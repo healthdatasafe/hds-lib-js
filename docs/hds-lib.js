@@ -1,0 +1,1 @@
+(()=>{var t={44:(t,r,o)=>{t.exports={HDSModel:o(196)}},196:t=>{t.exports=class{#t;#r;constructor(t){this.#t=t}async load(){const t=await fetch(this.#t),r=await t.text(),o=JSON.parse(r);this.#r=o}}}},r={};!function o(e){var a=r[e];if(void 0!==a)return a.exports;var s=r[e]={exports:{}};return t[e](s,s.exports,o),s.exports}(44)})();
