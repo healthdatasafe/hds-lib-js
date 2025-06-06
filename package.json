@@ -1,0 +1,25 @@
+{
+  "name": "hds-lib",
+  "version": "0.0.1",
+  "description": "Health Data Safe - Library",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/healthdatasafe/hds-lib-js.git"
+  },
+  "keywords": [
+    "HDS",
+    "Health",
+    "Data",
+    "Safe"
+  ],
+  "author": "HDS",
+  "license": "BSD-3-Clause",
+  "bugs": {
+    "url": "https://github.com/healthdatasafe/hds-lib-js/issues"
+  },
+  "homepage": "https://github.com/healthdatasafe/hds-lib-js#readme"
+}
