@@ -1,0 +1,6 @@
+#!/bin/bash
+set -e
+
+## Will be added to git hooks to make sure 
+## we don't commit not linted code
+npm run lint:change

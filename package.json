@@ -4,7 +4,11 @@
   "description": "Health Data Safe - Library",
   "main": "src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha tests --test-reporter=spec",
+    "build": "webpack",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "lint:change": "eslint $(git diff --name-only HEAD | grep -E '\\.(js|jsx)$' | xargs)"
   },
   "repository": {
     "type": "git",
@@ -21,5 +25,16 @@
   "bugs": {
     "url": "https://github.com/healthdatasafe/hds-lib-js/issues"
   },
-  "homepage": "https://github.com/healthdatasafe/hds-lib-js#readme"
+  "homepage": "https://github.com/healthdatasafe/hds-lib-js#readme",
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "eslint-config-semistandard": "^17.0.0",
+    "eslint-config-standard": "^17.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-n": "^15.7.0",
+    "eslint-plugin-promise": "^6.1.1",
+    "mocha": "^11.5.0",
+    "webpack": "^5.99.9",
+    "webpack-cli": "^6.0.1"
+  }
 }
