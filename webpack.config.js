@@ -1,10 +1,12 @@
 const path = require('path');
 
 module.exports = {
-  entry: './src/index.js',
+  entry: './src/index-webpack.js',
   mode: 'production',
   output: {
     path: path.resolve(__dirname, 'docs'),
-    filename: 'hds-lib.js'
+    filename: 'hds-lib.js',
+    globalObject: 'this',
+    library: 'HDSLib'
   }
 };
