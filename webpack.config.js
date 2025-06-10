@@ -8,5 +8,6 @@ module.exports = {
     filename: 'hds-lib.js',
     globalObject: 'this',
     library: 'HDSLib'
-  }
+  },
+  devtool: 'source-map'
 };
