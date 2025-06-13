@@ -1,13 +1,19 @@
 class HDSItemDef {
   #data;
+  #key;
 
-  constructor (definitionData) {
+  constructor (key, definitionData) {
+    this.#key = key;
     this.#data = definitionData;
   }
 
   get types () {
     if (this.#data.eventType) return [this.#data.eventType];
     return Object.keys(this.#data.variations.eventType);
+  }
+
+  get key () {
+    return this.#key;
   }
 
   get data () {

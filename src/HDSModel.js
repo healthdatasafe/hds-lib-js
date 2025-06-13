@@ -60,7 +60,7 @@ class HDSModel {
       if (throwErrorIfNotFound) throw new Error('Cannot find item definition with key: ' + key);
       return null;
     }
-    this.#itemsDefs[key] = new HDSItemDef(defData);
+    this.#itemsDefs[key] = new HDSItemDef(key, defData);
     return this.#itemsDefs[key];
   }
 
