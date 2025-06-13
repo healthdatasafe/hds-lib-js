@@ -17,7 +17,7 @@ describe('[MODX] Model', () => {
     await modelLoad.load();
     const itemDef = modelLoad.itemDefForKey('body-weight');
     assert.equal(itemDef.data.streamId, 'body-weight');
-    assert.deepEqual(itemDef.types, ['mass/kg', 'mass/lb']);
+    assert.deepEqual(itemDef.eventTypes, ['mass/kg', 'mass/lb']);
   });
 
   it('[MODS] Get definition from event data', async () => {
@@ -27,7 +27,7 @@ describe('[MODX] Model', () => {
     };
     const itemDef = model.itemDefForEvent(fakeEvent);
     assert.equal(itemDef.data.streamId, 'body-weight');
-    assert.deepEqual(itemDef.types, ['mass/kg', 'mass/lb']);
+    assert.deepEqual(itemDef.eventTypes, ['mass/kg', 'mass/lb']);
   });
 
   it('[MOEN] Throw error if itemDefForEvent not found', async () => {

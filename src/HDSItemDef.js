@@ -7,7 +7,7 @@ class HDSItemDef {
     this.#data = definitionData;
   }
 
-  get types () {
+  get eventTypes () {
     if (this.#data.eventType) return [this.#data.eventType];
     return Object.keys(this.#data.variations.eventType);
   }
