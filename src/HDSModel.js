@@ -26,6 +26,12 @@ class HDSModel {
   #modelDataByStreamIdEventTypes;
 
   /**
+   * streamsById
+   * Map to find streams by Id
+   */
+  #modelStreamsById;
+
+  /**
    * JSON definition file
    * Should come from service/info assets.hds-model
    * @type {string}
@@ -34,6 +40,7 @@ class HDSModel {
     this.#modelUrl = modelUrl;
     this.#itemsDefs = {};
     this.#modelDataByStreamIdEventTypes = {};
+    this.#modelStreamsById = {};
   }
 
   /**
@@ -45,6 +52,7 @@ class HDSModel {
     const result = JSON.parse(resultText);
     this.#modelData = result;
     loadModelDataByStreamIdEventTypes(this.#modelData.items, this.#modelDataByStreamIdEventTypes);
+    loadModelStreamsById(this.#modelData.streams, this.#modelStreamsById);
     deepFreeze(this.#modelData); // make sure it cannot be modified
   }
 
@@ -84,6 +92,55 @@ class HDSModel {
       throw new Error(`Found multiple matching definitions "${candidates.map(c => (c.key)).join(', ')}" for event: ${JSON.stringify(event)}`);
     }
     return this.itemDefForKey(candidates[0].key, throwErrorIfNotFound);
+  }
+
+  /**
+   * Get a list of streams to be created for usage of these keys (whithout children)
+   * @param {Array<string>} itemKeys
+   */
+  streamsGetNecessaryListForItemKeys (itemKeys) {
+    const result = [];
+    const streams = new Map(); // tempMap to keep streams already in
+    for (const itemKey of itemKeys) {
+      const itemDef = this.itemDefForKey(itemKey);
+      const streamParentIds = this.streamGetParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
+      for (const streamId of streamParentIds) {
+        if (streams.has(streamId)) continue;
+        const stream = this.streamDataGetById(streamId);
+        streams.set(streamId, true); // just to flag
+        result.push({
+          id: streamId,
+          name: stream.name, // to be translated
+          parentId: stream.parentId
+        });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Get stream Data by Id;
+   * @param {string} streamId
+   */
+  streamDataGetById (streamId, throwErrorIfNotFound = true) {
+    const streamData = this.#modelStreamsById[streamId];
+    if (throwErrorIfNotFound && !streamData) throw new Error(`Stream with id: "${streamId}" not found`);
+    return streamData;
+  }
+
+  /**
+   * Get all parents id;
+   * @param {string} streamId
+   * @param {boolean} [throwErrorIfNotFound] default `true`
+   * @param {Array} [initialArray] - a pre-filled array
+   */
+  streamGetParentsIds (streamId, throwErrorIfNotFound = true, initialArray = []) {
+    const streamData = this.streamDataGetById(streamId, throwErrorIfNotFound);
+    if (streamData.parentId !== null) {
+      initialArray.unshift(streamData.parentId);
+      this.streamGetParentsIds(streamData.parentId, true, initialArray);
+    }
+    return initialArray;
   }
 }
 
@@ -127,8 +184,21 @@ function loadModelDataByStreamIdEventTypes (model, map) {
     }
     for (const eventType of eventTypes) {
       const keyStreamIdEventType = item.streamId + ':' + eventType;
-      if (map[keyStreamIdEventType]) throw new Error(`Duplicate sreamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+      if (map[keyStreamIdEventType]) throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
       map[keyStreamIdEventType] = item;
     }
+  }
+}
+
+/**
+ * @param {Array<stream>} streams
+ * @param {Object<string, stream>} map - key value map
+ */
+function loadModelStreamsById (streams, map) {
+  if (!streams) return;
+  for (const stream of streams) {
+    if (map[stream.id]) throw new Error(`Duplicate streamId "${stream.id}" for strean ${JSON.stringify(stream)}`);
+    map[stream.id] = stream;
+    loadModelStreamsById(stream.children, map);
   }
 }
