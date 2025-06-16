@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "test": "mocha tests --test-reporter=spec",
+    "test:coverage": "c8 mocha tests --test-reporter=spec",
     "build": "webpack",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -36,5 +37,8 @@
     "mocha": "^11.5.0",
     "webpack": "^5.99.9",
     "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "c8": "^10.1.3"
   }
 }
