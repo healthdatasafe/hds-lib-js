@@ -176,6 +176,45 @@ describe('[MODX] Model', () => {
       assert.deepEqual(authorizationSet, expected);
     });
 
+    it('[MOAL] Get Authorizations from items override correctly authorized level', async () => {
+      const itemKeys = ['profile-name'];
+      const options = { preRequest: [{ streamId: 'profile', level: 'contribute' }] };
+      const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+      const expected = [
+        { streamId: 'profile', level: 'contribute', defaultName: 'Profile' }
+      ];
+      assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAV] Get Authorizations from items override correctly authorized level', async () => {
+      const itemKeys = ['profile-name'];
+      const options = {
+        defaultLevel: 'manage',
+        preRequest: [{ streamId: 'profile', level: 'read' }]
+      };
+      const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+      const expected = [
+        { streamId: 'profile', level: 'read', defaultName: 'Profile' },
+        { streamId: 'profile-name', defaultName: 'Name', level: 'manage' }
+      ];
+      assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAM] Get Authorizations from items mix correctly authorized level', async () => {
+      const levels = [{ request: 'manage', expect: 'manage' }, { request: 'contribute', expect: 'contribute' }, { request: 'writeOnly', expect: 'contribute' }];
+      for (const level of levels) {
+        const itemKeys = ['profile-name'];
+        const options = {
+          preRequest: [{ streamId: 'profile-name', level: level.request }]
+        };
+        const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+        const expected = [
+          { streamId: 'profile-name', level: level.expect, defaultName: 'Name' }
+        ];
+        assert.deepEqual(authorizationSet, expected);
+      }
+    });
+
     it('[MOAO] Get Authorizations from items with overrides', async () => {
       const itemKeys = [
         'body-vulva-mucus-inspect',

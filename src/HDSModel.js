@@ -224,6 +224,7 @@ module.exports = HDSModel;
 function authorizationOverride (level1, level2) {
   if (level1 === level2) return true;
   if (level1 === 'manage') return true;
+  if (level1 === 'contribute' && level2 !== 'manage') return true;
   return false;
 }
 
@@ -240,7 +241,7 @@ function mixAuthorizationLevels (level1, level2) {
   if (levels.includes('manage')) return 'manage'; // any & manage
   if (levels[0] === 'contribute') return 'contribute'; // read ore writeOnly & contribute
   if (levels[1] === 'writeOnly') return 'contribute'; // mix read & writeOnly
-  // error if there .. 'read' & 'read' should have already be found
+  /* c8 ignore next */ // error if there .. 'read' & 'read' should have already be found
   throw new Error(`Invalid level found level1: ${level1}, level2 ${level2}`);
 }
 
@@ -282,7 +283,10 @@ function loadModelDataByStreamIdEventTypes (model, map) {
     }
     for (const eventType of eventTypes) {
       const keyStreamIdEventType = item.streamId + ':' + eventType;
-      if (map[keyStreamIdEventType]) throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+      if (map[keyStreamIdEventType]) {
+        // should be tested with a faulty model
+        throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+      }
       map[keyStreamIdEventType] = item;
     }
   }
@@ -295,7 +299,10 @@ function loadModelDataByStreamIdEventTypes (model, map) {
 function loadModelStreamsById (streams, map) {
   if (!streams) return;
   for (const stream of streams) {
-    if (map[stream.id]) throw new Error(`Duplicate streamId "${stream.id}" for strean ${JSON.stringify(stream)}`);
+    if (map[stream.id]) {
+      // should be tested with a faulty model
+      throw new Error(`Duplicate streamId "${stream.id}" for strean ${JSON.stringify(stream)}`);
+    }
     map[stream.id] = stream;
     loadModelStreamsById(stream.children, map);
   }
