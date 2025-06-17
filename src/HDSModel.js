@@ -159,20 +159,22 @@ class HDSModel {
    * @param {Array<itemKeys>} itemKeys
    * @param {Object} [options]
    * @param {string} [options.defaultLevel] (default = write) one of 'read', 'write', 'contribute', 'writeOnly'
+   * @param {boolean} [options.includeDefaultName] (default = true) defaultNames are needed for permission requests but not for access creation
    * @param {Array<AuthorizationRequestItem>} [options.preRequest]
    * @return {Array<AuthorizationRequestItem>}
    */
   authorizationForItemKeys (itemKeys, options = {}) {
     const opts = {
       defaultLevel: 'read',
-      preRequest: []
+      preRequest: [],
+      includeDefaultName: true
     };
     Object.assign(opts, options);
     const streamsRequested = {};
     for (const pre of opts.preRequest) {
       if (!pre.streamId) throw new Error(`Missing streamId in options.preRequest item: ${JSON.stringify(pre)}`);
       // complete pre with defaultName if missing
-      if (!pre.defaultName) {
+      if (opts.includeDefaultName && !pre.defaultName) {
         // try to get it from streams Data
         const stream = this.streamDataGetById(pre.streamId, false);
         if (stream) {
@@ -180,10 +182,14 @@ class HDSModel {
         } else {
           throw new Error(`No "defaultName" in options.preRequest item: ${JSON.stringify(pre)} and cannot find matching streams in default list`);
         }
-        // add default level
-        if (!pre.level) {
-          pre.level = opts.defaultLevel;
-        }
+      }
+      // check there is no defaultName if not required
+      if (!opts.includeDefaultName) {
+        if (pre.defaultName) throw new Error(`Do not include defaultName when not included explicitely on ${JSON.stringify(pre)}`);
+      }
+      // add default level
+      if (!pre.level) {
+        pre.level = opts.defaultLevel;
       }
       streamsRequested[pre.streamId] = pre;
     }
@@ -192,8 +198,12 @@ class HDSModel {
       const itemDef = this.itemDefForKey(itemKey);
       const streamId = itemDef.data.streamId;
       if (!streamsRequested[streamId]) { // new streamId
-        const stream = this.streamDataGetById(streamId);
-        streamsRequested[streamId] = { streamId, defaultName: stream.name, level: opts.defaultLevel };
+        const auth = { streamId, level: opts.defaultLevel };
+        if (opts.includeDefaultName) {
+          const stream = this.streamDataGetById(streamId);
+          auth.defaultName = stream.name;
+        }
+        streamsRequested[streamId] = auth;
       } else { // existing just adapt level
         streamsRequested[streamId].level = mixAuthorizationLevels(streamsRequested[streamId].level, opts.defaultLevel);
       }

@@ -247,7 +247,56 @@ describe('[MODX] Model', () => {
       assert.deepEqual(authorizationSet, expected);
     });
 
-    it('[MOAE] Get authorization throw error on missing streamId', async () => {
+    it('[MOAW] Get Authorizations from items with overrides and no defaultName', async () => {
+      const itemKeys = [
+        'body-vulva-mucus-inspect',
+        'profile-name',
+        'profile-date-of-birth',
+        'body-vulva-mucus-stretch',
+        'profile-surname'
+      ];
+      const options = {
+        preRequest: [
+          { streamId: 'profile' },
+          { streamId: 'app-test', level: 'write' }
+        ],
+        includeDefaultName: false
+      };
+      const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+      const expected = [
+        { streamId: 'profile', level: 'read' },
+        { streamId: 'app-test', level: 'write' },
+        {
+          streamId: 'body-vulva-mucus-inspect',
+          level: 'read'
+        },
+        {
+          streamId: 'body-vulva-mucus-stretch',
+          level: 'read'
+        }
+      ];
+      assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAZ] Get authorization throw error on unknown streamId with no defaultName', async () => {
+      const itemKeys = [
+        'profile-surname'
+      ];
+      const options = {
+        preRequest: [
+          { streamId: 'dummy', defaultName: 'Dummy', level: 'read' }
+        ],
+        includeDefaultName: false
+      };
+      try {
+        model.authorizationForItemKeys(itemKeys, options);
+        throw new Error('Should throw Error');
+      } catch (e) {
+        assert.equal(e.message, 'Do not include defaultName when not included explicitely on {"streamId":"dummy","defaultName":"Dummy","level":"read"}');
+      }
+    });
+
+    it('[MOAE] Throw error when defaultName is in one of of the "pre" but not desired ', async () => {
       const itemKeys = [
         'profile-surname'
       ];
@@ -264,7 +313,7 @@ describe('[MODX] Model', () => {
       }
     });
 
-    it('[MOAE] Get authorization throw error on unknown streamId with no defaultName', async () => {
+    it('[MOAR] Get authorization throw error on unknown streamId with no defaultName', async () => {
       const itemKeys = [
         'profile-surname'
       ];
