@@ -154,7 +154,7 @@ describe('[MODX] Model', () => {
         'body-vulva-mucus-stretch',
         'profile-surname'
       ];
-      const authorizationSet = model.authorizationForItemKeys(itemKeys);
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys);
       const expected = [
         {
           streamId: 'body-vulva-mucus-inspect',
@@ -179,7 +179,7 @@ describe('[MODX] Model', () => {
     it('[MOAL] Get Authorizations from items override correctly authorized level', async () => {
       const itemKeys = ['profile-name'];
       const options = { preRequest: [{ streamId: 'profile', level: 'contribute' }] };
-      const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
       const expected = [
         { streamId: 'profile', level: 'contribute', defaultName: 'Profile' }
       ];
@@ -192,7 +192,7 @@ describe('[MODX] Model', () => {
         defaultLevel: 'manage',
         preRequest: [{ streamId: 'profile', level: 'read' }]
       };
-      const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
       const expected = [
         { streamId: 'profile', level: 'read', defaultName: 'Profile' },
         { streamId: 'profile-name', defaultName: 'Name', level: 'manage' }
@@ -207,7 +207,7 @@ describe('[MODX] Model', () => {
         const options = {
           preRequest: [{ streamId: 'profile-name', level: level.request }]
         };
-        const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+        const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
         const expected = [
           { streamId: 'profile-name', level: level.expect, defaultName: 'Name' }
         ];
@@ -229,7 +229,7 @@ describe('[MODX] Model', () => {
           { streamId: 'app-test', defaultName: 'App test', level: 'write' }
         ]
       };
-      const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
       const expected = [
         { streamId: 'profile', defaultName: 'Profile', level: 'read' },
         { streamId: 'app-test', defaultName: 'App test', level: 'write' },
@@ -262,7 +262,7 @@ describe('[MODX] Model', () => {
         ],
         includeDefaultName: false
       };
-      const authorizationSet = model.authorizationForItemKeys(itemKeys, options);
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
       const expected = [
         { streamId: 'profile', level: 'read' },
         { streamId: 'app-test', level: 'write' },
@@ -289,7 +289,7 @@ describe('[MODX] Model', () => {
         includeDefaultName: false
       };
       try {
-        model.authorizationForItemKeys(itemKeys, options);
+        model.authorizations.forItemKeys(itemKeys, options);
         throw new Error('Should throw Error');
       } catch (e) {
         assert.equal(e.message, 'Do not include defaultName when not included explicitely on {"streamId":"dummy","defaultName":"Dummy","level":"read"}');
@@ -306,7 +306,7 @@ describe('[MODX] Model', () => {
         ]
       };
       try {
-        model.authorizationForItemKeys(itemKeys, options);
+        model.authorizations.forItemKeys(itemKeys, options);
         throw new Error('Should throw Error');
       } catch (e) {
         assert.equal(e.message, 'Missing streamId in options.preRequest item: {"streamIdXXXX":"dummy","level":"read"}');
@@ -323,7 +323,7 @@ describe('[MODX] Model', () => {
         ]
       };
       try {
-        model.authorizationForItemKeys(itemKeys, options);
+        model.authorizations.forItemKeys(itemKeys, options);
         throw new Error('Should throw Error');
       } catch (e) {
         assert.equal(e.message, 'No "defaultName" in options.preRequest item: {"streamId":"dummy","level":"read"} and cannot find matching streams in default list');
