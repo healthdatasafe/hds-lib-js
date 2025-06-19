@@ -1,7 +1,7 @@
 const HDSItemDef = require('./HDSItemDef');
 
 /**
- * Items - Extension of HDSModel
+ * ItemsDefs - Extension of HDSModel
  */
 class HDSModelItemsDefs {
   /**

@@ -98,13 +98,13 @@ describe('[MODX] Model', () => {
 
   describe('[MOSX] streams', function () {
     it('[MOSB] Streams Data by Id', async () => {
-      const streamData = model.streamDataGetById('fertility-cycles-start');
+      const streamData = model.streams.getDataById('fertility-cycles-start');
       assert.equal(streamData.parentId, 'fertility-cycles');
     });
 
     it('[MOSE] Streams Data by Id, Throw Error if not found', async () => {
       try {
-        model.streamDataGetById('dummy');
+        model.streams.getDataById('dummy');
         throw new Error('Should throw Error');
       } catch (e) {
         assert.equal(e.message, 'Stream with id: "dummy" not found');
@@ -112,7 +112,7 @@ describe('[MODX] Model', () => {
     });
 
     it('[MOSP] Streams Data parents', async () => {
-      const streamParentIds = model.streamGetParentsIds('fertility-cycles-start');
+      const streamParentIds = model.streams.getParentsIds('fertility-cycles-start');
       assert.deepEqual(streamParentIds, ['fertility', 'fertility-cycles']);
     });
 
@@ -124,7 +124,7 @@ describe('[MODX] Model', () => {
         'body-vulva-mucus-stretch',
         'profile-surname'
       ];
-      const streamsToBeCreated = model.streamsGetNecessaryListForItemKeys(itemKeys);
+      const streamsToBeCreated = model.streams.getNecessaryListForItemKeys(itemKeys);
       // keeè a list of streams check that necessary streams exists
       const streamIdsToCheck = {};
       for (const itemKey of itemKeys) {

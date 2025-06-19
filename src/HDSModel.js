@@ -1,4 +1,5 @@
 const HDSModelItemsDefs = require('./HDSModel-ItemsDefs');
+const HDSModelStreams = require('./HDSModel-Streams');
 class HDSModel {
   /**
    * JSON definition file
@@ -19,10 +20,9 @@ class HDSModel {
   #modelItemsDefs;
 
   /**
-   * streamsById
-   * Map to find streams by Id
+   * @type {HDSModelStreams}
    */
-  #modelStreamsById;
+  #modelStreams;
 
   /**
    * JSON definition file
@@ -31,7 +31,6 @@ class HDSModel {
    */
   constructor (modelUrl) {
     this.#modelUrl = modelUrl;
-    this.#modelStreamsById = {};
   }
 
   /**
@@ -47,7 +46,6 @@ class HDSModel {
       item.key = key;
     }
 
-    loadModelStreamsById(this.#modelData.streams, this.#modelStreamsById);
     deepFreeze(this.#modelData); // make sure it cannot be modified
   }
 
@@ -68,53 +66,11 @@ class HDSModel {
   }
 
   /**
-   * Get a list of streams to be created for usage of these keys (whithout children)
-   * @param {Array<string>} itemKeys
+   * @type HDSModelStreams
    */
-  streamsGetNecessaryListForItemKeys (itemKeys) {
-    const result = [];
-    const streams = new Map(); // tempMap to keep streams already in
-    for (const itemKey of itemKeys) {
-      const itemDef = this.itemsDefs.forKey(itemKey);
-      const streamParentIds = this.streamGetParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
-      for (const streamId of streamParentIds) {
-        if (streams.has(streamId)) continue;
-        const stream = this.streamDataGetById(streamId);
-        streams.set(streamId, true); // just to flag
-        result.push({
-          id: streamId,
-          name: stream.name, // to be translated
-          parentId: stream.parentId
-        });
-      }
-    }
-    return result;
-  }
-
-  /**
-   * Get stream Data by Id;
-   * @param {string} streamId
-   */
-  streamDataGetById (streamId, throwErrorIfNotFound = true) {
-    const streamData = this.#modelStreamsById[streamId];
-    if (throwErrorIfNotFound && !streamData) throw new Error(`Stream with id: "${streamId}" not found`);
-    return streamData;
-  }
-
-  /**
-   * Get all parents id;
-   * @param {string} streamId
-   * @param {boolean} [throwErrorIfNotFound] default `true`
-   * @param {Array} [initialArray] - a pre-filled array
-   */
-  streamGetParentsIds (streamId, throwErrorIfNotFound = true, initialArray = []) {
-    const streamData = this.streamDataGetById(streamId, throwErrorIfNotFound);
-    if (!streamData) return initialArray;
-    if (streamData.parentId !== null) {
-      initialArray.unshift(streamData.parentId);
-      this.streamGetParentsIds(streamData.parentId, true, initialArray);
-    }
-    return initialArray;
+  get streams () {
+    if (!this.#modelStreams) this.#modelStreams = new HDSModelStreams(this);
+    return this.#modelStreams;
   }
 
   // --------- authorizations builder ------ //
@@ -149,7 +105,7 @@ class HDSModel {
       // complete pre with defaultName if missing
       if (opts.includeDefaultName && !pre.defaultName) {
         // try to get it from streams Data
-        const stream = this.streamDataGetById(pre.streamId, false);
+        const stream = this.streams.getDataById(pre.streamId, false);
         if (stream) {
           pre.defaultName = stream.name;
         } else {
@@ -173,7 +129,7 @@ class HDSModel {
       if (!streamsRequested[streamId]) { // new streamId
         const auth = { streamId, level: opts.defaultLevel };
         if (opts.includeDefaultName) {
-          const stream = this.streamDataGetById(streamId);
+          const stream = this.streams.getDataById(streamId);
           auth.defaultName = stream.name;
         }
         streamsRequested[streamId] = auth;
@@ -183,7 +139,7 @@ class HDSModel {
     }
     // remove all permissions with a parent having identical or higher level
     for (const auth of Object.values(streamsRequested)) {
-      const parents = this.streamGetParentsIds(auth.streamId, false);
+      const parents = this.streams.getParentsIds(auth.streamId, false);
       for (const parent of parents) {
         const found = streamsRequested[parent];
         if (found && authorizationOverride(found.level, auth.level)) {
@@ -247,20 +203,4 @@ function deepFreeze (object) {
   }
 
   return Object.freeze(object);
-}
-
-/**
- * @param {Array<stream>} streams
- * @param {Object<string, stream>} map - key value map
- */
-function loadModelStreamsById (streams, map) {
-  if (!streams) return;
-  for (const stream of streams) {
-    if (map[stream.id]) {
-      // should be tested with a faulty model
-      throw new Error(`Duplicate streamId "${stream.id}" for strean ${JSON.stringify(stream)}`);
-    }
-    map[stream.id] = stream;
-    loadModelStreamsById(stream.children, map);
-  }
 }
