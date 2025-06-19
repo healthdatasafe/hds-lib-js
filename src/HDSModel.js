@@ -1,5 +1,4 @@
-const HDSItemDef = require('./HDSItemDef');
-
+const HDSModelItemsDefs = require('./HDSModel-ItemsDefs');
 class HDSModel {
   /**
    * JSON definition file
@@ -15,15 +14,9 @@ class HDSModel {
   #modelData;
 
   /**
-   * ItemDefs Cache
-   * KeyValue of itemsDefs
+   * @type {HDSModelItemsDefs}
    */
-  #itemsDefs;
-
-  /**
-   * get itemsDefs by streamId and eventType
-   */
-  #modelDataByStreamIdEventTypes;
+  #modelItemsDefs;
 
   /**
    * streamsById
@@ -38,8 +31,6 @@ class HDSModel {
    */
   constructor (modelUrl) {
     this.#modelUrl = modelUrl;
-    this.#itemsDefs = {};
-    this.#modelDataByStreamIdEventTypes = {};
     this.#modelStreamsById = {};
   }
 
@@ -51,47 +42,29 @@ class HDSModel {
     const resultText = await response.text();
     const result = JSON.parse(resultText);
     this.#modelData = result;
-    loadModelDataByStreamIdEventTypes(this.#modelData.items, this.#modelDataByStreamIdEventTypes);
+    // add key to items before freezing;
+    for (const [key, item] of Object.entries(this.#modelData.items)) {
+      item.key = key;
+    }
+
     loadModelStreamsById(this.#modelData.streams, this.#modelStreamsById);
     deepFreeze(this.#modelData); // make sure it cannot be modified
   }
 
   /**
-   * get item for a key
-   * @param {string} key
-   * @param {boolean} [throwErrorIfNotFound] default `true`
+   * RAW model data
    */
-  itemDefForKey (key, throwErrorIfNotFound = true) {
-    if (this.#itemsDefs[key]) return this.#itemsDefs[key];
-    const defData = this.#modelData.items[key];
-    if (!defData) {
-      if (throwErrorIfNotFound) throw new Error('Cannot find item definition with key: ' + key);
-      return null;
-    }
-    this.#itemsDefs[key] = new HDSItemDef(key, defData);
-    return this.#itemsDefs[key];
+  get modelData () {
+    if (!this.#modelData) throw new Error('Model not loaded call `await model.load()` first.');
+    return this.#modelData;
   }
 
   /**
-   * get a definition for an event
-   * @param {Event} event
-   * @param {boolean} [throwErrorIfNotFound] default `true`
+   * @type HDSModelItemsDefs
    */
-  itemDefForEvent (event, throwErrorIfNotFound = true) {
-    const candidates = [];
-    for (const streamId of event.streamIds) {
-      const keyStreamIdEventType = streamId + ':' + event.type;
-      const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
-      if (candidate) candidates.push(candidate);
-    }
-    if (candidates.length === 0) {
-      if (throwErrorIfNotFound) throw new Error('Cannot find definition for event: ' + JSON.stringify(event));
-      return null;
-    }
-    if (candidates.length > 1) {
-      throw new Error(`Found multiple matching definitions "${candidates.map(c => (c.key)).join(', ')}" for event: ${JSON.stringify(event)}`);
-    }
-    return this.itemDefForKey(candidates[0].key, throwErrorIfNotFound);
+  get itemsDefs () {
+    if (!this.#modelItemsDefs) this.#modelItemsDefs = new HDSModelItemsDefs(this);
+    return this.#modelItemsDefs;
   }
 
   /**
@@ -102,7 +75,7 @@ class HDSModel {
     const result = [];
     const streams = new Map(); // tempMap to keep streams already in
     for (const itemKey of itemKeys) {
-      const itemDef = this.itemDefForKey(itemKey);
+      const itemDef = this.itemsDefs.forKey(itemKey);
       const streamParentIds = this.streamGetParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
       for (const streamId of streamParentIds) {
         if (streams.has(streamId)) continue;
@@ -195,7 +168,7 @@ class HDSModel {
     }
     // add streamId not already in
     for (const itemKey of itemKeys) {
-      const itemDef = this.itemDefForKey(itemKey);
+      const itemDef = this.itemsDefs.forKey(itemKey);
       const streamId = itemDef.data.streamId;
       if (!streamsRequested[streamId]) { // new streamId
         const auth = { streamId, level: opts.defaultLevel };
@@ -274,32 +247,6 @@ function deepFreeze (object) {
   }
 
   return Object.freeze(object);
-}
-
-/**
- * @private
- * Add key to model items and
- * load modeldata item into modelDataByStreamIdEventTypes for fast search
- */
-function loadModelDataByStreamIdEventTypes (model, map) {
-  for (const [key, item] of Object.entries(model)) {
-    // add key to item
-    item.key = key;
-    const eventTypes = [];
-    if (item.eventType) {
-      eventTypes.push(item.eventType);
-    } else {
-      eventTypes.push(...Object.keys(item.variations.eventType));
-    }
-    for (const eventType of eventTypes) {
-      const keyStreamIdEventType = item.streamId + ':' + eventType;
-      if (map[keyStreamIdEventType]) {
-        // should be tested with a faulty model
-        throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
-      }
-      map[keyStreamIdEventType] = item;
-    }
-  }
 }
 
 /**

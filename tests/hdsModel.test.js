@@ -15,25 +15,25 @@ describe('[MODX] Model', () => {
   it('[MODL] Load model for item with multiple types: body-weight', async () => {
     const modelLoad = new HDSModel(modelURL);
     await modelLoad.load();
-    const itemDef = modelLoad.itemDefForKey('body-weight');
+    const itemDef = modelLoad.itemsDefs.forKey('body-weight');
     assert.equal(itemDef.data.streamId, 'body-weight');
     assert.deepEqual(itemDef.eventTypes, ['mass/kg', 'mass/lb']);
     assert.equal(itemDef.key, 'body-weight');
   });
 
-  it('[MODL] Load model for item with single type: body-vulva-wetness-feeling', async () => {
+  it('[MODM] Load model for item with single type: body-vulva-wetness-feeling', async () => {
     const modelLoad = new HDSModel(modelURL);
     await modelLoad.load();
-    const itemDef = modelLoad.itemDefForKey('body-vulva-wetness-feeling');
+    const itemDef = modelLoad.itemsDefs.forKey('body-vulva-wetness-feeling');
     assert.deepEqual(itemDef.eventTypes, ['ratio/generic']);
   });
 
   // ---------- items ------------ //
 
   describe('[MOIX] items', function () {
-    it('[MOIE] Throw error if itemDefForKey not found', async () => {
+    it('[MOIE] Throw error if itemsDefs.forKey not found', async () => {
       try {
-        model.itemDefForKey('dummy');
+        model.itemsDefs.forKey('dummy');
         throw new Error('Should throw Error');
       } catch (e) {
         assert.equal(e.message, 'Cannot find item definition with key: dummy');
@@ -41,7 +41,7 @@ describe('[MODX] Model', () => {
     });
 
     it('[MOIN] Return null with throwErrorIfNotFound = false', async () => {
-      const notFound = model.itemDefForKey('dummy', false);
+      const notFound = model.itemsDefs.forKey('dummy', false);
       assert.equal(notFound, null);
     });
   });
@@ -53,40 +53,40 @@ describe('[MODX] Model', () => {
         streamIds: ['body-weight', 'dummy'],
         type: 'mass/kg'
       };
-      const itemDef = model.itemDefForEvent(fakeEvent);
+      const itemDef = model.itemsDefs.forEvent(fakeEvent);
       assert.equal(itemDef.data.streamId, 'body-weight');
       assert.deepEqual(itemDef.eventTypes, ['mass/kg', 'mass/lb']);
     });
 
-    it('[MOEE] Throw error if itemDefForEvent not found', async () => {
+    it('[MOEE] Throw error if itemsDefs.forEvent not found', async () => {
       const fakeEvent = {
         streamIds: ['dummy'],
         type: 'mass/kg'
       };
       try {
-        model.itemDefForEvent(fakeEvent);
+        model.itemsDefs.forEvent(fakeEvent);
         throw new Error('Should throw Error');
       } catch (e) {
         assert.equal(e.message, 'Cannot find definition for event: {"streamIds":["dummy"],"type":"mass/kg"}');
       }
     });
 
-    it('[MOEN] Return if itemDefForEvent not found and throwErrorIfNotFound = false', async () => {
+    it('[MOEN] Return if itemsDefs.forEvent not found and throwErrorIfNotFound = false', async () => {
       const fakeEvent = {
         streamIds: ['dummy'],
         type: 'mass/kg'
       };
-      const notFound = model.itemDefForEvent(fakeEvent, false);
+      const notFound = model.itemsDefs.forEvent(fakeEvent, false);
       assert.equal(notFound, null);
     });
 
-    it('[MOED] Throw error if itemDefForEvent finds duplicates', async () => {
+    it('[MOED] Throw error if itemsDefs.forEvent finds duplicates', async () => {
       const fakeEvent = {
         streamIds: ['body-vulva-wetness-feeling', 'body-vulva-mucus-stretch'],
         type: 'ratio/generic'
       };
       try {
-        model.itemDefForEvent(fakeEvent);
+        model.itemsDefs.forEvent(fakeEvent);
         throw new Error('Should throw Error');
       } catch (e) {
         assert.equal(e.message, 'Found multiple matching definitions "body-vulva-wetness-feeling, body-vulva-mucus-stretch" for event: {"streamIds":["body-vulva-wetness-feeling","body-vulva-mucus-stretch"],"type":"ratio/generic"}');
@@ -128,7 +128,7 @@ describe('[MODX] Model', () => {
       // keeè a list of streams check that necessary streams exists
       const streamIdsToCheck = {};
       for (const itemKey of itemKeys) {
-        const streamId = model.itemDefForKey(itemKey).data.streamId;
+        const streamId = model.itemsDefs.forKey(itemKey).data.streamId;
         streamIdsToCheck[streamId] = true;
       }
       const parentExist = {}; // list of parent id in order
