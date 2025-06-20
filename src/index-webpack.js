@@ -1,4 +1,4 @@
 /**
  * Export for webpack build
  */
-export const HDSModel = require('./HDSModel');
+export const hdsLib = require('./index.js');
