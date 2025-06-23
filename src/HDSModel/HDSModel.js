@@ -1,4 +1,4 @@
-const { deepFreeze } = require('./utils');
+const { deepFreeze } = require('../utils');
 
 const LAZILY_LOADED = {
   streams: require('./HDSModel-Streams'),

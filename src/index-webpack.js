@@ -1,4 +1,4 @@
-import HDSModel from './HDSModel';
+import HDSModel from './HDSModel/HDSModel';
 
 /**
  * Export for webpack build
