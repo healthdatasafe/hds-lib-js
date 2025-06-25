@@ -72,7 +72,7 @@ class AppManagingAccount {
     const collectorsMap = {};
     for (const stream of result.streams) {
       const collector = new Collector(this, stream);
-      collectorsMap[collector.id] = collector;
+      collectorsMap[collector.streamId] = collector;
     }
     this.#cache.collectorsMap = collectorsMap;
     return Object.values(this.#cache.collectorsMap);
@@ -92,23 +92,82 @@ class AppManagingAccount {
     if (result.error) throw new HDSLibError('Failed creating collector', result.error);
     if (!result.stream?.name) throw new HDSLibError('Failed creating collector, invalid result', result);
     const collector = new Collector(this, result.stream);
-    this.#cache.collectorsMap[collector.id] = collector;
+    this.#cache.collectorsMap[collector.streamId] = collector;
     return collector;
   }
 }
 
+const COLLECTOR_STREAMID_SUFFIXES = {
+  settings: 'settings',
+  pending: 'pending',
+  active: 'active',
+  error: 'error'
+};
+Object.freeze(COLLECTOR_STREAMID_SUFFIXES);
 class Collector {
+  static STREAMID_SUFFIXES = COLLECTOR_STREAMID_SUFFIXES;
   appManaging;
-  id;
+  streamId;
   name;
+  #streamData;
+
   /**
    * @param {AppManagingAccount} appManaging
-   * @param {Pryv.Stream} stream
+   * @param {Pryv.Stream} streamData
    */
-  constructor (appManaging, stream) {
-    this.id = stream.id;
-    this.name = stream.name;
+  constructor (appManaging, streamData) {
+    this.streamId = streamData.id;
+    this.name = streamData.name;
     this.appManaging = appManaging;
+    this.#streamData = streamData;
+  }
+
+  /**
+   * check if required streams are present, if not create them
+   */
+  async checkStreamStructure () {
+    // if streamData has correct children structure we assume all is OK
+    const childrenData = this.#streamData.children;
+    const toCreate = Object.values(Collector.STREAMID_SUFFIXES)
+      .filter((suffix) => {
+        if (!childrenData) return true;
+        if (childrenData.find(child => child.id === this.streamIdFor(suffix))) return false;
+        return true;
+      });
+
+    if (toCreate.length === 0) return { created: [] };
+    // create required streams
+    const apiCalls = toCreate.map(suffix => ({
+      method: 'streams.create',
+      params: {
+        id: this.streamIdFor(suffix),
+        parentId: this.streamId,
+        name: this.name + ' ' + suffix
+      }
+    }));
+    const result = { created: [], errors: [] };
+    const resultsApi = await this.appManaging.connection.api(apiCalls);
+    for (const resultCreate of resultsApi) {
+      if (resultCreate.error) {
+        result.errors.push(resultCreate.error);
+        continue;
+      }
+      if (resultCreate.stream) {
+        result.created.push(resultCreate.stream);
+        if (!this.#streamData.children) this.#streamData.children = [];
+        this.#streamData.children.push(resultCreate.stream);
+        continue;
+      }
+      result.errors.push({ id: 'unkown-error', message: 'Cannot find stream in result', data: resultCreate });
+    }
+    return result;
+  }
+
+  /**
+   * @param {string} suffix
+   */
+  streamIdFor (suffix) {
+    return this.streamId + '-' + suffix;
   }
 }
 

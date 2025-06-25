@@ -1,3 +1,4 @@
+require('./debug');
 const pryv = require('pryv');
 const superagent = pryv.utils.superagent;
 

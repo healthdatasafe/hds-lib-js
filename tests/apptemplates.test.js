@@ -28,7 +28,7 @@ describe('[APTX] appTemplates', function () {
     const collectorName = 'Test';
     // create a Collector
     const newCollector = await appManaging.createCollector(collectorName);
-    assert.ok(newCollector.id.startsWith(baseStreamId), 'Collectors id should start with baseStreamId');
+    assert.ok(newCollector.streamId.startsWith(baseStreamId), 'Collectors id should start with baseStreamId');
     assert.ok(newCollector.name, collectorName);
 
     // Create a Collector with the same name should fail
@@ -45,5 +45,27 @@ describe('[APTX] appTemplates', function () {
     const found = collectors.find(c => c.name === collectorName);
     if (!found) throw new Error('Should find collector with name: ' + collectorName);
     assert.equal(found, newCollector);
+
+    // check StreamStructure
+    const resultCheckStructure = await newCollector.checkStreamStructure();
+    assert.equal(resultCheckStructure.created.length, 4, 'Should create 4 streams');
+    for (const created of resultCheckStructure.created) {
+      assert.equal(created.parentId, newCollector.streamId, 'Should have collector stream as parentid');
+    }
+
+    // 2nd call of StreamStructure should be empty
+    const resultCheckStructure2 = await newCollector.checkStreamStructure();
+    assert.equal(resultCheckStructure2.created.length, 0, 'Should create 0 streams');
+
+    // creating a new Manager with same connection should load the structure
+    const connection2 = new pryv.Connection(appManaging.connection.apiEndpoint);
+    const appManaging2 = await AppManagingAccount.newFromConnection(connection2, baseStreamId);
+    // check if collector is in the list
+    const collectors2 = await appManaging2.getCollectors();
+    const found2 = collectors2.find(c => c.name === collectorName);
+    if (!found2) throw new Error('Should find collector with name: ' + collectorName);
+    // call of StreamStructure should be empty as already created
+    const resultCheckStructure3 = await newCollector.checkStreamStructure();
+    assert.equal(resultCheckStructure3.created.length, 0, 'Should create 0 streams');
   });
 });
