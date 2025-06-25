@@ -17,7 +17,7 @@ describe('[APTX] appTemplates', function () {
     appManaging = await AppManagingAccount.newFromConnection(connection, baseStreamId);
   });
 
-  it('[APTA] Initial and create One collector', async () => {
+  it('[APTA] Full flow create collector and sharing', async () => {
     assert.equal(appManaging.appName, appName);
     assert.equal(appManaging.baseStreamId, baseStreamId);
 
@@ -48,7 +48,7 @@ describe('[APTX] appTemplates', function () {
 
     // check StreamStructure
     const resultCheckStructure = await newCollector.checkStreamStructure();
-    assert.equal(resultCheckStructure.created.length, 4, 'Should create 4 streams');
+    assert.equal(resultCheckStructure.created.length, 5, 'Should create 5 streams');
     for (const created of resultCheckStructure.created) {
       assert.equal(created.parentId, newCollector.streamId, 'Should have collector stream as parentid');
     }
@@ -57,15 +57,28 @@ describe('[APTX] appTemplates', function () {
     const resultCheckStructure2 = await newCollector.checkStreamStructure();
     assert.equal(resultCheckStructure2.created.length, 0, 'Should create 0 streams');
 
+    // Sharing token creation
+    const sharingApiEndpoint = await newCollector.sharingApiEndpoint();
+    assert.ok(sharingApiEndpoint.startsWith('https://'));
+
+    // Should return the same
+    const sharingApiEndpoint2 = await newCollector.sharingApiEndpoint();
+    assert.equal(sharingApiEndpoint2, sharingApiEndpoint);
+
+    // ---------- creation of a manager on existing structure ---------- //
+
     // creating a new Manager with same connection should load the structure
     const connection2 = new pryv.Connection(appManaging.connection.apiEndpoint);
     const appManaging2 = await AppManagingAccount.newFromConnection(connection2, baseStreamId);
     // check if collector is in the list
     const collectors2 = await appManaging2.getCollectors();
-    const found2 = collectors2.find(c => c.name === collectorName);
-    if (!found2) throw new Error('Should find collector with name: ' + collectorName);
+    const collector2 = collectors2.find(c => c.name === collectorName);
+    if (!collector2) throw new Error('Should find collector with name: ' + collectorName);
     // call of StreamStructure should be empty as already created
-    const resultCheckStructure3 = await newCollector.checkStreamStructure();
+    const resultCheckStructure3 = await collector2.checkStreamStructure();
     assert.equal(resultCheckStructure3.created.length, 0, 'Should create 0 streams');
+    // should return the same access access point
+    const sharingApiEndpoint3 = await collector2.sharingApiEndpoint();
+    assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
   });
 });

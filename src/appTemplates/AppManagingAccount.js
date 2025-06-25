@@ -12,8 +12,9 @@ const collectorIdGenerator = new ShortUniqueId({ dictionary: 'alphanum_lower', l
  * Stream structure
  * - [baseStreamId]  "Root" stream for this app
  *     - [baseStreamId]-[collectorsId] Each "questionnary" or "request for a set of data" has it's own stream
- *       - [baseStreamId]-[collectorsId]-settings Contains events with the current settings of this app (this stream will be shared in "read" with the request)
+ *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
  *       - [baseStreamId]-[collectorsId]-pending Contains events with "pending" requests
+ *       - [baseStreamId]-[collectorsId]-inbox Contains events with "inbox" requests Will be shared in createOnly
  *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
  *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
  */
@@ -98,8 +99,9 @@ class AppManagingAccount {
 }
 
 const COLLECTOR_STREAMID_SUFFIXES = {
-  settings: 'settings',
+  public: 'public',
   pending: 'pending',
+  inbox: 'inbox',
   active: 'active',
   error: 'error'
 };
@@ -110,6 +112,7 @@ class Collector {
   streamId;
   name;
   #streamData;
+  #cache;
 
   /**
    * @param {AppManagingAccount} appManaging
@@ -120,6 +123,63 @@ class Collector {
     this.name = streamData.name;
     this.appManaging = appManaging;
     this.#streamData = streamData;
+    this.#cache = {};
+  }
+
+  /**
+   * Get sharing api endpoint
+   */
+  async sharingApiEndpoint () {
+    if (this.#cache.sharingApiEndpoint) return this.#cache.sharingApiEndpoint;
+    // check if sharing present
+    const sharedAccessId = 'a-' + this.streamId;
+    const accessesCheckRes = (await this.appManaging.connection.api([
+      { method: 'accesses.get', params: {} }
+    ]))[0];
+    if (accessesCheckRes?.error) throw new HDSLibError('Failed getting list of accesses', accessesCheckRes.error);
+    if (!accessesCheckRes?.accesses) throw new HDSLibError('Failed getting list of accesses', accessesCheckRes);
+    const sharedAccess = accessesCheckRes.accesses.find(
+      (access) => access.name === sharedAccessId
+    );
+    // found return it
+    if (sharedAccess) {
+      this.#cache.sharingApiEndpoint = sharedAccess.apiEndpoint;
+      return sharedAccess.apiEndpoint;
+    }
+
+    // not found create it
+    const permissions = [
+      { streamId: this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox), level: 'create-only' },
+      { streamId: this.streamIdFor(Collector.STREAMID_SUFFIXES.public), level: 'read' },
+      // for "publicly shared access" always forbid the selfRevoke feature
+      { feature: 'selfRevoke', setting: 'forbidden' },
+      // for "publicly shared access" always forbid the selfAudit feature
+      { feature: 'selfAudit', setting: 'forbidden' }
+    ];
+    const clientData = {
+      hdsCollector: {
+        public: {
+          streamId: this.streamIdFor(Collector.public)
+        },
+        inbox: {
+          streamId: this.streamIdFor(Collector.inbox)
+        }
+      }
+    };
+    const accessesCreate = await this.appManaging.connection.api([{
+      method: 'accesses.create',
+      params: {
+        name: sharedAccessId,
+        type: 'shared',
+        permissions,
+        clientData
+      }
+    }]);
+    if (accessesCreate?.[0]?.error) throw new HDSLibError('Failed creating shared token', accessesCreate?.[0]?.error);
+    const newSharingApiEndpoint = accessesCreate?.[0]?.access?.apiEndpoint;
+    if (!newSharingApiEndpoint) throw new HDSLibError('Cannot find apiEndpoint in sharing creation request', accessesCreate);
+    this.#cache.sharingApiEndpoint = newSharingApiEndpoint;
+    return newSharingApiEndpoint;
   }
 
   /**
@@ -175,7 +235,7 @@ module.exports = AppManagingAccount;
 
 async function newAppManagingAccountFromConnection (connection, baseStreamId) {
   const accessInfo = (await connection.api([{ method: 'getAccessInfo', params: {} }]))[0];
-  if (!accessInfo.type === 'app') throw new Error('Failed createing new AppManagingAccount, invalid coonection: ' + JSON.stringify(accessInfo));
+  if (!accessInfo.type === 'app') throw new Error('Failed creating new AppManagingAccount, "app" authorization required: ' + JSON.stringify(accessInfo));
   // check if baseStreamId is in pemission set
   const found = accessInfo.permissions.find(p => (p.streamId === baseStreamId || p.streamId === '*'));
   if (found && found.level !== 'manage') { // check if level 'manage'
