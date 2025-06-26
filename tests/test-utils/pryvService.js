@@ -12,6 +12,7 @@ module.exports = {
   userExists,
   createUser,
   createUserAndPermissions,
+  createUserPermissions,
   service,
   pryv,
   config
@@ -92,21 +93,28 @@ async function createUser (username, password, email) {
  * Create userAccountAndPermission
  * @param {string} username
  * @param {Object} permissions - permission set (as per pryv api) - Add name if they might not exist
+ * @param {Array<Stream creation>} initialStreams - to be created
  * @param {string} [appName] - default: from config
  * @param {string} [password] - if not provided will be 'pass{usernam}'
  * @param {string} [email] - if not provided will be '{usernam}@hds.bogus'
  * @returns {Object} username, personalApiEndpoint, appId, appApiEndpoint
  */
-async function createUserAndPermissions (username, permissions, appName, password, email) {
+async function createUserAndPermissions (username, permissions, initialStreams, appName, password, email) {
   const newUser = await createUser(username, password, email);
-  const appId = config.appId;
-  const personalConnection = new pryv.Connection(newUser.apiEndpoint);
+  const result = await createUserPermissions(newUser, permissions, initialStreams, appName);
+  result.appId = config.appId;
+  return result;
+}
+
+async function createUserPermissions (user, permissions, initialStreams = [], appName) {
+  const personalConnection = new pryv.Connection(user.apiEndpoint);
   // -- make sure requested streams exists
-  const createStreams = permissions.map(p => ({
+  const createStreams = initialStreams.map(s => ({
     method: 'streams.create',
     params: {
-      id: p.streamId,
-      name: p.name || p.streamId
+      id: s.id,
+      name: s.name,
+      parentId: s.parentId || null
     }
   }));
   // -- create access
@@ -118,14 +126,14 @@ async function createUserAndPermissions (username, permissions, appName, passwor
       permissions
     }
   };
-  const res = await personalConnection.api([...createStreams, accessRequest]);
+  const apiCalls = [...createStreams, accessRequest];
+  const res = await personalConnection.api(apiCalls);
   const accessRequestResult = res.pop();
   const appApiEndpoint = accessRequestResult.access?.apiEndpoint;
 
   const result = {
-    username: newUser.username,
-    personalApiEndpoint: newUser.apiEndpoint,
-    appId,
+    username: user.username,
+    personalApiEndpoint: user.apiEndpoint,
     appApiEndpoint
   };
 

@@ -1,24 +1,31 @@
 /* eslint-env mocha */
 const assert = require('node:assert/strict');
-const { createUserAndPermissions, pryv } = require('./test-utils/pryvService');
+const { createUserAndPermissions, pryv, createUser, createUserPermissions } = require('./test-utils/pryvService');
 const AppManagingAccount = require('../src/appTemplates/AppManagingAccount');
+const AppClientAccount = require('../src/appTemplates/AppClientAccount');
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
-  let user, appManaging;
-  const baseStreamId = 'test-app-template';
+  let managingUser, appManaging, user;
+  const baseStreamIdManager = 'test-app-template-manager';
+  const baseStreamIdClient = 'test-app-template-client';
   const appName = 'Test HDSLib.appTemplates';
+  const appClientName = 'Test Client HDSLib.appTemplates';
 
   before(async () => {
-    const permissions = [{ streamId: baseStreamId, level: 'manage' }];
-    user = await createUserAndPermissions(null, permissions, appName);
-    const connection = new pryv.Connection(user.appApiEndpoint);
-    appManaging = await AppManagingAccount.newFromConnection(connection, baseStreamId);
+    // -- managing
+    const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamIdManager, name: appName, parentId: 'applications' }];
+    const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
+    managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
+    const connection = new pryv.Connection(managingUser.appApiEndpoint);
+    appManaging = await AppManagingAccount.newFromConnection(connection, baseStreamIdManager);
+    // -- user
+    user = await createUser();
   });
 
   it('[APTA] Full flow create collector and sharing', async () => {
     assert.equal(appManaging.appName, appName);
-    assert.equal(appManaging.baseStreamId, baseStreamId);
+    assert.equal(appManaging.baseStreamId, baseStreamIdManager);
 
     const collectorEmpty = await appManaging.getCollectors();
     assert.ok(Array.isArray(collectorEmpty), 'Collectors should be an array');
@@ -26,13 +33,13 @@ describe('[APTX] appTemplates', function () {
 
     const collectorName = 'Test';
     // create a Collector
-    const newCollector = await appManaging.createCollector(collectorName);
-    assert.ok(newCollector.streamId.startsWith(baseStreamId), 'Collectors id should start with baseStreamId');
+    const newCollector = await appManaging.createCollectorUnitialized(collectorName);
+    assert.ok(newCollector.streamId.startsWith(baseStreamIdManager), 'Collectors id should start with baseStreamId');
     assert.ok(newCollector.name, collectorName);
 
     // Create a Collector with the same name should fail
     try {
-      await appManaging.createCollector(collectorName);
+      await appManaging.createCollectorUnitialized(collectorName);
       throw new Error('Creating a Collector with the same name should fail');
     } catch (e) {
       assert.ok(e.message.endsWith('>> Result: {"id":"item-already-exists","message":"A stream with name \\"Test\\" already exists","data":{"name":"Test"}}"'));
@@ -86,7 +93,7 @@ describe('[APTX] appTemplates', function () {
 
     // creating a new Manager with same connection should load the structure
     const connection2 = new pryv.Connection(appManaging.connection.apiEndpoint);
-    const appManaging2 = await AppManagingAccount.newFromConnection(connection2, baseStreamId);
+    const appManaging2 = await AppManagingAccount.newFromConnection(connection2, baseStreamIdManager);
     // check if collector is in the list
     const collectors2 = await appManaging2.getCollectors();
     const collector2 = collectors2.find(c => c.name === collectorName);
@@ -97,5 +104,42 @@ describe('[APTX] appTemplates', function () {
     // should return the same access access point
     const sharingApiEndpoint3 = await collector2.sharingApiEndpoint();
     assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
+  });
+
+  it('[APTI] Collector invite', async () => {
+    const newCollector = await appManaging.createCollector('Invite test 1');
+    assert(newCollector.statusCode, 'draft');
+
+    // create invite
+    const options = { customData: { hello: 'bob' } };
+    const invite = await newCollector.createInvite('Invite One', options);
+    assert.equal(invite.apiEndpoint, await newCollector.sharingApiEndpoint());
+    assert.ok(invite.eventId.length > 5);
+
+    // check invite can be found in "pendings"
+    const inviteEvent = await appManaging.connection.apiOne('events.getOne', { id: invite.eventId }, 'event');
+    assert.equal(inviteEvent.type, 'invite/collector-v1');
+    assert.ok(inviteEvent.streamIds[0].endsWith('-pending'));
+    assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
+
+    // Invitee receives the invite
+  });
+
+  describe('[APCX] app Templates Client', function () {
+    it('[APCE] Should throw error if not initiaized with a personal or master token', async () => {
+      const permissionsManager = [{ streamId: 'dummy', level: 'manage' }];
+      const clientUserNonMaster = await createUserPermissions(user, permissionsManager, [], appName);
+      // non master app
+      try {
+        await AppClientAccount.newFromApiEndpoint(clientUserNonMaster.appApiEndpoint, baseStreamIdClient, appClientName);
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'AppClientAccount with "app" type of access requires "master" token (streamId = "*", level = "manage")');
+      }
+      // personal
+      const appClient = await AppClientAccount.newFromApiEndpoint(user.apiEndpoint, baseStreamIdClient, appClientName);
+      assert.equal(appClient.streamData.id, baseStreamIdClient);
+      assert.equal(appClient.streamData.name, appClientName);
+    });
   });
 });

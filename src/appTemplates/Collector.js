@@ -107,8 +107,21 @@ class Collector {
    * @param {Object} [options]
    * @param {Object} [options.customData] any data to be used by the client app
    */
-  async createInvite (name, options) {
-
+  async createInvite (name, options = {}) {
+    const eventParams = {
+      type: 'invite/collector-v1',
+      streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.pending)],
+      content: {
+        name,
+        customData: options.customData || {}
+      }
+    };
+    const newInvite = await this.appManaging.connection.apiOne('events.create', eventParams, 'event');
+    const result = {
+      apiEndpoint: await this.sharingApiEndpoint(),
+      eventId: newInvite.id
+    };
+    return result;
   }
 
   /**

@@ -10,7 +10,8 @@ const Collector = require('./Collector');
  * The App can create multiple "collectors e.g. Questionnaries"
  *
  * Stream structure
- * - [baseStreamId]  "Root" stream for this app
+ * - applications
+ *   - [baseStreamId]  "Root" stream for this app
  *     - [baseStreamId]-[collectorsId] Each "questionnary" or "request for a set of data" has it's own stream
  *       - [baseStreamId]-[collectorsId]-internal Private stuff not to be shared
  *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
@@ -30,6 +31,7 @@ class AppManagingAccount {
   #cache;
 
   /**
+   * @private
    * use AppManagingAccount.newFromConnection() to create new AppManagingAccount
    * @param {string} appName
    * @param {string} baseStreamId
@@ -44,7 +46,7 @@ class AppManagingAccount {
 
   /**
    * Return an initialized AppManagingAccount instance
-   * @param {Pryv.Connection} connection
+   * @param {Pryv.Connection} connection - should be personalConnection, a connection with "manage" right on `baseStreamId` or "manage" on "*"
    * @returns {AppManagingAccount}
    */
   static async newFromConnection (connection, baseStreamId) {
@@ -72,7 +74,23 @@ class AppManagingAccount {
     return Object.values(this.#cache.collectorsMap);
   }
 
+  /**
+   * Create an iniatilized Collector
+   * @param {string} name
+   * @returns {Collector}
+   */
   async createCollector (name) {
+    const collector = await this.createCollectorUnitialized(name);
+    await collector.init();
+    return collector;
+  }
+
+  /**
+   * Create an unitialized Collector (mostly used by tests)
+   * @param {string} name
+   * @returns {Collector}
+   */
+  async createCollectorUnitialized (name) {
     const streamId = this.baseStreamId + '-' + collectorIdGenerator.rnd();
     const params = {
       id: streamId,
@@ -90,15 +108,17 @@ module.exports = AppManagingAccount;
 
 async function newAppManagingAccountFromConnection (connection, baseStreamId) {
   const accessInfo = await connection.apiOne('getAccessInfo');
-  if (!accessInfo.type === 'app') throw new Error('Failed creating new AppManagingAccount, "app" authorization required: ' + JSON.stringify(accessInfo));
-  // check if baseStreamId is in pemission set
-  const found = accessInfo.permissions.find(p => (p.streamId === baseStreamId || p.streamId === '*'));
-  if (found && found.level !== 'manage') { // check if level 'manage'
-    throw new Error(`Failed creating new AppManagingAccount, Not sufficient permissions on stream: ${baseStreamId}`);
-  }
-  if (!found) {
-    // here we may check if we can create or manage baseStreamId as it might be covered by permissions
-    throw new Error(`Failed creating new AppManagingAccount, cannot find "${baseStreamId}" in permission list`);
+  if (!accessInfo.type === 'personal') {
+    if (!accessInfo.type === 'app') throw new Error('Failed creating new AppManagingAccount, "app" authorization required: ' + JSON.stringify(accessInfo));
+    // check if baseStreamId is in pemission set
+    const found = accessInfo.permissions.find(p => (p.streamId === baseStreamId || p.streamId === '*'));
+    if (found && found.level !== 'manage') { // check if level 'manage'
+      throw new Error(`Failed creating new AppManagingAccount, Not sufficient permissions on stream: ${baseStreamId}`);
+    }
+    if (!found) {
+      // here we may check if we can create or manage baseStreamId as it might be covered by permissions
+      throw new Error(`Failed creating new AppManagingAccount, cannot find "${baseStreamId}" in permission list`);
+    }
   }
   const appManagingAccount = new AppManagingAccount(accessInfo.name, baseStreamId, connection);
   return appManagingAccount;
