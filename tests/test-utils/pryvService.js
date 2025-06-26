@@ -1,5 +1,5 @@
 require('./debug');
-const pryv = require('pryv');
+const pryv = require('../../src/patchedPryv');
 const superagent = pryv.utils.superagent;
 
 const ShortUniqueId = require('short-unique-id');
@@ -13,6 +13,7 @@ module.exports = {
   createUser,
   createUserAndPermissions,
   service,
+  pryv,
   config
 };
 

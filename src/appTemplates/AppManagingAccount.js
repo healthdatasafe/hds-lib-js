@@ -12,6 +12,7 @@ const collectorIdGenerator = new ShortUniqueId({ dictionary: 'alphanum_lower', l
  * Stream structure
  * - [baseStreamId]  "Root" stream for this app
  *     - [baseStreamId]-[collectorsId] Each "questionnary" or "request for a set of data" has it's own stream
+ *       - [baseStreamId]-[collectorsId]-internal Private stuff not to be shared
  *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
  *       - [baseStreamId]-[collectorsId]-pending Contains events with "pending" requests
  *       - [baseStreamId]-[collectorsId]-inbox Contains events with "inbox" requests Will be shared in createOnly
@@ -99,6 +100,7 @@ class AppManagingAccount {
 }
 
 const COLLECTOR_STREAMID_SUFFIXES = {
+  internal: 'internal',
   public: 'public',
   pending: 'pending',
   inbox: 'inbox',
@@ -108,6 +110,12 @@ const COLLECTOR_STREAMID_SUFFIXES = {
 Object.freeze(COLLECTOR_STREAMID_SUFFIXES);
 class Collector {
   static STREAMID_SUFFIXES = COLLECTOR_STREAMID_SUFFIXES;
+  static STATUSES = Object.freeze({
+    draft: 'draft',
+    active: 'active',
+    deactivated: 'deactivated'
+  });
+
   appManaging;
   streamId;
   name;
@@ -124,6 +132,76 @@ class Collector {
     this.appManaging = appManaging;
     this.#streamData = streamData;
     this.#cache = {};
+  }
+
+  /**
+   * @property {string} one of 'draft', 'active', 'deactivated'
+   */
+  get statusCode () {
+    if (this.#cache.status == null) throw new Error('Init Collector first');
+    return this.#cache.status.content.status;
+  }
+
+  /**
+   * Fetch online data
+   */
+  async init () {
+    await this.checkStreamStructure();
+    await this.getStatus();
+  }
+
+  /**
+   * @type {StatusEvent} - extends PryvEvent with a specific content
+   * @property {Object} content - content
+   * @property {String} content.status - one of 'draft', 'active', 'deactivated'
+   * @property {Data} content.data - app specific data
+   */
+
+  /**
+   * Get Collector status,
+   * @param {boolean} forceRefresh - if true, forces fetching the status from the server
+   * @returns {StatusEvent}
+   */
+  async getStatus (forceRefresh = false) {
+    if (!forceRefresh && this.#cache.status) return this.#cache.status;
+    const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)] };
+    const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
+    if (statusEvents.length === 0) { // non exsitent set "draft" status
+      return this.setStatus(Collector.STATUSES.draft, {});
+    }
+    this.#cache.status = statusEvents[0];
+    return this.#cache.status;
+  }
+
+  /**
+   * Change the status
+   * @param {string} status one of of 'draft', 'active', 'deactivated'
+   * @param {object} data - custom data
+   * @returns {StatusEvent}
+   */
+  async setStatus (status, data) {
+    if (!Collector.STATUSES[status]) throw new HDSLibError('Unkown status key', { status, data });
+    const event = {
+      type: 'status/collector-v1',
+      streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)],
+      content: {
+        status,
+        data
+      }
+    };
+    const statusEvent = await this.appManaging.connection.apiOne('events.create', event, 'event');
+    this.#cache.status = statusEvent;
+    return this.#cache.status;
+  }
+
+  /**
+   * Create a "pending" invite to be sent to an app usin AppSharingAccount
+   * @param {string} name a default display name for this request
+   * @param {Object} [options]
+   * @param {Object} [options.customData] any data to be used by the client app
+   */
+  async createInvite (name, options) {
+
   }
 
   /**

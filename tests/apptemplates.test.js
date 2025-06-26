@@ -1,8 +1,7 @@
 /* eslint-env mocha */
 const assert = require('node:assert/strict');
-const { createUserAndPermissions } = require('./test-utils/pryvService');
+const { createUserAndPermissions, pryv } = require('./test-utils/pryvService');
 const AppManagingAccount = require('../src/appTemplates/AppManagingAccount');
-const pryv = require('pryv');
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -48,7 +47,7 @@ describe('[APTX] appTemplates', function () {
 
     // check StreamStructure
     const resultCheckStructure = await newCollector.checkStreamStructure();
-    assert.equal(resultCheckStructure.created.length, 5, 'Should create 5 streams');
+    assert.equal(resultCheckStructure.created.length, 6, 'Should create 5 streams');
     for (const created of resultCheckStructure.created) {
       assert.equal(created.parentId, newCollector.streamId, 'Should have collector stream as parentid');
     }
@@ -56,6 +55,24 @@ describe('[APTX] appTemplates', function () {
     // 2nd call of StreamStructure should be empty
     const resultCheckStructure2 = await newCollector.checkStreamStructure();
     assert.equal(resultCheckStructure2.created.length, 0, 'Should create 0 streams');
+
+    // Should throw error as status is not yet set
+    try {
+      // eslint-disable-next-line no-unused-expressions
+      newCollector.statusCode;
+      throw new Error('Should throw error');
+    } catch (e) {
+      assert.equal(e.message, 'Init Collector first');
+    }
+
+    // Get status
+    const currentStatus = await newCollector.getStatus();
+    assert.equal(currentStatus.content.status, 'draft');
+    assert.equal(newCollector.statusCode, 'draft');
+
+    // Get status 2nd should retrun the same
+    const currentStatus2 = await newCollector.getStatus();
+    assert.equal(currentStatus2, currentStatus);
 
     // Sharing token creation
     const sharingApiEndpoint = await newCollector.sharingApiEndpoint();
