@@ -35,7 +35,7 @@ describe('[APTX] appTemplates', function () {
       await appManaging.createCollector(collectorName);
       throw new Error('Creating a Collector with the same name should fail');
     } catch (e) {
-      assert.equal(e.message, 'Failed creating collector >> A stream with name "Test" already exists');
+      assert.ok(e.message.endsWith('>> Result: {"id":"item-already-exists","message":"A stream with name \\"Test\\" already exists","data":{"name":"Test"}}"'));
       assert.equal(e.innerObject?.id, 'item-already-exists');
     }
 

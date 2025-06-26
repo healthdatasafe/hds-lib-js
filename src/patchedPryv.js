@@ -13,7 +13,12 @@ const pryv = require('pryv');
  */
 pryv.Connection.prototype.apiOne = async function (method, params = {}, expectedKey) {
   const result = await this.api([{ method, params }]);
-  if (result[0] == null || result[0].error || (expectedKey != null && result[0][expectedKey] == null)) throw new Error(`Error for api method: "${method}" with params: ${JSON.stringify(params)} >> Result: ${JSON.stringify(result)}"`);
+  if (result[0] == null || result[0].error || (expectedKey != null && result[0][expectedKey] == null)) {
+    const innerObject = result[0]?.error || result;
+    const error = new Error(`Error for api method: "${method}" with params: ${JSON.stringify(params)} >> Result: ${JSON.stringify(innerObject)}"`);
+    error.innerObject = innerObject;
+    throw error;
+  }
   if (expectedKey != null) return result[0][expectedKey];
   return result[0];
 };
