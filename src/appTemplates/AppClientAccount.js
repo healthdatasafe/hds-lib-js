@@ -11,10 +11,6 @@ class AppClientAccount extends Application {
     };
   }
 
-  get streamData () {
-    return this.cache.streamData;
-  }
-
   /**
    * - Check connection validity
    * - Make sure stream structure exists

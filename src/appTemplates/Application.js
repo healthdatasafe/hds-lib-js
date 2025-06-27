@@ -9,8 +9,18 @@ class Application {
 
   cache;
 
+  /**
+   * Get application stream structure
+   * Initialized at init()
+   * Can be refreshed with loadStreamData
+   */
+  get streamData () {
+    if (!this.cache.streamData) throw new Error('Call .init() first');
+    return this.cache.streamData;
+  }
+
   get appSettings () {
-    throw new Error('appSettings must be implemneted');
+    throw new Error('appSettings must be implemented');
     // possible return values:
     /**
      * return {
@@ -69,6 +79,17 @@ class Application {
   async init () {
     await createAppStreams(this);
   }
+
+  /**
+   * Force loading of streamData
+   */
+  async loadStreamData () {
+    const streamData = (await this.connection.apiOne('streams.get', { id: this.baseStreamId }, 'streams'))[0];
+    if (streamData) {
+      this.cache.streamData = streamData;
+    }
+    return streamData;
+  }
 }
 
 module.exports = Application;
@@ -101,11 +122,8 @@ async function createAppStreams (app) {
   // get streamStructure
   let found = false;
   try {
-    const stream = (await app.connection.apiOne('streams.get', { id: app.baseStreamId }, 'streams'))[0];
-    if (stream) {
-      app.cache.streamData = stream;
-    }
-    found = true;
+    const streamData = await app.loadStreamData();
+    if (streamData) found = true;
   } catch (e) {
     if (e.innerObject?.id !== 'unknown-referenced-resource' || e.innerObject?.data?.id !== 'test-app-template-client') {
       throw e;

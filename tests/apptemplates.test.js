@@ -36,6 +36,8 @@ describe('[APTX] appTemplates', function () {
     const newCollector = await appManaging.createCollectorUnitialized(collectorName);
     assert.ok(newCollector.streamId.startsWith(baseStreamIdManager), 'Collectors id should start with baseStreamId');
     assert.ok(newCollector.name, collectorName);
+    // check that streams has been addes to streamData
+    assert.ok(appManaging.streamData.children[0].name, collectorName);
 
     // Create a Collector with the same name should fail
     try {

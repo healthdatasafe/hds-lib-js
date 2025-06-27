@@ -41,7 +41,8 @@ class AppManagingAccount extends Application {
   async getCollectors (forceRefresh) {
     if (!forceRefresh && this.cache.collectorsMap) return Object.values(this.cache.collectorsMap);
     // Collectors are materialized by streams
-    const streams = await this.connection.apiOne('streams.get', { parentId: this.baseStreamId }, 'streams');
+    if (forceRefresh) await this.loadStreamData();
+    const streams = this.streamData.children || [];
     const collectorsMap = {};
     for (const stream of streams) {
       const collector = new Collector(this, stream);
@@ -75,6 +76,8 @@ class AppManagingAccount extends Application {
       parentId: this.baseStreamId
     };
     const stream = await this.connection.apiOne('streams.create', params, 'stream');
+    // add new stream to streamCache
+    this.streamData.children.push(stream);
     const collector = new Collector(this, stream);
     this.cache.collectorsMap[collector.streamId] = collector;
     return collector;
