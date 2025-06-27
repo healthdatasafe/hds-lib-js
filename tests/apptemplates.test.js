@@ -128,7 +128,7 @@ describe('[APTX] appTemplates', function () {
   });
 
   describe('[APCX] app Templates Client', function () {
-    it('[APCE] Should throw error if not initiaized with a personal or master token', async () => {
+    it('[APCE] Should throw error if not initialized with a personal or master token', async () => {
       const permissionsManager = [{ streamId: 'dummy', level: 'manage' }];
       const clientUserNonMaster = await createUserPermissions(user, permissionsManager, [], appName);
       // non master app

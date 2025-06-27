@@ -1,5 +1,5 @@
 /**
- * Client App in realtion with a AppManagingAccount/Collector
+ * Client App in relation to an AppManagingAccount/Collector
  * A "Collector" can be seen as a "Request" and set of "Responses"
  *
  */

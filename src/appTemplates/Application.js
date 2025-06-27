@@ -40,7 +40,7 @@ class Application {
    */
   static async newFromApiEndpoint (baseStreamId, apiEndpoint, appName) {
     const connection = new pryv.Connection(apiEndpoint);
-    // in a static method "this" is the Class (here the extending class)
+    // in a static method, "this" is the class (here the extending class)
     return await this.newFromConnection(baseStreamId, connection, appName);
   }
 
@@ -52,7 +52,7 @@ class Application {
   *  @returns {AppClientAccount}
   */
   static async newFromConnection (baseStreamId, connection, appName) {
-    // in a static method "this" is the Class (here the extending class)
+    // in a static method "this" is the class (here the extending class)
     const app = new this(baseStreamId, connection, appName);
     await app.init();
     return app;

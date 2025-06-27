@@ -1,5 +1,5 @@
 /**
- * Collector is use by AppManagingAccount
+ * Collector is used by AppManagingAccount
  * A "Collector" can be seen as a "Request" and set of "Responses"
  * - Responses are authorization tokens from individuals
  */
@@ -102,7 +102,7 @@ class Collector {
   }
 
   /**
-   * Create a "pending" invite to be sent to an app usin AppSharingAccount
+   * Create a "pending" invite to be sent to an app using AppSharingAccount
    * @param {string} name a default display name for this request
    * @param {Object} [options]
    * @param {Object} [options.customData] any data to be used by the client app
@@ -172,7 +172,7 @@ class Collector {
    * check if required streams are present, if not create them
    */
   async checkStreamStructure () {
-    // if streamData has correct children structure we assume all is OK
+    // if streamData has correct child structure, we assume all is OK
     const childrenData = this.#streamData.children;
     const toCreate = Object.values(Collector.STREAMID_SUFFIXES)
       .filter((suffix) => {

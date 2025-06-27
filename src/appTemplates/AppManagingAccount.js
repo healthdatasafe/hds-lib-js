@@ -13,7 +13,7 @@ const Collector = require('./Collector');
  * Stream structure
  * - applications
  *   - [baseStreamId]  "Root" stream for this app
- *     - [baseStreamId]-[collectorsId] Each "questionnary" or "request for a set of data" has it's own stream
+ *     - [baseStreamId]-[collectorsId] Each "questionnaire" or "request for a set of data" has it's own stream
  *       - [baseStreamId]-[collectorsId]-internal Private stuff not to be shared
  *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
  *       - [baseStreamId]-[collectorsId]-pending Contains events with "pending" requests
@@ -64,7 +64,7 @@ class AppManagingAccount extends Application {
   }
 
   /**
-   * Create an unitialized Collector (mostly used by tests)
+   * Create an un-initialized Collector (mostly used by tests)
    * @param {string} name
    * @returns {Collector}
    */
