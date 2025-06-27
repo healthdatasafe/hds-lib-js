@@ -1,5 +1,6 @@
 const ShortUniqueId = require('short-unique-id');
 const collectorIdGenerator = new ShortUniqueId({ dictionary: 'alphanum_lower', length: 7 });
+const Application = require('./Application');
 const Collector = require('./Collector');
 
 /**
@@ -20,49 +21,25 @@ const Collector = require('./Collector');
  *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
  *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
  */
-class AppManagingAccount {
-  /** @type {Pryv.Connection} */
-  connection;
-  /** @type {string} */
-  baseStreamId;
-  /** @type {string} */
-  appName;
-
-  #cache;
-
-  /**
-   * @private
-   * use AppManagingAccount.newFromConnection() to create new AppManagingAccount
-   * @param {string} appName
-   * @param {string} baseStreamId
-   * @param {Pryv.Connection} connection
-   */
-  constructor (appName, baseStreamId, connection) {
-    this.baseStreamId = baseStreamId;
-    this.appName = appName;
-    this.connection = connection;
-    this.#cache = { };
-  }
-
-  /**
-   * Return an initialized AppManagingAccount instance
-   * @param {Pryv.Connection} connection - should be personalConnection, a connection with "manage" right on `baseStreamId` or "manage" on "*"
-   * @returns {AppManagingAccount}
-   */
-  static async newFromConnection (connection, baseStreamId) {
-    const appManagingAccount = await newAppManagingAccountFromConnection(connection, baseStreamId);
-    await appManagingAccount.init();
-    return appManagingAccount;
+class AppManagingAccount extends Application {
+  // used by Application.init();
+  get appSettings () {
+    return {
+      canBePersonnal: true,
+      mustBeMaster: true,
+      appNameFromAccessInfo: true // application name will be taken from Access-Info Name
+    };
   }
 
   async init () {
+    await super.init();
     // -- check if stream structure exists
     await this.getCollectors();
     return this;
   }
 
   async getCollectors (forceRefresh) {
-    if (!forceRefresh && this.#cache.collectorsMap) return Object.values(this.#cache.collectorsMap);
+    if (!forceRefresh && this.cache.collectorsMap) return Object.values(this.cache.collectorsMap);
     // Collectors are materialized by streams
     const streams = await this.connection.apiOne('streams.get', { parentId: this.baseStreamId }, 'streams');
     const collectorsMap = {};
@@ -70,8 +47,8 @@ class AppManagingAccount {
       const collector = new Collector(this, stream);
       collectorsMap[collector.streamId] = collector;
     }
-    this.#cache.collectorsMap = collectorsMap;
-    return Object.values(this.#cache.collectorsMap);
+    this.cache.collectorsMap = collectorsMap;
+    return Object.values(this.cache.collectorsMap);
   }
 
   /**
@@ -99,27 +76,9 @@ class AppManagingAccount {
     };
     const stream = await this.connection.apiOne('streams.create', params, 'stream');
     const collector = new Collector(this, stream);
-    this.#cache.collectorsMap[collector.streamId] = collector;
+    this.cache.collectorsMap[collector.streamId] = collector;
     return collector;
   }
 }
 
 module.exports = AppManagingAccount;
-
-async function newAppManagingAccountFromConnection (connection, baseStreamId) {
-  const accessInfo = await connection.apiOne('getAccessInfo');
-  if (!accessInfo.type === 'personal') {
-    if (!accessInfo.type === 'app') throw new Error('Failed creating new AppManagingAccount, "app" authorization required: ' + JSON.stringify(accessInfo));
-    // check if baseStreamId is in pemission set
-    const found = accessInfo.permissions.find(p => (p.streamId === baseStreamId || p.streamId === '*'));
-    if (found && found.level !== 'manage') { // check if level 'manage'
-      throw new Error(`Failed creating new AppManagingAccount, Not sufficient permissions on stream: ${baseStreamId}`);
-    }
-    if (!found) {
-      // here we may check if we can create or manage baseStreamId as it might be covered by permissions
-      throw new Error(`Failed creating new AppManagingAccount, cannot find "${baseStreamId}" in permission list`);
-    }
-  }
-  const appManagingAccount = new AppManagingAccount(accessInfo.name, baseStreamId, connection);
-  return appManagingAccount;
-}

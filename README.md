@@ -88,7 +88,9 @@ const itemKeys = [
 
 ### AppTemplates
 
+App templates based on HDS Model, provide frameworks to build application for HDS.
 
+Some of the functionnalities will be moved from the lib
 
 
 

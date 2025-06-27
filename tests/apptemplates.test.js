@@ -18,7 +18,7 @@ describe('[APTX] appTemplates', function () {
     const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
     managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
     const connection = new pryv.Connection(managingUser.appApiEndpoint);
-    appManaging = await AppManagingAccount.newFromConnection(connection, baseStreamIdManager);
+    appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
     // -- user
     user = await createUser();
   });
@@ -93,7 +93,7 @@ describe('[APTX] appTemplates', function () {
 
     // creating a new Manager with same connection should load the structure
     const connection2 = new pryv.Connection(appManaging.connection.apiEndpoint);
-    const appManaging2 = await AppManagingAccount.newFromConnection(connection2, baseStreamIdManager);
+    const appManaging2 = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection2);
     // check if collector is in the list
     const collectors2 = await appManaging2.getCollectors();
     const collector2 = collectors2.find(c => c.name === collectorName);
@@ -131,13 +131,13 @@ describe('[APTX] appTemplates', function () {
       const clientUserNonMaster = await createUserPermissions(user, permissionsManager, [], appName);
       // non master app
       try {
-        await AppClientAccount.newFromApiEndpoint(clientUserNonMaster.appApiEndpoint, baseStreamIdClient, appClientName);
+        await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserNonMaster.appApiEndpoint, appClientName);
         throw new Error('Should throw error');
       } catch (e) {
-        assert.equal(e.message, 'AppClientAccount with "app" type of access requires "master" token (streamId = "*", level = "manage")');
+        assert.equal(e.message, `Application with "app" type of access requires  (streamId = '${baseStreamIdClient}', level = "manage") or master access`);
       }
       // personal
-      const appClient = await AppClientAccount.newFromApiEndpoint(user.apiEndpoint, baseStreamIdClient, appClientName);
+      const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, user.apiEndpoint, appClientName);
       assert.equal(appClient.streamData.id, baseStreamIdClient);
       assert.equal(appClient.streamData.name, appClientName);
     });
