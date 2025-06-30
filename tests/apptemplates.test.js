@@ -19,7 +19,7 @@ describe('[APTX] appTemplates', function () {
     managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
     const connection = new pryv.Connection(managingUser.appApiEndpoint);
     appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
-    // -- user
+    // -- receiving user
     user = await createUser();
   });
 
@@ -125,12 +125,20 @@ describe('[APTX] appTemplates', function () {
     assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
 
     // Invitee receives the invite
+    const permissionsClient = [{ streamId: '*', level: 'manage' }];
+    const clientUser = await createUserPermissions(user, permissionsClient, [], appClientName);
+    const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUser.appApiEndpoint, appClientName);
+    const collectorClient = await appClient.handleIncomingRequest(invite.apiEndpoint, invite.eventId);
+    assert.equal(collectorClient.eventData.streamIds[0], appClient.baseStreamId);
+    assert.equal(collectorClient.eventData.content.apiEndpoint, invite.apiEndpoint);
+    assert.equal(collectorClient.eventData.content.requesterEventId, invite.eventId);
+    // check collectorClient.eventData.accessInfo
   });
 
   describe('[APCX] app Templates Client', function () {
     it('[APCE] Should throw error if not initialized with a personal or master token', async () => {
-      const permissionsManager = [{ streamId: 'dummy', level: 'manage' }];
-      const clientUserNonMaster = await createUserPermissions(user, permissionsManager, [], appName);
+      const permissionsDummy = [{ streamId: 'dummy', level: 'manage' }];
+      const clientUserNonMaster = await createUserPermissions(user, permissionsDummy, [], appName);
       // non master app
       try {
         await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserNonMaster.appApiEndpoint, appClientName);

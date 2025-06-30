@@ -1,4 +1,7 @@
 const pryv = require('../patchedPryv');
+/**
+ * Common code for AppClientAccount and AppManagingAccount
+ */
 class Application {
   /** @type {Pryv.Connection} */
   connection;
@@ -114,7 +117,8 @@ async function createAppStreams (app) {
     isPersonalOrMaster = true;
     if (app.appSettings.mustBemaster && !masterFound) {
       throw new Error('Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
-    } else { // check that app has "manage" level on baseStreamId
+    }
+    if (!masterFound) { // check that app has "manage" level on baseStreamId
       const baseStreamFound = infos.permissions.find(p => (p.streamId === app.baseStreamId && p.level === 'manage'));
       if (!baseStreamFound) throw new Error(`Application with "app" type of access requires  (streamId = '${app.baseStreamId}', level = "manage") or master access`);
     }

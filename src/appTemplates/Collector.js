@@ -153,10 +153,10 @@ class Collector {
     const clientData = {
       hdsCollector: {
         public: {
-          streamId: this.streamIdFor(Collector.public)
+          streamId: this.streamIdFor(Collector.STREAMID_SUFFIXES.public)
         },
         inbox: {
-          streamId: this.streamIdFor(Collector.inbox)
+          streamId: this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox)
         }
       }
     };

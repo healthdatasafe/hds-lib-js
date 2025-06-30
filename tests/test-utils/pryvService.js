@@ -130,7 +130,6 @@ async function createUserPermissions (user, permissions, initialStreams = [], ap
   const res = await personalConnection.api(apiCalls);
   const accessRequestResult = res.pop();
   const appApiEndpoint = accessRequestResult.access?.apiEndpoint;
-
   const result = {
     username: user.username,
     personalApiEndpoint: user.apiEndpoint,
