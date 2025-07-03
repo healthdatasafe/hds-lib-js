@@ -21,7 +21,7 @@ An `ItemdDef`  is an object representation of the items from the data Model
 
 ```javascript
 // retrieve an itemDef by it's key
-const weight = mode.itemDefs.forKey('body-weight');
+const weight = model.itemDefs.forKey('body-weight');
 weight.streamId; // => 'body-weight'
 weight.eventTypes; // => 'mass/kg', 'mass/lb']
 ```

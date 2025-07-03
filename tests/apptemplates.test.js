@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { createUserAndPermissions, pryv, createUser, createUserPermissions } = require('./test-utils/pryvService');
 const AppManagingAccount = require('../src/appTemplates/AppManagingAccount');
 const AppClientAccount = require('../src/appTemplates/AppClientAccount');
+const Collector = require('../src/appTemplates/Collector');
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -74,14 +75,31 @@ describe('[APTX] appTemplates', function () {
       assert.equal(e.message, 'Init Collector first');
     }
 
+    await newCollector.init();
+
     // Get status
-    const currentStatus = await newCollector.getStatus();
-    assert.equal(currentStatus.content.status, 'draft');
     assert.equal(newCollector.statusCode, 'draft');
 
-    // Get status 2nd should retrun the same
-    const currentStatus2 = await newCollector.getStatus();
-    assert.equal(currentStatus2, currentStatus);
+    // trying to get a sharing token in draft should throw an error
+    try {
+      // eslint-disable-next-line no-unused-expressions
+      await newCollector.sharingApiEndpoint();
+      throw new Error('Should throw error');
+    } catch (e) {
+      assert.equal(e.message, 'Collector must be in "active" state error to get sharing link, current: draft');
+    }
+
+    // trying to create an invite in draft should throw an error
+    try {
+      // eslint-disable-next-line no-unused-expressions
+      await newCollector.createInvite({});
+      throw new Error('Should throw error');
+    } catch (e) {
+      assert.equal(e.message, 'Collector must be in "active" state error to create invite, current: draft');
+    }
+
+    // Publish
+    await newCollector.publish();
 
     // Sharing token creation
     const sharingApiEndpoint = await newCollector.sharingApiEndpoint();
@@ -104,6 +122,7 @@ describe('[APTX] appTemplates', function () {
     const resultCheckStructure3 = await collector2.checkStreamStructure();
     assert.equal(resultCheckStructure3.created.length, 0, 'Should create 0 streams');
     // should return the same access access point
+    await collector2.init();
     const sharingApiEndpoint3 = await collector2.sharingApiEndpoint();
     assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
   });
@@ -111,6 +130,41 @@ describe('[APTX] appTemplates', function () {
   it('[APTI] Collector invite', async () => {
     const newCollector = await appManaging.createCollector('Invite test 1');
     assert(newCollector.statusCode, 'draft');
+
+    // set request content
+    const requestContent = {
+      version: 0,
+      description: {
+        en: 'Short Description'
+      },
+      consent: {
+        en: 'This is a consent message'
+      },
+      permissions: [
+        { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+        {
+          streamId: 'profile-date-of-birth',
+          defaultName: 'Date of Birth',
+          level: 'read'
+        }
+      ],
+      app: { // may have "url" in the future
+        id: 'test-app',
+        url: 'https://xxx.yyy',
+        data: { // settings for the app
+          dummy: 'dummy'
+        }
+      }
+    };
+    newCollector.statusData.requestContent = requestContent;
+
+    // save
+    await newCollector.save();
+    assert.deepEqual(newCollector.statusData.requestContent, requestContent);
+    assert.ok(newCollector.statusData.requestContent !== requestContent, 'Should be the same content but different objects');
+    // publish
+    await newCollector.publish();
+    assert.equal(newCollector.statusCode, Collector.STATUSES.active);
 
     // create invite
     const options = { customData: { hello: 'bob' } };
@@ -132,7 +186,14 @@ describe('[APTX] appTemplates', function () {
     assert.equal(collectorClient.eventData.streamIds[0], appClient.baseStreamId);
     assert.equal(collectorClient.eventData.content.apiEndpoint, invite.apiEndpoint);
     assert.equal(collectorClient.eventData.content.requesterEventId, invite.eventId);
-    // check collectorClient.eventData.accessInfo
+
+    // TODO check collectorClient.eventData.accessInfo
+
+    // check collectorClients
+    const collectorClientsCached = await appClient.getCollectorClients();
+    assert.equal(collectorClientsCached.length, 1);
+    const collectorClients = await appClient.getCollectorClients(true);
+    assert.equal(collectorClients.length, 1);
   });
 
   describe('[APCX] app Templates Client', function () {

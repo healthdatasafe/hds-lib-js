@@ -29,36 +29,51 @@ class AppClientAccount extends Application {
    */
   async handleIncomingRequest (apiEndpoint, incomingEventId) {
     const requesterConnection = new pryv.Connection(apiEndpoint);
-    const accessInfos = await requesterConnection.accessInfo();
+    const accessInfo = await requesterConnection.accessInfo();
     // check if request is known
-    if (this.cache.collectorClientsMap[CollectorClient.keyFromInfo(accessInfos)]) {
-      const collectorClient = this.collectoClientsMap[accessInfos.name];
+    if (this.cache.collectorClientsMap[CollectorClient.keyFromInfo(accessInfo)]) {
+      const collectorClient = this.collectoClientsMap[accessInfo.name];
       if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
         throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
       }
       return collectorClient;
     }
     // check if comming form hdsCollector
-    if (!accessInfos?.clientData?.hdsCollector) {
-      throw new HDSLibError('Invalid collector request, cannot find clientData.hdsCollector', { clientData: accessInfos?.clientData });
+    if (!accessInfo?.clientData?.hdsCollector || accessInfo.clientData?.hdsCollector?.version !== 0) {
+      throw new HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
     }
     // else create it
 
-    const collectorClient = await CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfos);
+    const collectorClient = await CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
     this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
     return collectorClient;
   }
 
-  async getCollectorClients () {
+  async getCollectorClients (forceRefresh = false) {
+    if (!forceRefresh && this.cache.collectorClientsMapInitialized) return Object.values(this.cache.collectoClientsMap);
     const apiCalls = [{
       method: 'accesses.get',
       params: { includeDeletions: true }
     }, {
       method: 'events.get',
-      params: { types: ['request/collector-client-v1'], streamIds: [this.baseStreamId], limit: MAX_COLLECTORS }
-    }
-    ];
+      params: { types: ['request/collector-client-v1'], streams: [this.baseStreamId], limit: MAX_COLLECTORS }
+    }];
     const [accessesRes, eventRes] = await this.connection.api(apiCalls);
+    for (const access of accessesRes.accesses) {
+      // do something
+      console.log('##', access);
+    }
+    for (const access of accessesRes.accessDeletions) {
+      // do something
+      console.log('##', access);
+    }
+    for (const event of eventRes.events) {
+      const collectorClient = new CollectorClient(this, event);
+      this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
+    }
+
+    this.cache.collectorClientsMapInitialized = true;
+    return Object.values(this.cache.collectorClientsMap);
   }
 
   /**

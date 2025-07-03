@@ -1,9 +1,9 @@
 import HDSModel from './HDSModel/HDSModel';
-import appTemplates from './appTemplates';
+import appTemplates from './appTemplates/appTemplates';
 /**
  * Export for webpack build
  */
-export const HDSLib = {
+export {
   HDSModel,
   appTemplates
 };
