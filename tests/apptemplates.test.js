@@ -134,6 +134,9 @@ describe('[APTX] appTemplates', function () {
     // set request content
     const requestContent = {
       version: 0,
+      requester: {
+        name: 'Test requester name'
+      },
       description: {
         en: 'Short Description'
       },
@@ -194,6 +197,19 @@ describe('[APTX] appTemplates', function () {
     assert.equal(collectorClientsCached.length, 1);
     const collectorClients = await appClient.getCollectorClients(true);
     assert.equal(collectorClients.length, 1);
+
+    // check requestData
+    assert.deepEqual(collectorClient.requestData, requestContent);
+
+    // accept
+    const acceptResult = await collectorClient.accept();
+    assert.equal(acceptResult.requesterEvent.content.eventId, invite.eventId);
+    assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
+
+    // force refresh and check online
+    const collectorClients2 = await appClient.getCollectorClients(true);
+    assert.equal(collectorClients2.length, 1);
+    assert.deepEqual(collectorClients2[0].accessData, acceptResult.accessData);
   });
 
   describe('[APCX] app Templates Client', function () {

@@ -27,6 +27,10 @@ class CollectorClient {
     return this.eventData.content.requesterEventId;
   }
 
+  get requestData () {
+    return this.eventData.content.requesterEventData.content;
+  }
+
   get status () {
     if (!this.accessData && this.eventData.status === CollectorClient.STATUSES.refused) {
       return CollectorClient.STATUSES.refused;
@@ -34,9 +38,10 @@ class CollectorClient {
     return CollectorClient.STATUSES.incoming;
   }
 
-  constructor (app, eventData) {
+  constructor (app, eventData, accessData = null) {
     this.app = app;
     this.eventData = eventData;
+    this.accessData = accessData;
   }
 
   /**
@@ -47,7 +52,7 @@ class CollectorClient {
     const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
     // get request event cont
     const requesterConnection = new pryv.Connection(apiEndpoint);
-    const requesterEvents = await requesterConnection.apiOne('events.get', { streams: [publicStreamId], limit: 1 }, 'events');
+    const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
     if (!requesterEvents[0]) throw new HDSLibError('Cannot find requester event in public stream', requesterEvents);
 
     const eventData = {
@@ -62,6 +67,54 @@ class CollectorClient {
     };
     const event = await app.connection.apiOne('events.create', eventData, 'event');
     return new CollectorClient(app, event);
+  }
+
+  /**
+   * Accept current request
+   */
+  async accept () {
+    // create access for requester
+    if (this.accessData != null) throw new HDSLibError('Access Info already set');
+    // create access
+    const cleanedPermissions = this.requestData.permissions.map((p) => {
+      if (p.streamId) return { streamId: p.streamId, level: p.level };
+      return p;
+    });
+    const accessCreateData = {
+      name: this.key,
+      type: 'shared',
+      permissions: cleanedPermissions,
+      clientData: {
+        hdsCollectorClient: {
+          version: 0,
+          eventData: this.eventData
+        }
+      }
+    };
+    const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
+    this.accessData = accessData;
+    if (!this.accessData.apiEndpoint) throw new HDSLibError('Failed creating request access', accessData);
+
+    // sent access credentials to requester
+    // check content of accessInfo
+    const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
+    const requesterEventId = this.requesterEventId;
+    const requestrerApiEndpoint = this.eventData.content.apiEndpoint;
+
+    // acceptEvent to be sent to requester
+    const acceptEvent = {
+      type: 'credentials/collector-v1',
+      streamIds: [publicStreamId],
+      content: {
+        apiEndpoint: this.accessData.apiEndpoint,
+        eventId: requesterEventId
+      }
+    };
+
+    const requesterConnection = new pryv.Connection(requestrerApiEndpoint);
+    const requesterEvent = await requesterConnection.apiOne('events.create', acceptEvent, 'event');
+
+    return { accessData, requesterEvent };
   }
 
   /**

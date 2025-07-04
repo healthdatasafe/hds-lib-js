@@ -59,16 +59,15 @@ class AppClientAccount extends Application {
       params: { types: ['request/collector-client-v1'], streams: [this.baseStreamId], limit: MAX_COLLECTORS }
     }];
     const [accessesRes, eventRes] = await this.connection.api(apiCalls);
+    const accessHDSCollectorMap = {};
     for (const access of accessesRes.accesses) {
-      // do something
-      console.log('##', access);
-    }
-    for (const access of accessesRes.accessDeletions) {
-      // do something
-      console.log('##', access);
+      if (access.clientData.hdsCollectorClient) {
+        accessHDSCollectorMap[access.name] = access;
+      }
     }
     for (const event of eventRes.events) {
       const collectorClient = new CollectorClient(this, event);
+      if (accessHDSCollectorMap[collectorClient.key] != null) collectorClient.accessData = accessHDSCollectorMap[collectorClient.key];
       this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
     }
 
