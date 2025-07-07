@@ -3,6 +3,8 @@
  * added to pyv js-lib in a second step
  */
 const pryv = require('pryv');
+require('@pryv/monitor')(pryv);
+require('@pryv/socket.io')(pryv);
 
 // patch Pryv only if needed.
 if (!pryv.Connection.prototype.apiOne) {
