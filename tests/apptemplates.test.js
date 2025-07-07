@@ -57,7 +57,7 @@ describe('[APTX] appTemplates', function () {
 
     // check StreamStructure
     const resultCheckStructure = await newCollector.checkStreamStructure();
-    assert.equal(resultCheckStructure.created.length, 6, 'Should create 5 streams');
+    assert.equal(resultCheckStructure.created.length, 7, 'Should create 7 streams');
     for (const created of resultCheckStructure.created) {
       assert.equal(created.parentId, newCollector.streamId, 'Should have collector stream as parentid');
     }
@@ -172,11 +172,14 @@ describe('[APTX] appTemplates', function () {
     // create invite
     const options = { customData: { hello: 'bob' } };
     const invite = await newCollector.createInvite('Invite One', options);
-    assert.equal(invite.apiEndpoint, await newCollector.sharingApiEndpoint());
-    assert.ok(invite.eventId.length > 5);
+    assert.equal(invite.status, 'pending');
+    const inviteSharingData = await invite.getSharingData();
+    assert.equal(inviteSharingData.apiEndpoint, await newCollector.sharingApiEndpoint());
+    assert.ok(invite.key.length > 5);
+    assert.ok(inviteSharingData.eventId.length > 5);
 
     // check invite can be found in "pendings"
-    const inviteEvent = await appManaging.connection.apiOne('events.getOne', { id: invite.eventId }, 'event');
+    const inviteEvent = await appManaging.connection.apiOne('events.getOne', { id: inviteSharingData.eventId }, 'event');
     assert.equal(inviteEvent.type, 'invite/collector-v1');
     assert.ok(inviteEvent.streamIds[0].endsWith('-pending'));
     assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
@@ -185,10 +188,10 @@ describe('[APTX] appTemplates', function () {
     const permissionsClient = [{ streamId: '*', level: 'manage' }];
     const clientUser = await createUserPermissions(user, permissionsClient, [], appClientName);
     const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUser.appApiEndpoint, appClientName);
-    const collectorClient = await appClient.handleIncomingRequest(invite.apiEndpoint, invite.eventId);
+    const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
     assert.equal(collectorClient.eventData.streamIds[0], appClient.baseStreamId);
-    assert.equal(collectorClient.eventData.content.apiEndpoint, invite.apiEndpoint);
-    assert.equal(collectorClient.eventData.content.requesterEventId, invite.eventId);
+    assert.equal(collectorClient.eventData.content.apiEndpoint, inviteSharingData.apiEndpoint);
+    assert.equal(collectorClient.eventData.content.requesterEventId, inviteSharingData.eventId);
 
     // TODO check collectorClient.eventData.accessInfo
 
@@ -203,13 +206,22 @@ describe('[APTX] appTemplates', function () {
 
     // accept
     const acceptResult = await collectorClient.accept();
-    assert.equal(acceptResult.requesterEvent.content.eventId, invite.eventId);
+    assert.equal(acceptResult.requesterEvent.content.eventId, inviteSharingData.eventId);
     assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
 
     // force refresh and check online
     const collectorClients2 = await appClient.getCollectorClients(true);
     assert.equal(collectorClients2.length, 1);
     assert.deepEqual(collectorClients2[0].accessData, acceptResult.accessData);
+
+    // Continue on Collector side
+    const invitesFromInbox = await newCollector.checkInbox();
+    assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
+    assert.equal(invitesFromInbox[0].status, 'active');
+
+    // check current invites
+    const invites = await newCollector.getInvites(true);
+    assert.equal(invites[0], invitesFromInbox[0]);
   });
 
   describe('[APCX] app Templates Client', function () {

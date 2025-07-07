@@ -1,6 +1,8 @@
 const { HDSLibError } = require('../errors');
+const CollectorInvite = require('./CollectorInvite');
 
 const COLLECTOR_STREAMID_SUFFIXES = {
+  archive: 'archive',
   internal: 'internal',
   public: 'public',
   pending: 'pending',
@@ -38,7 +40,11 @@ class Collector {
     this.name = streamData.name;
     this.appManaging = appManaging;
     this.#streamData = streamData;
-    this.#cache = {};
+    this.#cache = {
+      invites: {},
+      invitesInitialized: false,
+      invitesInitializing: false
+    };
   }
 
   /**
@@ -143,6 +149,76 @@ class Collector {
     return await this.#setStatus(Collector.STATUSES.active);
   }
 
+  #addOrUpdateInvite (eventData) {
+    const key = CollectorInvite.getKeyForEvent(eventData);
+    if (this.#cache.invites[key]) {
+      this.#cache.invites[key].setEventData(eventData);
+    } else {
+      this.#cache.invites[key] = new CollectorInvite(this, eventData);
+    }
+    return this.#cache.invites[key];
+  }
+
+  async getInvites (forceRefresh = false) {
+    while (this.#cache.invitesInitializing) (await new Promise((resolve) => { setTimeout(resolve, 100); }));
+    this.#cache.invitesInitializing = true;
+    if (!forceRefresh && this.#cache.invitesInitialized) return Object.values(this.#cache.invites);
+    const queryParams = { types: ['invite/collector-v1'], streams: [this.streamId], fromTime: 0, toTime: 8640000000000000, limit: 10000 };
+    try {
+      await this.appManaging.connection.getEventsStreamed(queryParams, (eventData) => {
+        this.#addOrUpdateInvite(eventData);
+      });
+    } catch (e) {
+      this.#cache.invitesInitialized = true;
+      this.#cache.invitesInitializing = false;
+      throw e;
+    }
+    this.#cache.invitesInitialized = true;
+    this.#cache.invitesInitializing = false;
+    return Object.values(this.#cache.invites);
+  }
+
+  async checkInbox () {
+    const tempr = [];
+
+    const params = { types: ['credentials/collector-v1'], limit: 1, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox)] };
+    const incomingCredentials = await this.appManaging.connection.apiOne('events.get', params, 'events');
+    for (const incomingCredential of incomingCredentials) {
+      // fetch corresponding invite
+      const inviteEvent = await this.appManaging.connection.apiOne('events.getOne', { id: incomingCredential.content.eventId }, 'event');
+      if (inviteEvent == null) throw new HDSLibError(`Cannot find invite event matching id: ${incomingCredential.content.eventId}`, incomingCredential);
+      // update inviteEvent and archive inbox message
+      const apiCalls = [
+        {
+          method: 'events.update',
+          params: {
+            id: inviteEvent.id,
+            update: {
+              streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)],
+              content: Object.assign(inviteEvent.content, { apiEndpoint: incomingCredential.content.apiEndpoint })
+            }
+          }
+        },
+        {
+          method: 'events.update',
+          params: {
+            id: incomingCredential.id,
+            update: {
+              streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.archive)]
+            }
+          }
+        }
+      ];
+      const results = await this.appManaging.connection.api(apiCalls);
+      const errors = results.filter((r) => (!r.event));
+      if (errors.length > 0) throw new HDSLibError('Error activating incoming request', errors);
+      const eventUpdated = results[0].event;
+      const inviteUpdated = this.#addOrUpdateInvite(eventUpdated);
+      tempr.push(inviteUpdated);
+    }
+    return tempr;
+  }
+
   /**
    * Create a "pending" invite to be sent to an app using AppSharingAccount
    * @param {string} name a default display name for this request
@@ -160,11 +236,8 @@ class Collector {
       }
     };
     const newInvite = await this.appManaging.connection.apiOne('events.create', eventParams, 'event');
-    const result = {
-      apiEndpoint: await this.sharingApiEndpoint(),
-      eventId: newInvite.id
-    };
-    return result;
+    const invite = this.#addOrUpdateInvite(newInvite);
+    return invite;
   }
 
   /**
@@ -259,6 +332,22 @@ class Collector {
    */
   streamIdFor (suffix) {
     return this.streamId + '-' + suffix;
+  }
+
+  /**
+   * Invite Status for streamId
+   * reverse of streamIdFor
+   */
+  inviteStatusForStreamId (streamId) {
+    if (!this.#cache.inviteStatusForStreamId) {
+      this.#cache.inviteStatusForStreamId = {};
+      for (const status of [COLLECTOR_STREAMID_SUFFIXES.pending, COLLECTOR_STREAMID_SUFFIXES.active, COLLECTOR_STREAMID_SUFFIXES.error]) {
+        this.#cache.inviteStatusForStreamId[this.streamIdFor(status)] = status;
+      }
+    }
+    const status = this.#cache.inviteStatusForStreamId[streamId];
+    if (status == null) throw new HDSLibError(`Cannot find status for streamId: ${streamId}`);
+    return status;
   }
 }
 
