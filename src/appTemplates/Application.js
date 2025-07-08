@@ -129,7 +129,7 @@ async function createAppStreams (app) {
     const streamData = await app.loadStreamData();
     if (streamData) found = true;
   } catch (e) {
-    if (e.innerObject?.id !== 'unknown-referenced-resource' || e.innerObject?.data?.id !== 'test-app-template-client') {
+    if (e.innerObject?.id !== 'unknown-referenced-resource' || e.innerObject?.data?.id !== app.baseStreamId) {
       throw e;
     }
   }

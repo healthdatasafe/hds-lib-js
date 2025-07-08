@@ -48,34 +48,24 @@ class Collector {
   }
 
   /**
-   * @property {string} one of 'draft', 'active', 'deactivated'
+   * @property {string} id - shortcut for steamid
    */
-  get statusCode () {
-    if (this.#cache.status == null) throw new Error('Init Collector first');
-    return this.#cache.status.content.status;
+  get id () {
+    return this.streamId;
   }
-
-  /**
-   * @typedef {RequestContent}
-   * @property {number} version
-   * @property {Localizable} description
-   * @property {Localizable} consent
-   * @property {Array<Permission>} permissions - Like Pryv permission request
-   * @property {Object} app
-   * @property {String} app.id
-   * @property {String} app.url
-   * @property {Object} app.data - to be finalized
-   */
-
-  /**
-   * @typedef {StatusData}
-   * @property {RequestContent} requestContent
-   */
 
   /** @type {StatusData} */
   get statusData () {
     if (this.#cache.status == null) throw new Error('Init Collector first');
     return this.#cache.status.content.data;
+  }
+
+  /**
+   * @property {string} one of 'draft', 'active', 'deactivated'
+   */
+  get statusCode () {
+    if (this.#cache.status == null) throw new Error('Init Collector first');
+    return this.#cache.status.content.status;
   }
 
   /**
@@ -159,6 +149,11 @@ class Collector {
     return this.#cache.invites[key];
   }
 
+  /**
+   * Retreive all invites
+   * @param {boolean} [forceRefresh]
+   * @returns {Array<CollectorInvite>}
+   */
   async getInvites (forceRefresh = false) {
     while (this.#cache.invitesInitializing) (await new Promise((resolve) => { setTimeout(resolve, 100); }));
     this.#cache.invitesInitializing = true;
@@ -352,3 +347,20 @@ class Collector {
 }
 
 module.exports = Collector;
+
+/**
+   * @typedef {RequestContent}
+   * @property {number} version
+   * @property {Localizable} description
+   * @property {Localizable} consent
+   * @property {Array<Permission>} permissions - Like Pryv permission request
+   * @property {Object} app
+   * @property {String} app.id
+   * @property {String} app.url
+   * @property {Object} app.data - to be finalized
+   */
+
+/**
+   * @typedef {StatusData}
+   * @property {RequestContent} requestContent
+   */

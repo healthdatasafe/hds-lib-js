@@ -35,6 +35,10 @@ class CollectorInvite {
     return this.eventData.content.apiEndpoint;
   }
 
+  get dateCreation () {
+    return new Date(this.eventData.created * 1000);
+  }
+
   get connection () {
     if (this.#connection == null) {
       this.#connection = new pryv.Connection(this.apiEndpoint);

@@ -118,11 +118,12 @@ describe('[APTX] appTemplates', function () {
     const collectors2 = await appManaging2.getCollectors();
     const collector2 = collectors2.find(c => c.name === collectorName);
     if (!collector2) throw new Error('Should find collector with name: ' + collectorName);
+    // init collector found;
+    await collector2.init();
     // call of StreamStructure should be empty as already created
     const resultCheckStructure3 = await collector2.checkStreamStructure();
     assert.equal(resultCheckStructure3.created.length, 0, 'Should create 0 streams');
     // should return the same access access point
-    await collector2.init();
     const sharingApiEndpoint3 = await collector2.sharingApiEndpoint();
     assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
   });

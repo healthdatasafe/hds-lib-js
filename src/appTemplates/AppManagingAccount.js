@@ -39,17 +39,26 @@ class AppManagingAccount extends Application {
   }
 
   async getCollectors (forceRefresh) {
-    if (!forceRefresh && this.cache.collectorsMap) return Object.values(this.cache.collectorsMap);
-    // Collectors are materialized by streams
+    await this.#updateCollectorsIfNeeded(forceRefresh);
+    return Object.values(this.cache.collectorsMap);
+  }
+
+  async getCollectorById (id) {
+    await this.#updateCollectorsIfNeeded();
+    return this.cache.collectorsMap[id];
+  }
+
+  async #updateCollectorsIfNeeded (forceRefresh = false) {
+    if (!forceRefresh && this.cache.collectorsMap) return;
     if (forceRefresh) await this.loadStreamData();
+    // TODO do not replace the map, but update collectors if streamData has changed and add new collectors
     const streams = this.streamData.children || [];
     const collectorsMap = {};
     for (const stream of streams) {
       const collector = new Collector(this, stream);
-      collectorsMap[collector.streamId] = collector;
+      collectorsMap[collector.id] = collector;
     }
     this.cache.collectorsMap = collectorsMap;
-    return Object.values(this.cache.collectorsMap);
   }
 
   /**

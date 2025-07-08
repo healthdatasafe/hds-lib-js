@@ -28,6 +28,9 @@ class AppClientAccount extends Application {
    * @param {string} [incomingEventId] - Information for the recipient
    */
   async handleIncomingRequest (apiEndpoint, incomingEventId) {
+    // make sure that collectorClientsMap is initialized
+    // await this.getCollectorClients();
+
     const requesterConnection = new pryv.Connection(apiEndpoint);
     const accessInfo = await requesterConnection.accessInfo();
     // check if request is known
