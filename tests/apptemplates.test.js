@@ -212,6 +212,7 @@ describe('[APTX] appTemplates', function () {
     const acceptResult = await collectorClient.accept();
     assert.equal(acceptResult.requesterEvent.content.eventId, inviteSharingData.eventId);
     assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
+    assert.equal(collectorClient.status, 'Active');
 
     // force refresh and check online
     const collectorClients2 = await appClient.getCollectorClients(true);
