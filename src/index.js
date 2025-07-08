@@ -1,4 +1,5 @@
 module.exports = {
   HDSModel: require('./HDSModel/HDSModel'),
-  appTemplates: require('./appTemplates/appTemplates')
+  appTemplates: require('./appTemplates/appTemplates'),
+  pryv: require('./patchedPryv')
 };
