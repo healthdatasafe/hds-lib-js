@@ -138,6 +138,9 @@ describe('[APTX] appTemplates', function () {
       requester: {
         name: 'Test requester name'
       },
+      title: {
+        en: 'Title of the request'
+      },
       description: {
         en: 'Short Description'
       },
