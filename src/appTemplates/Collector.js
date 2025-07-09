@@ -174,7 +174,7 @@ class Collector {
   }
 
   async checkInbox () {
-    const tempr = [];
+    const newCollectorInvites = [];
 
     const params = { types: ['credentials/collector-v1'], limit: 1, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox)] };
     const incomingCredentials = await this.appManaging.connection.apiOne('events.get', params, 'events');
@@ -209,9 +209,9 @@ class Collector {
       if (errors.length > 0) throw new HDSLibError('Error activating incoming request', errors);
       const eventUpdated = results[0].event;
       const inviteUpdated = this.#addOrUpdateInvite(eventUpdated);
-      tempr.push(inviteUpdated);
+      newCollectorInvites.push(inviteUpdated);
     }
-    return tempr;
+    return newCollectorInvites;
   }
 
   /**

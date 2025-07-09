@@ -52,6 +52,12 @@ class AppClientAccount extends Application {
     return collectorClient;
   }
 
+  async getCollectorClientByKey (collectorKey) {
+    // ensure collectors are initialized
+    await this.getCollectorClients();
+    return this.cache.collectorClientsMap[collectorKey];
+  }
+
   async getCollectorClients (forceRefresh = false) {
     if (!forceRefresh && this.cache.collectorClientsMapInitialized) return Object.values(this.cache.collectoClientsMap);
     const apiCalls = [{

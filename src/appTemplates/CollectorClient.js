@@ -32,9 +32,8 @@ class CollectorClient {
   }
 
   get status () {
-    // TODO the following test is bogus this.eventData.status does not exists
-    if (!this.accessData && this.eventData.status === CollectorClient.STATUSES.refused) {
-      return CollectorClient.STATUSES.refused;
+    if (!this.accessData) {
+      return CollectorClient.STATUSES.active;
     }
     if (this.accessData) return CollectorClient.STATUSES.active;
     return CollectorClient.STATUSES.incoming;
