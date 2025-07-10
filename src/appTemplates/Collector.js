@@ -41,6 +41,7 @@ class Collector {
     this.appManaging = appManaging;
     this.#streamData = streamData;
     this.#cache = {
+      initialized: false,
       invites: {},
       invitesInitialized: false,
       invitesInitializing: false
@@ -71,9 +72,11 @@ class Collector {
   /**
    * Fetch online data
    */
-  async init () {
-    await this.checkStreamStructure();
-    await this.#getStatus();
+  async init (forceRefresh = false) {
+    if (!forceRefresh && this.#cache.initialized) return;
+    await this.checkStreamStructure(forceRefresh);
+    await this.#getStatus(forceRefresh);
+    this.#cache.initialized = true;
   }
 
   /**
@@ -150,14 +153,29 @@ class Collector {
   }
 
   /**
+   * Retrieve an invite by its key
+   */
+  async getInviteByKey (key) {
+    await this.init(); // do not forceRefresh on Init();
+    await this.#initInvites();
+    return this.#cache.invites[key];
+  }
+
+  /**
    * Retreive all invites
    * @param {boolean} [forceRefresh]
    * @returns {Array<CollectorInvite>}
    */
   async getInvites (forceRefresh = false) {
+    await this.init(); // do not forceRefresh on Init();
+    await this.#initInvites(forceRefresh);
+    return Object.values(this.#cache.invites);
+  }
+
+  async #initInvites (forceRefresh) {
     while (this.#cache.invitesInitializing) (await new Promise((resolve) => { setTimeout(resolve, 100); }));
     this.#cache.invitesInitializing = true;
-    if (!forceRefresh && this.#cache.invitesInitialized) return Object.values(this.#cache.invites);
+    if (!forceRefresh && this.#cache.invitesInitialized) return;
     const queryParams = { types: ['invite/collector-v1'], streams: [this.streamId], fromTime: 0, toTime: 8640000000000000, limit: 10000 };
     try {
       await this.appManaging.connection.getEventsStreamed(queryParams, (eventData) => {
@@ -170,7 +188,6 @@ class Collector {
     }
     this.#cache.invitesInitialized = true;
     this.#cache.invitesInitializing = false;
-    return Object.values(this.#cache.invites);
   }
 
   async checkInbox () {
