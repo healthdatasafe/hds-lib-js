@@ -1,4 +1,5 @@
 const { HDSLibError } = require('../errors');
+const { waitUntilFalse } = require('../utils');
 const CollectorInvite = require('./CollectorInvite');
 
 const COLLECTOR_STREAMID_SUFFIXES = {
@@ -173,9 +174,9 @@ class Collector {
   }
 
   async #initInvites (forceRefresh) {
-    while (this.#cache.invitesInitializing) (await new Promise((resolve) => { setTimeout(resolve, 100); }));
-    this.#cache.invitesInitializing = true;
+    await waitUntilFalse(() => (this.#cache.invitesInitializing));
     if (!forceRefresh && this.#cache.invitesInitialized) return;
+    this.#cache.invitesInitializing = true;
     const queryParams = { types: ['invite/collector-v1'], streams: [this.streamId], fromTime: 0, toTime: 8640000000000000, limit: 10000 };
     try {
       await this.appManaging.connection.getEventsStreamed(queryParams, (eventData) => {

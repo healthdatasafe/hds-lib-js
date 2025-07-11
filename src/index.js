@@ -6,5 +6,6 @@ module.exports = {
   pryv: require('./patchedPryv'),
   localizeText,
   setPreferredLocale,
-  l: localizeText
+  l: localizeText,
+  logger: require('./logger')
 };

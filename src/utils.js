@@ -3,8 +3,20 @@
  */
 
 module.exports = {
-  deepFreeze
+  deepFreeze,
+  waitUntilFalse
 };
+
+/**
+ * Timed semaphore
+ */
+async function waitUntilFalse (callBackToReturnFalse, maxWaitMs = 5000) {
+  const started = Date.now();
+  while (callBackToReturnFalse()) {
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+    if (Date.now() - started > maxWaitMs) throw new Error(`Timeout after ${maxWaitMs}ms`);
+  }
+}
 
 /**
  * Recursively make immutable an object

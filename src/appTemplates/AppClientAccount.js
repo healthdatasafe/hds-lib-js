@@ -77,6 +77,8 @@ class AppClientAccount extends Application {
     for (const event of eventRes.events) {
       const collectorClient = new CollectorClient(this, event);
       if (accessHDSCollectorMap[collectorClient.key] != null) collectorClient.accessData = accessHDSCollectorMap[collectorClient.key];
+      // temp process - might be removed
+      await collectorClient.checkConsistency();
       this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
     }
 

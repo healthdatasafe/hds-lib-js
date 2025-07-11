@@ -7,7 +7,7 @@ const Collector = require('../src/appTemplates/Collector');
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
-  let managingUser, appManaging, user;
+  let managingUser, appManaging, clientUser, clientUserResultPermissions, appClient;
   const baseStreamIdManager = 'test-app-template-manager';
   const baseStreamIdClient = 'test-app-template-client';
   const appName = 'Test HDSLib.appTemplates';
@@ -21,7 +21,10 @@ describe('[APTX] appTemplates', function () {
     const connection = new pryv.Connection(managingUser.appApiEndpoint);
     appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
     // -- receiving user
-    user = await createUser();
+    clientUser = await createUser();
+    const permissionsClient = [{ streamId: '*', level: 'manage' }];
+    clientUserResultPermissions = await createUserPermissions(clientUser, permissionsClient, [], appClientName);
+    appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserResultPermissions.appApiEndpoint, appClientName);
   });
 
   it('[APTA] Full flow create collector and sharing', async () => {
@@ -128,7 +131,7 @@ describe('[APTX] appTemplates', function () {
     assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
   });
 
-  it('[APTI] Collector invite', async () => {
+  it('[APTI] Collector invite accept', async () => {
     const newCollector = await appManaging.createCollector('Invite test 1');
     assert(newCollector.statusCode, 'draft');
 
@@ -188,21 +191,27 @@ describe('[APTX] appTemplates', function () {
     assert.ok(inviteEvent.streamIds[0].endsWith('-pending'));
     assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
 
+    // also on current invites
+    const invites1 = await newCollector.getInvites();
+    assert.equal(invites1.length, 1);
+    assert.equal(invites1[0].status, 'pending');
+
     // Invitee receives the invite
     const permissionsClient = [{ streamId: '*', level: 'manage' }];
-    const clientUser = await createUserPermissions(user, permissionsClient, [], appClientName);
-    const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUser.appApiEndpoint, appClientName);
-    const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
-    assert.equal(collectorClient.eventData.streamIds[0], appClient.baseStreamId);
+    const myClientUserPermissionsResult = await createUserPermissions(clientUser, permissionsClient, [], appClientName + 'APTI');
+
+    const myAppClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, myClientUserPermissionsResult.appApiEndpoint, appClientName);
+    const collectorClient = await myAppClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+    assert.equal(collectorClient.eventData.streamIds[0], myAppClient.baseStreamId);
     assert.equal(collectorClient.eventData.content.apiEndpoint, inviteSharingData.apiEndpoint);
     assert.equal(collectorClient.eventData.content.requesterEventId, inviteSharingData.eventId);
 
     // TODO check collectorClient.eventData.accessInfo
 
     // check collectorClients
-    const collectorClientsCached = await appClient.getCollectorClients();
+    const collectorClientsCached = await myAppClient.getCollectorClients();
     assert.equal(collectorClientsCached.length, 1);
-    const collectorClients = await appClient.getCollectorClients(true);
+    const collectorClients = await myAppClient.getCollectorClients(true);
     assert.equal(collectorClients.length, 1);
 
     // check requestData
@@ -214,8 +223,16 @@ describe('[APTX] appTemplates', function () {
     assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
     assert.equal(collectorClient.status, 'Active');
 
+    // try to re-accept throws an error
+    try {
+      await collectorClient.accept();
+      throw new Error('should throw error');
+    } catch (e) {
+      assert.equal(e.message, 'Cannot accept an Active CollectorClient');
+    }
+
     // force refresh and check online
-    const collectorClients2 = await appClient.getCollectorClients(true);
+    const collectorClients2 = await myAppClient.getCollectorClients(true);
     assert.equal(collectorClients2.length, 1);
     assert.deepEqual(collectorClients2[0].accessData, acceptResult.accessData);
 
@@ -225,14 +242,23 @@ describe('[APTX] appTemplates', function () {
     assert.equal(invitesFromInbox[0].status, 'active');
 
     // check current invites
-    const invites = await newCollector.getInvites(true);
-    assert.equal(invites[0], invitesFromInbox[0]);
+    const invites2 = await newCollector.getInvites(true);
+    assert.equal(invites2.length, 1);
+    assert.equal(invites2[0], invitesFromInbox[0]);
+    assert.equal(invites2[0].status, 'active');
+  });
+
+  it('[APTR] Collector invite refuse', async () => {
+    const { collectorClient, inviteSharingData } = await helperNewInvite(appManaging, appClient, 'APTR');
+    const refuseResult = await collectorClient.refuse();
+    assert.equal(refuseResult.requesterEvent.content.eventId, inviteSharingData.eventId);
+    assert.equal(collectorClient.status, 'Refused');
   });
 
   describe('[APCX] app Templates Client', function () {
     it('[APCE] Should throw error if not initialized with a personal or master token', async () => {
       const permissionsDummy = [{ streamId: 'dummy', level: 'manage' }];
-      const clientUserNonMaster = await createUserPermissions(user, permissionsDummy, [], appName);
+      const clientUserNonMaster = await createUserPermissions(clientUser, permissionsDummy, [], appName);
       // non master app
       try {
         await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserNonMaster.appApiEndpoint, appClientName);
@@ -241,9 +267,44 @@ describe('[APTX] appTemplates', function () {
         assert.equal(e.message, `Application with "app" type of access requires  (streamId = '${baseStreamIdClient}', level = "manage") or master access`);
       }
       // personal
-      const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, user.apiEndpoint, appClientName);
+      const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUser.apiEndpoint, appClientName);
       assert.equal(appClient.streamData.id, baseStreamIdClient);
       assert.equal(appClient.streamData.name, appClientName);
     });
   });
 });
+
+/**
+ * heper to generate a new collector and invite for this managing application
+ * @param {AppManagingAccount} appManaging
+ * @returns {Object}
+ */
+async function helperNewInvite (appManaging, appClient, code) {
+  code = code || Math.floor(Math.random() * 1000);
+  const collector = await appManaging.createCollector('Invite test ' + code);
+
+  // set request content
+  const requestContent = {
+    version: 0,
+    requester: { name: 'Test requester name' },
+    title: { en: 'Title of the request' },
+    description: { en: 'Short Description' },
+    consent: { en: 'This is a consent message' },
+    permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
+    app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
+  };
+  collector.statusData.requestContent = requestContent;
+
+  await collector.save();
+  await collector.publish();
+  // create invite
+  const options = { customData: { hello: 'bob' } };
+  const invite = await collector.createInvite('Invite One', options);
+  const inviteSharingData = await invite.getSharingData();
+  assert.equal(inviteSharingData.apiEndpoint, await collector.sharingApiEndpoint());
+
+  // Invitee receives the invite
+  const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+
+  return { collector, invite, collectorClient, inviteSharingData };
+}
