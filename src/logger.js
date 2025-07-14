@@ -11,7 +11,7 @@ module.exports = {
 let logger = {
   info: log('info'),
   error: log('error'),
-  debug: log('error')
+  debug: log('debug')
 };
 
 function setLogger (newLogger) {
@@ -20,7 +20,9 @@ function setLogger (newLogger) {
 
 function info () { logger.info(...arguments); }
 function error () { logger.error(...arguments); }
-function debug () { logger.debug(...arguments); }
+function debug () {
+  // logger.debug(...arguments);
+}
 
 function log (type) {
   return function () {

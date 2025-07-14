@@ -2,6 +2,7 @@ const { HDSLibError } = require('../errors');
 const pryv = require('../patchedPryv');
 const Application = require('./Application');
 const CollectorClient = require('./CollectorClient');
+const logger = require('../logger');
 
 /**
  * - applications
@@ -29,15 +30,23 @@ class AppClientAccount extends Application {
    */
   async handleIncomingRequest (apiEndpoint, incomingEventId) {
     // make sure that collectorClientsMap is initialized
-    // await this.getCollectorClients();
+    await this.getCollectorClients();
 
     const requesterConnection = new pryv.Connection(apiEndpoint);
     const accessInfo = await requesterConnection.accessInfo();
     // check if request is known
-    if (this.cache.collectorClientsMap[CollectorClient.keyFromInfo(accessInfo)]) {
-      const collectorClient = this.collectoClientsMap[accessInfo.name];
+    const collectorClientKey = CollectorClient.keyFromInfo(accessInfo);
+    logger.debug('AppClient:handleIncomingRequest', { collectorClientKey, accessInfo, incomingEventId });
+    if (this.cache.collectorClientsMap[collectorClientKey]) {
+      const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
+      logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
       if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-        throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+        logger.error('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+      }
+      if (collectorClient.apiEndpoint !== apiEndpoint) {
+        logger.error('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
       }
       return collectorClient;
     }
@@ -46,7 +55,6 @@ class AppClientAccount extends Application {
       throw new HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
     }
     // else create it
-
     const collectorClient = await CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
     this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
     return collectorClient;
@@ -59,7 +67,7 @@ class AppClientAccount extends Application {
   }
 
   async getCollectorClients (forceRefresh = false) {
-    if (!forceRefresh && this.cache.collectorClientsMapInitialized) return Object.values(this.cache.collectoClientsMap);
+    if (!forceRefresh && this.cache.collectorClientsMapInitialized) return Object.values(this.cache.collectorClientsMap);
     const apiCalls = [{
       method: 'accesses.get',
       params: { includeDeletions: true }

@@ -30,6 +30,11 @@ class CollectorClient {
     return this.eventData.content.requesterEventId;
   }
 
+  /** @property {String}  */
+  get requesterApiEndpoint () {
+    return this.eventData.content.apiEndpoint;
+  }
+
   /** @property {Object} - full content of the request */
   get requestData () {
     return this.eventData.content.requesterEventData.content;
@@ -38,10 +43,21 @@ class CollectorClient {
   /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
   get status () {
     const eventStatus = this.eventData.content.status;
+    if (eventStatus === 'Deactivated' || eventStatus === 'Refused') {
+      if (!this.accessData?.deleted) {
+        logger.error('>> CollectorClient.status TODO check consitency when access is still valid and deactivated or refused', this.accessData);
+      }
+      return eventStatus;
+    }
+
     if (this.accessData && !this.accessData.deleted && this.eventData.content.status !== CollectorClient.STATUSES.active) {
-      console.log(this.accessData);
+      logger.error('>> CollectorClient.status: accessData ', this.accessData);
       throw new HDSLibError('Should be active, try checkConsiency()');
     }
+    if (!eventStatus) {
+      logger.error('>> CollectorClient.status is null', { eventData: this.eventData, accessData: this.accessData });
+    }
+
     return eventStatus;
   }
 
@@ -78,9 +94,40 @@ class CollectorClient {
   }
 
   /**
+   * reset with new request Event of ApiEndpoint
+   * Identical as create but keep current event
+   */
+  async reset (apiEndpoint, requesterEventId, accessInfo) {
+    if (this.accessData && this.accessData?.deleted != null) {
+      logger.error('TODO try to revoke current access');
+    }
+    // check content of accessInfo
+    const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
+    // get request event cont
+    const requesterConnection = new pryv.Connection(apiEndpoint);
+    const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
+    if (!requesterEvents[0]) throw new HDSLibError('Cannot find requester event in public stream', requesterEvents);
+
+    const eventData = await this.app.connection.apiOne('events.update', {
+      id: this.eventData.id,
+      update: {
+        content: {
+          apiEndpoint,
+          requesterEventId,
+          requesterEventData: requesterEvents[0],
+          accessInfo,
+          status: CollectorClient.STATUSES.incoming
+        }
+      }
+    }, 'event');
+    this.eventData = eventData;
+    return this;
+  }
+
+  /**
    * Update business event with new status
    * @param {string} newStatus
-   * @param {Object} [extraData] - if given this will be added to content ⚠️ - This can ovveride content!
+   * @param {Object} [extraData] - if given this will be added to content ⚠️ - This can overide content!
    */
   async #updateStatus (newStatus, extraData = null) {
     const newContent = structuredClone(this.eventData.content);
@@ -96,47 +143,14 @@ class CollectorClient {
   }
 
   /**
-   * Refuse current request
-   */
-  async refuse () {
-    if (this.status !== 'Incoming') throw new HDSLibError('Cannot only refuse incoming requests');
-    // sent access credentials to requester
-    // check content of accessInfo
-    const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
-    const requesterEventId = this.requesterEventId;
-    const requestrerApiEndpoint = this.eventData.content.apiEndpoint;
-
-    // refuseEvent to be sent to requester
-    const refuseEvent = {
-      type: 'refusal/collector-v1',
-      streamIds: [publicStreamId],
-      content: {
-        eventId: requesterEventId
-      }
-    };
-
-    const requesterConnection = new pryv.Connection(requestrerApiEndpoint);
-    const requesterEvent = await requesterConnection.apiOne('events.create', refuseEvent, 'event');
-
-    await this.#updateStatus(CollectorClient.STATUSES.refused);
-    return { requesterEvent };
-  }
-
-  /**
-   * Revoke current request
-   * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
-   */
-  async revoke () {
-    if (this.status !== 'Active') throw new HDSLibError('Cannot only revoke an Active CollectorClient');
-
-    console.log('Do something for revoke');
-  }
-
-  /**
    * Accept current request
    * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
    */
   async accept (forceAndSkipAccessCreation = false) {
+    if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
+      forceAndSkipAccessCreation = true;
+      logger.error('CollectorClient.accept TODO fix accept when access valid');
+    }
     if (forceAndSkipAccessCreation) {
       if (!this.accessData?.apiEndpoint || this.accessData?.delete) throw new HDSLibError('Cannot force accept with empty or deleted accessData', this.accessData);
     } else {
@@ -162,27 +176,55 @@ class CollectorClient {
       if (!this.accessData?.apiEndpoint) throw new HDSLibError('Failed creating request access', accessData);
     }
 
+    const responseContent = {
+      apiEndpoint: this.accessData.apiEndpoint
+    };
+
+    const requesterEvent = await this.#updateRequester('accept', responseContent);
+    if (requesterEvent != null) {
+      await this.#updateStatus(CollectorClient.STATUSES.active);
+      return { accessData: this.accessData, requesterEvent };
+    }
+    return null;
+  }
+
+  async refuse () {
+    const responseContent = { };
+
+    const requesterEvent = await this.#updateRequester('refuse', responseContent);
+    if (requesterEvent != null) {
+      await this.#updateStatus(CollectorClient.STATUSES.refused);
+      return { requesterEvent };
+    }
+    return null;
+  }
+
+  /**
+   * @param {string} type - one of 'accpet', 'revoke', 'refuse'
+   * @param {object} responseContent - content is related to type
+   * @returns {Object} - response
+   */
+  async #updateRequester (type, responseContent) {
     // sent access credentials to requester
     // check content of accessInfo
     const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
     const requesterEventId = this.requesterEventId;
     const requestrerApiEndpoint = this.eventData.content.apiEndpoint;
 
+    // add eventId to content
+    const content = Object.assign({ type, eventId: requesterEventId }, responseContent);
+
     // acceptEvent to be sent to requester
-    const acceptEvent = {
-      type: 'credentials/collector-v1',
+    const responseEvent = {
+      type: 'response/collector-v1',
       streamIds: [publicStreamId],
-      content: {
-        apiEndpoint: this.accessData.apiEndpoint,
-        eventId: requesterEventId
-      }
+      content
     };
 
     try {
       const requesterConnection = new pryv.Connection(requestrerApiEndpoint);
-      const requesterEvent = await requesterConnection.apiOne('events.create', acceptEvent, 'event');
-      await this.#updateStatus(CollectorClient.STATUSES.active);
-      return { accessData: this.accessData, requesterEvent };
+      const requesterEvent = await requesterConnection.apiOne('events.create', responseEvent, 'event');
+      return requesterEvent;
     } catch (e) {
       const deactivatedDetail = {
         type: 'error',
@@ -190,8 +232,9 @@ class CollectorClient {
       };
       if (e.innerObject) deactivatedDetail.data = e.innerObject;
       logger.error('Failed activating', deactivatedDetail);
-      await this.#updateStatus(CollectorClient.STATUSES.deactivated, { deactivatedDetail });
-      return false;
+      const deactivatedResult = await this.#updateStatus(CollectorClient.STATUSES.deactivated, { deactivatedDetail });
+      console.log('***** ', { deactivatedResult });
+      return null;
     }
   }
 
@@ -202,13 +245,13 @@ class CollectorClient {
     // accessData but not active
     if (this.accessData && this.eventData.content.status == null) {
       logger.info('Found discrepency with accessData and status not active, fixing it');
-      if (this.accessData.deleted) {
+      if (!this.accessData.deleted) {
         await this.accept(true);
       } else {
         await this.revoke();
       }
     } else {
-      logger.debug('CollectorClient:checkConsistency', this.accessData);
+      // logger.debug('CollectorClient:checkConsistency', this.accessData);
     }
   }
 

@@ -35,6 +35,11 @@ class CollectorInvite {
     return this.eventData.content.apiEndpoint;
   }
 
+  /** @type {string} - on of 'revoked', 'refused' */
+  get errorType () {
+    return this.eventData.content?.errorType;
+  }
+
   get dateCreation () {
     return new Date(this.eventData.created * 1000);
   }

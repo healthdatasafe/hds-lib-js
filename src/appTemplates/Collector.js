@@ -194,28 +194,49 @@ class Collector {
   async checkInbox () {
     const newCollectorInvites = [];
 
-    const params = { types: ['credentials/collector-v1'], limit: 1, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox)] };
-    const incomingCredentials = await this.appManaging.connection.apiOne('events.get', params, 'events');
-    for (const incomingCredential of incomingCredentials) {
+    const params = { types: ['response/collector-v1'], limit: 1000, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox)] };
+    const responseEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
+    for (const responseEvent of responseEvents) {
       // fetch corresponding invite
-      const inviteEvent = await this.appManaging.connection.apiOne('events.getOne', { id: incomingCredential.content.eventId }, 'event');
-      if (inviteEvent == null) throw new HDSLibError(`Cannot find invite event matching id: ${incomingCredential.content.eventId}`, incomingCredential);
+      const inviteEvent = await this.appManaging.connection.apiOne('events.getOne', { id: responseEvent.content.eventId }, 'event');
+      if (inviteEvent == null) throw new HDSLibError(`Cannot find invite event matching id: ${responseEvent.content.eventId}`, responseEvent);
+
+      const updateInvite = {
+        content: structuredClone(inviteEvent.content)
+      };
+      updateInvite.content.sourceEventId = responseEvent.id;
+
+      // check type of response
+      switch (responseEvent.content.type) {
+        case 'accept':
+          updateInvite.streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)];
+          Object.assign(updateInvite.content, { apiEndpoint: responseEvent.content.apiEndpoint });
+          break;
+        case 'refuse':
+          updateInvite.streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)];
+          updateInvite.content.errorType = 'refused';
+          break;
+        case 'revoke':
+          updateInvite.streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)];
+          updateInvite.content.errorType = 'revoked';
+          break;
+        default:
+          throw new HDSLibError(`Unkown or undefined ${responseEvent.content.type}`, responseEvent);
+      }
+
       // update inviteEvent and archive inbox message
       const apiCalls = [
         {
           method: 'events.update',
           params: {
             id: inviteEvent.id,
-            update: {
-              streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)],
-              content: Object.assign(inviteEvent.content, { apiEndpoint: incomingCredential.content.apiEndpoint })
-            }
+            update: updateInvite
           }
         },
         {
           method: 'events.update',
           params: {
-            id: incomingCredential.id,
+            id: responseEvent.id,
             update: {
               streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.archive)]
             }
@@ -352,12 +373,14 @@ class Collector {
    * reverse of streamIdFor
    */
   inviteStatusForStreamId (streamId) {
+    // init cache if needed
     if (!this.#cache.inviteStatusForStreamId) {
       this.#cache.inviteStatusForStreamId = {};
       for (const status of [COLLECTOR_STREAMID_SUFFIXES.pending, COLLECTOR_STREAMID_SUFFIXES.active, COLLECTOR_STREAMID_SUFFIXES.error]) {
         this.#cache.inviteStatusForStreamId[this.streamIdFor(status)] = status;
       }
     }
+    // look for status
     const status = this.#cache.inviteStatusForStreamId[streamId];
     if (status == null) throw new HDSLibError(`Cannot find status for streamId: ${streamId}`);
     return status;

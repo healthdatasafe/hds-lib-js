@@ -249,10 +249,16 @@ describe('[APTX] appTemplates', function () {
   });
 
   it('[APTR] Collector invite refuse', async () => {
-    const { collectorClient, inviteSharingData } = await helperNewInvite(appManaging, appClient, 'APTR');
+    const { collector, collectorClient, inviteSharingData } = await helperNewInvite(appManaging, appClient, 'APTR');
     const refuseResult = await collectorClient.refuse();
     assert.equal(refuseResult.requesterEvent.content.eventId, inviteSharingData.eventId);
     assert.equal(collectorClient.status, 'Refused');
+
+    // check collector
+    const invitesFromInbox = await collector.checkInbox();
+    assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
+    assert.equal(invitesFromInbox[0].status, 'error');
+    assert.equal(invitesFromInbox[0].errorType, 'refused');
   });
 
   describe('[APCX] app Templates Client', function () {
