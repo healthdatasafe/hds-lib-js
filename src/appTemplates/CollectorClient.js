@@ -43,7 +43,7 @@ class CollectorClient {
   /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
   get status () {
     const eventStatus = this.eventData.content.status;
-    if (eventStatus === 'Deactivated' || eventStatus === 'Refused') {
+    if (eventStatus === CollectorClient.STATUSES.deactivated || eventStatus === CollectorClient.STATUSES.refused) {
       if (!this.accessData?.deleted) {
         logger.error('>> CollectorClient.status TODO check consitency when access is still valid and deactivated or refused', this.accessData);
       }
@@ -184,6 +184,27 @@ class CollectorClient {
     if (requesterEvent != null) {
       await this.#updateStatus(CollectorClient.STATUSES.active);
       return { accessData: this.accessData, requesterEvent };
+    }
+    return null;
+  }
+
+  async revoke () {
+    if (!this.accessData) {
+      throw new HDSLibError('Cannot revoke if no accessData');
+    }
+    if (this.accessData.deleted && this.status === CollectorClient.STATUSES.deactivated) {
+      throw new HDSLibError('Already revoked');
+    }
+    // revoke access
+    await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
+    // lazyly flag currentAccess as deleted
+    this.accessData.deleted = Date.now() / 1000;
+
+    const responseContent = { };
+    const requesterEvent = await this.#updateRequester('revoke', responseContent);
+    if (requesterEvent != null) {
+      await this.#updateStatus(CollectorClient.STATUSES.deactivated);
+      return { requesterEvent };
     }
     return null;
   }

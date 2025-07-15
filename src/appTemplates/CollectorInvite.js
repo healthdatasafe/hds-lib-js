@@ -22,6 +22,8 @@ class CollectorInvite {
   eventData;
   /** @type {pryv.Connection} */
   #connection;
+  /** @type {Object} accessInfo from account */
+  #accessInfo;
 
   get key () {
     return CollectorInvite.getKeyForEvent(this.eventData);
@@ -49,6 +51,26 @@ class CollectorInvite {
       this.#connection = new pryv.Connection(this.apiEndpoint);
     }
     return this.#connection;
+  }
+
+  /**
+   * Check if connection is valid. (only if active)
+   * If result is "forbidden" update and set as revoked
+   * @returns {Object} accessInfo if valid.
+   */
+  async checkAndGetAccessInfo (forceRefresh = false) {
+    if (!forceRefresh && this.#accessInfo) return this.#accessInfo;
+    try {
+      this.#accessInfo = await this.connection.accessInfo();
+      return this.#accessInfo;
+    } catch (e) {
+      this.#accessInfo = null;
+      if (e.response?.body?.error?.id === 'invalid-access-token') {
+        await this.collector.revokeInvite(this);
+        return null;
+      }
+      throw e;
+    }
   }
 
   get displayName () {

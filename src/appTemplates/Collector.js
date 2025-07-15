@@ -321,6 +321,28 @@ class Collector {
   }
 
   /**
+   * @private
+   * @param {CollectorInvite} invite
+   * @returns {CollectorInvite}
+   */
+  async revokeInvite (invite) {
+    // invalidate this access
+    const updateInvite = {
+      id: invite.eventData.id,
+      update: {
+        content: structuredClone(invite.eventData.content),
+        streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)]
+      }
+    };
+    // TODO revoke updateInvite.apiEndPoint
+
+    updateInvite.update.content.errorType = 'revoked';
+    const eventData = await this.appManaging.connection.apiOne('events.update', updateInvite, 'event');
+    invite.eventData = eventData;
+    return invite;
+  }
+
+  /**
    * check if required streams are present, if not create them
    */
   async checkStreamStructure () {

@@ -261,6 +261,27 @@ describe('[APTX] appTemplates', function () {
     assert.equal(invitesFromInbox[0].errorType, 'refused');
   });
 
+  it('[APCR] Collector invite revoke', async () => {
+    const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCR');
+    await collectorClient.accept();
+
+    // check collector
+    const invitesFromInbox1 = await collector.checkInbox();
+    assert.equal(invitesFromInbox1[0], invite);
+    assert.equal(invite.status, 'active');
+
+    // client revoke
+    await collectorClient.revoke();
+    assert.equal(collectorClient.status, 'Deactivated');
+    assert.ok(collectorClient.accessData.deleted);
+
+    // check collector
+    const invitesFromInbox2 = await collector.checkInbox();
+    assert.equal(invitesFromInbox2[0], invite);
+    assert.equal(invite.status, 'error');
+    assert.equal(invite.errorType, 'revoked');
+  });
+
   describe('[APCX] app Templates Client', function () {
     it('[APCE] Should throw error if not initialized with a personal or master token', async () => {
       const permissionsDummy = [{ streamId: 'dummy', level: 'manage' }];
