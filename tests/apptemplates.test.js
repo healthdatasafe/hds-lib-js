@@ -1,5 +1,5 @@
 /* eslint-env mocha */
-const assert = require('node:assert/strict');
+const { assert } = require('./test-utils/deps-node');
 const { createUserAndPermissions, pryv, createUser, createUserPermissions } = require('./test-utils/pryvService');
 const AppManagingAccount = require('../src/appTemplates/AppManagingAccount');
 const AppClientAccount = require('../src/appTemplates/AppClientAccount');

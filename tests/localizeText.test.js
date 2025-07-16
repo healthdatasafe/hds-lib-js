@@ -1,5 +1,5 @@
 /* eslint-env mocha */
-const assert = require('node:assert/strict');
+const { assert } = require('./test-utils/deps-node');
 const { setPreferredLocales, localizeText } = require('../src');
 const { resetPreferredLocales, getPreferredLocales, getSupportedLocales } = require('../src/localizeText');
 

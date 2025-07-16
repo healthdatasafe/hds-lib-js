@@ -28,6 +28,8 @@
   },
   "homepage": "https://github.com/healthdatasafe/hds-lib-js#readme",
   "devDependencies": {
+    "assert": "^2.1.0",
+    "copy-webpack-plugin": "^13.0.0",
     "eslint": "^8.57.0",
     "eslint-config-semistandard": "^17.0.0",
     "eslint-config-standard": "^17.1.0",
@@ -35,6 +37,7 @@
     "eslint-plugin-n": "^15.7.0",
     "eslint-plugin-promise": "^6.1.1",
     "mocha": "^11.5.0",
+    "process": "^0.11.10",
     "webpack": "^5.99.9",
     "webpack-cli": "^6.0.1"
   },
