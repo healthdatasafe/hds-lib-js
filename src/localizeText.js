@@ -6,10 +6,37 @@ const { HDSLibError } = require('./errors');
 
 module.exports = {
   localizeText,
-  setPreferredLocale
+  setPreferredLocales,
+  getPreferredLocales,
+  getSupportedLocales,
+  resetPreferredLocales
 };
 
-let preferredLocales = ['en', 'fr', 'es'];
+const supportedLocales = ['en', 'fr', 'es'];
+Object.freeze(supportedLocales);
+let preferredLocales = [...supportedLocales];
+
+/**
+ * get the current preferred locales
+* @returns {Array<string>}
+ */
+function getPreferredLocales () {
+  return [...preferredLocales];
+}
+/**
+ * get the current supported locales
+* @returns {Array<string>}
+ */
+function getSupportedLocales () {
+  return [...preferredLocales];
+}
+
+/**
+ * reset prefferedLocalesTo Original state
+ */
+function resetPreferredLocales () {
+  setPreferredLocales(supportedLocales);
+}
 
 /**
  * return the translation of this item considering the setting of preffered language
@@ -29,7 +56,16 @@ function localizeText (textItem) {
 
 /**
  * Change prefferedLocal order
+ * @param {Array<string>} arrayOfLocals of local codes
  */
-function setPreferredLocale (arrayOfLocals) {
+function setPreferredLocales (arrayOfLocals) {
+  if (!Array.isArray(arrayOfLocals)) {
+    throw new HDSLibError('setPreferredLocales takes an array of language codes');
+  }
+  const unsupportedLocales = arrayOfLocals.filter(l => (supportedLocales.indexOf(l) < 0));
+  if (unsupportedLocales.length > 0) {
+    throw new HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
+  }
+
   preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
 }

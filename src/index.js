@@ -1,11 +1,12 @@
-const { localizeText, setPreferredLocale } = require('./localizeText');
+const { localizeText, setPreferredLocales } = require('./localizeText');
 
 module.exports = {
+  settings: require('./settings'),
   HDSModel: require('./HDSModel/HDSModel'),
   appTemplates: require('./appTemplates/appTemplates'),
   pryv: require('./patchedPryv'),
   localizeText,
-  setPreferredLocale,
+  setPreferredLocales,
   l: localizeText,
   logger: require('./logger')
 };
