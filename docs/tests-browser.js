@@ -20787,6 +20787,27 @@ module.exports = HDSModel;
 
 /***/ }),
 
+/***/ "./src/HDSService.js":
+/*!***************************!*\
+  !*** ./src/HDSService.js ***!
+  \***************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+const settings = __webpack_require__(/*! ./settings */ "./src/settings.js");
+const pryv = __webpack_require__(/*! ./patchedPryv */ "./src/patchedPryv.js");
+
+// makes Pryv service aware of default serviceUrl
+class HDSService extends pryv.Service {
+  constructor (serviceInfoUrl, serviceCustomizations) {
+    serviceInfoUrl = serviceInfoUrl || settings.getServiceInfoURL();
+    super(serviceInfoUrl, serviceCustomizations);
+  }
+}
+
+module.exports = HDSService;
+
+/***/ }),
+
 /***/ "./src/appTemplates/AppClientAccount.js":
 /*!**********************************************!*\
   !*** ./src/appTemplates/AppClientAccount.js ***!
@@ -22067,18 +22088,47 @@ module.exports = {
   \**********************/
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
-const { localizeText, setPreferredLocales } = __webpack_require__(/*! ./localizeText */ "./src/localizeText.js");
+const { localizeText } = __webpack_require__(/*! ./localizeText */ "./src/localizeText.js");
+const settings = __webpack_require__(/*! ./settings */ "./src/settings.js");
+const pryv = __webpack_require__(/*! ./patchedPryv */ "./src/patchedPryv.js");
+const HDSModel = __webpack_require__(/*! ./HDSModel/HDSModel */ "./src/HDSModel/HDSModel.js");
+const appTemplates = __webpack_require__(/*! ./appTemplates/appTemplates */ "./src/appTemplates/appTemplates.js");
+const logger = __webpack_require__(/*! ./logger */ "./src/logger.js");
+const HDService = __webpack_require__(/*! ./HDSService */ "./src/HDSService.js");
+const { HDSLibError } = __webpack_require__(/*! ./errors */ "./src/errors.js");
+
+let model = null;
 
 module.exports = {
-  settings: __webpack_require__(/*! ./settings */ "./src/settings.js"),
-  HDSModel: __webpack_require__(/*! ./HDSModel/HDSModel */ "./src/HDSModel/HDSModel.js"),
-  appTemplates: __webpack_require__(/*! ./appTemplates/appTemplates */ "./src/appTemplates/appTemplates.js"),
-  pryv: __webpack_require__(/*! ./patchedPryv */ "./src/patchedPryv.js"),
+  pryv,
+  settings,
+  HDService,
+  HDSModel,
+  get model () {
+    if (model == null) throw new HDSLibError('Call await HDSLib.initHDSModel() once');
+    return model;
+  },
+  initHDSModel,
+  appTemplates,
   localizeText,
-  setPreferredLocales,
-  l: localizeText,
-  logger: __webpack_require__(/*! ./logger */ "./src/logger.js")
+  l: localizeText, // shortcut to HDSLib.localizeText
+  logger
 };
+
+/**
+ * Initialized model singleton
+ * @returns {HDSModel}
+ */
+async function initHDSModel (forceNew = false) {
+  if (!model || forceNew) {
+    const service = new HDService();
+    const serviceInfo = await service.info();
+    model = new HDSModel(serviceInfo.assets['hds-model']);
+    await model.load();
+  }
+  return model;
+}
+
 
 
 /***/ }),
@@ -22240,6 +22290,7 @@ if (!pryv.Connection.prototype.apiOne) {
     return result[0];
   };
 }
+
 module.exports = pryv;
 
 
@@ -22254,9 +22305,28 @@ module.exports = pryv;
 const { setPreferredLocales } = __webpack_require__(/*! ./localizeText */ "./src/localizeText.js");
 
 module.exports = {
-  setPreferredLocales
+  setPreferredLocales,
+  setServiceInfoURL,
+  getServiceInfoURL
 };
 
+// todo change when in production
+let serviceInfoUrl = 'https://demo.datasafe.dev/reg/service/info';
+/**
+ * Set default service info URL
+ * @param {string} url
+ */
+function setServiceInfoURL (url) {
+  serviceInfoUrl = url;
+}
+
+/**
+ * Get default service info URL
+ * @returns {string}
+ */
+function getServiceInfoURL () {
+  return serviceInfoUrl;
+}
 
 /***/ }),
 
@@ -23039,8 +23109,7 @@ describe('[LISX] Lib settings', () => {
 
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-const { setPreferredLocales, localizeText } = __webpack_require__(/*! ../src */ "./src/index.js");
-const { resetPreferredLocales, getPreferredLocales, getSupportedLocales } = __webpack_require__(/*! ../src/localizeText */ "./src/localizeText.js");
+const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = __webpack_require__(/*! ../src/localizeText */ "./src/localizeText.js");
 
 describe('[LOCX] Lib settings', () => {
   beforeEach(() => {
@@ -23161,12 +23230,14 @@ module.exports = {
 
 __webpack_require__(/*! ./debug */ "./tests/test-utils/debug.js");
 const pryv = __webpack_require__(/*! ../../src/patchedPryv */ "./src/patchedPryv.js");
+const HDSService = __webpack_require__(/*! ../../src/HDSService */ "./src/HDSService.js");
 const superagent = pryv.utils.superagent;
 
 const ShortUniqueId = __webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js");
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
 
 const config = __webpack_require__(/*! ./config */ "./tests/test-utils/config.js");
+const { setServiceInfoURL } = __webpack_require__(/*! ../../src/settings */ "./src/settings.js");
 
 module.exports = {
   init,
@@ -23180,7 +23251,7 @@ module.exports = {
 };
 
 /**
- * @type {pryv.Service}
+ * @type {HDSService}
  */
 let serviceSingleton;
 
@@ -23190,8 +23261,8 @@ let serviceSingleton;
 let infosSingleton;
 
 /**
- * Get current Pryv service
- * @returns {pryv.Service}
+ * Get current HDSService
+ * @returns {HDSService}
  */
 function service () {
   if (serviceSingleton == null) throw new Error('Init pryvService first');
@@ -23199,15 +23270,16 @@ function service () {
 }
 
 /**
- * Initialize Pryv service from config and creates a singleton
+ * Initialize HDSservice from config and creates a singleton
  * accessible via service()
- * @returns {pryv.Service}
+ * @returns {HDSService}
  */
 async function init () {
   if (infosSingleton) return infosSingleton;
   if (!config.appId) throw new Error('Cannot find appId in config');
   if (!config.serviceInfoURL) throw new Error('Cannot find serviceInfoURL in config');
-  serviceSingleton = new pryv.Service(config.serviceInfoURL);
+  setServiceInfoURL(config.serviceInfoURL);
+  serviceSingleton = new HDSService(config.serviceInfoURL);
   infosSingleton = await serviceSingleton.info();
   return infosSingleton;
 }
@@ -23434,6 +23506,10 @@ var __webpack_exports__ = {};
 /*!********************************!*\
   !*** ./tests/browser-tests.js ***!
   \********************************/
+/**
+ * Hook for webpack to build browser test-suite
+ * Add new tests here
+ */
 __webpack_require__(/*! ./apptemplates.test */ "./tests/apptemplates.test.js");
 __webpack_require__(/*! ./hdsModel.test */ "./tests/hdsModel.test.js");
 __webpack_require__(/*! ./libSettings.test */ "./tests/libSettings.test.js");

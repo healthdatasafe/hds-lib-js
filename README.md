@@ -104,3 +104,22 @@ Some of the functionalities will be moved from the lib
     </script>
 </head>
 ```
+
+# Dev
+
+## Build 
+
+`npm run build` publish the code in `./docs`
+
+## Tests 
+
+## Node
+- all tests: `npm run test`
+- specific test: `npm run test -- --grep=<string>`
+
+## Browser
+Test suite is accessible in `docs/` 
+run `npx backloop.dev ./docs` and open `https://whatever.backloop.dev:4443/tests.html`
+
+
+

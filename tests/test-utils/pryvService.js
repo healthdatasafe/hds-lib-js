@@ -1,11 +1,13 @@
 require('./debug');
 const pryv = require('../../src/patchedPryv');
+const HDSService = require('../../src/HDSService');
 const superagent = pryv.utils.superagent;
 
 const ShortUniqueId = require('short-unique-id');
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
 
 const config = require('./config');
+const { setServiceInfoURL } = require('../../src/settings');
 
 module.exports = {
   init,
@@ -19,7 +21,7 @@ module.exports = {
 };
 
 /**
- * @type {pryv.Service}
+ * @type {HDSService}
  */
 let serviceSingleton;
 
@@ -29,8 +31,8 @@ let serviceSingleton;
 let infosSingleton;
 
 /**
- * Get current Pryv service
- * @returns {pryv.Service}
+ * Get current HDSService
+ * @returns {HDSService}
  */
 function service () {
   if (serviceSingleton == null) throw new Error('Init pryvService first');
@@ -38,15 +40,16 @@ function service () {
 }
 
 /**
- * Initialize Pryv service from config and creates a singleton
+ * Initialize HDSservice from config and creates a singleton
  * accessible via service()
- * @returns {pryv.Service}
+ * @returns {HDSService}
  */
 async function init () {
   if (infosSingleton) return infosSingleton;
   if (!config.appId) throw new Error('Cannot find appId in config');
   if (!config.serviceInfoURL) throw new Error('Cannot find serviceInfoURL in config');
-  serviceSingleton = new pryv.Service(config.serviceInfoURL);
+  setServiceInfoURL(config.serviceInfoURL);
+  serviceSingleton = new HDSService(config.serviceInfoURL);
   infosSingleton = await serviceSingleton.info();
   return infosSingleton;
 }

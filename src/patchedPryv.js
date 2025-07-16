@@ -27,4 +27,5 @@ if (!pryv.Connection.prototype.apiOne) {
     return result[0];
   };
 }
+
 module.exports = pryv;
