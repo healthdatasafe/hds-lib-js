@@ -110,7 +110,7 @@ async function createUserAndPermissions (username, permissions, initialStreams, 
 }
 
 async function createUserPermissions (user, permissions, initialStreams = [], appName) {
-  const personalConnection = new pryv.Connection(user.apiEndpoint);
+  const personalConnection = new pryv.Connection(user.apiEndpoint || user.personalApiEndpoint);
   // -- make sure requested streams exists
   const createStreams = initialStreams.map(s => ({
     method: 'streams.create',

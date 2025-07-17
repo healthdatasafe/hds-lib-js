@@ -41,12 +41,14 @@ class AppClientAccount extends Application {
       const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
       logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
       if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-        logger.error('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+        throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+        // we might consider reseting() in the future;
+        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
       }
       if (collectorClient.apiEndpoint !== apiEndpoint) {
         logger.error('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+        // we might consider reseting() in the future;
+        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
       }
       return collectorClient;
     }

@@ -6,3 +6,4 @@ require('./apptemplates.test');
 require('./hdsModel.test');
 require('./libSettings.test');
 require('./localizeText.test');
+require('./errors.test');

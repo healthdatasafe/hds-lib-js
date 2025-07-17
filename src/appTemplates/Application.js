@@ -146,6 +146,9 @@ async function createAppStreams (app) {
       { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: 'applications' } }
     ];
     const streamCreateResult = await app.connection.api(apiCalls);
+    for (const r of streamCreateResult) {
+      if (r.error) throw new Error('Failed creating app streams', { apiCalls, streamCreateResult });
+    }
     const stream = streamCreateResult[1].stream;
     app.cache.streamData = stream;
   }
