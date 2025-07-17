@@ -206,6 +206,10 @@ describe('[APTX] appTemplates', function () {
       const collectorClients = await myAppClient.getCollectorClients(true);
       assert.equal(collectorClients.length, 1);
 
+      // collectorClients can be retrieved by key
+      const found = await myAppClient.getCollectorClientByKey(collectorClient.key);
+      assert.equal(found, collectorClients[0]);
+
       // check requestData
       assert.deepEqual(collectorClient.requestData, requestContent);
 
@@ -294,9 +298,19 @@ describe('[APTX] appTemplates', function () {
       // revoke appManaging
       await new0.appManaging.connection.revoke();
       // create a new appManaging with the same name for the same user
-      // const new1 = await helperNewAppManaging('dummy', 'dummyApp', new0.managingUser);
-      // create a new invite for existing client
-      // TODO
+      const manager1 = await helperNewAppManaging('dummy', 'dummyApp', new0.managingUser);
+      // get invites from precedent collector
+      const collector1 = (await manager1.appManaging.getCollectors())[0];
+      await collector1.init();
+      const inv1 = (await collector1.getInvites())[0];
+      const inviteSharingData1 = await inv1.getSharingData();
+      // Already known but different incomingEnventId
+      try {
+        await new0.appClient.handleIncomingRequest(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
+        throw new Error('should throw Error');
+      } catch (e) {
+        assert.equal(e.message, 'Found existing collectorClient with a different apiEndpoint');
+      }
     });
   });
 
@@ -329,7 +343,8 @@ async function helperNewAppManaging (baseStreamIdManager, appName, managingUser 
   if (!managingUser) {
     managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
   } else {
-    await createUserPermissions(managingUser, permissionsManager, initialStreams, appName);
+    // replace managing user with new permissions set
+    managingUser = await createUserPermissions(managingUser, permissionsManager, initialStreams, appName);
   }
   const connection = new pryv.Connection(managingUser.appApiEndpoint);
   const appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
