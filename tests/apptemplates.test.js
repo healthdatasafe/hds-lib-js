@@ -5,6 +5,7 @@ const AppManagingAccount = require('../src/appTemplates/AppManagingAccount');
 const AppClientAccount = require('../src/appTemplates/AppClientAccount');
 const Collector = require('../src/appTemplates/Collector');
 const CollectorClient = require('../src/appTemplates/CollectorClient');
+const { HDSLibError } = require('../src/errors');
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -123,8 +124,8 @@ describe('[APTX] appTemplates', function () {
     assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
   });
 
-  describe('[APIX] Collector invite flows', () => {
-    it('[APTI] Collector invite accept', async () => {
+  describe('[APIX] Collector invite flows & internals', () => {
+    it('[APTI] Collector invite accept full flow testing internal', async () => {
       const newCollector = await appManaging.createCollector('Invite test 1');
       assert(newCollector.statusCode, 'draft');
 
@@ -243,6 +244,41 @@ describe('[APTX] appTemplates', function () {
       assert.equal(invites2.length, 1);
       assert.equal(invites2[0], invitesFromInbox[0]);
       assert.equal(invites2[0].status, 'active');
+    });
+
+    it('[APIA] Collector invite accept', async () => {
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APIA');
+      assert.ok(invite.status, 'pending');
+      await collectorClient.accept();
+      await collector.checkInbox();
+      assert.ok(invite.status, 'active');
+    });
+
+    it('[APII] Collector invite internals', async () => {
+      const beforeCreation = new Date();
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APII');
+      const afterCreation = new Date();
+      assert.ok(invite.dateCreation > beforeCreation && invite.dateCreation < afterCreation);
+
+      // apiEndpoint should throw Error
+      try {
+        // eslint-disable-next-line no-unused-expressions
+        invite.apiEndpoint;
+        throw new HDSLibError('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'invite.apiEndpoint is accessible only when active');
+      }
+
+      await collectorClient.accept();
+      await collector.checkInbox();
+
+      // eslint-disable-next-line no-unused-expressions
+      invite.apiEndpoint; // should not throw error
+
+      // connection is cached and valid
+      const connection = invite.connection;
+      const inviteInfo = await connection.accessInfo();
+      assert.ok(!!inviteInfo.clientData.hdsCollectorClient);
     });
 
     it('[APTR] Collector invite refuse', async () => {

@@ -20869,13 +20869,15 @@ class AppClientAccount extends Application {
     if (this.cache.collectorClientsMap[collectorClientKey]) {
       const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
       logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
-      if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-        logger.error('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+      if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
+        throw new HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+        // we might consider reseting() in the future;
+        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
       }
-      if (collectorClient.apiEndpoint !== apiEndpoint) {
-        logger.error('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+      if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
+        throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+        // we might consider reseting() in the future;
+        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
       }
       return collectorClient;
     }
@@ -21197,6 +21199,9 @@ async function createAppStreams (app) {
       { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: 'applications' } }
     ];
     const streamCreateResult = await app.connection.api(apiCalls);
+    for (const r of streamCreateResult) {
+      if (r.error) throw new Error('Failed creating app streams', { apiCalls, streamCreateResult });
+    }
     const stream = streamCreateResult[1].stream;
     app.cache.streamData = stream;
   }
@@ -21749,14 +21754,16 @@ class CollectorClient {
    * reset with new request Event of ApiEndpoint
    * Identical as create but keep current event
    */
-  async reset (apiEndpoint, requesterEventId, accessInfo) {
+  async reset (apiEndpoint, requesterEventId) {
     if (this.accessData && this.accessData?.deleted != null) {
       logger.error('TODO try to revoke current access');
     }
+    // get accessInfo
+    const requesterConnection = new pryv.Connection(apiEndpoint);
+    const accessInfo = await requesterConnection.accessInfo();
     // check content of accessInfo
     const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
     // get request event cont
-    const requesterConnection = new pryv.Connection(apiEndpoint);
     const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
     if (!requesterEvents[0]) throw new HDSLibError('Cannot find requester event in public stream', requesterEvents);
 
@@ -21984,6 +21991,9 @@ class CollectorInvite {
   }
 
   get apiEndpoint () {
+    if (this.status !== 'active') {
+      throw new HDSLibError('invite.apiEndpoint is accessible only when active');
+    }
     return this.eventData.content.apiEndpoint;
   }
 
@@ -22290,7 +22300,7 @@ if (!pryv.Connection.prototype.apiOne) {
  * @param {string} [resultKey] - if given, returns the value or throws an error if not present
  * @throws {Error} if .error is present the response
  */
-  pryv.Connection.prototype.apiOne = async function (method, params = {}, expectedKey) {
+  pryv.Connection.prototype.apiOne = async function apiOne (method, params = {}, expectedKey) {
     const result = await this.api([{ method, params }]);
     if (result[0] == null || result[0].error || (expectedKey != null && result[0][expectedKey] == null)) {
       const innerObject = result[0]?.error || result;
@@ -22300,6 +22310,35 @@ if (!pryv.Connection.prototype.apiOne) {
     }
     if (expectedKey != null) return result[0][expectedKey];
     return result[0];
+  };
+
+  /**
+   * Revoke : Delete the accessId
+   * - Do not thow error if access is already revoked, just return null;
+   * @param {boolean} [throwOnFail = true] - if set to false do not throw Error on failure
+   * @param {Connection} [usingConnection] - specify which connection issues the revoke, might be necessary when selfRovke
+   */
+  pryv.Connection.prototype.revoke = async function revoke (throwOnFail = true, usingConnection) {
+    usingConnection = usingConnection || this;
+    let accessInfo = null;
+    // get accessId
+    try {
+      accessInfo = await this.accessInfo();
+    } catch (e) {
+      if (e.response?.body?.error?.id === 'invalid-access-token') {
+        return null; // Already revoked OK..
+      }
+      if (throwOnFail) throw e;
+      return null;
+    }
+    // delete access
+    try {
+      const result = usingConnection.apiOne('accesses.delete', { id: accessInfo.id });
+      return result;
+    } catch (e) {
+      if (throwOnFail) throw e;
+      return null;
+    }
   };
 }
 
@@ -22405,9 +22444,12 @@ const { createUserAndPermissions, pryv, createUser, createUserPermissions } = __
 const AppManagingAccount = __webpack_require__(/*! ../src/appTemplates/AppManagingAccount */ "./src/appTemplates/AppManagingAccount.js");
 const AppClientAccount = __webpack_require__(/*! ../src/appTemplates/AppClientAccount */ "./src/appTemplates/AppClientAccount.js");
 const Collector = __webpack_require__(/*! ../src/appTemplates/Collector */ "./src/appTemplates/Collector.js");
+const CollectorClient = __webpack_require__(/*! ../src/appTemplates/CollectorClient */ "./src/appTemplates/CollectorClient.js");
+const { HDSLibError } = __webpack_require__(/*! ../src/errors */ "./src/errors.js");
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
+  // eslint-disable-next-line no-unused-vars
   let managingUser, appManaging, clientUser, clientUserResultPermissions, appClient;
   const baseStreamIdManager = 'test-app-template-manager';
   const baseStreamIdClient = 'test-app-template-client';
@@ -22415,17 +22457,7 @@ describe('[APTX] appTemplates', function () {
   const appClientName = 'Test Client HDSLib.appTemplates';
 
   before(async () => {
-    // -- managing
-    const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamIdManager, name: appName, parentId: 'applications' }];
-    const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
-    managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
-    const connection = new pryv.Connection(managingUser.appApiEndpoint);
-    appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
-    // -- receiving user
-    clientUser = await createUser();
-    const permissionsClient = [{ streamId: '*', level: 'manage' }];
-    clientUserResultPermissions = await createUserPermissions(clientUser, permissionsClient, [], appClientName);
-    appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserResultPermissions.appApiEndpoint, appClientName);
+    ({ managingUser, appManaging, clientUser, clientUserResultPermissions, appClient } = await helperNewAppAndUsers(baseStreamIdManager, appName, baseStreamIdClient, appClientName));
   });
 
   it('[APTA] Full flow create collector and sharing', async () => {
@@ -22532,155 +22564,239 @@ describe('[APTX] appTemplates', function () {
     assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
   });
 
-  it('[APTI] Collector invite accept', async () => {
-    const newCollector = await appManaging.createCollector('Invite test 1');
-    assert(newCollector.statusCode, 'draft');
+  describe('[APIX] Collector invite flows & internals', () => {
 
-    // set request content
-    const requestContent = {
-      version: 0,
-      requester: {
-        name: 'Test requester name'
-      },
-      title: {
-        en: 'Title of the request'
-      },
-      description: {
-        en: 'Short Description'
-      },
-      consent: {
-        en: 'This is a consent message'
-      },
-      permissions: [
-        { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
-        {
-          streamId: 'profile-date-of-birth',
-          defaultName: 'Date of Birth',
-          level: 'read'
+    it('[APTI] Collector invite accept full flow testing internal', async () => {
+      const newCollector = await appManaging.createCollector('Invite test 1');
+      assert(newCollector.statusCode, 'draft');
+
+      // set request content
+      const requestContent = {
+        version: 0,
+        requester: {
+          name: 'Test requester name'
+        },
+        title: {
+          en: 'Title of the request'
+        },
+        description: {
+          en: 'Short Description'
+        },
+        consent: {
+          en: 'This is a consent message'
+        },
+        permissions: [
+          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+          {
+            streamId: 'profile-date-of-birth',
+            defaultName: 'Date of Birth',
+            level: 'read'
+          }
+        ],
+        app: { // may have "url" in the future
+          id: 'test-app',
+          url: 'https://xxx.yyy',
+          data: { // settings for the app
+            dummy: 'dummy'
+          }
         }
-      ],
-      app: { // may have "url" in the future
-        id: 'test-app',
-        url: 'https://xxx.yyy',
-        data: { // settings for the app
-          dummy: 'dummy'
-        }
+      };
+      newCollector.statusData.requestContent = requestContent;
+
+      // save
+      await newCollector.save();
+      assert.deepEqual(newCollector.statusData.requestContent, requestContent);
+      assert.ok(newCollector.statusData.requestContent !== requestContent, 'Should be the same content but different objects');
+      // publish
+      await newCollector.publish();
+      assert.equal(newCollector.statusCode, Collector.STATUSES.active);
+
+      // create invite
+      const options = { customData: { hello: 'bob' } };
+      const invite = await newCollector.createInvite('Invite One', options);
+      assert.equal(invite.status, 'pending');
+      const inviteSharingData = await invite.getSharingData();
+      assert.equal(inviteSharingData.apiEndpoint, await newCollector.sharingApiEndpoint());
+      assert.ok(invite.key.length > 5);
+      assert.ok(inviteSharingData.eventId.length > 5);
+
+      // check invite can be found in "pendings"
+      const inviteEvent = await appManaging.connection.apiOne('events.getOne', { id: inviteSharingData.eventId }, 'event');
+      assert.equal(inviteEvent.type, 'invite/collector-v1');
+      assert.ok(inviteEvent.streamIds[0].endsWith('-pending'));
+      assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
+
+      // also on current invites
+      const invites1 = await newCollector.getInvites();
+      assert.equal(invites1.length, 1);
+      assert.equal(invites1[0].status, 'pending');
+
+      // Invitee receives the invite
+      const permissionsClient = [{ streamId: '*', level: 'manage' }];
+      const myClientUserPermissionsResult = await createUserPermissions(clientUser, permissionsClient, [], appClientName + 'APTI');
+
+      const myAppClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, myClientUserPermissionsResult.appApiEndpoint, appClientName);
+      const collectorClient = await myAppClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+      assert.equal(collectorClient.eventData.streamIds[0], myAppClient.baseStreamId);
+      assert.equal(collectorClient.eventData.content.apiEndpoint, inviteSharingData.apiEndpoint);
+      assert.equal(collectorClient.eventData.content.requesterEventId, inviteSharingData.eventId);
+
+      // TODO check collectorClient.eventData.accessInfo
+
+      // check collectorClients
+      const collectorClientsCached = await myAppClient.getCollectorClients();
+      assert.equal(collectorClientsCached.length, 1);
+      const collectorClients = await myAppClient.getCollectorClients(true);
+      assert.equal(collectorClients.length, 1);
+
+      // collectorClients can be retrieved by key
+      const found = await myAppClient.getCollectorClientByKey(collectorClient.key);
+      assert.equal(found, collectorClients[0]);
+
+      // check requestData
+      assert.deepEqual(collectorClient.requestData, requestContent);
+
+      // accept
+      const acceptResult = await collectorClient.accept();
+      assert.equal(acceptResult.requesterEvent.content.eventId, inviteSharingData.eventId);
+      assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
+      assert.equal(collectorClient.status, 'Active');
+
+      // try to re-accept throws an error
+      try {
+        await collectorClient.accept();
+        throw new Error('should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Cannot accept an Active CollectorClient');
       }
-    };
-    newCollector.statusData.requestContent = requestContent;
 
-    // save
-    await newCollector.save();
-    assert.deepEqual(newCollector.statusData.requestContent, requestContent);
-    assert.ok(newCollector.statusData.requestContent !== requestContent, 'Should be the same content but different objects');
-    // publish
-    await newCollector.publish();
-    assert.equal(newCollector.statusCode, Collector.STATUSES.active);
+      // force refresh and check online
+      const collectorClients2 = await myAppClient.getCollectorClients(true);
+      assert.equal(collectorClients2.length, 1);
+      assert.deepEqual(collectorClients2[0].accessData, acceptResult.accessData);
 
-    // create invite
-    const options = { customData: { hello: 'bob' } };
-    const invite = await newCollector.createInvite('Invite One', options);
-    assert.equal(invite.status, 'pending');
-    const inviteSharingData = await invite.getSharingData();
-    assert.equal(inviteSharingData.apiEndpoint, await newCollector.sharingApiEndpoint());
-    assert.ok(invite.key.length > 5);
-    assert.ok(inviteSharingData.eventId.length > 5);
+      // Continue on Collector side
+      const invitesFromInbox = await newCollector.checkInbox();
+      assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
+      assert.equal(invitesFromInbox[0].status, 'active');
 
-    // check invite can be found in "pendings"
-    const inviteEvent = await appManaging.connection.apiOne('events.getOne', { id: inviteSharingData.eventId }, 'event');
-    assert.equal(inviteEvent.type, 'invite/collector-v1');
-    assert.ok(inviteEvent.streamIds[0].endsWith('-pending'));
-    assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
+      // check current invites
+      const invites2 = await newCollector.getInvites(true);
+      assert.equal(invites2.length, 1);
+      assert.equal(invites2[0], invitesFromInbox[0]);
+      assert.equal(invites2[0].status, 'active');
+    });
 
-    // also on current invites
-    const invites1 = await newCollector.getInvites();
-    assert.equal(invites1.length, 1);
-    assert.equal(invites1[0].status, 'pending');
-
-    // Invitee receives the invite
-    const permissionsClient = [{ streamId: '*', level: 'manage' }];
-    const myClientUserPermissionsResult = await createUserPermissions(clientUser, permissionsClient, [], appClientName + 'APTI');
-
-    const myAppClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, myClientUserPermissionsResult.appApiEndpoint, appClientName);
-    const collectorClient = await myAppClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
-    assert.equal(collectorClient.eventData.streamIds[0], myAppClient.baseStreamId);
-    assert.equal(collectorClient.eventData.content.apiEndpoint, inviteSharingData.apiEndpoint);
-    assert.equal(collectorClient.eventData.content.requesterEventId, inviteSharingData.eventId);
-
-    // TODO check collectorClient.eventData.accessInfo
-
-    // check collectorClients
-    const collectorClientsCached = await myAppClient.getCollectorClients();
-    assert.equal(collectorClientsCached.length, 1);
-    const collectorClients = await myAppClient.getCollectorClients(true);
-    assert.equal(collectorClients.length, 1);
-
-    // check requestData
-    assert.deepEqual(collectorClient.requestData, requestContent);
-
-    // accept
-    const acceptResult = await collectorClient.accept();
-    assert.equal(acceptResult.requesterEvent.content.eventId, inviteSharingData.eventId);
-    assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
-    assert.equal(collectorClient.status, 'Active');
-
-    // try to re-accept throws an error
-    try {
+        it('[APIA] Collector invite accept', async () => {
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APIA');
+      assert.ok(invite.status, 'pending');
       await collectorClient.accept();
-      throw new Error('should throw error');
-    } catch (e) {
-      assert.equal(e.message, 'Cannot accept an Active CollectorClient');
-    }
+      await collector.checkInbox();
+      assert.ok(invite.status, 'active');
+    });
 
-    // force refresh and check online
-    const collectorClients2 = await myAppClient.getCollectorClients(true);
-    assert.equal(collectorClients2.length, 1);
-    assert.deepEqual(collectorClients2[0].accessData, acceptResult.accessData);
+    it('[APII] Collector invite internals', async () => {
+      const beforeCreation = new Date();
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APII');
+      const afterCreation = new Date();
+      assert.ok(invite.dateCreation > beforeCreation && invite.dateCreation < afterCreation);
 
-    // Continue on Collector side
-    const invitesFromInbox = await newCollector.checkInbox();
-    assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
-    assert.equal(invitesFromInbox[0].status, 'active');
+      // apiEndpoint should throw Error
+      try {
+        // eslint-disable-next-line no-unused-expressions
+        invite.apiEndpoint;
+        throw new HDSLibError('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'invite.apiEndpoint is accessible only when active');
+      }
 
-    // check current invites
-    const invites2 = await newCollector.getInvites(true);
-    assert.equal(invites2.length, 1);
-    assert.equal(invites2[0], invitesFromInbox[0]);
-    assert.equal(invites2[0].status, 'active');
+      await collectorClient.accept();
+      await collector.checkInbox();
+
+      // eslint-disable-next-line no-unused-expressions
+      invite.apiEndpoint; // should not throw error
+
+      // connection is cached and valid
+      const connection = invite.connection;
+      const inviteInfo = await connection.accessInfo();
+      assert.ok(!!inviteInfo.clientData.hdsCollectorClient)
+    });
+
+    it('[APTR] Collector invite refuse', async () => {
+      const { collector, collectorClient, inviteSharingData } = await helperNewInvite(appManaging, appClient, 'APTR');
+      const refuseResult = await collectorClient.refuse();
+      assert.equal(refuseResult.requesterEvent.content.eventId, inviteSharingData.eventId);
+      assert.equal(collectorClient.status, 'Refused');
+
+      // check collector
+      const invitesFromInbox = await collector.checkInbox();
+      assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
+      assert.equal(invitesFromInbox[0].status, 'error');
+      assert.equal(invitesFromInbox[0].errorType, 'refused');
+    });
+
+    it('[APCR] Collector invite revoke', async () => {
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCR');
+      await collectorClient.accept();
+
+      // check collector
+      const invitesFromInbox1 = await collector.checkInbox();
+      assert.equal(invitesFromInbox1[0], invite);
+      assert.equal(invite.status, 'active');
+
+      // client revoke
+      await collectorClient.revoke();
+      assert.equal(collectorClient.status, 'Deactivated');
+      assert.ok(collectorClient.accessData.deleted);
+
+      // check collector
+      const invitesFromInbox2 = await collector.checkInbox();
+      assert.equal(invitesFromInbox2[0], invite);
+      assert.equal(invite.status, 'error');
+      assert.equal(invite.errorType, 'revoked');
+    });
   });
 
-  it('[APTR] Collector invite refuse', async () => {
-    const { collector, collectorClient, inviteSharingData } = await helperNewInvite(appManaging, appClient, 'APTR');
-    const refuseResult = await collectorClient.refuse();
-    assert.equal(refuseResult.requesterEvent.content.eventId, inviteSharingData.eventId);
-    assert.equal(collectorClient.status, 'Refused');
+  describe('[APEX] Errors ', () => {
+    it('[APEH] Collector.client handleIncoming Request Errors', async () => {
+      const new0 = await helperNewAppAndUsers('dummy', 'dummyApp', 'dummyC', 'dummyCApp');
+      const inv0 = await helperNewInvite(new0.appManaging, new0.appClient, 'APEH');
 
-    // check collector
-    const invitesFromInbox = await collector.checkInbox();
-    assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
-    assert.equal(invitesFromInbox[0].status, 'error');
-    assert.equal(invitesFromInbox[0].errorType, 'refused');
-  });
+      // Already known but different incomingEnventId
+      try {
+        await new0.appClient.handleIncomingRequest(inv0.inviteSharingData.apiEndpoint, 'bogusId');
+        throw new Error('should throw Error');
+      } catch (e) {
+        assert.equal(e.message, 'Found existing collectorClient with a different eventId');
+      }
 
-  it('[APCR] Collector invite revoke', async () => {
-    const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCR');
-    await collectorClient.accept();
+      // -- The following case happens when a user revokes its app permission
+      // and re-grant other permissions to the same app
 
-    // check collector
-    const invitesFromInbox1 = await collector.checkInbox();
-    assert.equal(invitesFromInbox1[0], invite);
-    assert.equal(invite.status, 'active');
+      // revoke appManaging
+      await new0.appManaging.connection.revoke();
+      // create a new appManaging with the same name for the same user
+      const manager1 = await helperNewAppManaging('dummy', 'dummyApp', new0.managingUser);
+      // get invites from precedent collector
+      const collector1 = (await manager1.appManaging.getCollectors())[0];
+      await collector1.init();
+      const inv1 = (await collector1.getInvites())[0];
+      const inviteSharingData1 = await inv1.getSharingData();
+      // Already known but different incomingEnventId
+      try {
+        await new0.appClient.handleIncomingRequest(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
+        throw new Error('should throw Error');
+      } catch (e) {
+        assert.equal(e.message, 'Found existing collectorClient with a different apiEndpoint');
+      }
 
-    // client revoke
-    await collectorClient.revoke();
-    assert.equal(collectorClient.status, 'Deactivated');
-    assert.ok(collectorClient.accessData.deleted);
-
-    // check collector
-    const invitesFromInbox2 = await collector.checkInbox();
-    assert.equal(invitesFromInbox2[0], invite);
-    assert.equal(invite.status, 'error');
-    assert.equal(invite.errorType, 'revoked');
+      // reset to new incoming (might be implement later)
+      const requesterConnection = new pryv.Connection(inviteSharingData1.apiEndpoint);
+      const accessInfo = await requesterConnection.accessInfo();
+      const collectorClient = await new0.appClient.getCollectorClientByKey(CollectorClient.keyFromInfo(accessInfo));
+      await collectorClient.reset(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
+      assert.equal(collectorClient.status, CollectorClient.STATUSES.incoming);
+    });
   });
 
   describe('[APCX] app Templates Client', function () {
@@ -22701,6 +22817,48 @@ describe('[APTX] appTemplates', function () {
     });
   });
 });
+
+/**
+ * function helperNewAppManaging
+ */
+async function helperNewAppManaging (baseStreamIdManager, appName, managingUser = null) {
+  // -- managing
+  const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamIdManager, name: appName, parentId: 'applications' }];
+  const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
+  if (!managingUser) {
+    managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
+  } else {
+    // replace managing user with new permissions set
+    managingUser = await createUserPermissions(managingUser, permissionsManager, initialStreams, appName);
+  }
+  const connection = new pryv.Connection(managingUser.appApiEndpoint);
+  const appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
+  return { managingUser, appManaging };
+}
+
+/**
+ * helper to generate a new managing user and new client user
+ */
+async function helperNewAppClient (baseStreamIdClient, appClientName) {
+  // -- receiving user
+  const clientUser = await createUser();
+  const permissionsClient = [{ streamId: '*', level: 'manage' }];
+  const clientUserResultPermissions = await createUserPermissions(clientUser, permissionsClient, [], appClientName);
+  const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserResultPermissions.appApiEndpoint, appClientName);
+  return { clientUser, clientUserResultPermissions, appClient };
+}
+
+/**
+ * helper to generate a new managing user and new client user
+ */
+async function helperNewAppAndUsers (baseStreamIdManager, appName, baseStreamIdClient, appClientName) {
+  const res = {};
+  const resManager = await helperNewAppManaging(baseStreamIdManager, appName);
+  const resClient = await helperNewAppClient(baseStreamIdClient, appClientName);
+  Object.assign(res, resManager);
+  Object.assign(res, resClient);
+  return res;
+}
 
 /**
  * heper to generate a new collector and invite for this managing application
@@ -22736,6 +22894,42 @@ async function helperNewInvite (appManaging, appClient, code) {
 
   return { collector, invite, collectorClient, inviteSharingData };
 }
+
+
+/***/ }),
+
+/***/ "./tests/errors.test.js":
+/*!******************************!*\
+  !*** ./tests/errors.test.js ***!
+  \******************************/
+/***/ ((__unused_webpack_module, __unused_webpack_exports, __webpack_require__) => {
+
+/* eslint-env mocha */
+const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
+
+const { HDSLibError } = __webpack_require__(/*! ../src/errors */ "./src/errors.js");
+
+describe('[ERRX] HDSLibError', () => {
+  it('[ERRS] HDSLibError.toString() without inner message', async () => {
+    const error = new HDSLibError('Hello');
+    assert.equal(error.message, 'Hello');
+    assert.equal('' + error, 'Error: Hello\nInner Object:\n{}');
+  });
+
+  it('[ERRM] HDSLibError.toString() with inner message', async () => {
+    const innerObject = { message: 'Bob', dummy: 'Dummy' };
+    const error = new HDSLibError('Hello', innerObject);
+    assert.equal(error.message, 'Hello >> Bob');
+    assert.equal('' + error, 'Error: Hello >> Bob\nInner Object:\n{\n  "message": "Bob",\n  "dummy": "Dummy"\n}');
+    assert.deepEqual(error.innerObject, innerObject);
+  });
+
+  it('[ERRO] HDSLibError.toString() with bject without message', async () => {
+    const error = new HDSLibError('Hello', { dummy: 'Dummy' });
+    assert.equal(error.message, 'Hello');
+    assert.equal('' + error, 'Error: Hello\nInner Object:\n{\n  "dummy": "Dummy"\n}');
+  });
+});
 
 
 /***/ }),
@@ -23139,49 +23333,83 @@ describe('[LISX] Lib settings', () => {
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = __webpack_require__(/*! ../src/localizeText */ "./src/localizeText.js");
 
-describe('[LOCX] Lib settings', () => {
+describe('[LOCX] Localization', () => {
   afterEach(() => {
     // make sure locales are set back to default after each test
     resetPreferredLocales();
   });
 
-  it('[LOCD] getSupportedLocales', () => {
-    const defaultLocales = getSupportedLocales();
-    assert.deepEqual(defaultLocales, ['en', 'fr', 'es']);
+  describe('[LOSX] Localization settings', () => {
+    it('[LOSG] getSupportedLocales', () => {
+      const defaultLocales = getSupportedLocales();
+      assert.deepEqual(defaultLocales, ['en', 'fr', 'es']);
+    });
+
+    it('[LOSS] setPreferredLocales, resetPrefferedLocales', () => {
+      const defaultLocales = getSupportedLocales();
+      const text = {
+        en: 'Hello',
+        fr: 'Bonjour'
+      };
+      setPreferredLocales(['en']);
+      assert.equal(localizeText(text), text.en);
+      setPreferredLocales(['fr', 'es']);
+      assert.equal(localizeText(text), text.fr);
+      const prefferedLocales = getPreferredLocales();
+      assert.deepEqual(prefferedLocales, ['fr', 'es', 'en']);
+      resetPreferredLocales();
+      assert.deepEqual(getPreferredLocales(), defaultLocales);
+    });
+
+    it('[LOSE] setPreferredLocales throws error if language code unssuported', () => {
+      try {
+        setPreferredLocales(['ex', 'en', 'fr', 'ut']);
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'locales "ex, ut" are not supported');
+      }
+    });
+
+    it('[LOSA] setPreferredLocales throws error if not array', () => {
+      try {
+        setPreferredLocales('en');
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'setPreferredLocales takes an array of language codes');
+      }
+    });
   });
 
-  it('[LOCL] setPreferredLocales, resetPrefferedLocales', () => {
-    const defaultLocales = getSupportedLocales();
-    const text = {
-      en: 'Hello',
-      fr: 'Bonjour'
-    };
-    setPreferredLocales(['en']);
-    assert.equal(localizeText(text), text.en);
-    setPreferredLocales(['fr', 'es']);
-    assert.equal(localizeText(text), text.fr);
-    const prefferedLocales = getPreferredLocales();
-    assert.deepEqual(prefferedLocales, ['fr', 'es', 'en']);
-    resetPreferredLocales();
-    assert.deepEqual(getPreferredLocales(), defaultLocales);
-  });
+  // --- item localization
 
-  it('[LOCE] setPreferredLocales throws error if language code unssuported', () => {
-    try {
-      setPreferredLocales(['ex', 'en', 'fr', 'ut']);
-      throw new Error('Should throw error');
-    } catch (e) {
-      assert.equal(e.message, 'locales "ex, ut" are not supported');
-    }
-  });
+  describe('[LOLX] item localization', () => {
+    it('[LOLN] localizable null items return null', () => {
+      const nullRes = localizeText(null);
+      assert.equal(nullRes, null);
+    });
 
-  it('[LOCE] setPreferredLocales throws error if not array', () => {
-    try {
-      setPreferredLocales('en');
-      throw new Error('Should throw error');
-    } catch (e) {
-      assert.equal(e.message, 'setPreferredLocales takes an array of language codes');
-    }
+    it('[LOLE] localizable should return english translation if none other found', () => {
+      setPreferredLocales(['fr', 'es']);
+      const text = {
+        en: 'Hello'
+      };
+      const res = localizeText(text);
+      assert.equal(res, 'Hello');
+    });
+
+    it('[LOLT] localizable items must have an english translation, even if default language is not english', () => {
+      try {
+        const text = {
+          es: 'Ola',
+          fr: 'Bonjour'
+        };
+        setPreferredLocales(['fr']);
+        localizeText(text);
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'textItems must have an english translation');
+      }
+    });
   });
 });
 
@@ -23369,7 +23597,7 @@ async function createUserAndPermissions (username, permissions, initialStreams, 
 }
 
 async function createUserPermissions (user, permissions, initialStreams = [], appName) {
-  const personalConnection = new pryv.Connection(user.apiEndpoint);
+  const personalConnection = new pryv.Connection(user.apiEndpoint || user.personalApiEndpoint);
   // -- make sure requested streams exists
   const createStreams = initialStreams.map(s => ({
     method: 'streams.create',
@@ -23543,6 +23771,7 @@ __webpack_require__(/*! ./apptemplates.test */ "./tests/apptemplates.test.js");
 __webpack_require__(/*! ./hdsModel.test */ "./tests/hdsModel.test.js");
 __webpack_require__(/*! ./libSettings.test */ "./tests/libSettings.test.js");
 __webpack_require__(/*! ./localizeText.test */ "./tests/localizeText.test.js");
+__webpack_require__(/*! ./errors.test */ "./tests/errors.test.js");
 
 })();
 

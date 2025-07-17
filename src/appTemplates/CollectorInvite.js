@@ -34,6 +34,9 @@ class CollectorInvite {
   }
 
   get apiEndpoint () {
+    if (this.status !== 'active') {
+      throw new HDSLibError('invite.apiEndpoint is accessible only when active');
+    }
     return this.eventData.content.apiEndpoint;
   }
 
