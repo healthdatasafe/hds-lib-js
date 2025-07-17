@@ -97,14 +97,16 @@ class CollectorClient {
    * reset with new request Event of ApiEndpoint
    * Identical as create but keep current event
    */
-  async reset (apiEndpoint, requesterEventId, accessInfo) {
+  async reset (apiEndpoint, requesterEventId) {
     if (this.accessData && this.accessData?.deleted != null) {
       logger.error('TODO try to revoke current access');
     }
+    // get accessInfo
+    const requesterConnection = new pryv.Connection(apiEndpoint);
+    const accessInfo = await requesterConnection.accessInfo();
     // check content of accessInfo
     const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
     // get request event cont
-    const requesterConnection = new pryv.Connection(apiEndpoint);
     const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
     if (!requesterEvents[0]) throw new HDSLibError('Cannot find requester event in public stream', requesterEvents);
 

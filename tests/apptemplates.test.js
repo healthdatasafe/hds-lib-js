@@ -4,6 +4,7 @@ const { createUserAndPermissions, pryv, createUser, createUserPermissions } = re
 const AppManagingAccount = require('../src/appTemplates/AppManagingAccount');
 const AppClientAccount = require('../src/appTemplates/AppClientAccount');
 const Collector = require('../src/appTemplates/Collector');
+const CollectorClient = require('../src/appTemplates/CollectorClient');
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -311,6 +312,13 @@ describe('[APTX] appTemplates', function () {
       } catch (e) {
         assert.equal(e.message, 'Found existing collectorClient with a different apiEndpoint');
       }
+
+      // reset to new incoming (might be implement later)
+      const requesterConnection = new pryv.Connection(inviteSharingData1.apiEndpoint);
+      const accessInfo = await requesterConnection.accessInfo();
+      const collectorClient = await new0.appClient.getCollectorClientByKey(CollectorClient.keyFromInfo(accessInfo));
+      await collectorClient.reset(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
+      assert.equal(collectorClient.status, CollectorClient.STATUSES.incoming);
     });
   });
 
