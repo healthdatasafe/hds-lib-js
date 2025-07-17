@@ -20340,7 +20340,9 @@ module.exports = function whichTypedArray(value) {
 /*!************************************!*\
   !*** ./src/HDSModel/HDSItemDef.js ***!
   \************************************/
-/***/ ((module) => {
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+const { localizeText } = __webpack_require__(/*! ../localizeText */ "./src/localizeText.js");
 
 class HDSItemDef {
   #data;
@@ -20362,6 +20364,16 @@ class HDSItemDef {
 
   get data () {
     return this.#data;
+  }
+
+  /** @type {string} label Localized */
+  get label () {
+    return localizeText(this.#data.label);
+  }
+
+  /** @type {string} description Localized */
+  get description () {
+    return localizeText(this.#data.description);
   }
 }
 
@@ -20805,6 +20817,7 @@ class HDSService extends pryv.Service {
 }
 
 module.exports = HDSService;
+
 
 /***/ }),
 
@@ -22130,7 +22143,6 @@ async function initHDSModel (forceNew = false) {
 }
 
 
-
 /***/ }),
 
 /***/ "./src/localizeText.js":
@@ -22169,7 +22181,7 @@ function getPreferredLocales () {
 * @returns {Array<string>}
  */
 function getSupportedLocales () {
-  return [...preferredLocales];
+  return [...supportedLocales];
 }
 
 /**
@@ -22327,6 +22339,7 @@ function setServiceInfoURL (url) {
 function getServiceInfoURL () {
   return serviceInfoUrl;
 }
+
 
 /***/ }),
 
@@ -22739,6 +22752,7 @@ const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/te
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
 const { HDSModel } = __webpack_require__(/*! ../ */ "./src/index.js");
+const { resetPreferredLocales, setPreferredLocales } = __webpack_require__(/*! ../src/localizeText */ "./src/localizeText.js");
 
 describe('[MODX] Model', () => {
   let model;
@@ -22764,6 +22778,20 @@ describe('[MODX] Model', () => {
   });
 
   // ---------- items ------------ //
+  describe('[MOLX] items localization', function () {
+    afterEach(() => {
+      // make sure locales are set back to default after each test
+      resetPreferredLocales();
+    });
+    it('[MOLL] Label  & Description properties are localized', () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      assert.equal(itemDef.label, 'Body weight');
+      assert.equal(itemDef.description, 'Measured body weight');
+      setPreferredLocales(['fr']);
+      assert.equal(itemDef.label, 'Poids corporel');
+      assert.equal(itemDef.description, 'Poids corporel mesuré');
+    });
+  });
 
   describe('[MOIX] items', function () {
     it('[MOIE] Throw error if itemsDefs.forKey not found', async () => {
@@ -23112,7 +23140,8 @@ const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/te
 const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = __webpack_require__(/*! ../src/localizeText */ "./src/localizeText.js");
 
 describe('[LOCX] Lib settings', () => {
-  beforeEach(() => {
+  afterEach(() => {
+    // make sure locales are set back to default after each test
     resetPreferredLocales();
   });
 
