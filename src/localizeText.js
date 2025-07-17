@@ -28,7 +28,7 @@ function getPreferredLocales () {
 * @returns {Array<string>}
  */
 function getSupportedLocales () {
-  return [...preferredLocales];
+  return [...supportedLocales];
 }
 
 /**

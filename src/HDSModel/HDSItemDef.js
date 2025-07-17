@@ -1,3 +1,5 @@
+const { localizeText } = require('../localizeText');
+
 class HDSItemDef {
   #data;
   #key;
@@ -18,6 +20,16 @@ class HDSItemDef {
 
   get data () {
     return this.#data;
+  }
+
+  /** @type {string} label Localized */
+  get label () {
+    return localizeText(this.#data.label);
+  }
+
+  /** @type {string} description Localized */
+  get description () {
+    return localizeText(this.#data.description);
   }
 }
 

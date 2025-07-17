@@ -3,7 +3,8 @@ const { assert } = require('./test-utils/deps-node');
 const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = require('../src/localizeText');
 
 describe('[LOCX] Lib settings', () => {
-  beforeEach(() => {
+  afterEach(() => {
+    // make sure locales are set back to default after each test
     resetPreferredLocales();
   });
 

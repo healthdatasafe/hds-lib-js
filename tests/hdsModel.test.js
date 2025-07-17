@@ -4,6 +4,7 @@ const { assert } = require('./test-utils/deps-node');
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
 const { HDSModel } = require('../');
+const { resetPreferredLocales, setPreferredLocales } = require('../src/localizeText');
 
 describe('[MODX] Model', () => {
   let model;
@@ -29,6 +30,20 @@ describe('[MODX] Model', () => {
   });
 
   // ---------- items ------------ //
+  describe('[MOLX] items localization', function () {
+    afterEach(() => {
+      // make sure locales are set back to default after each test
+      resetPreferredLocales();
+    });
+    it('[MOLL] Label  & Description properties are localized', () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      assert.equal(itemDef.label, 'Body weight');
+      assert.equal(itemDef.description, 'Measured body weight');
+      setPreferredLocales(['fr']);
+      assert.equal(itemDef.label, 'Poids corporel');
+      assert.equal(itemDef.description, 'Poids corporel mesuré');
+    });
+  });
 
   describe('[MOIX] items', function () {
     it('[MOIE] Throw error if itemsDefs.forKey not found', async () => {
