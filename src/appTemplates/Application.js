@@ -120,7 +120,7 @@ async function createAppStreams (app) {
     }
     if (!masterFound) { // check that app has "manage" level on baseStreamId
       const baseStreamFound = infos.permissions.find(p => (p.streamId === app.baseStreamId && p.level === 'manage'));
-      if (!baseStreamFound) throw new Error(`Application with "app" type of access requires  (streamId = '${app.baseStreamId}', level = "manage") or master access`);
+      if (!baseStreamFound) throw new Error(`Application with "app" type of access requires  (streamId = "${app.baseStreamId}", level = "manage") or master access`);
     }
   }
   // get streamStructure
@@ -135,9 +135,6 @@ async function createAppStreams (app) {
   }
   // not found create streams
   if (!found) {
-    if (app.appName == null) {
-      throw new Error('Cannot create app stream if not "appName" has been given');
-    }
     if (!isPersonalOrMaster) {
       throw new Error('Token has not sufficient right to create App streams. Create them upfront');
     }

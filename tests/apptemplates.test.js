@@ -367,7 +367,7 @@ describe('[APTX] appTemplates', function () {
         await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserNonMaster.appApiEndpoint, appClientName);
         throw new Error('Should throw error');
       } catch (e) {
-        assert.equal(e.message, `Application with "app" type of access requires  (streamId = '${baseStreamIdClient}', level = "manage") or master access`);
+        assert.equal(e.message, `Application with "app" type of access requires  (streamId = "${baseStreamIdClient}", level = "manage") or master access`);
       }
       // personal
       const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUser.apiEndpoint, appClientName);
