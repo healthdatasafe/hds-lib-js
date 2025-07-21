@@ -1,4 +1,12 @@
 const pryv = require('../patchedPryv');
+const { StreamsAutoCreate } = require('../toolkit');
+
+/**
+ * Settings for application
+ * @typedef {Object} ApplicationFeatures
+ * @property {Boolean} [streamsAutoCreate = true] - attach an instance of StreamsAutoCreate to connection
+ */
+
 /**
  * Common code for AppClientAccount and AppManagingAccount
  */
@@ -11,6 +19,9 @@ class Application {
   appName;
 
   cache;
+
+  /** @property {ApplicationFeatures} */
+  features;
 
   /**
    * Get application stream structure
@@ -39,9 +50,10 @@ class Application {
    * @param {string} apiEndpoint
    * @param {string} baseStreamId - application base Strem ID
    * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
+   * @param {ApplicationFeatures} [features]
    * @returns {AppClientAccount}
    */
-  static async newFromApiEndpoint (baseStreamId, apiEndpoint, appName) {
+  static async newFromApiEndpoint (baseStreamId, apiEndpoint, appName, features) {
     const connection = new pryv.Connection(apiEndpoint);
     // in a static method, "this" is the class (here the extending class)
     return await this.newFromConnection(baseStreamId, connection, appName);
@@ -52,11 +64,12 @@ class Application {
   * @param {Pryv.connection} connection - must be a connection with personnalToken or masterToken
   * @param {string} baseStreamId - application base Strem ID
   * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
-  *  @returns {AppClientAccount}
+  * @param {ApplicationFeatures} [features]
+  * @returns {AppClientAccount}
   */
-  static async newFromConnection (baseStreamId, connection, appName) {
+  static async newFromConnection (baseStreamId, connection, appName, features) {
     // in a static method "this" is the class (here the extending class)
-    const app = new this(baseStreamId, connection, appName);
+    const app = new this(baseStreamId, connection, appName, features);
     await app.init();
     return app;
   }
@@ -67,8 +80,9 @@ class Application {
    * @param {string} baseStreamId
    * @param {Pryv.Connection} connection
    * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
+   * @param {ApplicationFeatures} [features]
    */
-  constructor (baseStreamId, connection, appName) {
+  constructor (baseStreamId, connection, appName, features) {
     if (!baseStreamId || baseStreamId.length < 2) throw new Error('Missing or too short baseStreamId');
     this.baseStreamId = baseStreamId;
     if (appName == null && !this.appSettings.appNameFromAccessInfo) {
@@ -76,6 +90,12 @@ class Application {
     }
     this.appName = appName;
     this.connection = connection;
+    this.features = Object.assign({ streamsAutoCreate: true }, features);
+
+    if (this.features.streamsAutoCreate) {
+      StreamsAutoCreate.attachToConnection(this.connection);
+    }
+
     this.cache = { };
   }
 

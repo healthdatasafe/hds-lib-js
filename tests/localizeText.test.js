@@ -30,7 +30,7 @@ describe('[LOCX] Localization', () => {
       assert.deepEqual(getPreferredLocales(), defaultLocales);
     });
 
-    it('[LOSE] setPreferredLocales throws error if language code unssuported', () => {
+    it('[LOSE] setPreferredLocales throws error if language code unsuported', () => {
       try {
         setPreferredLocales(['ex', 'en', 'fr', 'ut']);
         throw new Error('Should throw error');

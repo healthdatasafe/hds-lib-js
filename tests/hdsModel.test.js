@@ -139,7 +139,7 @@ describe('[MODX] Model', () => {
         'body-vulva-mucus-stretch',
         'profile-surname'
       ];
-      const streamsToBeCreated = model.streams.getNecessaryListForItemKeys(itemKeys);
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys);
       // keeè a list of streams check that necessary streams exists
       const streamIdsToCheck = {};
       for (const itemKey of itemKeys) {
@@ -155,6 +155,63 @@ describe('[MODX] Model', () => {
         parentExist[stream.id] = true;
       }
       assert.deepEqual(Object.keys(streamIdsToCheck), []);
+    });
+
+    it('[MOSD] Necessary streams to handle itemKey, with existing streamIds', async () => {
+      const itemKeys = [
+        'body-vulva-mucus-inspect',
+        'profile-name',
+        'profile-date-of-birth',
+        'body-vulva-mucus-stretch',
+        'profile-surname'
+      ];
+      const knowExistingStreamsIds = ['body-vulva', 'profile', 'applications'];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { knowExistingStreamsIds });
+      assert.deepEqual(streamsToBeCreated, [
+        {
+          id: 'body-vulva-mucus',
+          name: 'Vulva Mucus',
+          parentId: 'body-vulva'
+        },
+        {
+          id: 'body-vulva-mucus-inspect',
+          name: 'Vulva Mucus Inspect',
+          parentId: 'body-vulva-mucus'
+        },
+        { id: 'profile-name', name: 'Name', parentId: 'profile' },
+        {
+          id: 'profile-date-of-birth',
+          name: 'Date of Birth',
+          parentId: 'profile'
+        },
+        {
+          id: 'body-vulva-mucus-stretch',
+          name: 'Vulva Mucus Stretch',
+          parentId: 'body-vulva-mucus'
+        }
+      ]);
+    });
+
+    it('[MOSE] Necessary streams to handle itemKey, with nameProperty: defaultName', async () => {
+      const itemKeys = [
+        'profile-name'
+      ];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { nameProperty: 'defaultName' });
+      assert.deepEqual(streamsToBeCreated, [
+        { id: 'profile', parentId: null, defaultName: 'Profile' },
+        { id: 'profile-name', parentId: 'profile', defaultName: 'Name' }
+      ]);
+    });
+
+    it('[MOSF] Necessary streams to handle itemKey, with nameProperty: none', async () => {
+      const itemKeys = [
+        'profile-name'
+      ];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { nameProperty: 'none' });
+      assert.deepEqual(streamsToBeCreated, [
+        { id: 'profile', parentId: null },
+        { id: 'profile-name', parentId: 'profile' }
+      ]);
     });
   });
 

@@ -4,7 +4,9 @@
  */
 require('./applicationClass.test');
 require('./apptemplates.test');
+require('./errors.test');
+require('./hdsLib.test');
 require('./hdsModel.test');
 require('./libSettings.test');
 require('./localizeText.test');
-require('./errors.test');
+require('./toolkitStreamAutoCreate.test');

@@ -20620,7 +20620,9 @@ function loadModelDataByStreamIdEventTypes (model, map) {
 /*!******************************************!*\
   !*** ./src/HDSModel/HDSModel-Streams.js ***!
   \******************************************/
-/***/ ((module) => {
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+const { itemKeysOrDefsToDefs } = __webpack_require__(/*! ./internalModelUtils */ "./src/HDSModel/internalModelUtils.js");
 
 /**
  * Streams - Extension of HDSModel
@@ -20645,24 +20647,40 @@ class HDSModelStreams {
 
   /**
    * Get a list of streams to be created for usage of these keys (whithout children)
-   * @param {Array<string>} itemKeys
+   * @param {Array<string>|Array<HDSItemDef>} itemKeysOrDefs
+   * @param {Object} params
+   * @param {String} [params.nameProperty = 'name'] - can be set to 'name' (default), 'defaultName' or 'none' => if you want nothing
+   * @param {Array<string>} [params.knowExistingStreamsIds]
    */
-  getNecessaryListForItemKeys (itemKeys) {
+  getNecessaryListForItems (itemKeysOrDefs, params = {}) {
+    const itemDefs = itemKeysOrDefsToDefs(this.#model, itemKeysOrDefs);
+    const knowExistingStreamsIds = params.knowExistingStreamsIds || [];
+    const nameProperty = params.nameProperty || 'name';
+
     const result = [];
     const streams = new Map(); // tempMap to keep streams already in
-    for (const itemKey of itemKeys) {
-      const itemDef = this.#model.itemsDefs.forKey(itemKey);
+    for (const knowStreamId of knowExistingStreamsIds) {
+      const strs = this.getParentsIds(knowStreamId, false, [knowStreamId]).reverse();
+      for (const strId of strs) {
+        streams.set(strId, true);
+      }
+    }
+    for (const itemDef of itemDefs) {
       const streamParentIds = this.getParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
-      for (const streamId of streamParentIds) {
-        if (streams.has(streamId)) continue;
+      const resultToBeReversed = [];
+      for (let i = streamParentIds.length - 1; i > -1; i--) { // loop reverse to break as soon as we find an existing stream
+        const streamId = streamParentIds[i];
+        if (streams.has(streamId)) break;
         const stream = this.getDataById(streamId);
         streams.set(streamId, true); // just to flag
-        result.push({
-          id: streamId,
-          name: stream.name, // to be translated
-          parentId: stream.parentId
-        });
+        const itemStream = { id: streamId, parentId: stream.parentId };
+        if (nameProperty !== 'none') {
+          itemStream[nameProperty] = stream.name; // to be translated
+        }
+        resultToBeReversed.push(itemStream);
       }
+      // result need to be reversed in order to get parents created before
+      result.push(...resultToBeReversed.reverse());
     }
     return result;
   }
@@ -20799,6 +20817,87 @@ module.exports = HDSModel;
 
 /***/ }),
 
+/***/ "./src/HDSModel/HDSModelInitAndSingleton.js":
+/*!**************************************************!*\
+  !*** ./src/HDSModel/HDSModelInitAndSingleton.js ***!
+  \**************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+let model = null;
+const HDSModel = __webpack_require__(/*! ./HDSModel */ "./src/HDSModel/HDSModel.js");
+const HDService = __webpack_require__(/*! ../HDSService */ "./src/HDSService.js");
+const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
+
+module.exports = {
+  getModel,
+  initHDSModel
+};
+
+function getModel () {
+  if (model == null) throw new HDSLibError('Call await HDSLib.initHDSModel() once');
+  return model;
+}
+
+/**
+ * Initialized model singleton
+ * @returns {HDSModel}
+ */
+async function initHDSModel (forceNew = false) {
+  if (!model || forceNew) {
+    const service = new HDService();
+    const serviceInfo = await service.info();
+    model = new HDSModel(serviceInfo.assets['hds-model']);
+    await model.load();
+  }
+  return model;
+}
+
+
+/***/ }),
+
+/***/ "./src/HDSModel/internalModelUtils.js":
+/*!********************************************!*\
+  !*** ./src/HDSModel/internalModelUtils.js ***!
+  \********************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+const HDSItemDef = __webpack_require__(/*! ./HDSItemDef */ "./src/HDSModel/HDSItemDef.js");
+
+module.exports = {
+  itemKeysOrDefsToDefs,
+  itemKeyOrDefToDef
+};
+
+/**
+ * Some call support either arrays of itemKeys or itemDefs
+ * test if they are strings or itemDefs and returns an array of itemDefs
+ * @param {HDSModel} model
+ * @param {Array<string>|Array<HDSItemDef>} keysOrDefs
+ * @return {Array<HDSItemDef>}
+ */
+function itemKeysOrDefsToDefs (model, keysOrDefs) {
+  const res = [];
+  for (const keyOrDef of keysOrDefs) {
+    res.push(itemKeyOrDefToDef(model, keyOrDef));
+  }
+  return res;
+}
+
+/**
+ * Some call support either itemKey or itemDef
+ * test if string or itemDef and returns an itemDef
+ * @param {HDSModel} model
+ * @param {string|HDSItemDef} keyOrDef
+ * @return {HDSItemDef}
+ */
+function itemKeyOrDefToDef (model, keyOrDef) {
+  if (keyOrDef instanceof HDSItemDef) return keyOrDef;
+  return model.itemsDefs.forKey(keyOrDef);
+}
+
+
+/***/ }),
+
 /***/ "./src/HDSService.js":
 /*!***************************!*\
   !*** ./src/HDSService.js ***!
@@ -20840,7 +20939,7 @@ const logger = __webpack_require__(/*! ../logger */ "./src/logger.js");
 
 const MAX_COLLECTORS = 1000;
 class AppClientAccount extends Application {
-  constructor (baseStreamId, connection, appName) {
+  constructor (baseStreamId, connection, appName, features) {
     super(...arguments);
     this.cache.collectorClientsMap = {};
   }
@@ -21052,6 +21151,14 @@ module.exports = AppManagingAccount;
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 const pryv = __webpack_require__(/*! ../patchedPryv */ "./src/patchedPryv.js");
+const { StreamsAutoCreate } = __webpack_require__(/*! ../toolkit */ "./src/toolkit/index.js");
+
+/**
+ * Settings for application
+ * @typedef {Object} ApplicationFeatures
+ * @property {Boolean} [streamsAutoCreate = true] - attach an instance of StreamsAutoCreate to connection
+ */
+
 /**
  * Common code for AppClientAccount and AppManagingAccount
  */
@@ -21064,6 +21171,9 @@ class Application {
   appName;
 
   cache;
+
+  /** @property {ApplicationFeatures} */
+  features;
 
   /**
    * Get application stream structure
@@ -21092,9 +21202,10 @@ class Application {
    * @param {string} apiEndpoint
    * @param {string} baseStreamId - application base Strem ID
    * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
+   * @param {ApplicationFeatures} [features]
    * @returns {AppClientAccount}
    */
-  static async newFromApiEndpoint (baseStreamId, apiEndpoint, appName) {
+  static async newFromApiEndpoint (baseStreamId, apiEndpoint, appName, features) {
     const connection = new pryv.Connection(apiEndpoint);
     // in a static method, "this" is the class (here the extending class)
     return await this.newFromConnection(baseStreamId, connection, appName);
@@ -21105,11 +21216,12 @@ class Application {
   * @param {Pryv.connection} connection - must be a connection with personnalToken or masterToken
   * @param {string} baseStreamId - application base Strem ID
   * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
-  *  @returns {AppClientAccount}
+  * @param {ApplicationFeatures} [features]
+  * @returns {AppClientAccount}
   */
-  static async newFromConnection (baseStreamId, connection, appName) {
+  static async newFromConnection (baseStreamId, connection, appName, features) {
     // in a static method "this" is the class (here the extending class)
-    const app = new this(baseStreamId, connection, appName);
+    const app = new this(baseStreamId, connection, appName, features);
     await app.init();
     return app;
   }
@@ -21120,8 +21232,9 @@ class Application {
    * @param {string} baseStreamId
    * @param {Pryv.Connection} connection
    * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
+   * @param {ApplicationFeatures} [features]
    */
-  constructor (baseStreamId, connection, appName) {
+  constructor (baseStreamId, connection, appName, features) {
     if (!baseStreamId || baseStreamId.length < 2) throw new Error('Missing or too short baseStreamId');
     this.baseStreamId = baseStreamId;
     if (appName == null && !this.appSettings.appNameFromAccessInfo) {
@@ -21129,6 +21242,12 @@ class Application {
     }
     this.appName = appName;
     this.connection = connection;
+    this.features = Object.assign({ streamsAutoCreate: true }, features);
+
+    if (this.features.streamsAutoCreate) {
+      StreamsAutoCreate.attachToConnection(this.connection);
+    }
+
     this.cache = { };
   }
 
@@ -22115,9 +22234,8 @@ const HDSModel = __webpack_require__(/*! ./HDSModel/HDSModel */ "./src/HDSModel/
 const appTemplates = __webpack_require__(/*! ./appTemplates/appTemplates */ "./src/appTemplates/appTemplates.js");
 const logger = __webpack_require__(/*! ./logger */ "./src/logger.js");
 const HDService = __webpack_require__(/*! ./HDSService */ "./src/HDSService.js");
-const { HDSLibError } = __webpack_require__(/*! ./errors */ "./src/errors.js");
-
-let model = null;
+const HDSModelInitAndSingleton = __webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton */ "./src/HDSModel/HDSModelInitAndSingleton.js");
+const toolkit = __webpack_require__(/*! ./toolkit */ "./src/toolkit/index.js");
 
 module.exports = {
   pryv,
@@ -22125,29 +22243,15 @@ module.exports = {
   HDService,
   HDSModel,
   get model () {
-    if (model == null) throw new HDSLibError('Call await HDSLib.initHDSModel() once');
-    return model;
+    return HDSModelInitAndSingleton.getModel();
   },
-  initHDSModel,
+  initHDSModel: HDSModelInitAndSingleton.initHDSModel,
   appTemplates,
   localizeText,
   l: localizeText, // shortcut to HDSLib.localizeText
+  toolkit,
   logger
 };
-
-/**
- * Initialized model singleton
- * @returns {HDSModel}
- */
-async function initHDSModel (forceNew = false) {
-  if (!model || forceNew) {
-    const service = new HDService();
-    const serviceInfo = await service.info();
-    model = new HDSModel(serviceInfo.assets['hds-model']);
-    await model.load();
-  }
-  return model;
-}
 
 
 /***/ }),
@@ -22375,6 +22479,135 @@ function setServiceInfoURL (url) {
 function getServiceInfoURL () {
   return serviceInfoUrl;
 }
+
+
+/***/ }),
+
+/***/ "./src/toolkit/StreamsAutoCreate.js":
+/*!******************************************!*\
+  !*** ./src/toolkit/StreamsAutoCreate.js ***!
+  \******************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
+const { getModel } = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton */ "./src/HDSModel/HDSModelInitAndSingleton.js");
+
+class StreamsAutoCreate {
+  connection;
+
+  /**
+   * Safe way to create StreamsAutoCreate as it check if ones is already attached to connection
+   * @param {Connection} connection
+   * @param {*} knownStreamStructure
+   * @returns {StreamsAutoCreate}
+   */
+  static attachToConnection (connection, knownStreamStructure) {
+    const streamsAutoCreate = connection.streamsAutoCreate || new StreamsAutoCreate(connection);
+    streamsAutoCreate.addStreamStructure(knownStreamStructure);
+    return streamsAutoCreate;
+  }
+
+  /**
+   * @private
+   * Don't use.. use StreamsAutoCreate.attachToConnection
+   * @param {Connection} connection
+   */
+  constructor (connection) {
+    // make connection a weak reference to avoif cycles
+    this.connection = new WeakRef(connection);
+    this.knownStreams = {};
+    connection.streamsAutoCreate = this;
+  }
+
+  /**
+   * @param {Array<String|HDSItemDef>|Set<String|HDSItemDef>} keysOrDefs - Array or Set of itemDefs or itemKeys
+   */
+  async ensureExistsForItems (keysOrDefs) {
+    // get existing streamIds;
+    const modelStreams = getModel().streams;
+    const streamsToCreate = modelStreams.getNecessaryListForItems(keysOrDefs, this.knowStreamIds());
+    const apiCalls = streamsToCreate.map((s) => ({
+      method: 'streams.create',
+      params: s
+    }));
+    const connection = this.connection?.deref();
+    if (!connection) {
+      throw new Error('Lost reference to connection');
+    }
+
+    const results = await connection.api(apiCalls);
+    const streamsCreated = [];
+    const errors = [];
+    for (const result of results) {
+      if (result.stream?.id) {
+        streamsCreated.push(result.stream);
+        continue;
+      }
+      if (result.error) {
+        if (result.error.id === 'item-already-exists') continue; // all OK
+        errors.push(result.error);
+        continue;
+      }
+      // shouldn't be there
+      errors.push({
+        id: 'unexpected-error',
+        message: 'Unexpected content in api response',
+        data: result
+      });
+    }
+    if (errors.length > 0) {
+      throw new HDSLibError('Error creating streams', errors);
+    }
+    return streamsCreated;
+  }
+
+  knowStreamIds () {
+    return Object.keys(this.knownStreams);
+  }
+
+  addStreamStructure (streamStructure) {
+    if (streamStructure == null) return;
+    for (const stream of allStreamsAndChildren(streamStructure)) {
+      this.#addStream(stream);
+    }
+  }
+
+  #addStream (stream) {
+    if (!this.knownStreams[stream.id]) {
+      this.knownStreams[stream.id] = {};
+    }
+  }
+}
+
+module.exports = StreamsAutoCreate;
+
+/**
+ * Iterate all streams and children
+ * @param {*} streamStructure
+ */
+function * allStreamsAndChildren (streamStructure) {
+  for (const stream of streamStructure) {
+    yield stream;
+    if (stream.children && stream.children.length > 0) {
+      for (const child of allStreamsAndChildren(stream.children)) {
+        yield child;
+      }
+    }
+  }
+}
+
+
+/***/ }),
+
+/***/ "./src/toolkit/index.js":
+/*!******************************!*\
+  !*** ./src/toolkit/index.js ***!
+  \******************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+module.exports = {
+  StreamsAutoCreate: __webpack_require__(/*! ./StreamsAutoCreate */ "./src/toolkit/StreamsAutoCreate.js")
+};
 
 
 /***/ }),
@@ -23053,6 +23286,85 @@ describe('[ERRX] HDSLibError', () => {
 
 /***/ }),
 
+/***/ "./tests/hdsLib.test.js":
+/*!******************************!*\
+  !*** ./tests/hdsLib.test.js ***!
+  \******************************/
+/***/ ((__unused_webpack_module, __unused_webpack_exports, __webpack_require__) => {
+
+/* eslint-env mocha */
+const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
+/**
+ * Tests related to HDSLib.index.js & utils
+ */
+const HDSLib = __webpack_require__(/*! ../src */ "./src/index.js");
+const { waitUntilFalse } = __webpack_require__(/*! ../src/utils */ "./src/utils.js");
+
+describe('[HDLX] HDSLib.index.js', () => {
+  it('[HDME] HDSLib.model throws error if not initialized', () => {
+    try {
+      // eslint-disable-next-line no-unused-expressions
+      HDSLib.model;
+      throw new Error('Should throw an error');
+    } catch (e) {
+      assert.equal(e.message, 'Call await HDSLib.initHDSModel() once');
+    }
+  });
+
+  it('[HDME] HDSLib.initHDSModel()', async () => {
+    const model0 = await HDSLib.initHDSModel();
+    const model1 = await HDSLib.initHDSModel();
+    assert.equal(model0, model1, 'HDSLib.initHDSModel() should used cached model');
+    const model2 = HDSLib.model;
+    assert.equal(model0, model2, 'HDSLib.model should used cached model');
+    // -- refresh model
+  });
+
+  it('[HDME] HDSLib.initHDSModel(forceRefresh = true) should refresh model', async () => {
+    const model0 = await HDSLib.initHDSModel();
+    const model1 = await HDSLib.initHDSModel(true);
+    assert.ok(model0 !== model1, 'HDSLib.initHDSModel(true) should refresh cached model');
+    const model2 = HDSLib.model;
+    assert.equal(model1, model2, 'HDSLib.model should used cached model');
+  });
+
+  describe('[HDUX] Utils', () => {
+    it('[HDUW] utils.waitUntilFalse', async function () {
+      this.timeout('1000');
+      let toBeSetToFalse = true;
+      setTimeout(() => { toBeSetToFalse = false; }, 500);
+
+      let count = 0;
+      await waitUntilFalse(() => {
+        count++;
+        return toBeSetToFalse;
+      }, 700);
+      assert.ok(count > 2, 'should do at least 2 loops');
+    });
+
+    it('[HDUW] utils.waitUntilFalse throw timout on error', async function () {
+      this.timeout('1000');
+      let toBeSetToFalse = true;
+      setTimeout(() => { toBeSetToFalse = false; }, 600);
+
+      let count = 0;
+      try {
+        await waitUntilFalse(() => {
+          count++;
+          return toBeSetToFalse;
+        }, 400);
+        throw new Error('Should throw errors');
+      } catch (e) {
+        assert.equal(e.message, 'Timeout after 400ms');
+      }
+      assert.ok(count > 2, 'should do at least 2 loops');
+    });
+  });
+});
+
+
+/***/ }),
+
 /***/ "./tests/hdsModel.test.js":
 /*!********************************!*\
   !*** ./tests/hdsModel.test.js ***!
@@ -23200,7 +23512,7 @@ describe('[MODX] Model', () => {
         'body-vulva-mucus-stretch',
         'profile-surname'
       ];
-      const streamsToBeCreated = model.streams.getNecessaryListForItemKeys(itemKeys);
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys);
       // keeè a list of streams check that necessary streams exists
       const streamIdsToCheck = {};
       for (const itemKey of itemKeys) {
@@ -23216,6 +23528,63 @@ describe('[MODX] Model', () => {
         parentExist[stream.id] = true;
       }
       assert.deepEqual(Object.keys(streamIdsToCheck), []);
+    });
+
+    it('[MOSD] Necessary streams to handle itemKey, with existing streamIds', async () => {
+      const itemKeys = [
+        'body-vulva-mucus-inspect',
+        'profile-name',
+        'profile-date-of-birth',
+        'body-vulva-mucus-stretch',
+        'profile-surname'
+      ];
+      const knowExistingStreamsIds = ['body-vulva', 'profile', 'applications'];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { knowExistingStreamsIds });
+      assert.deepEqual(streamsToBeCreated, [
+        {
+          id: 'body-vulva-mucus',
+          name: 'Vulva Mucus',
+          parentId: 'body-vulva'
+        },
+        {
+          id: 'body-vulva-mucus-inspect',
+          name: 'Vulva Mucus Inspect',
+          parentId: 'body-vulva-mucus'
+        },
+        { id: 'profile-name', name: 'Name', parentId: 'profile' },
+        {
+          id: 'profile-date-of-birth',
+          name: 'Date of Birth',
+          parentId: 'profile'
+        },
+        {
+          id: 'body-vulva-mucus-stretch',
+          name: 'Vulva Mucus Stretch',
+          parentId: 'body-vulva-mucus'
+        }
+      ]);
+    });
+
+    it('[MOSE] Necessary streams to handle itemKey, with nameProperty: defaultName', async () => {
+      const itemKeys = [
+        'profile-name'
+      ];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { nameProperty: 'defaultName' });
+      assert.deepEqual(streamsToBeCreated, [
+        { id: 'profile', parentId: null, defaultName: 'Profile' },
+        { id: 'profile-name', parentId: 'profile', defaultName: 'Name' }
+      ]);
+    });
+
+    it('[MOSF] Necessary streams to handle itemKey, with nameProperty: none', async () => {
+      const itemKeys = [
+        'profile-name'
+      ];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { nameProperty: 'none' });
+      assert.deepEqual(streamsToBeCreated, [
+        { id: 'profile', parentId: null },
+        { id: 'profile-name', parentId: 'profile' }
+      ]);
     });
   });
 
@@ -23798,6 +24167,46 @@ function getNewUserId (startWith = 'x') {
 
 /***/ }),
 
+/***/ "./tests/toolkitStreamAutoCreate.test.js":
+/*!***********************************************!*\
+  !*** ./tests/toolkitStreamAutoCreate.test.js ***!
+  \***********************************************/
+/***/ ((__unused_webpack_module, __unused_webpack_exports, __webpack_require__) => {
+
+/* eslint-env mocha */
+const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
+
+const HDSLib = __webpack_require__(/*! ../src */ "./src/index.js");
+const { createUserAndPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
+
+describe('[TKSX] toolKit Stream Auto Create', () => {
+  before(async () => {
+    await HDSLib.initHDSModel();
+  });
+
+  it('[TKSA] create required streams based on itemsDefs', async () => {
+    const permissionsManager = [{ streamId: '*', level: 'manage' }];
+    const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test LISL');
+    const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
+    const streamsAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
+
+    const itemKeys = [
+      'profile-name'
+    ];
+
+    const createdStreams = await streamsAutoCreate.ensureExistsForItems(itemKeys);
+    assert.equal(createdStreams.length, 2);
+    assert.equal(createdStreams[0].id, 'profile');
+    assert.equal(createdStreams[1].id, 'profile-name');
+
+    const createdStream2 = await streamsAutoCreate.ensureExistsForItems(itemKeys);
+    assert.equal(createdStream2.length, 0, 'Should not recreate existing streams');
+  });
+});
+
+
+/***/ }),
+
 /***/ "?4f7e":
 /*!********************************!*\
   !*** ./util.inspect (ignored) ***!
@@ -23888,11 +24297,12 @@ var __webpack_exports__ = {};
  */
 __webpack_require__(/*! ./applicationClass.test */ "./tests/applicationClass.test.js");
 __webpack_require__(/*! ./apptemplates.test */ "./tests/apptemplates.test.js");
+__webpack_require__(/*! ./errors.test */ "./tests/errors.test.js");
+__webpack_require__(/*! ./hdsLib.test */ "./tests/hdsLib.test.js");
 __webpack_require__(/*! ./hdsModel.test */ "./tests/hdsModel.test.js");
 __webpack_require__(/*! ./libSettings.test */ "./tests/libSettings.test.js");
 __webpack_require__(/*! ./localizeText.test */ "./tests/localizeText.test.js");
-__webpack_require__(/*! ./errors.test */ "./tests/errors.test.js");
-
+__webpack_require__(/*! ./toolkitStreamAutoCreate.test */ "./tests/toolkitStreamAutoCreate.test.js");
 })();
 
 /******/ })()

@@ -1,3 +1,5 @@
+const { itemKeysOrDefsToDefs } = require('./internalModelUtils');
+
 /**
  * Streams - Extension of HDSModel
  */
@@ -21,24 +23,40 @@ class HDSModelStreams {
 
   /**
    * Get a list of streams to be created for usage of these keys (whithout children)
-   * @param {Array<string>} itemKeys
+   * @param {Array<string>|Array<HDSItemDef>} itemKeysOrDefs
+   * @param {Object} params
+   * @param {String} [params.nameProperty = 'name'] - can be set to 'name' (default), 'defaultName' or 'none' => if you want nothing
+   * @param {Array<string>} [params.knowExistingStreamsIds]
    */
-  getNecessaryListForItemKeys (itemKeys) {
+  getNecessaryListForItems (itemKeysOrDefs, params = {}) {
+    const itemDefs = itemKeysOrDefsToDefs(this.#model, itemKeysOrDefs);
+    const knowExistingStreamsIds = params.knowExistingStreamsIds || [];
+    const nameProperty = params.nameProperty || 'name';
+
     const result = [];
     const streams = new Map(); // tempMap to keep streams already in
-    for (const itemKey of itemKeys) {
-      const itemDef = this.#model.itemsDefs.forKey(itemKey);
+    for (const knowStreamId of knowExistingStreamsIds) {
+      const strs = this.getParentsIds(knowStreamId, false, [knowStreamId]).reverse();
+      for (const strId of strs) {
+        streams.set(strId, true);
+      }
+    }
+    for (const itemDef of itemDefs) {
       const streamParentIds = this.getParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
-      for (const streamId of streamParentIds) {
-        if (streams.has(streamId)) continue;
+      const resultToBeReversed = [];
+      for (let i = streamParentIds.length - 1; i > -1; i--) { // loop reverse to break as soon as we find an existing stream
+        const streamId = streamParentIds[i];
+        if (streams.has(streamId)) break;
         const stream = this.getDataById(streamId);
         streams.set(streamId, true); // just to flag
-        result.push({
-          id: streamId,
-          name: stream.name, // to be translated
-          parentId: stream.parentId
-        });
+        const itemStream = { id: streamId, parentId: stream.parentId };
+        if (nameProperty !== 'none') {
+          itemStream[nameProperty] = stream.name; // to be translated
+        }
+        resultToBeReversed.push(itemStream);
       }
+      // result need to be reversed in order to get parents created before
+      result.push(...resultToBeReversed.reverse());
     }
     return result;
   }

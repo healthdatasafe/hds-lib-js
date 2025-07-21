@@ -46,7 +46,7 @@ const itemKeys = [
   'body-vulva-mucus-stretch',
   'profile-surname'
 ];
-const streamsToBeCreated = model.streams.getNecessaryListForItemKeys(itemKeys);
+const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys);
 ```
 
 #### Authorizations

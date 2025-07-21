@@ -5,9 +5,8 @@ const HDSModel = require('./HDSModel/HDSModel');
 const appTemplates = require('./appTemplates/appTemplates');
 const logger = require('./logger');
 const HDService = require('./HDSService');
-const { HDSLibError } = require('./errors');
-
-let model = null;
+const HDSModelInitAndSingleton = require('./HDSModel/HDSModelInitAndSingleton');
+const toolkit = require('./toolkit');
 
 module.exports = {
   pryv,
@@ -15,26 +14,12 @@ module.exports = {
   HDService,
   HDSModel,
   get model () {
-    if (model == null) throw new HDSLibError('Call await HDSLib.initHDSModel() once');
-    return model;
+    return HDSModelInitAndSingleton.getModel();
   },
-  initHDSModel,
+  initHDSModel: HDSModelInitAndSingleton.initHDSModel,
   appTemplates,
   localizeText,
   l: localizeText, // shortcut to HDSLib.localizeText
+  toolkit,
   logger
 };
-
-/**
- * Initialized model singleton
- * @returns {HDSModel}
- */
-async function initHDSModel (forceNew = false) {
-  if (!model || forceNew) {
-    const service = new HDService();
-    const serviceInfo = await service.info();
-    model = new HDSModel(serviceInfo.assets['hds-model']);
-    await model.load();
-  }
-  return model;
-}

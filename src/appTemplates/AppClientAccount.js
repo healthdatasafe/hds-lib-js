@@ -11,7 +11,7 @@ const logger = require('../logger');
 
 const MAX_COLLECTORS = 1000;
 class AppClientAccount extends Application {
-  constructor (baseStreamId, connection, appName) {
+  constructor (baseStreamId, connection, appName, features) {
     super(...arguments);
     this.cache.collectorClientsMap = {};
   }
