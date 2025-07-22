@@ -2,30 +2,82 @@
 
 Generic toolkit for server and web applications.
 
-- [ ] 
+1. Manages global settings for the lib (servers, localization, logger)
+2. Extends orginal Pryv's JS lib to fit HDS needs
+3. Based on [HDS data model](https://github.com/healthdatasafe/data-model-draft?tab=readme-ov-file#hds-data-model-drafting-space) exposes methods to facilitate app development.
+  - load data model and exposes it as a singleton
+  - retrieve definitions 
+  - provides helper for stream creation and authorizations requests
+4. Provide app templates to create new applications for  
+  - Requesting and managing consents - And collecting data
+  - Approving requests and sharing data
+5. Other tools to facilitate app developments
 
-## Usage 
 
-### Model
+## Components 
 
-#### Load
+### settings
+
+#### settings.setServiceInfoURL(url)
+Set the default service for `HDSModel` and `HDSService`
+
+#### settings.setPreferredLocales(Array of locales)
+Change the order of pereferred localization codes
+
+### HDSService
+Is an extension of `pryv.Service` which uses the default service set with `settings.setServiceInfoURL(url)``
+
+### pryv
+Patched version of [pryv's javacript library](https://github.com/pryv/lib-js) including supports for [Socket.io](https://github.com/pryv/lib-js/tree/master/components/pryv-socket.io) and [Monitors](https://github.com/pryv/lib-js/tree/master/components/pryv-monitor)
+
+#### pryv.Connection.apiOne(method, params, expectedKey)
+One liner call to pryv api based on `connection.api()``
+
+#### pryv.Connection.revoke()
+Helper to revoke current connection
+
+### localizeText (alias "l")
+Handles localization of text. The choice of locales can be set with `settings.setPreferredLocales()`
+
+### HDSModel
+
+an instance of HDSModel loads the definitions from a json file, usually `https://model.datasafe.dev/pack.json`. This may be overridden with:
+
+**Load your own model**
 
 ```javascript
 const model = new HDSLib.HDSModel('https://model.datasafe.dev/pack.json');
 await model.load();
 ```
 
-#### ItemDef
+**Per service auto loading.** (preferred way)
+0. (Optional) You may set the defaultService info of the lib with  `HDSLib.setServiceInfoURL()`.
+1. Initialize model singleton once with `await HDSLib.initHDSModel()`
+2. Use model from `HDSLib.model`
+
+#### HDSModel.ItemDef
 
 An `ItemDef` is an object representation of the items from the data Model
 
+- **itemDef.key**: (string) a unique identifier, for example `body-weight`
+- **itemDef.data**: (Object) raw data for this item from [HDS data model](https://github.com/healthdatasafe/data-model-draft?tab=readme-ov-file#hds-data-model-drafting-space)
+- **itemDef.label**: (string) localized `item.data.label`
+- **itemDef.description**: (string) localized `item.data.description`
+- **itemDef.eventTypes**: (Array) of supported eventTypes
+
+#### model.itemDefs
+Tools to retrieve itemDefinitons
+
+##### model.itemDefs.forKey()
+retrieve an itemDef with its key
+
 ```javascript
-// retrieve an itemDef by it's key
 const weight = model.itemDefs.forKey('body-weight');
 weight.streamId; // => 'body-weight'
 weight.eventTypes; // => ['mass/kg', 'mass/lb']
 ```
 
+##### model.itemDefs.forKey()
 ```javascript
 // retrieve an itemDef from an event
 const anEvent = {
@@ -36,10 +88,16 @@ const itemDef = model.itemsDefs.forEvent(anEvent);
 itemDef.key // => 'body-weight'
 ```
 
-#### Streams
+#### HDSModel.Streams
+
+##### model.streams.getNecessaryListForItems(itemKeys, params)
+get the list of streams to be created to store these items
+
+**params**
+- **nameProperty**: (string) can be set to 'name' (default), 'defaultName' or 'none' => if you want nothing
+- **knowExistingStreamsIds**: (Array of strings) Array of known existing streams' ids
 
 ```javascript
-// get the list of streams to be created to store these items
 const itemKeys = [
   'profile-name',
   'profile-date-of-birth',
@@ -49,10 +107,25 @@ const itemKeys = [
 const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys);
 ```
 
-#### Authorizations
+##### model.streams.getDataById(streamId)
+retrieve model data related to this stream
 
-```javascript
-// get the authorization needed to manipulate a set of items
+##### model.streams.getParentsIds(streamId)
+retrieve order list of parents up to this streamId
+
+
+#### HDSModel.Authorizations
+Helpers to generate authorizations from itemKeys 
+
+##### model.authorizations.forItemKeys(itemKeys, options);
+get the authorization needed to manipulate a set of items
+
+**options** (all optional)
+- **defaultLevel**: (string, default = 'name' ) -  one of'read', 'manage', 'contribue', 'writeOnly'
+- **includeDefaultName** (boolean, default = true) - if false does not add defaultNames for streams
+- **preRequest** (Array of AuthorizationRequestItem) you may specify a custom set or authorizations
+
+```javascript 
 const itemKeys = [
     'body-vulva-mucus-inspect',
     'profile-name',
@@ -84,17 +157,28 @@ const expected = [
 ];
 ```
 
-
-
 ### AppTemplates
 
 App templates based on HDS Model, provide frameworks to build applications for HDS.
 
 Some of the functionalities will be moved from the lib
 
+### toolkit
+Misc. tools 
 
+#### toolkit.StreamsAutoCreate
+helper to be attached to a `Connection` to facilitate auto creation of streams when needed.
 
-### Browser 
+Exemple:
+```javascript
+// done at initialization of connection (a pryv.Connection)
+toolkit.StreamsAutoCreate.attachToConnection(connection)
+
+// later
+await connection.streamsAutoCreate.ensureExistsForItems(['body-weight', 'profile-name']);
+```
+
+## Usage Browser 
 
 ```html
 <head>
@@ -116,6 +200,7 @@ Some of the functionalities will be moved from the lib
 ## Node
 - all tests: `npm run test`
 - specific test: `npm run test -- --grep=<string>`
+- coverage: `npm run test:coverage`
 
 ## Browser
 Test suite is accessible in `docs/` 
