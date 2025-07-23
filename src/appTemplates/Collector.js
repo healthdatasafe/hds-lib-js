@@ -56,7 +56,10 @@ class Collector {
     return this.streamId;
   }
 
-  /** @type {StatusData} */
+  /**
+   * @type {StatusData}
+   * Payload that can be modified
+   * */
   get statusData () {
     if (this.#cache.status == null) throw new Error('Init Collector first');
     return this.#cache.status.content.data;

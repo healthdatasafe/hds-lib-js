@@ -27,6 +27,7 @@ class AppClientAccount extends Application {
    * When the app receives a new request for data sharing
    * @param {string} apiEndpoint
    * @param {string} [incomingEventId] - Information for the recipient
+   * @returns {CollectorClient}
    */
   async handleIncomingRequest (apiEndpoint, incomingEventId) {
     // make sure that collectorClientsMap is initialized

@@ -20406,7 +20406,7 @@ class HDSModelAuthorizations {
    * /!\ Does not handle requests with streamId = "*"
    * @param {Array<itemKeys>} itemKeys
    * @param {Object} [options]
-   * @param {string} [options.defaultLevel] (default = write) one of 'read', 'write', 'contribute', 'writeOnly'
+   * @param {string} [options.defaultLevel] (default = write) one of 'read', 'manage', 'contribute', 'writeOnly'
    * @param {boolean} [options.includeDefaultName] (default = true) defaultNames are needed for permission requests but not for access creation
    * @param {Array<AuthorizationRequestItem>} [options.preRequest]
    * @return {Array<AuthorizationRequestItem>}
@@ -20955,6 +20955,7 @@ class AppClientAccount extends Application {
    * When the app receives a new request for data sharing
    * @param {string} apiEndpoint
    * @param {string} [incomingEventId] - Information for the recipient
+   * @returns {CollectorClient}
    */
   async handleIncomingRequest (apiEndpoint, incomingEventId) {
     // make sure that collectorClientsMap is initialized
@@ -21390,7 +21391,10 @@ class Collector {
     return this.streamId;
   }
 
-  /** @type {StatusData} */
+  /**
+   * @type {StatusData} 
+   * Payload that can be modified
+   * */
   get statusData () {
     if (this.#cache.status == null) throw new Error('Init Collector first');
     return this.#cache.status.content.data;
@@ -21841,7 +21845,8 @@ class CollectorClient {
   }
 
   /**
-   * Create a new Event
+   * @private
+   * used by appClientAccount.handleIncomingRequest
    */
   static async create (app, apiEndpoint, requesterEventId, accessInfo) {
     // check content of accessInfo
@@ -21867,6 +21872,7 @@ class CollectorClient {
   }
 
   /**
+   * @private
    * reset with new request Event of ApiEndpoint
    * Identical as create but keep current event
    */
@@ -22159,6 +22165,10 @@ class CollectorInvite {
     this.eventData = eventData;
   }
 
+  /**
+   * private
+   * @param {*} eventData 
+   */
   setEventData (eventData) {
     if (eventData.id !== this.eventData.id) throw new HDSLibError('CollectInvite event id does not match new Event');
     this.eventData = eventData;
@@ -23849,7 +23859,7 @@ describe('[LOCX] Localization', () => {
       assert.deepEqual(getPreferredLocales(), defaultLocales);
     });
 
-    it('[LOSE] setPreferredLocales throws error if language code unssuported', () => {
+    it('[LOSE] setPreferredLocales throws error if language code unsuported', () => {
       try {
         setPreferredLocales(['ex', 'en', 'fr', 'ut']);
         throw new Error('Should throw error');
@@ -24303,6 +24313,7 @@ __webpack_require__(/*! ./hdsModel.test */ "./tests/hdsModel.test.js");
 __webpack_require__(/*! ./libSettings.test */ "./tests/libSettings.test.js");
 __webpack_require__(/*! ./localizeText.test */ "./tests/localizeText.test.js");
 __webpack_require__(/*! ./toolkitStreamAutoCreate.test */ "./tests/toolkitStreamAutoCreate.test.js");
+
 })();
 
 /******/ })()

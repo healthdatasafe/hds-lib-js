@@ -161,7 +161,11 @@ const expected = [
 
 App templates based on HDS Model, provide frameworks to build applications for HDS.
 
-Some of the functionalities will be moved from the lib
+- **AppManagingAccount**: App which manages Collectors. A "Collector" handles a "Request" and set of "Responses". => With access to some HDS data from other accounts.
+- **AppClientAccount**: Handles requests from `AppManagingAccount` and corresponding responses (agree, refuse, revoke).
+
+Details and examples for theses App templates can be found in [AppTemplates.md]
+
 
 ### toolkit
 Misc. tools 
@@ -184,7 +188,18 @@ await connection.streamsAutoCreate.ensureExistsForItems(['body-weight', 'profile
 <head>
     <script src="../docs/hds-lib.js"></script>
     <script>
-      model = new HDSLib.HDSModel();
+      HDSLib.settings.setServiceInfoURL('https://demo.datasafe.dev/reg/service/info');
+      HDSLib.settings.setPreferredLocales(['fr', 'en']); // ordered
+
+      // init model in async code
+      (async () => {
+        await HDSLib.initHDSModel(); // need just one
+        // from now on an in all your code you use HDSLib.model 
+
+        // you may create new HDSService with:
+        const service = new HDSService();
+
+      })();
     </script>
 </head>
 ```

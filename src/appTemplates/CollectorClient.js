@@ -68,7 +68,8 @@ class CollectorClient {
   }
 
   /**
-   * Create a new Event
+   * @private
+   * used by appClientAccount.handleIncomingRequest
    */
   static async create (app, apiEndpoint, requesterEventId, accessInfo) {
     // check content of accessInfo
@@ -94,6 +95,7 @@ class CollectorClient {
   }
 
   /**
+   * @private
    * reset with new request Event of ApiEndpoint
    * Identical as create but keep current event
    */

@@ -86,6 +86,10 @@ class CollectorInvite {
     this.eventData = eventData;
   }
 
+  /**
+   * private
+   * @param {*} eventData
+   */
   setEventData (eventData) {
     if (eventData.id !== this.eventData.id) throw new HDSLibError('CollectInvite event id does not match new Event');
     this.eventData = eventData;
