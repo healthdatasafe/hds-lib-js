@@ -10,28 +10,28 @@ describe('[HDLX] HDSLib.index.js', () => {
   it('[HDME] HDSLib.model throws error if not initialized', () => {
     try {
       // eslint-disable-next-line no-unused-expressions
-      HDSLib.model;
+      HDSLib.model.modelData;
       throw new Error('Should throw an error');
     } catch (e) {
-      assert.equal(e.message, 'Call await HDSLib.initHDSModel() once');
+      assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+    }
+
+    try {
+      // eslint-disable-next-line no-unused-expressions
+      HDSLib.model.streams;
+      throw new Error('Should throw an error');
+    } catch (e) {
+      assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
     }
   });
 
-  it('[HDME] HDSLib.initHDSModel()', async () => {
+  it('[HDMF] HDSLib.initHDSModel()', async () => {
     const model0 = await HDSLib.initHDSModel();
     const model1 = await HDSLib.initHDSModel();
     assert.equal(model0, model1, 'HDSLib.initHDSModel() should used cached model');
     const model2 = HDSLib.model;
     assert.equal(model0, model2, 'HDSLib.model should used cached model');
     // -- refresh model
-  });
-
-  it('[HDME] HDSLib.initHDSModel(forceRefresh = true) should refresh model', async () => {
-    const model0 = await HDSLib.initHDSModel();
-    const model1 = await HDSLib.initHDSModel(true);
-    assert.ok(model0 !== model1, 'HDSLib.initHDSModel(true) should refresh cached model');
-    const model2 = HDSLib.model;
-    assert.equal(model1, model2, 'HDSLib.model should used cached model');
   });
 
   describe('[HDUX] Utils', () => {

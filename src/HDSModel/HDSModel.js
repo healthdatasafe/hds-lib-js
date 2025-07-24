@@ -38,10 +38,17 @@ class HDSModel {
     this.laziliyLoadedMap = { };
   }
 
+  get isLoaded () {
+    return !!this.#modelData;
+  }
+
   /**
    * Load model definitions
    */
-  async load () {
+  async load (modelUrl = null) {
+    if (modelUrl) {
+      this.#modelUrl = modelUrl;
+    }
     const response = await fetch(this.#modelUrl);
     const resultText = await response.text();
     const result = JSON.parse(resultText);
@@ -56,7 +63,7 @@ class HDSModel {
 
   /** RAW model data */
   get modelData () {
-    if (!this.#modelData) throw new Error('Model not loaded call `await model.load()` first.');
+    if (!this.isLoaded) throw new Error('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
     return this.#modelData;
   }
 }
@@ -65,6 +72,7 @@ class HDSModel {
 for (const [prop, Obj] of Object.entries(LAZILY_LOADED)) {
   Object.defineProperty(HDSModel.prototype, prop, {
     get: function () {
+      if (!this.isLoaded) throw new Error('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
       if (!this.laziliyLoadedMap[prop]) this.laziliyLoadedMap[prop] = new Obj(this);
       return this.laziliyLoadedMap[prop];
     }

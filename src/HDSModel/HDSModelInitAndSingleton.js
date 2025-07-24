@@ -1,7 +1,6 @@
 let model = null;
 const HDSModel = require('./HDSModel');
 const HDService = require('../HDSService');
-const { HDSLibError } = require('../errors');
 
 module.exports = {
   getModel,
@@ -9,7 +8,9 @@ module.exports = {
 };
 
 function getModel () {
-  if (model == null) throw new HDSLibError('Call await HDSLib.initHDSModel() once');
+  if (model == null) {
+    model = new HDSModel();
+  }
   return model;
 }
 
@@ -17,12 +18,14 @@ function getModel () {
  * Initialized model singleton
  * @returns {HDSModel}
  */
-async function initHDSModel (forceNew = false) {
-  if (!model || forceNew) {
+async function initHDSModel () {
+  if (!model) {
+    getModel();
+  }
+  if (!model.isLoaded) {
     const service = new HDService();
     const serviceInfo = await service.info();
-    model = new HDSModel(serviceInfo.assets['hds-model']);
-    await model.load();
+    await model.load(serviceInfo.assets['hds-model']);
   }
   return model;
 }
