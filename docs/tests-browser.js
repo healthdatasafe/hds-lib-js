@@ -20779,10 +20779,17 @@ class HDSModel {
     this.laziliyLoadedMap = { };
   }
 
+  get isLoaded () {
+    return !!this.#modelData;
+  }
+
   /**
    * Load model definitions
    */
-  async load () {
+  async load (modelUrl = null) {
+    if (modelUrl) {
+      this.#modelUrl = modelUrl;
+    }
     const response = await fetch(this.#modelUrl);
     const resultText = await response.text();
     const result = JSON.parse(resultText);
@@ -20797,7 +20804,7 @@ class HDSModel {
 
   /** RAW model data */
   get modelData () {
-    if (!this.#modelData) throw new Error('Model not loaded call `await model.load()` first.');
+    if (!this.isLoaded) throw new Error('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
     return this.#modelData;
   }
 }
@@ -20806,6 +20813,7 @@ class HDSModel {
 for (const [prop, Obj] of Object.entries(LAZILY_LOADED)) {
   Object.defineProperty(HDSModel.prototype, prop, {
     get: function () {
+      if (!this.isLoaded) throw new Error('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
       if (!this.laziliyLoadedMap[prop]) this.laziliyLoadedMap[prop] = new Obj(this);
       return this.laziliyLoadedMap[prop];
     }
@@ -20826,7 +20834,6 @@ module.exports = HDSModel;
 let model = null;
 const HDSModel = __webpack_require__(/*! ./HDSModel */ "./src/HDSModel/HDSModel.js");
 const HDService = __webpack_require__(/*! ../HDSService */ "./src/HDSService.js");
-const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
 
 module.exports = {
   getModel,
@@ -20834,7 +20841,9 @@ module.exports = {
 };
 
 function getModel () {
-  if (model == null) throw new HDSLibError('Call await HDSLib.initHDSModel() once');
+  if (model == null) {
+    model = new HDSModel();
+  }
   return model;
 }
 
@@ -20842,12 +20851,14 @@ function getModel () {
  * Initialized model singleton
  * @returns {HDSModel}
  */
-async function initHDSModel (forceNew = false) {
-  if (!model || forceNew) {
+async function initHDSModel () {
+  if (!model) {
+    getModel();
+  }
+  if (!model.isLoaded) {
     const service = new HDService();
     const serviceInfo = await service.info();
-    model = new HDSModel(serviceInfo.assets['hds-model']);
-    await model.load();
+    await model.load(serviceInfo.assets['hds-model']);
   }
   return model;
 }
@@ -21392,7 +21403,7 @@ class Collector {
   }
 
   /**
-   * @type {StatusData} 
+   * @type {StatusData}
    * Payload that can be modified
    * */
   get statusData () {
@@ -22167,7 +22178,7 @@ class CollectorInvite {
 
   /**
    * private
-   * @param {*} eventData 
+   * @param {*} eventData
    */
   setEventData (eventData) {
     if (eventData.id !== this.eventData.id) throw new HDSLibError('CollectInvite event id does not match new Event');
@@ -23314,28 +23325,28 @@ describe('[HDLX] HDSLib.index.js', () => {
   it('[HDME] HDSLib.model throws error if not initialized', () => {
     try {
       // eslint-disable-next-line no-unused-expressions
-      HDSLib.model;
+      HDSLib.model.modelData;
       throw new Error('Should throw an error');
     } catch (e) {
-      assert.equal(e.message, 'Call await HDSLib.initHDSModel() once');
+      assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+    }
+
+    try {
+      // eslint-disable-next-line no-unused-expressions
+      HDSLib.model.streams;
+      throw new Error('Should throw an error');
+    } catch (e) {
+      assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
     }
   });
 
-  it('[HDME] HDSLib.initHDSModel()', async () => {
+  it('[HDMF] HDSLib.initHDSModel()', async () => {
     const model0 = await HDSLib.initHDSModel();
     const model1 = await HDSLib.initHDSModel();
     assert.equal(model0, model1, 'HDSLib.initHDSModel() should used cached model');
     const model2 = HDSLib.model;
     assert.equal(model0, model2, 'HDSLib.model should used cached model');
     // -- refresh model
-  });
-
-  it('[HDME] HDSLib.initHDSModel(forceRefresh = true) should refresh model', async () => {
-    const model0 = await HDSLib.initHDSModel();
-    const model1 = await HDSLib.initHDSModel(true);
-    assert.ok(model0 !== model1, 'HDSLib.initHDSModel(true) should refresh cached model');
-    const model2 = HDSLib.model;
-    assert.equal(model1, model2, 'HDSLib.model should used cached model');
   });
 
   describe('[HDUX] Utils', () => {
