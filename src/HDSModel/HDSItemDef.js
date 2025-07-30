@@ -31,6 +31,18 @@ class HDSItemDef {
   get description () {
     return localizeText(this.#data.description);
   }
+
+  /**
+   * a template event with eventType and streamIds
+   * // TODO handle variations
+   * @returns {Object}
+   */
+  eventTemplate () {
+    return {
+      streamIds: [this.#data.streamId],
+      eventType: this.eventTypes[0]
+    };
+  }
 }
 
 module.exports = HDSItemDef;
