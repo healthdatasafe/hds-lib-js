@@ -21309,7 +21309,7 @@ class Application {
    * Get current settings previously set with setCustomSettings()
    */
   async getCustomSettings (forceRefresh = false) {
-    if (forceRefresh || this.cache.customSettingsEvent) {
+    if (forceRefresh || !this.cache.customSettingsEvent) {
       const customSettingsEvent = (await this.connection.apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
       this.cache.customSettingsEvent = customSettingsEvent;
     }
@@ -22772,9 +22772,11 @@ describe('[APAX] Application class', () => {
       assert.deepEqual(newSettings, newSettings1);
       const newSettings2 = await appDummy.getCustomSettings();
       assert.deepEqual(newSettings, newSettings2);
-      // assert.equal(newSettings1, newSettings2, 'should be the same object');
+      assert.deepEqual(newSettings1, newSettings2);
+      assert.equal(newSettings1, newSettings2, 'should be the same object');
       const newSettings3 = await appDummy.getCustomSettings(true);
       assert.deepEqual(newSettings1, newSettings3);
+      assert.notEqual(newSettings1, newSettings3, 'should not be the same object');
     });
   });
 
