@@ -133,7 +133,8 @@ class Application {
    * Get current settings previously set with setCustomSettings()
    */
   async getCustomSettings (forceRefresh = false) {
-    if (forceRefresh || this.cache.customSettingsEvent) {
+    if (forceRefresh || !this.cache.customSettingsEvent) {
+      console.log('>>A');
       const customSettingsEvent = (await this.connection.apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
       this.cache.customSettingsEvent = customSettingsEvent;
     }
