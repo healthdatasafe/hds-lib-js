@@ -104,6 +104,46 @@ class Application {
   }
 
   /**
+   * Save anything you want for your app
+   * @param {Object} content will fully replace any existing content
+   */
+  async setCustomSettings (content) {
+    const currentCustomSettings = await this.getCustomSettings();
+    if (currentCustomSettings != null) { // update
+      const id = this.cache.customSettingsEvent.id;
+      const updatedEvent = await this.connection.apiOne('events.update', { id, update: { content } }, 'event');
+      this.cache.customSettingsEvent = updatedEvent;
+    } else {
+      await this.#createCustomSettings(content);
+    }
+    return this.cache.customSettingsEvent?.content;
+  }
+
+  /**
+   * @private
+   * Used by getCustomSettings & setCustomSettings
+   * @param {*} content
+   */
+  async #createCustomSettings (content) {
+    const createdEvent = await this.connection.apiOne('events.create', { streamIds: [this.baseStreamId], type: 'settings/any', content }, 'event');
+    this.cache.customSettingsEvent = createdEvent;
+  }
+
+  /**
+   * Get current settings previously set with setCustomSettings()
+   */
+  async getCustomSettings (forceRefresh = false) {
+    if (forceRefresh || this.cache.customSettingsEvent) {
+      const customSettingsEvent = (await this.connection.apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
+      this.cache.customSettingsEvent = customSettingsEvent;
+    }
+    if (!this.cache.customSettingsEvent) {
+      await this.#createCustomSettings({});
+    }
+    return this.cache.customSettingsEvent?.content;
+  }
+
+  /**
    * Force loading of streamData
    */
   async loadStreamData () {
