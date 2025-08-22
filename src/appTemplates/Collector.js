@@ -57,7 +57,6 @@ class Collector {
   }
 
   /**
-   * @type {StatusData}
    * Payload that can be modified
    * */
   get statusData () {

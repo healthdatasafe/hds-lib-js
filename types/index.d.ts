@@ -1,0 +1,12 @@
+import pryv = require("pryv");
+import settings = require("./settings");
+import HDService = require("./HDSService");
+import HDSModel = require("./HDSModel/HDSModel");
+import HDSModelInitAndSingleton = require("./HDSModel/HDSModelInitAndSingleton");
+import appTemplates = require("./appTemplates/appTemplates");
+import { localizeText } from "./localizeText";
+import toolkit = require("./toolkit");
+import logger = require("./logger");
+export declare const model: any;
+export declare let initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
+export { pryv, settings, HDService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };
