@@ -1,3 +1,6 @@
+import HDSModelStreams from "./HDSModel-Streams";
+import HDSModelItemsDefs from "./HDSModel-ItemsDefs";
+import HDSModelAuthorizations from "./HDSModel-Authorizations";
 export = HDSModel;
 /**
  * @class {HDSModel}
@@ -23,5 +26,9 @@ declare class HDSModel {
     load(modelUrl?: any): Promise<void>;
     /** RAW model data */
     get modelData(): any;
+    
+    get itemsDefs(): HDSModelItemsDefs;
+    get streams(): HDSModelStreams;
+    get authorizations(): HDSModelAuthorizations;
     #private;
 }
