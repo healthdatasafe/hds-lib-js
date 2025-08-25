@@ -1,3 +1,4 @@
+import pryv = require('pryv');
 export = AppManagingAccount;
 /**
  * App which manages Collectors
@@ -18,6 +19,24 @@ export = AppManagingAccount;
  *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
  */
 declare class AppManagingAccount extends Application {
+     /**
+     * Create with an apiEnpoint
+     * @param {string} apiEndpoint
+     * @param {string} baseStreamId - application base Strem ID
+     * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
+     * @param {ApplicationFeatures} [features]
+     * @returns {AppManagingAccount}
+     */
+    static newFromApiEndpoint(baseStreamId: string, apiEndpoint: string, appName?: string, features?: Application.ApplicationFeatures): AppManagingAccount;
+    /**
+    * Create with an apiEnpoint
+    * @param {Pryv.connection} connection - must be a connection with personnalToken or masterToken
+    * @param {string} baseStreamId - application base Strem ID
+    * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
+    * @param {ApplicationFeatures} [features]
+    * @returns {AppManagingAccount}
+    */
+    static newFromConnection(baseStreamId: string, connection: pryv.Connection, appName?: string, features?: Application.ApplicationFeatures): AppManagingAccount;
     get appSettings(): {
         canBePersonnal: boolean;
         mustBeMaster: boolean;

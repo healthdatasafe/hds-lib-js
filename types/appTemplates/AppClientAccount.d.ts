@@ -2,6 +2,24 @@
 import pryv = require('pryv');
 export = AppClientAccount;
 declare class AppClientAccount extends Application {
+    /**
+     * Create with an apiEnpoint
+     * @param {string} apiEndpoint
+     * @param {string} baseStreamId - application base Strem ID
+     * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
+     * @param {ApplicationFeatures} [features]
+     * @returns {AppClientAccount}
+     */
+    static newFromApiEndpoint(baseStreamId: string, apiEndpoint: string, appName?: string, features?: Application.ApplicationFeatures): AppClientAccount;
+    /**
+    * Create with an apiEnpoint
+    * @param {Pryv.connection} connection - must be a connection with personnalToken or masterToken
+    * @param {string} baseStreamId - application base Strem ID
+    * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
+    * @param {ApplicationFeatures} [features]
+    * @returns {AppClientAccount}
+    */
+    static newFromConnection(baseStreamId: string, connection: pryv.Connection, appName?: string, features?: Application.ApplicationFeatures): AppClientAccount;
     constructor(baseStreamId: string, connection: pryv.Connection, appName: string, features: any, ...args: Application.ApplicationFeatures[]);
     get appSettings(): {
         canBePersonnal: boolean;
