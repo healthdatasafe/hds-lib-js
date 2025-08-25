@@ -1,4 +1,4 @@
-export function getModel(): any;
+export function getModel(): HDSModel;
 /**
  * Initialized model singleton
  * @returns {HDSModel}

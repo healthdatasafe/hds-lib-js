@@ -43,8 +43,8 @@ declare class AppManagingAccount extends Application {
         appNameFromAccessInfo: boolean;
     };
     init(): Promise<this>;
-    getCollectors(forceRefresh: any): Promise<any[]>;
-    getCollectorById(id: any): Promise<any>;
+    getCollectors(forceRefresh?: boolean): Promise<Collector[]>;
+    getCollectorById(id: string): Promise<Collector>;
     /**
      * Create an iniatilized Collector
      * @param {string} name

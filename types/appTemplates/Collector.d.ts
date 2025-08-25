@@ -27,12 +27,12 @@ declare class Collector {
      */
     constructor(appManaging: AppManagingAccount, streamData: pryv.Stream);
     appManaging: AppManagingAccount;
-    streamId: any;
-    name: any;
+    streamId: string;
+    name: string;
     /**
      * @property {string} id - shortcut for steamid
      */
-    get id(): any;
+    get id(): string;
     /**
      * Payload that can be modified
      * */
@@ -40,7 +40,7 @@ declare class Collector {
     /**
      * @property {string} one of 'draft', 'active', 'deactivated'
      */
-    get statusCode(): any;
+    get statusCode(): string;
     /**
      * Fetch online data
      */
@@ -81,10 +81,8 @@ declare class Collector {
      * check if required streams are present, if not create them
      */
     checkStreamStructure(): Promise<{
-        created: any[];
-        errors: any[];
-    } | {
-        created: any[];
+        created: pryv.Stream[];
+        errors?: any[];
     }>;
     /**
      * @param {string} suffix

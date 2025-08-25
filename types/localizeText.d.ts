@@ -9,7 +9,7 @@ export function localizeText(textItem: {
     en: string;
     fr?: string;
     es?: string;
-}): any;
+}): string;
 /**
  * Change prefferedLocal order
  * @param {Array<string>} arrayOfLocals of local codes
