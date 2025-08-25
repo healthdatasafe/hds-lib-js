@@ -18,7 +18,7 @@ class HDSModelAuthorizations {
    * @param {Object} [options]
    * @param {string} [options.defaultLevel] (default = write) one of 'read', 'manage', 'contribute', 'writeOnly'
    * @param {boolean} [options.includeDefaultName] (default = true) defaultNames are needed for permission requests but not for access creation
-   * @param {Array<AuthorizationRequestItem>} [options.preRequest]
+   * @param {Array<AuthorizationPreRequestItem>} [options.preRequest]
    * @return {Array<AuthorizationRequestItem>}
    */
   forItemKeys (itemKeys, options = {}) {
@@ -88,6 +88,13 @@ class HDSModelAuthorizations {
  * @property {string} streamId
  * @property {string} level
  * @property {string} defaultName
+ */
+
+/**
+ * @typedef {Object} AuthorizationpreRequestItem
+ * @property {string} streamId
+ * @property {string} [level]
+ * @property {string} [defaultName]
  */
 
 /**
