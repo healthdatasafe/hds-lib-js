@@ -12,15 +12,15 @@ declare class CollectorInvite {
      * @param {pryv.Event} eventData
      * @returns {string}
      */
-    static getKeyForEvent(eventData: Event): string;
+    static getKeyForEvent(eventData: pryv.Event): string;
     constructor(collector: any, eventData: any);
     /** @type {Collector} */
     collector: Collector;
     /** @type {Event} */
     eventData: pryv.Event;
     get key(): string;
-    get status(): any;
-    get apiEndpoint(): any;
+    get status(): string;
+    get apiEndpoint(): string;
     /** @type {string} - on of 'revoked', 'refused' */
     get errorType(): string;
     get dateCreation(): Date;
@@ -30,16 +30,16 @@ declare class CollectorInvite {
      * If result is "forbidden" update and set as revoked
      * @returns {Object} accessInfo if valid.
      */
-    checkAndGetAccessInfo(forceRefresh?: boolean): any;
-    get displayName(): any;
+    checkAndGetAccessInfo(forceRefresh?: boolean): pryv.AccessInfo;
+    get displayName(): string;
     /**
      * private
      * @param {*} eventData
      */
-    setEventData(eventData: any): void;
+    setEventData(eventData: pryv.Event): void;
     getSharingData(): Promise<{
-        apiEndpoint: any;
-        eventId: any;
+        apiEndpoint: string;
+        eventId: string;
     }>;
     #private;
 }

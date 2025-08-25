@@ -1,10 +1,13 @@
 import pryv = require('pryv');
 import AppClientAccount from './AppClientAccount';
+
 export = CollectorClient;
+
 /**
  * Client App in relation to an AppManagingAccount/Collector
  */
 declare class CollectorClient {
+     
     static STATUSES: Readonly<{
         incoming: "Incoming";
         active: "Active";
@@ -20,8 +23,8 @@ declare class CollectorClient {
      * return the key to discriminate collectorClients
      * @param {PryvAccessInfo} accessInfo
      */
-    static keyFromInfo(info: any): string;
-    constructor(app: any, eventData: any, accessData?: any);
+    static keyFromInfo(info: pryv.AccessInfo): string;
+    constructor(app: AppClientAccount, eventData: pryv.Event, accessData?: any);
     /** @type {AppClientAccount} */
     app: AppClientAccount;
     /** @type {PryvEvent} */
@@ -31,13 +34,13 @@ declare class CollectorClient {
     /** @property {String} - identified within user's account - can be used to retreive a Collector Client from an app */
     get key(): string;
     /** @property {String} - id matching an event within requester's account - used as a reference to communicate with requester */
-    get requesterEventId(): any;
+    get requesterEventId(): string;
     /** @property {String}  */
-    get requesterApiEndpoint(): any;
+    get requesterApiEndpoint(): string;
     /** @property {Object} - full content of the request */
     get requestData(): any;
     /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
-    get status(): any;
+    get status(): string;
     /**
      * @private
      * reset with new request Event of ApiEndpoint
@@ -50,13 +53,13 @@ declare class CollectorClient {
      */
     accept(forceAndSkipAccessCreation?: boolean): Promise<{
         accessData: any;
-        requesterEvent: any;
+        requesterEvent: pryv.Event;
     }>;
     revoke(): Promise<{
-        requesterEvent: any;
+        requesterEvent: pryv.Event;
     }>;
     refuse(): Promise<{
-        requesterEvent: any;
+        requesterEvent: pryv.Event;
     }>;
     /**
      * Probable temporary internal to fix possible inconsenticies during lib early stages
