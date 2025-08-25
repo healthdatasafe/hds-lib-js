@@ -16,18 +16,18 @@ declare class Application {
      * @param {string} baseStreamId - application base Strem ID
      * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
      * @param {ApplicationFeatures} [features]
-     * @returns {AppClientAccount}
+     * @returns {Application}
      */
-    static newFromApiEndpoint(baseStreamId: string, apiEndpoint: string, appName?: string, features?: ApplicationFeatures): AppClientAccount;
+    static newFromApiEndpoint(baseStreamId: string, apiEndpoint: string, appName?: string, features?: ApplicationFeatures): Application;
     /**
     * Create with an apiEnpoint
     * @param {Pryv.connection} connection - must be a connection with personnalToken or masterToken
     * @param {string} baseStreamId - application base Strem ID
     * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
     * @param {ApplicationFeatures} [features]
-    * @returns {AppClientAccount}
+    * @returns {Application}
     */
-    static newFromConnection(baseStreamId: string, connection: pryv.Connection, appName?: string, features?: ApplicationFeatures): AppClientAccount;
+    static newFromConnection(baseStreamId: string, connection: pryv.Connection, appName?: string, features?: ApplicationFeatures): Application;
     /**
      * @private
      * use .newFrom...() to create new AppManagingAccount
