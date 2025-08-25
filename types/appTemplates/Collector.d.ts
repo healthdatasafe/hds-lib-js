@@ -50,14 +50,14 @@ declare class Collector {
     /**
      * Retrieve an invite by its key
      */
-    getInviteByKey(key: any): Promise<any>;
+    getInviteByKey(key: string): Promise<CollectorInvite>;
     /**
      * Retreive all invites
      * @param {boolean} [forceRefresh]
      * @returns {Array<CollectorInvite>}
      */
-    getInvites(forceRefresh?: boolean): Array<CollectorInvite>;
-    checkInbox(): Promise<any[]>;
+    getInvites(forceRefresh?: boolean): Promise<CollectorInvite[]>;
+    checkInbox(): Promise<CollectorInvite[]>;
     /**
      * Create a "pending" invite to be sent to an app using AppSharingAccount
      * @param {string} name a default display name for this request
@@ -66,11 +66,11 @@ declare class Collector {
      */
     createInvite(name: string, options?: {
         customData?: any;
-    }): Promise<any>;
+    }): Promise<CollectorInvite>;
     /**
      * Get sharing api endpoint
      */
-    sharingApiEndpoint(): Promise<any>;
+    sharingApiEndpoint(): Promise<string>;
     /**
      * @private
      * @param {CollectorInvite} invite
@@ -94,7 +94,7 @@ declare class Collector {
      * Invite Status for streamId
      * reverse of streamIdFor
      */
-    inviteStatusForStreamId(streamId: any): any;
+    inviteStatusForStreamId(streamId: string): string;
     #private;
 }
 import CollectorInvite = require("./CollectorInvite");

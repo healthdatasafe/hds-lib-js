@@ -1,9 +1,11 @@
+import HDSModel from "./HDSModel";
+
 export = HDSModelAuthorizations;
 /**
  * Authorizations - Extension of HDSModel
  */
 declare class HDSModelAuthorizations {
-    constructor(model: any);
+    constructor(model: HDSModel);
     /**
      * Get minimal Authorization set for itemKeys
      * /!\ Does not handle requests with streamId = "*"
@@ -14,7 +16,7 @@ declare class HDSModelAuthorizations {
      * @param {Array<AuthorizationRequestItem>} [options.preRequest]
      * @return {Array<AuthorizationRequestItem>}
      */
-    forItemKeys(itemKeys: any, options?: {
+    forItemKeys(itemKeys: string[], options?: {
         defaultLevel?: string;
         includeDefaultName?: boolean;
         preRequest?: Array<AuthorizationRequestItem>;

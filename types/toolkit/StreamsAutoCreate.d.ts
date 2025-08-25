@@ -16,12 +16,12 @@ declare class StreamsAutoCreate {
      * @param {Connection} connection
      */
     private constructor();
-    connection: any;
+    connection: pryv.Connection;
     knownStreams: {};
     /**
      * @param {Array<String|HDSItemDef>|Set<String|HDSItemDef>} keysOrDefs - Array or Set of itemDefs or itemKeys
      */
-    ensureExistsForItems(keysOrDefs: Array<string | HDSItemDef> | Set<string | HDSItemDef>): Promise<any[]>;
+    ensureExistsForItems(keysOrDefs: Array<string | HDSItemDef> | Set<string | HDSItemDef>): Promise<pryv.Stream[]>;
     knowStreamIds(): string[];
     addStreamStructure(streamStructure: any): void;
     #private;

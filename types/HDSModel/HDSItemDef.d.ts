@@ -1,7 +1,7 @@
 export = HDSItemDef;
 declare class HDSItemDef {
     constructor(key: string, definitionData: any);
-    get eventTypes(): any[];
+    get eventTypes(): string[];
     get key(): string;
     get data(): any;
     /** @type {string} label Localized */
@@ -13,6 +13,9 @@ declare class HDSItemDef {
      * // TODO handle variations
      * @returns {Object}
      */
-    eventTemplate(): any;
+    eventTemplate(): {
+        streamId: string,
+        type: string
+    };
     #private;
 }

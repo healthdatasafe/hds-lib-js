@@ -1,7 +1,8 @@
 
+import pryv = require('pryv');
 export = AppClientAccount;
 declare class AppClientAccount extends Application {
-    constructor(baseStreamId: any, connection: any, appName: any, features: any, ...args: any[]);
+    constructor(baseStreamId: string, connection: pryv.Connection, appName: string, features: any, ...args: Application.ApplicationFeatures[]);
     get appSettings(): {
         canBePersonnal: boolean;
         mustBeMaster: boolean;
@@ -13,8 +14,8 @@ declare class AppClientAccount extends Application {
      * @returns {CollectorClient}
      */
     handleIncomingRequest(apiEndpoint: string, incomingEventId?: string): CollectorClient;
-    getCollectorClientByKey(collectorKey: any): Promise<any>;
-    getCollectorClients(forceRefresh?: boolean): Promise<any[]>;
+    getCollectorClientByKey(collectorKey: any): Promise<CollectorClient>;
+    getCollectorClients(forceRefresh?: boolean): Promise<CollectorClient[]>;
 }
 import Application = require("./Application");
 import CollectorClient = require("./CollectorClient");
