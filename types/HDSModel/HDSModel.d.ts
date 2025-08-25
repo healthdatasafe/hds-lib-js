@@ -23,7 +23,7 @@ declare class HDSModel {
     /**
      * Load model definitions
      */
-    load(modelUrl?: any): Promise<void>;
+    load(modelUrl?: string): Promise<void>;
     /** RAW model data */
     get modelData(): any;
     

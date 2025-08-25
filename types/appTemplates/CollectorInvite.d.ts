@@ -13,7 +13,7 @@ declare class CollectorInvite {
      * @returns {string}
      */
     static getKeyForEvent(eventData: pryv.Event): string;
-    constructor(collector: any, eventData: any);
+    constructor(collector: Collector, eventData: pryv.Event);
     /** @type {Collector} */
     collector: Collector;
     /** @type {Event} */

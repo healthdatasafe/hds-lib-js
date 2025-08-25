@@ -20,7 +20,7 @@ declare class AppClientAccount extends Application {
     * @returns {AppClientAccount}
     */
     static newFromConnection(baseStreamId: string, connection: pryv.Connection, appName?: string, features?: Application.ApplicationFeatures): AppClientAccount;
-    constructor(baseStreamId: string, connection: pryv.Connection, appName: string, features: any, ...args: Application.ApplicationFeatures[]);
+    constructor(baseStreamId: string, connection: pryv.Connection, appName: string, features:  Application.ApplicationFeatures);
     get appSettings(): {
         canBePersonnal: boolean;
         mustBeMaster: boolean;
@@ -32,7 +32,7 @@ declare class AppClientAccount extends Application {
      * @returns {CollectorClient}
      */
     handleIncomingRequest(apiEndpoint: string, incomingEventId?: string): CollectorClient;
-    getCollectorClientByKey(collectorKey: any): Promise<CollectorClient>;
+    getCollectorClientByKey(collectorKey: string): Promise<CollectorClient>;
     getCollectorClients(forceRefresh?: boolean): Promise<CollectorClient[]>;
 }
 import Application = require("./Application");
