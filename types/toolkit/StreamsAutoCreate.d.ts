@@ -16,7 +16,6 @@ declare class StreamsAutoCreate {
      * @param {Connection} connection
      */
     private constructor();
-    connection: pryv.Connection;
     knownStreams: {};
     /**
      * @param {Array<String|HDSItemDef>|Set<String|HDSItemDef>} keysOrDefs - Array or Set of itemDefs or itemKeys
