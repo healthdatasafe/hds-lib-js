@@ -14,8 +14,10 @@ module.exports = {
   HDService,
   HDSModel,
   get model () {
+    console.warn('HDSLib.model is deprecated use getHDSModel() instead');
     return HDSModelInitAndSingleton.getModel();
   },
+  getHDSModel: HDSModelInitAndSingleton.getModel,
   initHDSModel: HDSModelInitAndSingleton.initHDSModel,
   appTemplates,
   localizeText,
