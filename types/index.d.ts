@@ -8,5 +8,6 @@ import { localizeText } from "./localizeText";
 import toolkit = require("./toolkit");
 import logger = require("./logger");
 export declare const model: HDSModel;
+export declare const getHDSModel: typeof HDSModelInitAndSingleton.getModel;
 export declare let initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
 export { pryv, settings, HDService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };
