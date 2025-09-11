@@ -1,6 +1,7 @@
 const { HDSLibError } = require('../errors');
 const { waitUntilFalse } = require('../utils');
 const CollectorInvite = require('./CollectorInvite');
+const logger = require('../logger');
 
 const COLLECTOR_STREAMID_SUFFIXES = {
   archive: 'archive',
@@ -328,6 +329,15 @@ class Collector {
    * @returns {CollectorInvite}
    */
   async revokeInvite (invite) {
+    // Invalidate Invite APIEndpoint(s)
+    if (invite.status === 'active') { // invalidate eventual authorization granted
+      const accessInfo = await invite.checkAndGetAccessInfo(true);
+      const deletionResult = await invite.connection.apiOne('accesses.delete', { id: accessInfo.id });
+      if (deletionResult?.accessDeletion?.id == null) {
+        logger.warn(`Failed revoking invite access for ${accessInfo.name}`);
+      }
+    }
+
     // invalidate this access
     const updateInvite = {
       id: invite.eventData.id,
@@ -336,7 +346,6 @@ class Collector {
         streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)]
       }
     };
-    // TODO revoke updateInvite.apiEndPoint
 
     updateInvite.update.content.errorType = 'revoked';
     const eventData = await this.appManaging.connection.apiOne('events.update', updateInvite, 'event');
