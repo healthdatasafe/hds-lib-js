@@ -1,6 +1,6 @@
 import pryv = require("pryv");
 import settings = require("./settings");
-import HDService = require("./HDSService");
+import HDSService = require("./HDSService");
 import HDSModel = require("./HDSModel/HDSModel");
 import HDSModelInitAndSingleton = require("./HDSModel/HDSModelInitAndSingleton");
 import appTemplates = require("./appTemplates/appTemplates");
@@ -10,4 +10,4 @@ import logger = require("./logger");
 export declare const model: HDSModel;
 export declare const getHDSModel: typeof HDSModelInitAndSingleton.getModel;
 export declare let initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };

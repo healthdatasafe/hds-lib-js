@@ -1,6 +1,6 @@
 let model = null;
 const HDSModel = require('./HDSModel');
-const HDService = require('../HDSService');
+const HDSService = require('../HDSService');
 
 module.exports = {
   getModel,
@@ -23,7 +23,7 @@ async function initHDSModel () {
     getModel();
   }
   if (!model.isLoaded) {
-    const service = new HDService();
+    const service = new HDSService();
     const serviceInfo = await service.info();
     await model.load(serviceInfo.assets['hds-model']);
   }

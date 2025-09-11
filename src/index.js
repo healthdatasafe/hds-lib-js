@@ -4,14 +4,14 @@ const pryv = require('./patchedPryv');
 const HDSModel = require('./HDSModel/HDSModel');
 const appTemplates = require('./appTemplates/appTemplates');
 const logger = require('./logger');
-const HDService = require('./HDSService');
+const HDSService = require('./HDSService');
 const HDSModelInitAndSingleton = require('./HDSModel/HDSModelInitAndSingleton');
 const toolkit = require('./toolkit');
 
 module.exports = {
   pryv,
   settings,
-  HDService,
+  HDSService,
   HDSModel,
   get model () {
     console.warn('HDSLib.model is deprecated use getHDSModel() instead');
