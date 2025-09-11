@@ -76,7 +76,7 @@ declare class Collector {
      * @param {CollectorInvite} invite
      * @returns {CollectorInvite}
      */
-    private revokeInvite;
+    private revokeInvite(): Promise<CollectorInvite>;
     /**
      * check if required streams are present, if not create them
      */

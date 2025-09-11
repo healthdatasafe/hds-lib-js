@@ -69,11 +69,18 @@ class CollectorInvite {
     } catch (e) {
       this.#accessInfo = null;
       if (e.response?.body?.error?.id === 'invalid-access-token') {
-        await this.collector.revokeInvite(this);
+        await this.revoke();
         return null;
       }
       throw e;
     }
+  }
+
+  /**
+   * revoke the invite
+   */
+  async revoke () {
+    return this.collector.revokeInvite(this);
   }
 
   get displayName () {

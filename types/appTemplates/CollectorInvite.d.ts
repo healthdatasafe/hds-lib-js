@@ -41,5 +41,9 @@ declare class CollectorInvite {
         apiEndpoint: string;
         eventId: string;
     }>;
+    /**
+     * revoke the invite
+     */
+    revoke(): Promise<void>;
     #private;
 }

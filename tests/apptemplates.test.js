@@ -294,7 +294,7 @@ describe('[APTX] appTemplates', function () {
       assert.equal(invitesFromInbox[0].errorType, 'refused');
     });
 
-    it('[APCR] Collector invite revoke', async () => {
+    it('[APCR] Collector Client invite revoke', async () => {
       const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCR');
       await collectorClient.accept();
 
@@ -313,6 +313,29 @@ describe('[APTX] appTemplates', function () {
       assert.equal(invitesFromInbox2[0], invite);
       assert.equal(invite.status, 'error');
       assert.equal(invite.errorType, 'revoked');
+    });
+
+    it('[APCM] Collector (manager) invite revoke after accept', async () => {
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCM');
+      await collectorClient.accept();
+
+      // check collector
+      const invitesFromInbox1 = await collector.checkInbox();
+      assert.equal(invitesFromInbox1[0], invite);
+      assert.equal(invite.status, 'active');
+
+      // revoke invitation
+      await invite.revoke();
+      assert.equal(invite.status, 'error');
+      assert.equal(invite.errorType, 'revoked');
+
+      // check if authorization is revoked
+      try {
+        await invite.connection.accessInfo();
+        throw new Error('Should be forbidden');
+      } catch (e) {
+        assert(e.message === 'Forbidden');
+      }
     });
   });
 
