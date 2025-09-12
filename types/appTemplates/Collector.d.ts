@@ -35,8 +35,8 @@ declare class Collector {
     get id(): string;
     /**
      * Payload that can be modified
-     * */
-    get statusData(): any;
+     */
+    request: CollectorRequest;
     /**
      * @property {string} one of 'draft', 'active', 'deactivated'
      */
@@ -95,4 +95,5 @@ declare class Collector {
     inviteStatusForStreamId(streamId: string): string;
     #private;
 }
-import CollectorInvite = require("./CollectorInvite");
+import CollectorInvite = require("./CollectorInvite");import { CollectorRequest } from '../../src/appTemplates/CollectorRequest';
+

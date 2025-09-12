@@ -160,12 +160,12 @@ describe('[APTX] appTemplates', function () {
           }
         }
       };
-      newCollector.statusData.requestContent = requestContent;
+      newCollector.request.setContent(requestContent);
 
       // save
       await newCollector.save();
-      assert.deepEqual(newCollector.statusData.requestContent, requestContent);
-      assert.ok(newCollector.statusData.requestContent !== requestContent, 'Should be the same content but different objects');
+      assert.deepEqual(newCollector.request.content, requestContent);
+      assert.ok(newCollector.request.content !== requestContent, 'Should be the same content but different objects');
       // publish
       await newCollector.publish();
       assert.equal(newCollector.statusCode, Collector.STATUSES.active);
@@ -461,7 +461,7 @@ async function helperNewInvite (appManaging, appClient, code) {
     permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
     app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
   };
-  collector.statusData.requestContent = requestContent;
+  collector.request.setContent(requestContent);
 
   await collector.save();
   await collector.publish();

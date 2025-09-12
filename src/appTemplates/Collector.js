@@ -1,3 +1,4 @@
+const { CollectorRequest } = require('./CollectorRequest.ts');
 const { HDSLibError } = require('../errors');
 const { waitUntilFalse } = require('../utils');
 const CollectorInvite = require('./CollectorInvite');
@@ -32,6 +33,7 @@ class Collector {
   name;
   #streamData;
   #cache;
+  request;
 
   /**
    * @param {AppManagingAccount} appManaging
@@ -42,11 +44,13 @@ class Collector {
     this.name = streamData.name;
     this.appManaging = appManaging;
     this.#streamData = streamData;
+    this.request = new CollectorRequest({});
     this.#cache = {
       initialized: false,
       invites: {},
       invitesInitialized: false,
-      invitesInitializing: false
+      invitesInitializing: false,
+      statusEvent: null
     };
   }
 
@@ -58,19 +62,11 @@ class Collector {
   }
 
   /**
-   * Payload that can be modified
-   * */
-  get statusData () {
-    if (this.#cache.status == null) throw new Error('Init Collector first');
-    return this.#cache.status.content.data;
-  }
-
-  /**
    * @property {string} one of 'draft', 'active', 'deactivated'
    */
   get statusCode () {
-    if (this.#cache.status == null) throw new Error('Init Collector first');
-    return this.#cache.status.content.status;
+    if (this.#cache.statusEvent == null) throw new Error('Init Collector first');
+    return this.#cache.statusEvent.content.status;
   }
 
   /**
@@ -79,7 +75,7 @@ class Collector {
   async init (forceRefresh = false) {
     if (!forceRefresh && this.#cache.initialized) return;
     await this.checkStreamStructure(forceRefresh);
-    await this.#getStatus(forceRefresh);
+    await this.#loadStatus(forceRefresh);
     this.#cache.initialized = true;
   }
 
@@ -87,48 +83,44 @@ class Collector {
    * @type {StatusEvent} - extends PryvEvent with a specific content
    * @property {Object} content - content
    * @property {String} content.status - one of 'draft', 'active', 'deactivated'
-   * @property {Data} content.data - app specific data
+   * @property {CollectorRequestData} content.request - app specific data
    */
 
   /**
-   * Get Collector status,
+   * Load Collector status,
    * @param {boolean} forceRefresh - if true, forces fetching the status from the server
-   * @returns {StatusEvent}
    */
-  async #getStatus (forceRefresh = false) {
-    if (!forceRefresh && this.#cache.status) return this.#cache.status;
+  async #loadStatus (forceRefresh = false) {
+    if (!forceRefresh && this.#cache.statusEvent) return this.#cache.statusEvent;
     const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)] };
     const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
     if (statusEvents.length === 0) { // non exsitent set "draft" status
       return this.#setStatus(Collector.STATUSES.draft);
     }
-    this.#cache.status = statusEvents[0];
-    return this.#cache.status;
+    this.#cache.statusEvent = statusEvents[0];
+    this.request.loadFromStatusEvent(statusEvents[0]);
   }
 
   /**
    * Change the status
    * @param {string} status one of of 'draft', 'active', 'deactivated'
-   * @param {object} [data] - if not set reuuse current data or { requestContent: {} }
    * @returns {StatusEvent}
    */
-  async #setStatus (status, data) {
-    if (!Collector.STATUSES[status]) throw new HDSLibError('Unkown status key', { status, data });
-    if (!data) {
-      data = (!this.#cache.status) ? { requestContent: {} } : this.statusData;
-    }
+  async #setStatus (status) {
+    if (!Collector.STATUSES[status]) throw new HDSLibError('Unkown status key', { status });
 
     const event = {
       type: 'status/collector-v1',
       streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)],
       content: {
         status,
-        data
+        request: this.request.content
       }
     };
     const statusEvent = await this.appManaging.connection.apiOne('events.create', event, 'event');
-    this.#cache.status = statusEvent;
-    return this.#cache.status;
+    this.#cache.statusEvent = statusEvent;
+    this.request.loadFromStatusEvent(statusEvent);
+    return this.#cache.statusEvent;
   }
 
   async save () {
@@ -140,7 +132,7 @@ class Collector {
     const publicEventData = {
       type: 'request/collector-v1',
       streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.public)],
-      content: this.statusData.requestContent
+      content: this.request.content
     };
     await this.appManaging.connection.apiOne('events.create', publicEventData, 'event');
     return await this.#setStatus(Collector.STATUSES.active);
@@ -423,18 +415,13 @@ class Collector {
 module.exports = Collector;
 
 /**
-   * @typedef {RequestContent}
-   * @property {number} version
-   * @property {Localizable} description
-   * @property {Localizable} consent
-   * @property {Array<Permission>} permissions - Like Pryv permission request
-   * @property {Object} app
-   * @property {String} app.id
-   * @property {String} app.url
-   * @property {Object} app.data - to be finalized
-   */
-
-/**
-   * @typedef {StatusData}
-   * @property {RequestContent} requestContent
-   */
+ * @typedef {CollectorRequest}
+ * @property {number} version
+ * @property {Localizable} description
+ * @property {Localizable} consent
+ * @property {Array<Permission>} permissions - Like Pryv permission request
+ * @property {Object} app
+ * @property {String} app.id
+ * @property {String} app.url
+ * @property {Object} app.data - to be finalized
+ */
