@@ -61,11 +61,11 @@ You may use this as a reference to retrieve a specific collector from an app
 #### collector.statusCode
 One of 'draft', 'active', 'deactivated'
 
-#### collector.statusData
+#### collector.request
 Payload that can be modified
 
 #### async collector.save()
-After modifying `collector.statusData` you should save it.
+After modifying `collector.request` you should save it.
 
 #### async collector.publish()
 Once the edition is done and saved, validate and publish. (Can be done just once);

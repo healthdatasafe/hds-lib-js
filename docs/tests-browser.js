@@ -10012,7 +10012,7 @@ process.umask = function() { return 0; };
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"2.4.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js"},"license":"BSD-3-Clause","author":"Pryv S.A. <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"superagent":"^9.0.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"2.4.4","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js"},"license":"BSD-3-Clause","author":"Pryv S.A. <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"superagent":"^9.0.0"}}');
 
 /***/ }),
 
@@ -20420,7 +20420,7 @@ class HDSModelAuthorizations {
    * @param {Object} [options]
    * @param {string} [options.defaultLevel] (default = write) one of 'read', 'manage', 'contribute', 'writeOnly'
    * @param {boolean} [options.includeDefaultName] (default = true) defaultNames are needed for permission requests but not for access creation
-   * @param {Array<AuthorizationRequestItem>} [options.preRequest]
+   * @param {Array<AuthorizationPreRequestItem>} [options.preRequest]
    * @return {Array<AuthorizationRequestItem>}
    */
   forItemKeys (itemKeys, options = {}) {
@@ -20490,6 +20490,13 @@ class HDSModelAuthorizations {
  * @property {string} streamId
  * @property {string} level
  * @property {string} defaultName
+ */
+
+/**
+ * @typedef {Object} AuthorizationpreRequestItem
+ * @property {string} streamId
+ * @property {string} [level]
+ * @property {string} [defaultName]
  */
 
 /**
@@ -21396,9 +21403,11 @@ async function createAppStreams (app) {
   \***************************************/
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
+const { CollectorRequest } = __webpack_require__(/*! ./CollectorRequest.ts */ "./src/appTemplates/CollectorRequest.ts");
 const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
 const { waitUntilFalse } = __webpack_require__(/*! ../utils */ "./src/utils.js");
 const CollectorInvite = __webpack_require__(/*! ./CollectorInvite */ "./src/appTemplates/CollectorInvite.js");
+const logger = __webpack_require__(/*! ../logger */ "./src/logger.js");
 
 const COLLECTOR_STREAMID_SUFFIXES = {
   archive: 'archive',
@@ -21429,6 +21438,7 @@ class Collector {
   name;
   #streamData;
   #cache;
+  request;
 
   /**
    * @param {AppManagingAccount} appManaging
@@ -21439,11 +21449,13 @@ class Collector {
     this.name = streamData.name;
     this.appManaging = appManaging;
     this.#streamData = streamData;
+    this.request = new CollectorRequest({});
     this.#cache = {
       initialized: false,
       invites: {},
       invitesInitialized: false,
-      invitesInitializing: false
+      invitesInitializing: false,
+      statusEvent: null
     };
   }
 
@@ -21455,20 +21467,11 @@ class Collector {
   }
 
   /**
-   * @type {StatusData}
-   * Payload that can be modified
-   * */
-  get statusData () {
-    if (this.#cache.status == null) throw new Error('Init Collector first');
-    return this.#cache.status.content.data;
-  }
-
-  /**
    * @property {string} one of 'draft', 'active', 'deactivated'
    */
   get statusCode () {
-    if (this.#cache.status == null) throw new Error('Init Collector first');
-    return this.#cache.status.content.status;
+    if (this.#cache.statusEvent == null) throw new Error('Init Collector first');
+    return this.#cache.statusEvent.content.status;
   }
 
   /**
@@ -21477,7 +21480,7 @@ class Collector {
   async init (forceRefresh = false) {
     if (!forceRefresh && this.#cache.initialized) return;
     await this.checkStreamStructure(forceRefresh);
-    await this.#getStatus(forceRefresh);
+    await this.#loadStatus(forceRefresh);
     this.#cache.initialized = true;
   }
 
@@ -21485,48 +21488,44 @@ class Collector {
    * @type {StatusEvent} - extends PryvEvent with a specific content
    * @property {Object} content - content
    * @property {String} content.status - one of 'draft', 'active', 'deactivated'
-   * @property {Data} content.data - app specific data
+   * @property {CollectorRequestData} content.request - app specific data
    */
 
   /**
-   * Get Collector status,
+   * Load Collector status,
    * @param {boolean} forceRefresh - if true, forces fetching the status from the server
-   * @returns {StatusEvent}
    */
-  async #getStatus (forceRefresh = false) {
-    if (!forceRefresh && this.#cache.status) return this.#cache.status;
+  async #loadStatus (forceRefresh = false) {
+    if (!forceRefresh && this.#cache.statusEvent) return this.#cache.statusEvent;
     const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)] };
     const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
     if (statusEvents.length === 0) { // non exsitent set "draft" status
       return this.#setStatus(Collector.STATUSES.draft);
     }
-    this.#cache.status = statusEvents[0];
-    return this.#cache.status;
+    this.#cache.statusEvent = statusEvents[0];
+    this.request.loadFromStatusEvent(statusEvents[0]);
   }
 
   /**
    * Change the status
    * @param {string} status one of of 'draft', 'active', 'deactivated'
-   * @param {object} [data] - if not set reuuse current data or { requestContent: {} }
    * @returns {StatusEvent}
    */
-  async #setStatus (status, data) {
-    if (!Collector.STATUSES[status]) throw new HDSLibError('Unkown status key', { status, data });
-    if (!data) {
-      data = (!this.#cache.status) ? { requestContent: {} } : this.statusData;
-    }
+  async #setStatus (status) {
+    if (!Collector.STATUSES[status]) throw new HDSLibError('Unkown status key', { status });
 
     const event = {
       type: 'status/collector-v1',
       streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)],
       content: {
         status,
-        data
+        request: this.request.content
       }
     };
     const statusEvent = await this.appManaging.connection.apiOne('events.create', event, 'event');
-    this.#cache.status = statusEvent;
-    return this.#cache.status;
+    this.#cache.statusEvent = statusEvent;
+    this.request.loadFromStatusEvent(statusEvent);
+    return this.#cache.statusEvent;
   }
 
   async save () {
@@ -21538,7 +21537,7 @@ class Collector {
     const publicEventData = {
       type: 'request/collector-v1',
       streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.public)],
-      content: this.statusData.requestContent
+      content: this.request.content
     };
     await this.appManaging.connection.apiOne('events.create', publicEventData, 'event');
     return await this.#setStatus(Collector.STATUSES.active);
@@ -21727,6 +21726,15 @@ class Collector {
    * @returns {CollectorInvite}
    */
   async revokeInvite (invite) {
+    // Invalidate Invite APIEndpoint(s)
+    if (invite.status === 'active') { // invalidate eventual authorization granted
+      const accessInfo = await invite.checkAndGetAccessInfo(true);
+      const deletionResult = await invite.connection.apiOne('accesses.delete', { id: accessInfo.id });
+      if (deletionResult?.accessDeletion?.id == null) {
+        logger.warn(`Failed revoking invite access for ${accessInfo.name}`);
+      }
+    }
+
     // invalidate this access
     const updateInvite = {
       id: invite.eventData.id,
@@ -21735,7 +21743,6 @@ class Collector {
         streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)]
       }
     };
-    // TODO revoke updateInvite.apiEndPoint
 
     updateInvite.update.content.errorType = 'revoked';
     const eventData = await this.appManaging.connection.apiOne('events.update', updateInvite, 'event');
@@ -21813,21 +21820,16 @@ class Collector {
 module.exports = Collector;
 
 /**
-   * @typedef {RequestContent}
-   * @property {number} version
-   * @property {Localizable} description
-   * @property {Localizable} consent
-   * @property {Array<Permission>} permissions - Like Pryv permission request
-   * @property {Object} app
-   * @property {String} app.id
-   * @property {String} app.url
-   * @property {Object} app.data - to be finalized
-   */
-
-/**
-   * @typedef {StatusData}
-   * @property {RequestContent} requestContent
-   */
+ * @typedef {CollectorRequest}
+ * @property {number} version
+ * @property {Localizable} description
+ * @property {Localizable} consent
+ * @property {Array<Permission>} permissions - Like Pryv permission request
+ * @property {Object} app
+ * @property {String} app.id
+ * @property {String} app.url
+ * @property {Object} app.data - to be finalized
+ */
 
 
 /***/ }),
@@ -22211,11 +22213,18 @@ class CollectorInvite {
     } catch (e) {
       this.#accessInfo = null;
       if (e.response?.body?.error?.id === 'invalid-access-token') {
-        await this.collector.revokeInvite(this);
+        await this.revoke();
         return null;
       }
       throw e;
     }
+  }
+
+  /**
+   * revoke the invite
+   */
+  async revoke () {
+    return this.collector.revokeInvite(this);
   }
 
   get displayName () {
@@ -22247,6 +22256,74 @@ class CollectorInvite {
 }
 
 module.exports = CollectorInvite;
+
+
+/***/ }),
+
+/***/ "./src/appTemplates/CollectorRequest.ts":
+/*!**********************************************!*\
+  !*** ./src/appTemplates/CollectorRequest.ts ***!
+  \**********************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   CollectorRequest: () => (/* binding */ CollectorRequest)
+/* harmony export */ });
+/**
+ * Each Collector has one Request
+ * Which contains
+ * - the name of the requester
+ * - a title
+ * - an id
+ * - a description
+ * - a consent message
+ * - a set of permission requests
+ * - a version
+ */
+var __classPrivateFieldSet = (undefined && undefined.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
+    if (kind === "m") throw new TypeError("Private method is not writable");
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
+};
+var __classPrivateFieldGet = (undefined && undefined.__classPrivateFieldGet) || function (receiver, state, kind, f) {
+    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _CollectorRequest_content;
+class CollectorRequest {
+    constructor(content) {
+        _CollectorRequest_content.set(this, void 0);
+        this.id = content.id || null;
+        __classPrivateFieldSet(this, _CollectorRequest_content, content, "f");
+    }
+    /**
+     * Loadfrom status event
+     * used by Collector only
+     * @param statusEvent
+     */
+    loadFromStatusEvent(statusEvent) {
+        // content.data is deprecated it was used in a previous version, should be removed
+        __classPrivateFieldSet(this, _CollectorRequest_content, statusEvent.content.request || statusEvent.content.data, "f");
+    }
+    /**
+     * Temp content
+     * @param content
+     */
+    setContent(content) {
+        __classPrivateFieldSet(this, _CollectorRequest_content, content, "f");
+    }
+    /**
+     * Return
+     */
+    get content() {
+        return __classPrivateFieldGet(this, _CollectorRequest_content, "f");
+    }
+}
+_CollectorRequest_content = new WeakMap();
 
 
 /***/ }),
@@ -22316,8 +22393,10 @@ module.exports = {
   HDService,
   HDSModel,
   get model () {
+    console.warn('HDSLib.model is deprecated use getHDSModel() instead');
     return HDSModelInitAndSingleton.getModel();
   },
+  getHDSModel: HDSModelInitAndSingleton.getModel,
   initHDSModel: HDSModelInitAndSingleton.initHDSModel,
   appTemplates,
   localizeText,
@@ -23052,12 +23131,12 @@ describe('[APTX] appTemplates', function () {
           }
         }
       };
-      newCollector.statusData.requestContent = requestContent;
+      newCollector.request.setContent(requestContent);
 
       // save
       await newCollector.save();
-      assert.deepEqual(newCollector.statusData.requestContent, requestContent);
-      assert.ok(newCollector.statusData.requestContent !== requestContent, 'Should be the same content but different objects');
+      assert.deepEqual(newCollector.request.content, requestContent);
+      assert.ok(newCollector.request.content !== requestContent, 'Should be the same content but different objects');
       // publish
       await newCollector.publish();
       assert.equal(newCollector.statusCode, Collector.STATUSES.active);
@@ -23186,7 +23265,7 @@ describe('[APTX] appTemplates', function () {
       assert.equal(invitesFromInbox[0].errorType, 'refused');
     });
 
-    it('[APCR] Collector invite revoke', async () => {
+    it('[APCR] Collector Client invite revoke', async () => {
       const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCR');
       await collectorClient.accept();
 
@@ -23205,6 +23284,29 @@ describe('[APTX] appTemplates', function () {
       assert.equal(invitesFromInbox2[0], invite);
       assert.equal(invite.status, 'error');
       assert.equal(invite.errorType, 'revoked');
+    });
+
+    it('[APCM] Collector (manager) invite revoke after accept', async () => {
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCM');
+      await collectorClient.accept();
+
+      // check collector
+      const invitesFromInbox1 = await collector.checkInbox();
+      assert.equal(invitesFromInbox1[0], invite);
+      assert.equal(invite.status, 'active');
+
+      // revoke invitation
+      await invite.revoke();
+      assert.equal(invite.status, 'error');
+      assert.equal(invite.errorType, 'revoked');
+
+      // check if authorization is revoked
+      try {
+        await invite.connection.accessInfo();
+        throw new Error('Should be forbidden');
+      } catch (e) {
+        assert(e.message === 'Forbidden');
+      }
     });
   });
 
@@ -23330,7 +23432,7 @@ async function helperNewInvite (appManaging, appClient, code) {
     permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
     app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
   };
-  collector.statusData.requestContent = requestContent;
+  collector.request.setContent(requestContent);
 
   await collector.save();
   await collector.publish();
