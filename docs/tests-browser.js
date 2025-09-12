@@ -22308,6 +22308,9 @@ class CollectorRequest {
     loadFromStatusEvent(statusEvent) {
         // content.data is deprecated it was used in a previous version, should be removed
         __classPrivateFieldSet(this, _CollectorRequest_content, statusEvent.content.request || statusEvent.content.data, "f");
+        // for some reason to be investigated sometime the data is in requestContent
+        if (__classPrivateFieldGet(this, _CollectorRequest_content, "f").requestContent)
+            __classPrivateFieldSet(this, _CollectorRequest_content, __classPrivateFieldGet(this, _CollectorRequest_content, "f").requestContent, "f");
     }
     /**
      * Temp content

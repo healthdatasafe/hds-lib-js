@@ -27,6 +27,8 @@ export class CollectorRequest {
   loadFromStatusEvent(statusEvent: any) {
     // content.data is deprecated it was used in a previous version, should be removed
     this.#content = statusEvent.content.request || statusEvent.content.data;
+    // for some reason to be investigated sometime the data is in requestContent
+    if (this.#content.requestContent) this.#content = this.#content.requestContent;
   }
 
   /**
