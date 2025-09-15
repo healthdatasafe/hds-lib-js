@@ -44,7 +44,9 @@ class Collector {
     this.name = streamData.name;
     this.appManaging = appManaging;
     this.#streamData = streamData;
-    this.request = new CollectorRequest({});
+    this.request = new CollectorRequest({
+      id: this.id
+    });
     this.#cache = {
       initialized: false,
       invites: {},
