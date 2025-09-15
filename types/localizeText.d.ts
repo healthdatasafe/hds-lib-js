@@ -1,3 +1,9 @@
+export type localizableText = {
+    en: string;
+    fr?: string;
+    es?: string;
+}
+
 /**
  * return the translation of this item considering the setting of preffered language
  * @param {Object} textItem
@@ -5,11 +11,7 @@
  * @param {string} [textItem.fr] - French translation
  * @param {string} [textItem.es] - Spanish translation
  */
-export function localizeText(textItem: {
-    en: string;
-    fr?: string;
-    es?: string;
-}): string;
+export function localizeText(textItem: localizableText): string;
 /**
  * Change prefferedLocal order
  * @param {Array<string>} arrayOfLocals of local codes
@@ -29,3 +31,7 @@ export function getSupportedLocales(): Array<string>;
  * reset prefferedLocalesTo Original state
  */
 export function resetPreferredLocales(): void;
+/**
+ * throw errors if an item is not of type localizableText
+ */
+export function validateLocalizableText (key: string, toTest: any): localizableText;

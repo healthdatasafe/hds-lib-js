@@ -9,7 +9,8 @@ module.exports = {
   setPreferredLocales,
   getPreferredLocales,
   getSupportedLocales,
-  resetPreferredLocales
+  resetPreferredLocales,
+  validateLocalizableText
 };
 
 const supportedLocales = ['en', 'fr', 'es'];
@@ -68,4 +69,18 @@ function setPreferredLocales (arrayOfLocals) {
   }
 
   preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
+}
+/**
+ * throw errors if an item is not of type localizableText
+ * @param {string} key
+ * @param {*} toTest
+ * @returns {import('../types/localizeText').localizableText}
+ */
+function validateLocalizableText (key, toTest) {
+  if (toTest.en == null || typeof toTest.en !== 'string') throw new HDSLibError(`Missing or invalid localizable text for ${key}`, { [key]: toTest });
+  for (const optionalLang of supportedLocales) {
+    if (optionalLang === 'en') continue;
+    if (toTest[optionalLang] != null && typeof toTest[optionalLang] !== 'string') throw new HDSLibError(`Missing or invalid localizable text for ${key} languagecode: ${optionalLang}`, { [key]: toTest, languageCode: optionalLang });
+  }
+  return toTest;
 }

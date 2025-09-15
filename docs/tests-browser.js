@@ -21449,7 +21449,9 @@ class Collector {
     this.name = streamData.name;
     this.appManaging = appManaging;
     this.#streamData = streamData;
-    this.request = new CollectorRequest({});
+    this.request = new CollectorRequest({
+      id: this.id
+    });
     this.#cache = {
       initialized: false,
       invites: {},
@@ -22271,17 +22273,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   CollectorRequest: () => (/* binding */ CollectorRequest)
 /* harmony export */ });
-/**
- * Each Collector has one Request
- * Which contains
- * - the name of the requester
- * - a title
- * - an id
- * - a description
- * - a consent message
- * - a set of permission requests
- * - a version
- */
+/* harmony import */ var _errors_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../errors.js */ "./src/errors.js");
+/* harmony import */ var _errors_js__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(_errors_js__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _localizeText_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../localizeText.js */ "./src/localizeText.js");
+/* harmony import */ var _localizeText_js__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(_localizeText_js__WEBPACK_IMPORTED_MODULE_1__);
 var __classPrivateFieldSet = (undefined && undefined.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
     if (kind === "m") throw new TypeError("Private method is not writable");
     if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
@@ -22293,12 +22288,34 @@ var __classPrivateFieldGet = (undefined && undefined.__classPrivateFieldGet) || 
     if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
     return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
 };
-var _CollectorRequest_content;
+var _CollectorRequest_version, _CollectorRequest_title, _CollectorRequest_description, _CollectorRequest_consent, _CollectorRequest_requester, _CollectorRequest_app, _CollectorRequest_permissions, _CollectorRequest_extraContent;
+
+
+/**
+ * Each Collector has one Request
+ * Which contains
+ * - the name of the requester
+ * - a title
+ * - a description
+ * - a consent message
+ * - a set of permission requests
+ * - a version
+ */
 class CollectorRequest {
     constructor(content) {
-        _CollectorRequest_content.set(this, void 0);
-        this.id = content.id || null;
-        __classPrivateFieldSet(this, _CollectorRequest_content, content, "f");
+        _CollectorRequest_version.set(this, void 0);
+        _CollectorRequest_title.set(this, void 0);
+        _CollectorRequest_description.set(this, void 0);
+        _CollectorRequest_consent.set(this, void 0);
+        _CollectorRequest_requester.set(this, void 0);
+        _CollectorRequest_app.set(this, void 0);
+        _CollectorRequest_permissions.set(this, void 0);
+        _CollectorRequest_extraContent.set(this, void 0);
+        __classPrivateFieldSet(this, _CollectorRequest_version, 0, "f");
+        __classPrivateFieldSet(this, _CollectorRequest_requester, { name: null }, "f");
+        __classPrivateFieldSet(this, _CollectorRequest_app, { id: null, url: null, data: {} }, "f");
+        __classPrivateFieldSet(this, _CollectorRequest_permissions, [], "f");
+        this.setContent(content);
     }
     /**
      * Loadfrom status event
@@ -22307,26 +22324,107 @@ class CollectorRequest {
      */
     loadFromStatusEvent(statusEvent) {
         // content.data is deprecated it was used in a previous version, should be removed
-        __classPrivateFieldSet(this, _CollectorRequest_content, statusEvent.content.request || statusEvent.content.data, "f");
+        let potentialContent = statusEvent.content.request || statusEvent.content.data;
         // for some reason to be investigated sometime the data is in requestContent
-        if (__classPrivateFieldGet(this, _CollectorRequest_content, "f").requestContent)
-            __classPrivateFieldSet(this, _CollectorRequest_content, __classPrivateFieldGet(this, _CollectorRequest_content, "f").requestContent, "f");
+        if (potentialContent.requestContent)
+            potentialContent = potentialContent.requestContent;
+        this.setContent(potentialContent);
     }
     /**
      * Temp content
      * @param content
      */
     setContent(content) {
-        __classPrivateFieldSet(this, _CollectorRequest_content, content, "f");
+        const futureContent = structuredClone(content);
+        // validate content
+        if (futureContent.version) {
+            const numV = Number.parseInt(futureContent.version);
+            if (numV !== __classPrivateFieldGet(this, _CollectorRequest_version, "f"))
+                throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
+            delete futureContent.version;
+        }
+        for (const key of ['title', 'consent', 'description']) {
+            if (futureContent[key] != null) {
+                this[key] = futureContent[key];
+            }
+            delete futureContent[key];
+        }
+        if (futureContent.requester) {
+            if (futureContent.requester.name != null) {
+                this.requesterName = futureContent.requester.name;
+            }
+            delete futureContent.requester;
+        }
+        if (futureContent.app) {
+            if (futureContent.app.id != null) {
+                this.appId = futureContent.app.id;
+            }
+            if (futureContent.app.url != null) {
+                this.appUrl = futureContent.app.url;
+            }
+            if (futureContent.app.data != null) {
+                this.appCustomData = futureContent.app.data;
+            }
+            delete futureContent.app;
+        }
+        if (futureContent.permissions) {
+            __classPrivateFieldSet(this, _CollectorRequest_permissions, [], "f"); // reset permissions
+            futureContent.permissions.forEach((p) => {
+                this.addPermissions(p.streamId, p.defaultName, p.level);
+            });
+            delete futureContent.permissions;
+        }
+        __classPrivateFieldSet(this, _CollectorRequest_extraContent, futureContent, "f");
+    }
+    // ------------- getter and setters ------------ //
+    get version() { return __classPrivateFieldGet(this, _CollectorRequest_version, "f"); }
+    set title(title) { __classPrivateFieldSet(this, _CollectorRequest_title, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('title', title), "f"); }
+    get title() { return __classPrivateFieldGet(this, _CollectorRequest_title, "f"); }
+    set consent(consent) { __classPrivateFieldSet(this, _CollectorRequest_consent, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('consent', consent), "f"); }
+    get consent() { return __classPrivateFieldGet(this, _CollectorRequest_consent, "f"); }
+    set description(description) { __classPrivateFieldSet(this, _CollectorRequest_description, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('description', description), "f"); }
+    get description() { return __classPrivateFieldGet(this, _CollectorRequest_description, "f"); }
+    set requesterName(name) { __classPrivateFieldGet(this, _CollectorRequest_requester, "f").name = validateString('requester:name', name); }
+    get requesterName() { return __classPrivateFieldGet(this, _CollectorRequest_requester, "f").name; }
+    set appId(id) { __classPrivateFieldGet(this, _CollectorRequest_app, "f").id = validateString('app:id', id); }
+    get appId() { return __classPrivateFieldGet(this, _CollectorRequest_app, "f").id; }
+    set appUrl(url) { __classPrivateFieldGet(this, _CollectorRequest_app, "f").url = validateString('app:url', url); }
+    get appUrl() { return __classPrivateFieldGet(this, _CollectorRequest_app, "f").url; }
+    set appCustomData(data) { __classPrivateFieldGet(this, _CollectorRequest_app, "f").data = data; }
+    get appCustomData() { return __classPrivateFieldGet(this, _CollectorRequest_app, "f").data; }
+    get permissions() { return __classPrivateFieldGet(this, _CollectorRequest_permissions, "f"); }
+    // ---------- permissions ---------- //
+    addPermissions(streamId, defaultName, level) {
+        __classPrivateFieldGet(this, _CollectorRequest_permissions, "f").push({ streamId, defaultName, level });
     }
     /**
-     * Return
+     * Return Content to comply with initial implementation as an object
      */
     get content() {
-        return __classPrivateFieldGet(this, _CollectorRequest_content, "f");
+        const content = {
+            title: this.title,
+            consent: this.consent,
+            description: this.description,
+            requester: {
+                name: this.requesterName
+            },
+            permissions: this.permissions,
+            app: {
+                id: this.appId,
+                url: this.appUrl,
+                data: this.appCustomData
+            }
+        };
+        Object.assign(content, __classPrivateFieldGet(this, _CollectorRequest_extraContent, "f"));
+        return content;
     }
 }
-_CollectorRequest_content = new WeakMap();
+_CollectorRequest_version = new WeakMap(), _CollectorRequest_title = new WeakMap(), _CollectorRequest_description = new WeakMap(), _CollectorRequest_consent = new WeakMap(), _CollectorRequest_requester = new WeakMap(), _CollectorRequest_app = new WeakMap(), _CollectorRequest_permissions = new WeakMap(), _CollectorRequest_extraContent = new WeakMap();
+function validateString(key, totest) {
+    if (totest == null || typeof totest !== 'string')
+        throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
+    return totest;
+}
 
 
 /***/ }),
@@ -22428,7 +22526,8 @@ module.exports = {
   setPreferredLocales,
   getPreferredLocales,
   getSupportedLocales,
-  resetPreferredLocales
+  resetPreferredLocales,
+  validateLocalizableText
 };
 
 const supportedLocales = ['en', 'fr', 'es'];
@@ -22487,6 +22586,20 @@ function setPreferredLocales (arrayOfLocals) {
   }
 
   preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
+}
+/**
+ * throw errors if an item is not of type localizableText
+ * @param {string} key
+ * @param {*} toTest
+ * @returns {import('../types/localizeText').localizableText}
+ */
+function validateLocalizableText (key, toTest) {
+  if (toTest.en == null || typeof toTest.en !== 'string') throw new HDSLibError(`Missing or invalid localizable text for ${key}`, { [key]: toTest });
+  for (const optionalLang of supportedLocales) {
+    if (optionalLang === 'en') continue;
+    if (toTest[optionalLang] != null && typeof toTest[optionalLang] !== 'string') throw new HDSLibError(`Missing or invalid localizable text for ${key} languagecode: ${optionalLang}`, { [key]: toTest, languageCode: optionalLang });
+  }
+  return toTest;
 }
 
 
@@ -24448,6 +24561,18 @@ describe('[TKSX] toolKit Stream Auto Create', () => {
 /******/ 	}
 /******/ 	
 /************************************************************************/
+/******/ 	/* webpack/runtime/compat get default export */
+/******/ 	(() => {
+/******/ 		// getDefaultExport function for compatibility with non-harmony modules
+/******/ 		__webpack_require__.n = (module) => {
+/******/ 			var getter = module && module.__esModule ?
+/******/ 				() => (module['default']) :
+/******/ 				() => (module);
+/******/ 			__webpack_require__.d(getter, { a: getter });
+/******/ 			return getter;
+/******/ 		};
+/******/ 	})();
+/******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
 /******/ 		// define getter functions for harmony exports
