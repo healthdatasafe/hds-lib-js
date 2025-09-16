@@ -6,6 +6,7 @@ const AppClientAccount = require('../src/appTemplates/AppClientAccount');
 const Collector = require('../src/appTemplates/Collector');
 const CollectorClient = require('../src/appTemplates/CollectorClient');
 const { HDSLibError } = require('../src/errors');
+const { initHDSModel } = require('../src/index.js');
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -18,6 +19,7 @@ describe('[APTX] appTemplates', function () {
 
   before(async () => {
     ({ managingUser, appManaging, clientUser, clientUserResultPermissions, appClient } = await helperNewAppAndUsers(baseStreamIdManager, appName, baseStreamIdClient, appClientName));
+    await initHDSModel();
   });
 
   it('[APTA] Full flow create collector and sharing', async () => {
@@ -131,7 +133,7 @@ describe('[APTX] appTemplates', function () {
 
       // set request content
       const requestContent = {
-        version: 0,
+        version: 1,
         requester: {
           name: 'Test requester name'
         },
@@ -158,7 +160,27 @@ describe('[APTX] appTemplates', function () {
           data: { // settings for the app
             dummy: 'dummy'
           }
+        },
+        sections: [{
+          itemKeys: [
+            'profile-name',
+            'profile-surname'
+          ],
+          key: 'profile',
+          name: {
+            en: 'Profile'
+          },
+          type: 'permanent'
+        },
+        {
+          itemKeys: ['fertility-ttc-tta', 'body-weight'],
+          key: 'history',
+          name: {
+            en: 'History'
+          },
+          type: 'recurring'
         }
+        ]
       };
       newCollector.request.setContent(requestContent);
 
@@ -336,6 +358,97 @@ describe('[APTX] appTemplates', function () {
       } catch (e) {
         assert(e.message === 'Forbidden');
       }
+    });
+
+    it('[APCV] Collector convert v0 to v1 correctly', async () => {
+      const newCollector = await appManaging.createCollector('Invite test APCV');
+
+      const requestContent = {
+        version: 0,
+        requester: {
+          name: 'Test requester name'
+        },
+        title: {
+          en: 'Title of the request'
+        },
+        description: {
+          en: 'Short Description'
+        },
+        consent: {
+          en: 'This is a consent message'
+        },
+        permissions: [
+          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+          {
+            streamId: 'profile-date-of-birth',
+            defaultName: 'Date of Birth',
+            level: 'read'
+          }
+        ],
+        app: { // may have "url" in the future
+          id: 'test-app',
+          url: 'https://xxx.yyy',
+          data: { // settings for the app
+            dummy: 'dummy',
+            forms: {
+              profile: {
+                itemKeys: [
+                  'profile-name',
+                  'profile-surname'
+                ],
+                name: 'Profile',
+                type: 'permanent'
+              }
+            }
+          }
+        }
+      };
+
+      // set expected content
+      const expectedContent = {
+        version: 1,
+        requester: {
+          name: 'Test requester name'
+        },
+        title: {
+          en: 'Title of the request'
+        },
+        description: {
+          en: 'Short Description'
+        },
+        consent: {
+          en: 'This is a consent message'
+        },
+        permissions: [
+          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+          {
+            streamId: 'profile-date-of-birth',
+            defaultName: 'Date of Birth',
+            level: 'read'
+          }
+        ],
+        app: { // may have "url" in the future
+          id: 'test-app',
+          url: 'https://xxx.yyy',
+          data: { // settings for the app
+            dummy: 'dummy'
+          }
+        },
+        sections: [{
+          itemKeys: [
+            'profile-name',
+            'profile-surname'
+          ],
+          key: 'profile',
+          name: {
+            en: 'Profile'
+          },
+          type: 'permanent'
+        }
+        ]
+      };
+      newCollector.request.setContent(requestContent);
+      assert.deepEqual(newCollector.request.content, expectedContent);
     });
   });
 

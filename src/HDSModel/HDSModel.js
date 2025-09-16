@@ -1,3 +1,4 @@
+const { HDSLibError } = require('../errors');
 const { deepFreeze } = require('../utils');
 
 const LAZILY_LOADED = {
@@ -63,7 +64,7 @@ class HDSModel {
 
   /** RAW model data */
   get modelData () {
-    if (!this.isLoaded) throw new Error('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+    if (!this.isLoaded) throwNotLoadedError();
     return this.#modelData;
   }
 }
@@ -72,7 +73,7 @@ class HDSModel {
 for (const [prop, Obj] of Object.entries(LAZILY_LOADED)) {
   Object.defineProperty(HDSModel.prototype, prop, {
     get: function () {
-      if (!this.isLoaded) throw new Error('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+      if (!this.isLoaded) throwNotLoadedError();
       if (!this.laziliyLoadedMap[prop]) this.laziliyLoadedMap[prop] = new Obj(this);
       return this.laziliyLoadedMap[prop];
     }
@@ -80,3 +81,7 @@ for (const [prop, Obj] of Object.entries(LAZILY_LOADED)) {
 }
 
 module.exports = HDSModel;
+
+function throwNotLoadedError () {
+  throw new HDSLibError('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+}

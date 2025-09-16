@@ -1,8 +1,12 @@
 import { HDSLibError } from '../errors.js';
+import { getModel } from '../HDSModel/HDSModelInitAndSingleton.js';
 import { validateLocalizableText } from '../localizeText.js';
-import type { localizableText } from '../../types/localizeText.d.ts';
+import type { localizableText, localizableTextLanguages } from '../../types/localizeText.d.ts';
+
 
 declare type PermissionItem = {streamId: string, defaultName: string, level: string};
+
+const CURRENT_VERSION = 1;
 
 /**
  * Each Collector has one Request
@@ -22,13 +26,15 @@ export class CollectorRequest {
   #requester: {name: string};
   #app: {id: string, url: string | null, data: any};
   #permissions: Array<PermissionItem>;
+  #sections: Array<CollectorRequestSection>;
 
   #extraContent: any;
   constructor (content: any) {
-    this.#version = 0;
+    this.#version = CURRENT_VERSION;
     this.#requester = { name: null };
     this.#app = { id: null, url: null, data: {} };
     this.#permissions = [];
+    this.#sections = [];
     this.setContent(content);
   }
 
@@ -51,25 +57,35 @@ export class CollectorRequest {
    */
   setContent(content: any) {
     const futureContent = structuredClone(content);
+    
     // validate content
-    if (futureContent.version) {
+    if (futureContent.version != null) {
       const numV = Number.parseInt(futureContent.version);
-      if (numV !== this.#version) throw new HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
+      if (numV === 0) {
+        vo0ToV1(futureContent); // convert to v1 if needed
+      } else {  
+        if (numV !== this.#version) throw new HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
+      }
       delete futureContent.version;
     }
 
+    // -- title, consent, description
     for (const key of ['title', 'consent', 'description']) {
       if (futureContent[key] != null) {
         this[key] = futureContent[key];
       }
       delete futureContent[key];
     }
+
+    // -- requester 
     if (futureContent.requester) {
       if (futureContent.requester.name != null) {
         this.requesterName = futureContent.requester.name;
       }
       delete futureContent.requester;
     }
+
+    // -- app
     if (futureContent.app) {
       if (futureContent.app.id != null) { this.appId = futureContent.app.id; }
       if (futureContent.app.url != null) { this.appUrl = futureContent.app.url; }
@@ -77,6 +93,17 @@ export class CollectorRequest {
       delete futureContent.app;
     }
 
+    // -- sections
+    if (futureContent.sections != null) {
+      for (const sectionData of futureContent.sections) {
+        const section = new CollectorRequestSection(sectionData.key, sectionData.type);
+        section.setName(sectionData.name);
+        section.addItemKeys(sectionData.itemKeys);
+        this.#sections.push(section);
+      }
+    }
+
+    // -- permissions
     if (futureContent.permissions) {
       this.#permissions = []; // reset permissions
       futureContent.permissions.forEach((p: PermissionItem)=> {
@@ -116,6 +143,14 @@ export class CollectorRequest {
 
   get permissions() { return this.#permissions; }
 
+  get sectionsData() {
+    const result = [];
+    for (const section of this.#sections) {
+      result.push(section.getData());
+    }
+    return result;
+  }
+
   // ---------- permissions ---------- //
   addPermissions (streamId: string, defaultName: string, level: string) {
     this.#permissions.push({streamId, defaultName, level});
@@ -126,6 +161,7 @@ export class CollectorRequest {
    */
   get content () {
     const content = {
+      version: this.version,
       title: this.title,
       consent: this.consent,
       description: this.description,
@@ -137,7 +173,8 @@ export class CollectorRequest {
         id: this.appId,
         url: this.appUrl,
         data: this.appCustomData
-      }
+      },
+      sections: this.sectionsData
     };
     Object.assign(content, this.#extraContent);
     return content;
@@ -149,4 +186,78 @@ function validateString (key, totest) {
   return totest;
 }
 
+const RequestSectionType = {
+  recurring: 'recurring',
+  permanent: 'permanent'
+}
+type RequestSectionType = (typeof RequestSectionType )[keyof typeof RequestSectionType ];
 
+class CollectorRequestSection {
+  #type: RequestSectionType;
+  #name: localizableText;
+  #key: string;
+  #itemKeys: Array<string>;
+
+  constructor (key: string, type: RequestSectionType) {
+    this.#key = key;
+    this.#type = type;
+    this.#itemKeys = [];
+    this.#name = {
+      en: ''
+    }
+  }
+
+  addItemKeys(keys: Array<string>) {
+    keys.forEach((k) => this.addItemKey(k));
+  }
+
+  addItemKey(key: string) {
+    getModel().itemsDefs.forKey(key); // will throw error if not found
+    if (this.#itemKeys.includes(key)) return; // avoid double entries
+    this.#itemKeys.push(key);
+  }
+
+  setName(localizedName: localizableText) {
+    for (const [languageCode, name] of Object.entries(localizedName)) {
+      this.setNameLocal(languageCode as localizableTextLanguages, name);
+    }
+  }
+
+  setNameLocal(languageCode: localizableTextLanguages, name: string) {
+    this.#name[languageCode] = name;
+  }
+
+  get type() { return this.#type }
+  get key() { return this.#key }
+  get itemKeys() { return this.#itemKeys }
+
+  getData() {
+    return {
+      key: this.key,
+      type: this.#type,
+      name: this.#name,
+      itemKeys: this.#itemKeys
+    }
+  }
+
+}
+
+/**
+ * Transform data to match v1
+ * @param v0Data
+ */
+function vo0ToV1(v0Data: any) {
+  if (v0Data.app?.data?.forms) {
+    if (v0Data.sections) throw new HDSLibError('Cannot mix data.forms & sections', v0Data);
+    v0Data.sections = [];
+    for (const [key, value] of Object.entries(v0Data.app.data.forms) as [key: string, value: any]) {
+      value.key = key;
+      value.name = {
+        en: value.name
+      }
+      v0Data.sections.push(value)
+    }
+    delete v0Data.app.data.forms;
+  }
+  v0Data.version = 1;
+}
