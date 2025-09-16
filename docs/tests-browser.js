@@ -20758,6 +20758,7 @@ function loadModelStreamsById (streams, map) {
   \**********************************/
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
+const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
 const { deepFreeze } = __webpack_require__(/*! ../utils */ "./src/utils.js");
 
 const LAZILY_LOADED = {
@@ -20823,7 +20824,7 @@ class HDSModel {
 
   /** RAW model data */
   get modelData () {
-    if (!this.isLoaded) throw new Error('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+    if (!this.isLoaded) throwNotLoadedError();
     return this.#modelData;
   }
 }
@@ -20832,7 +20833,7 @@ class HDSModel {
 for (const [prop, Obj] of Object.entries(LAZILY_LOADED)) {
   Object.defineProperty(HDSModel.prototype, prop, {
     get: function () {
-      if (!this.isLoaded) throw new Error('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+      if (!this.isLoaded) throwNotLoadedError();
       if (!this.laziliyLoadedMap[prop]) this.laziliyLoadedMap[prop] = new Obj(this);
       return this.laziliyLoadedMap[prop];
     }
@@ -20840,6 +20841,10 @@ for (const [prop, Obj] of Object.entries(LAZILY_LOADED)) {
 }
 
 module.exports = HDSModel;
+
+function throwNotLoadedError () {
+  throw new HDSLibError('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+}
 
 
 /***/ }),
@@ -20856,7 +20861,8 @@ const HDService = __webpack_require__(/*! ../HDSService */ "./src/HDSService.js"
 
 module.exports = {
   getModel,
-  initHDSModel
+  initHDSModel,
+  resetModel
 };
 
 function getModel () {
@@ -20864,6 +20870,12 @@ function getModel () {
     model = new HDSModel();
   }
   return model;
+}
+/**
+ * Mostly used during test to unlod model
+ */
+function resetModel () {
+  model = null;
 }
 
 /**
@@ -21842,6 +21854,7 @@ module.exports = Collector;
   \*********************************************/
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
+const { CollectorRequest } = __webpack_require__(/*! ./CollectorRequest.ts */ "./src/appTemplates/CollectorRequest.ts");
 const pryv = __webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js");
 const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
 const logger = __webpack_require__(/*! ../logger */ "./src/logger.js");
@@ -21863,6 +21876,8 @@ class CollectorClient {
   eventData;
   /** @type {Object} - when active or deactivated - there is a link with accessData */
   accessData;
+  /** @type {CollectorRequest} */
+  request;
 
   /** @property {String} - identified within user's account - can be used to retreive a Collector Client from an app */
   get key () {
@@ -21909,6 +21924,8 @@ class CollectorClient {
     this.app = app;
     this.eventData = eventData;
     this.accessData = accessData;
+    this.request = new CollectorRequest({});
+    this.request.loadFromInviteEvent(eventData.content.requesterEventData);
   }
 
   /**
@@ -21969,6 +21986,7 @@ class CollectorClient {
       }
     }, 'event');
     this.eventData = eventData;
+    this.request.loadFromInviteEvent(requesterEvents[0]);
     return this;
   }
 
@@ -22275,8 +22293,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _errors_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../errors.js */ "./src/errors.js");
 /* harmony import */ var _errors_js__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(_errors_js__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _localizeText_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../localizeText.js */ "./src/localizeText.js");
-/* harmony import */ var _localizeText_js__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(_localizeText_js__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var _HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./src/HDSModel/HDSModelInitAndSingleton.js");
+/* harmony import */ var _HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(_HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var _localizeText_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../localizeText.js */ "./src/localizeText.js");
+/* harmony import */ var _localizeText_js__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(_localizeText_js__WEBPACK_IMPORTED_MODULE_2__);
 var __classPrivateFieldSet = (undefined && undefined.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
     if (kind === "m") throw new TypeError("Private method is not writable");
     if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
@@ -22288,9 +22308,11 @@ var __classPrivateFieldGet = (undefined && undefined.__classPrivateFieldGet) || 
     if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
     return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
 };
-var _CollectorRequest_version, _CollectorRequest_title, _CollectorRequest_description, _CollectorRequest_consent, _CollectorRequest_requester, _CollectorRequest_app, _CollectorRequest_permissions, _CollectorRequest_extraContent;
+var _CollectorRequest_version, _CollectorRequest_title, _CollectorRequest_description, _CollectorRequest_consent, _CollectorRequest_requester, _CollectorRequest_app, _CollectorRequest_permissions, _CollectorRequest_sections, _CollectorRequest_extraContent, _CollectorRequestSection_type, _CollectorRequestSection_name, _CollectorRequestSection_key, _CollectorRequestSection_itemKeys;
 
 
+
+const CURRENT_VERSION = 1;
 /**
  * Each Collector has one Request
  * Which contains
@@ -22310,15 +22332,26 @@ class CollectorRequest {
         _CollectorRequest_requester.set(this, void 0);
         _CollectorRequest_app.set(this, void 0);
         _CollectorRequest_permissions.set(this, void 0);
+        _CollectorRequest_sections.set(this, void 0);
         _CollectorRequest_extraContent.set(this, void 0);
-        __classPrivateFieldSet(this, _CollectorRequest_version, 0, "f");
+        __classPrivateFieldSet(this, _CollectorRequest_version, CURRENT_VERSION, "f");
         __classPrivateFieldSet(this, _CollectorRequest_requester, { name: null }, "f");
         __classPrivateFieldSet(this, _CollectorRequest_app, { id: null, url: null, data: {} }, "f");
         __classPrivateFieldSet(this, _CollectorRequest_permissions, [], "f");
+        __classPrivateFieldSet(this, _CollectorRequest_sections, [], "f");
         this.setContent(content);
     }
     /**
-     * Loadfrom status event
+     * Loadfrom invite event
+     * used by CollectorClient only
+     * @param invite
+     */
+    loadFromInviteEvent(inviteEvent) {
+        console.log('>>>>>>>>>>', inviteEvent.content, new Error());
+        this.setContent(inviteEvent.content);
+    }
+    /**
+     * Loadfrom status event from Collector
      * used by Collector only
      * @param statusEvent
      */
@@ -22337,24 +22370,32 @@ class CollectorRequest {
     setContent(content) {
         const futureContent = structuredClone(content);
         // validate content
-        if (futureContent.version) {
+        if (futureContent.version != null) {
             const numV = Number.parseInt(futureContent.version);
-            if (numV !== __classPrivateFieldGet(this, _CollectorRequest_version, "f"))
-                throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
+            if (numV === 0) {
+                vo0ToV1(futureContent); // convert to v1 if needed
+            }
+            else {
+                if (numV !== __classPrivateFieldGet(this, _CollectorRequest_version, "f"))
+                    throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
+            }
             delete futureContent.version;
         }
+        // -- title, consent, description
         for (const key of ['title', 'consent', 'description']) {
             if (futureContent[key] != null) {
                 this[key] = futureContent[key];
             }
             delete futureContent[key];
         }
+        // -- requester 
         if (futureContent.requester) {
             if (futureContent.requester.name != null) {
                 this.requesterName = futureContent.requester.name;
             }
             delete futureContent.requester;
         }
+        // -- app
         if (futureContent.app) {
             if (futureContent.app.id != null) {
                 this.appId = futureContent.app.id;
@@ -22367,6 +22408,16 @@ class CollectorRequest {
             }
             delete futureContent.app;
         }
+        // -- sections
+        if (futureContent.sections != null) {
+            for (const sectionData of futureContent.sections) {
+                const section = new CollectorRequestSection(sectionData.key, sectionData.type);
+                section.setName(sectionData.name);
+                section.addItemKeys(sectionData.itemKeys);
+                __classPrivateFieldGet(this, _CollectorRequest_sections, "f").push(section);
+            }
+        }
+        // -- permissions
         if (futureContent.permissions) {
             __classPrivateFieldSet(this, _CollectorRequest_permissions, [], "f"); // reset permissions
             futureContent.permissions.forEach((p) => {
@@ -22378,11 +22429,11 @@ class CollectorRequest {
     }
     // ------------- getter and setters ------------ //
     get version() { return __classPrivateFieldGet(this, _CollectorRequest_version, "f"); }
-    set title(title) { __classPrivateFieldSet(this, _CollectorRequest_title, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('title', title), "f"); }
+    set title(title) { __classPrivateFieldSet(this, _CollectorRequest_title, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_2__.validateLocalizableText)('title', title), "f"); }
     get title() { return __classPrivateFieldGet(this, _CollectorRequest_title, "f"); }
-    set consent(consent) { __classPrivateFieldSet(this, _CollectorRequest_consent, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('consent', consent), "f"); }
+    set consent(consent) { __classPrivateFieldSet(this, _CollectorRequest_consent, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_2__.validateLocalizableText)('consent', consent), "f"); }
     get consent() { return __classPrivateFieldGet(this, _CollectorRequest_consent, "f"); }
-    set description(description) { __classPrivateFieldSet(this, _CollectorRequest_description, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('description', description), "f"); }
+    set description(description) { __classPrivateFieldSet(this, _CollectorRequest_description, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_2__.validateLocalizableText)('description', description), "f"); }
     get description() { return __classPrivateFieldGet(this, _CollectorRequest_description, "f"); }
     set requesterName(name) { __classPrivateFieldGet(this, _CollectorRequest_requester, "f").name = validateString('requester:name', name); }
     get requesterName() { return __classPrivateFieldGet(this, _CollectorRequest_requester, "f").name; }
@@ -22393,15 +22444,31 @@ class CollectorRequest {
     set appCustomData(data) { __classPrivateFieldGet(this, _CollectorRequest_app, "f").data = data; }
     get appCustomData() { return __classPrivateFieldGet(this, _CollectorRequest_app, "f").data; }
     get permissions() { return __classPrivateFieldGet(this, _CollectorRequest_permissions, "f"); }
+    // --- section --- //
+    get sections() {
+        return __classPrivateFieldGet(this, _CollectorRequest_sections, "f");
+    }
+    get sectionsData() {
+        const result = [];
+        for (const section of __classPrivateFieldGet(this, _CollectorRequest_sections, "f")) {
+            result.push(section.getData());
+        }
+        return result;
+    }
+    getSectionByKey(key) {
+        return __classPrivateFieldGet(this, _CollectorRequest_sections, "f").find((s) => (s.key === key));
+    }
     // ---------- permissions ---------- //
     addPermissions(streamId, defaultName, level) {
         __classPrivateFieldGet(this, _CollectorRequest_permissions, "f").push({ streamId, defaultName, level });
     }
+    // ---------- sections ------------- //
     /**
      * Return Content to comply with initial implementation as an object
      */
     get content() {
         const content = {
+            version: this.version,
             title: this.title,
             consent: this.consent,
             description: this.description,
@@ -22413,17 +22480,87 @@ class CollectorRequest {
                 id: this.appId,
                 url: this.appUrl,
                 data: this.appCustomData
-            }
+            },
+            sections: this.sectionsData
         };
         Object.assign(content, __classPrivateFieldGet(this, _CollectorRequest_extraContent, "f"));
         return content;
     }
 }
-_CollectorRequest_version = new WeakMap(), _CollectorRequest_title = new WeakMap(), _CollectorRequest_description = new WeakMap(), _CollectorRequest_consent = new WeakMap(), _CollectorRequest_requester = new WeakMap(), _CollectorRequest_app = new WeakMap(), _CollectorRequest_permissions = new WeakMap(), _CollectorRequest_extraContent = new WeakMap();
+_CollectorRequest_version = new WeakMap(), _CollectorRequest_title = new WeakMap(), _CollectorRequest_description = new WeakMap(), _CollectorRequest_consent = new WeakMap(), _CollectorRequest_requester = new WeakMap(), _CollectorRequest_app = new WeakMap(), _CollectorRequest_permissions = new WeakMap(), _CollectorRequest_sections = new WeakMap(), _CollectorRequest_extraContent = new WeakMap();
 function validateString(key, totest) {
     if (totest == null || typeof totest !== 'string')
         throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
     return totest;
+}
+const RequestSectionType = {
+    recurring: 'recurring',
+    permanent: 'permanent'
+};
+class CollectorRequestSection {
+    constructor(key, type) {
+        _CollectorRequestSection_type.set(this, void 0);
+        _CollectorRequestSection_name.set(this, void 0);
+        _CollectorRequestSection_key.set(this, void 0);
+        _CollectorRequestSection_itemKeys.set(this, void 0);
+        __classPrivateFieldSet(this, _CollectorRequestSection_key, key, "f");
+        __classPrivateFieldSet(this, _CollectorRequestSection_type, type, "f");
+        __classPrivateFieldSet(this, _CollectorRequestSection_itemKeys, [], "f");
+        __classPrivateFieldSet(this, _CollectorRequestSection_name, {
+            en: ''
+        }, "f");
+    }
+    addItemKeys(keys) {
+        keys.forEach((k) => this.addItemKey(k));
+    }
+    addItemKey(key) {
+        (0,_HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__.getModel)().itemsDefs.forKey(key); // will throw error if not found
+        if (__classPrivateFieldGet(this, _CollectorRequestSection_itemKeys, "f").includes(key))
+            return; // avoid double entries
+        __classPrivateFieldGet(this, _CollectorRequestSection_itemKeys, "f").push(key);
+    }
+    setName(localizedName) {
+        for (const [languageCode, name] of Object.entries(localizedName)) {
+            this.setNameLocal(languageCode, name);
+        }
+    }
+    setNameLocal(languageCode, name) {
+        __classPrivateFieldGet(this, _CollectorRequestSection_name, "f")[languageCode] = name;
+    }
+    get type() { return __classPrivateFieldGet(this, _CollectorRequestSection_type, "f"); }
+    get key() { return __classPrivateFieldGet(this, _CollectorRequestSection_key, "f"); }
+    get itemKeys() { return __classPrivateFieldGet(this, _CollectorRequestSection_itemKeys, "f"); }
+    get name() { return __classPrivateFieldGet(this, _CollectorRequestSection_name, "f"); }
+    getData() {
+        return {
+            key: this.key,
+            type: __classPrivateFieldGet(this, _CollectorRequestSection_type, "f"),
+            name: __classPrivateFieldGet(this, _CollectorRequestSection_name, "f"),
+            itemKeys: __classPrivateFieldGet(this, _CollectorRequestSection_itemKeys, "f")
+        };
+    }
+}
+_CollectorRequestSection_type = new WeakMap(), _CollectorRequestSection_name = new WeakMap(), _CollectorRequestSection_key = new WeakMap(), _CollectorRequestSection_itemKeys = new WeakMap();
+/**
+ * Transform data to match v1
+ * @param v0Data
+ */
+function vo0ToV1(v0Data) {
+    var _a, _b;
+    if ((_b = (_a = v0Data.app) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.forms) {
+        if (v0Data.sections)
+            throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError('Cannot mix data.forms & sections', v0Data);
+        v0Data.sections = [];
+        for (const [key, value] of Object.entries(v0Data.app.data.forms)) {
+            value.key = key;
+            value.name = {
+                en: value.name
+            };
+            v0Data.sections.push(value);
+        }
+        delete v0Data.app.data.forms;
+    }
+    v0Data.version = 1;
 }
 
 
@@ -23093,6 +23230,7 @@ const AppClientAccount = __webpack_require__(/*! ../src/appTemplates/AppClientAc
 const Collector = __webpack_require__(/*! ../src/appTemplates/Collector */ "./src/appTemplates/Collector.js");
 const CollectorClient = __webpack_require__(/*! ../src/appTemplates/CollectorClient */ "./src/appTemplates/CollectorClient.js");
 const { HDSLibError } = __webpack_require__(/*! ../src/errors */ "./src/errors.js");
+const { initHDSModel } = __webpack_require__(/*! ../src/index.js */ "./src/index.js");
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -23105,6 +23243,7 @@ describe('[APTX] appTemplates', function () {
 
   before(async () => {
     ({ managingUser, appManaging, clientUser, clientUserResultPermissions, appClient } = await helperNewAppAndUsers(baseStreamIdManager, appName, baseStreamIdClient, appClientName));
+    await initHDSModel();
   });
 
   it('[APTA] Full flow create collector and sharing', async () => {
@@ -23218,7 +23357,7 @@ describe('[APTX] appTemplates', function () {
 
       // set request content
       const requestContent = {
-        version: 0,
+        version: 1,
         requester: {
           name: 'Test requester name'
         },
@@ -23245,7 +23384,27 @@ describe('[APTX] appTemplates', function () {
           data: { // settings for the app
             dummy: 'dummy'
           }
+        },
+        sections: [{
+          itemKeys: [
+            'profile-name',
+            'profile-surname'
+          ],
+          key: 'profile',
+          name: {
+            en: 'Profile'
+          },
+          type: 'permanent'
+        },
+        {
+          itemKeys: ['fertility-ttc-tta', 'body-weight'],
+          key: 'history',
+          name: {
+            en: 'History'
+          },
+          type: 'recurring'
         }
+        ]
       };
       newCollector.request.setContent(requestContent);
 
@@ -23423,6 +23582,97 @@ describe('[APTX] appTemplates', function () {
       } catch (e) {
         assert(e.message === 'Forbidden');
       }
+    });
+
+    it('[APCV] Collector convert v0 to v1 correctly', async () => {
+      const newCollector = await appManaging.createCollector('Invite test APCV');
+
+      const requestContent = {
+        version: 0,
+        requester: {
+          name: 'Test requester name'
+        },
+        title: {
+          en: 'Title of the request'
+        },
+        description: {
+          en: 'Short Description'
+        },
+        consent: {
+          en: 'This is a consent message'
+        },
+        permissions: [
+          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+          {
+            streamId: 'profile-date-of-birth',
+            defaultName: 'Date of Birth',
+            level: 'read'
+          }
+        ],
+        app: { // may have "url" in the future
+          id: 'test-app',
+          url: 'https://xxx.yyy',
+          data: { // settings for the app
+            dummy: 'dummy',
+            forms: {
+              profile: {
+                itemKeys: [
+                  'profile-name',
+                  'profile-surname'
+                ],
+                name: 'Profile',
+                type: 'permanent'
+              }
+            }
+          }
+        }
+      };
+
+      // set expected content
+      const expectedContent = {
+        version: 1,
+        requester: {
+          name: 'Test requester name'
+        },
+        title: {
+          en: 'Title of the request'
+        },
+        description: {
+          en: 'Short Description'
+        },
+        consent: {
+          en: 'This is a consent message'
+        },
+        permissions: [
+          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+          {
+            streamId: 'profile-date-of-birth',
+            defaultName: 'Date of Birth',
+            level: 'read'
+          }
+        ],
+        app: { // may have "url" in the future
+          id: 'test-app',
+          url: 'https://xxx.yyy',
+          data: { // settings for the app
+            dummy: 'dummy'
+          }
+        },
+        sections: [{
+          itemKeys: [
+            'profile-name',
+            'profile-surname'
+          ],
+          key: 'profile',
+          name: {
+            en: 'Profile'
+          },
+          type: 'permanent'
+        }
+        ]
+      };
+      newCollector.request.setContent(requestContent);
+      assert.deepEqual(newCollector.request.content, expectedContent);
     });
   });
 
@@ -23616,8 +23866,13 @@ const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/te
  */
 const HDSLib = __webpack_require__(/*! ../src */ "./src/index.js");
 const { waitUntilFalse } = __webpack_require__(/*! ../src/utils */ "./src/utils.js");
+const { resetModel } = __webpack_require__(/*! ../src/HDSModel/HDSModelInitAndSingleton */ "./src/HDSModel/HDSModelInitAndSingleton.js");
 
 describe('[HDLX] HDSLib.index.js', () => {
+  before(() => {
+    resetModel();
+  });
+
   it('[HDME] HDSLib.model throws error if not initialized', () => {
     try {
       // eslint-disable-next-line no-unused-expressions
