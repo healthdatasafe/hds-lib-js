@@ -4,7 +4,8 @@ const HDService = require('../HDSService');
 
 module.exports = {
   getModel,
-  initHDSModel
+  initHDSModel,
+  resetModel
 };
 
 function getModel () {
@@ -12,6 +13,12 @@ function getModel () {
     model = new HDSModel();
   }
   return model;
+}
+/**
+ * Mostly used during test to unlod model
+ */
+function resetModel () {
+  model = null;
 }
 
 /**

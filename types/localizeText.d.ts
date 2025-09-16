@@ -1,7 +1,14 @@
+
+export enum localizableTextLanguages {
+    English = 'en',
+    French = 'fr',
+    Spanish = 'es'
+}
+
 export type localizableText = {
-    en: string;
-    fr?: string;
-    es?: string;
+    [localizableTextLanguages.English]: string;
+    [localizableTextLanguages.French]?: string;
+    [localizableTextLanguages.Spanish]?: string;
 }
 
 /**

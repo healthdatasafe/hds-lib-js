@@ -5,8 +5,13 @@ const { assert } = require('./test-utils/deps-node');
  */
 const HDSLib = require('../src');
 const { waitUntilFalse } = require('../src/utils');
+const { resetModel } = require('../src/HDSModel/HDSModelInitAndSingleton');
 
 describe('[HDLX] HDSLib.index.js', () => {
+  before(() => {
+    resetModel();
+  });
+
   it('[HDME] HDSLib.model throws error if not initialized', () => {
     try {
       // eslint-disable-next-line no-unused-expressions
