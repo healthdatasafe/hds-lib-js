@@ -39,7 +39,18 @@ export class CollectorRequest {
   }
 
   /**
-   * Loadfrom status event
+   * Loadfrom invite event
+   * used by CollectorClient only
+   * @param invite 
+   */
+  loadFromInviteEvent(inviteEvent: any) {
+    this.setContent(inviteEvent.content);
+  }
+
+
+
+  /**
+   * Loadfrom status event from Collector
    * used by Collector only
    * @param statusEvent 
    */
@@ -111,7 +122,6 @@ export class CollectorRequest {
       });
       delete futureContent.permissions;
     }
-
     this.#extraContent = futureContent;
   }
 
@@ -143,7 +153,13 @@ export class CollectorRequest {
 
   get permissions() { return this.#permissions; }
 
-  get sectionsData() {
+  // --- section --- //
+
+  get sections (): Array<CollectorRequestSection> {
+    return this.#sections;
+  }
+
+  get sectionsData () {
     const result = [];
     for (const section of this.#sections) {
       result.push(section.getData());
@@ -151,10 +167,16 @@ export class CollectorRequest {
     return result;
   }
 
+  getSectionByKey (key: string) {
+    return this.#sections.find((s) => (s.key === key));
+  }
+
   // ---------- permissions ---------- //
   addPermissions (streamId: string, defaultName: string, level: string) {
     this.#permissions.push({streamId, defaultName, level});
   }
+
+  // ---------- sections ------------- //
 
   /**
    * Return Content to comply with initial implementation as an object
@@ -227,9 +249,10 @@ class CollectorRequestSection {
     this.#name[languageCode] = name;
   }
 
-  get type() { return this.#type }
-  get key() { return this.#key }
+  get type(): RequestSectionType { return this.#type }
+  get key(): string { return this.#key }
   get itemKeys() { return this.#itemKeys }
+  get name(): localizableText { return this.#name }
 
   getData() {
     return {

@@ -1,3 +1,4 @@
+const { CollectorRequest } = require('./CollectorRequest.ts');
 const pryv = require('pryv');
 const { HDSLibError } = require('../errors');
 const logger = require('../logger');
@@ -19,6 +20,8 @@ class CollectorClient {
   eventData;
   /** @type {Object} - when active or deactivated - there is a link with accessData */
   accessData;
+  /** @type {CollectorRequest} */
+  request;
 
   /** @property {String} - identified within user's account - can be used to retreive a Collector Client from an app */
   get key () {
@@ -65,6 +68,8 @@ class CollectorClient {
     this.app = app;
     this.eventData = eventData;
     this.accessData = accessData;
+    this.request = new CollectorRequest({});
+    this.request.loadFromInviteEvent(eventData.content.requesterEventData);
   }
 
   /**
@@ -125,6 +130,7 @@ class CollectorClient {
       }
     }, 'event');
     this.eventData = eventData;
+    this.request.loadFromInviteEvent(requesterEvents[0]);
     return this;
   }
 
