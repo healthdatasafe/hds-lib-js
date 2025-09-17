@@ -147,6 +147,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        permissionsExtra: [],
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
           {
@@ -420,6 +421,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        permissionsExtra: [],
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
           {
