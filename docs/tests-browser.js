@@ -22308,7 +22308,7 @@ var __classPrivateFieldGet = (undefined && undefined.__classPrivateFieldGet) || 
     if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
     return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
 };
-var _CollectorRequest_version, _CollectorRequest_title, _CollectorRequest_description, _CollectorRequest_consent, _CollectorRequest_requester, _CollectorRequest_app, _CollectorRequest_permissions, _CollectorRequest_sections, _CollectorRequest_extraContent, _CollectorRequestSection_type, _CollectorRequestSection_name, _CollectorRequestSection_key, _CollectorRequestSection_itemKeys;
+var _CollectorRequest_version, _CollectorRequest_title, _CollectorRequest_description, _CollectorRequest_consent, _CollectorRequest_requester, _CollectorRequest_app, _CollectorRequest_permissionsExtra, _CollectorRequest_permissions, _CollectorRequest_sections, _CollectorRequest_extraContent, _CollectorRequestSection_type, _CollectorRequestSection_name, _CollectorRequestSection_key, _CollectorRequestSection_itemKeys;
 
 
 
@@ -22331,6 +22331,7 @@ class CollectorRequest {
         _CollectorRequest_consent.set(this, void 0);
         _CollectorRequest_requester.set(this, void 0);
         _CollectorRequest_app.set(this, void 0);
+        _CollectorRequest_permissionsExtra.set(this, void 0);
         _CollectorRequest_permissions.set(this, void 0);
         _CollectorRequest_sections.set(this, void 0);
         _CollectorRequest_extraContent.set(this, void 0);
@@ -22338,6 +22339,7 @@ class CollectorRequest {
         __classPrivateFieldSet(this, _CollectorRequest_requester, { name: null }, "f");
         __classPrivateFieldSet(this, _CollectorRequest_app, { id: null, url: null, data: {} }, "f");
         __classPrivateFieldSet(this, _CollectorRequest_permissions, [], "f");
+        __classPrivateFieldSet(this, _CollectorRequest_permissionsExtra, [], "f");
         __classPrivateFieldSet(this, _CollectorRequest_sections, [], "f");
         this.setContent(content);
     }
@@ -22347,7 +22349,6 @@ class CollectorRequest {
      * @param invite
      */
     loadFromInviteEvent(inviteEvent) {
-        console.log('>>>>>>>>>>', inviteEvent.content, new Error());
         this.setContent(inviteEvent.content);
     }
     /**
@@ -22368,6 +22369,7 @@ class CollectorRequest {
      * @param content
      */
     setContent(content) {
+        console.log('$$$$$$$ CONTENT', content, new Error());
         const futureContent = structuredClone(content);
         // validate content
         if (futureContent.version != null) {
@@ -22410,20 +22412,29 @@ class CollectorRequest {
         }
         // -- sections
         if (futureContent.sections != null) {
+            __classPrivateFieldSet(this, _CollectorRequest_sections, [], "f"); // reset sections
             for (const sectionData of futureContent.sections) {
-                const section = new CollectorRequestSection(sectionData.key, sectionData.type);
+                const section = this.createSection(sectionData.key, sectionData.type);
                 section.setName(sectionData.name);
                 section.addItemKeys(sectionData.itemKeys);
-                __classPrivateFieldGet(this, _CollectorRequest_sections, "f").push(section);
             }
+            delete futureContent.sections;
         }
         // -- permissions
         if (futureContent.permissions) {
             __classPrivateFieldSet(this, _CollectorRequest_permissions, [], "f"); // reset permissions
             futureContent.permissions.forEach((p) => {
-                this.addPermissions(p.streamId, p.defaultName, p.level);
+                this.addPermission(p.streamId, p.defaultName, p.level);
             });
             delete futureContent.permissions;
+        }
+        // -- permissionsExtra
+        if (futureContent.permissionsExtra) {
+            __classPrivateFieldSet(this, _CollectorRequest_permissionsExtra, [], "f"); // reset permissions Extra
+            futureContent.permissionsExtra.forEach((p) => {
+                this.addPermissionExtra(p);
+            });
+            delete futureContent.permissionsExtra;
         }
         __classPrivateFieldSet(this, _CollectorRequest_extraContent, futureContent, "f");
     }
@@ -22444,6 +22455,7 @@ class CollectorRequest {
     set appCustomData(data) { __classPrivateFieldGet(this, _CollectorRequest_app, "f").data = data; }
     get appCustomData() { return __classPrivateFieldGet(this, _CollectorRequest_app, "f").data; }
     get permissions() { return __classPrivateFieldGet(this, _CollectorRequest_permissions, "f"); }
+    get permissionsExtra() { return __classPrivateFieldGet(this, _CollectorRequest_permissionsExtra, "f"); }
     // --- section --- //
     get sections() {
         return __classPrivateFieldGet(this, _CollectorRequest_sections, "f");
@@ -22451,16 +22463,60 @@ class CollectorRequest {
     get sectionsData() {
         const result = [];
         for (const section of __classPrivateFieldGet(this, _CollectorRequest_sections, "f")) {
-            result.push(section.getData());
+            const data = section.getData();
+            result.push(data);
         }
         return result;
+    }
+    createSection(key, type) {
+        console.log('$$$$ create section', key, type, __classPrivateFieldGet(this, _CollectorRequest_extraContent, "f"));
+        if (this.getSectionByKey(key) != null)
+            throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Section with key: ${key} already exists`);
+        const section = new CollectorRequestSection(key, type);
+        __classPrivateFieldGet(this, _CollectorRequest_sections, "f").push(section);
+        return section;
     }
     getSectionByKey(key) {
         return __classPrivateFieldGet(this, _CollectorRequest_sections, "f").find((s) => (s.key === key));
     }
     // ---------- permissions ---------- //
-    addPermissions(streamId, defaultName, level) {
+    addPermissions(permissions) {
+        for (const permission of permissions) {
+            this.addPermission(permission.streamId, permission.defaultName, permission.level);
+        }
+    }
+    addPermission(streamId, defaultName, level) {
         __classPrivateFieldGet(this, _CollectorRequest_permissions, "f").push({ streamId, defaultName, level });
+    }
+    /**
+     * Add a static permission, not linked to itemKeys for other usages
+     * @param permission
+     */
+    addPermissionExtra(permission) {
+        // todo standard checks
+        __classPrivateFieldGet(this, _CollectorRequest_permissionsExtra, "f").push(permission);
+    }
+    /**
+     * Reset permissions
+     */
+    resetPermissions() {
+        __classPrivateFieldGet(this, _CollectorRequest_permissions, "f").splice(0, __classPrivateFieldGet(this, _CollectorRequest_permissions, "f").length);
+    }
+    /**
+     * Rebuild permissions based on sections itemKeys and staticPermissions
+     */
+    buildPermissions() {
+        // 1- get all items form the questionnary sections
+        const itemKeys = [];
+        for (const section of this.sections) {
+            itemKeys.push(...section.itemKeys);
+        }
+        // 2 - get the permissions with eventual preRequest 
+        const preRequest = this.permissionsExtra || [];
+        const permissions = (0,_HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__.getModel)().authorizations.forItemKeys(itemKeys, { preRequest });
+        // 3 - if no error araised - reset permissions
+        this.resetPermissions();
+        this.addPermissions(permissions);
     }
     // ---------- sections ------------- //
     /**
@@ -22475,6 +22531,7 @@ class CollectorRequest {
             requester: {
                 name: this.requesterName
             },
+            permissionsExtra: this.permissionsExtra,
             permissions: this.permissions,
             app: {
                 id: this.appId,
@@ -22487,7 +22544,7 @@ class CollectorRequest {
         return content;
     }
 }
-_CollectorRequest_version = new WeakMap(), _CollectorRequest_title = new WeakMap(), _CollectorRequest_description = new WeakMap(), _CollectorRequest_consent = new WeakMap(), _CollectorRequest_requester = new WeakMap(), _CollectorRequest_app = new WeakMap(), _CollectorRequest_permissions = new WeakMap(), _CollectorRequest_sections = new WeakMap(), _CollectorRequest_extraContent = new WeakMap();
+_CollectorRequest_version = new WeakMap(), _CollectorRequest_title = new WeakMap(), _CollectorRequest_description = new WeakMap(), _CollectorRequest_consent = new WeakMap(), _CollectorRequest_requester = new WeakMap(), _CollectorRequest_app = new WeakMap(), _CollectorRequest_permissionsExtra = new WeakMap(), _CollectorRequest_permissions = new WeakMap(), _CollectorRequest_sections = new WeakMap(), _CollectorRequest_extraContent = new WeakMap();
 function validateString(key, totest) {
     if (totest == null || typeof totest !== 'string')
         throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
@@ -23224,13 +23281,14 @@ describe('[APAX] Application class', () => {
 
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-const { createUserAndPermissions, pryv, createUser, createUserPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
+const { pryv, createUserPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
 const AppManagingAccount = __webpack_require__(/*! ../src/appTemplates/AppManagingAccount */ "./src/appTemplates/AppManagingAccount.js");
 const AppClientAccount = __webpack_require__(/*! ../src/appTemplates/AppClientAccount */ "./src/appTemplates/AppClientAccount.js");
 const Collector = __webpack_require__(/*! ../src/appTemplates/Collector */ "./src/appTemplates/Collector.js");
 const CollectorClient = __webpack_require__(/*! ../src/appTemplates/CollectorClient */ "./src/appTemplates/CollectorClient.js");
 const { HDSLibError } = __webpack_require__(/*! ../src/errors */ "./src/errors.js");
 const { initHDSModel } = __webpack_require__(/*! ../src/index.js */ "./src/index.js");
+const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -23736,83 +23794,6 @@ describe('[APTX] appTemplates', function () {
     });
   });
 });
-
-/**
- * function helperNewAppManaging
- */
-async function helperNewAppManaging (baseStreamIdManager, appName, managingUser = null) {
-  // -- managing
-  const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamIdManager, name: appName, parentId: 'applications' }];
-  const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
-  if (!managingUser) {
-    managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
-  } else {
-    // replace managing user with new permissions set
-    managingUser = await createUserPermissions(managingUser, permissionsManager, initialStreams, appName);
-  }
-  const connection = new pryv.Connection(managingUser.appApiEndpoint);
-  const appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
-  return { managingUser, appManaging };
-}
-
-/**
- * helper to generate a new managing user and new client user
- */
-async function helperNewAppClient (baseStreamIdClient, appClientName) {
-  // -- receiving user
-  const clientUser = await createUser();
-  const permissionsClient = [{ streamId: '*', level: 'manage' }];
-  const clientUserResultPermissions = await createUserPermissions(clientUser, permissionsClient, [], appClientName);
-  const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserResultPermissions.appApiEndpoint, appClientName);
-  return { clientUser, clientUserResultPermissions, appClient };
-}
-
-/**
- * helper to generate a new managing user and new client user
- */
-async function helperNewAppAndUsers (baseStreamIdManager, appName, baseStreamIdClient, appClientName) {
-  const res = {};
-  const resManager = await helperNewAppManaging(baseStreamIdManager, appName);
-  const resClient = await helperNewAppClient(baseStreamIdClient, appClientName);
-  Object.assign(res, resManager);
-  Object.assign(res, resClient);
-  return res;
-}
-
-/**
- * heper to generate a new collector and invite for this managing application
- * @param {AppManagingAccount} appManaging
- * @returns {Object}
- */
-async function helperNewInvite (appManaging, appClient, code) {
-  code = code || Math.floor(Math.random() * 1000);
-  const collector = await appManaging.createCollector('Invite test ' + code);
-
-  // set request content
-  const requestContent = {
-    version: 0,
-    requester: { name: 'Test requester name' },
-    title: { en: 'Title of the request' },
-    description: { en: 'Short Description' },
-    consent: { en: 'This is a consent message' },
-    permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
-    app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
-  };
-  collector.request.setContent(requestContent);
-
-  await collector.save();
-  await collector.publish();
-  // create invite
-  const options = { customData: { hello: 'bob' } };
-  const invite = await collector.createInvite('Invite One', options);
-  const inviteSharingData = await invite.getSharingData();
-  assert.equal(inviteSharingData.apiEndpoint, await collector.sharingApiEndpoint());
-
-  // Invitee receives the invite
-  const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
-
-  return { collector, invite, collectorClient, inviteSharingData };
-}
 
 
 /***/ }),
@@ -24535,6 +24516,104 @@ __webpack_require__.g.$$$ = log;
 module.exports = {
   assert: __webpack_require__(/*! assert */ "./node_modules/assert/build/assert.js")
 };
+
+
+/***/ }),
+
+/***/ "./tests/test-utils/helpersAppTemplate.js":
+/*!************************************************!*\
+  !*** ./tests/test-utils/helpersAppTemplate.js ***!
+  \************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+const { assert } = __webpack_require__(/*! ./deps-node */ "./tests/test-utils/deps-browser.js");
+const { createUserAndPermissions, pryv, createUser, createUserPermissions } = __webpack_require__(/*! ./pryvService */ "./tests/test-utils/pryvService.js");
+const AppManagingAccount = __webpack_require__(/*! ../../src/appTemplates/AppManagingAccount */ "./src/appTemplates/AppManagingAccount.js");
+const AppClientAccount = __webpack_require__(/*! ../../src/appTemplates/AppClientAccount */ "./src/appTemplates/AppClientAccount.js");
+
+module.exports = {
+  helperNewAppAndUsers,
+  helperNewAppClient,
+  helperNewAppManaging,
+  helperNewInvite
+};
+
+/**
+ * function helperNewAppManaging
+ */
+async function helperNewAppManaging (baseStreamIdManager, appName, managingUser = null) {
+  // -- managing
+  const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamIdManager, name: appName, parentId: 'applications' }];
+  const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
+  if (!managingUser) {
+    managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
+  } else {
+    // replace managing user with new permissions set
+    managingUser = await createUserPermissions(managingUser, permissionsManager, initialStreams, appName);
+  }
+  const connection = new pryv.Connection(managingUser.appApiEndpoint);
+  const appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
+  return { managingUser, appManaging };
+}
+
+/**
+ * helper to generate a new managing user and new client user
+ */
+async function helperNewAppClient (baseStreamIdClient, appClientName) {
+  // -- receiving user
+  const clientUser = await createUser();
+  const permissionsClient = [{ streamId: '*', level: 'manage' }];
+  const clientUserResultPermissions = await createUserPermissions(clientUser, permissionsClient, [], appClientName);
+  const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserResultPermissions.appApiEndpoint, appClientName);
+  return { clientUser, clientUserResultPermissions, appClient };
+}
+
+/**
+ * helper to generate a new managing user and new client user
+ */
+async function helperNewAppAndUsers (baseStreamIdManager, appName, baseStreamIdClient, appClientName) {
+  const res = {};
+  const resManager = await helperNewAppManaging(baseStreamIdManager, appName);
+  const resClient = await helperNewAppClient(baseStreamIdClient, appClientName);
+  Object.assign(res, resManager);
+  Object.assign(res, resClient);
+  return res;
+}
+
+/**
+ * heper to generate a new collector and invite for this managing application
+ * @param {AppManagingAccount} appManaging
+ * @returns {Object}
+ */
+async function helperNewInvite (appManaging, appClient, code) {
+  code = code || Math.floor(Math.random() * 1000);
+  const collector = await appManaging.createCollector('Invite test ' + code);
+
+  // set request content
+  const requestContent = {
+    version: 0,
+    requester: { name: 'Test requester name' },
+    title: { en: 'Title of the request' },
+    description: { en: 'Short Description' },
+    consent: { en: 'This is a consent message' },
+    permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
+    app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
+  };
+  collector.request.setContent(requestContent);
+
+  await collector.save();
+  await collector.publish();
+  // create invite
+  const options = { customData: { hello: 'bob' } };
+  const invite = await collector.createInvite('Invite One', options);
+  const inviteSharingData = await invite.getSharingData();
+  assert.equal(inviteSharingData.apiEndpoint, await collector.sharingApiEndpoint());
+
+  // Invitee receives the invite
+  const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+
+  return { collector, invite, collectorClient, inviteSharingData };
+}
 
 
 /***/ }),

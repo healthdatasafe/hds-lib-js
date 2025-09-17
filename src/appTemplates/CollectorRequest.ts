@@ -5,6 +5,7 @@ import type { localizableText, localizableTextLanguages } from '../../types/loca
 
 
 declare type PermissionItem = {streamId: string, defaultName: string, level: string};
+declare type PermissionItemLight = {streamId: string, defaultName?: string, level?: string};
 
 const CURRENT_VERSION = 1;
 
@@ -25,6 +26,7 @@ export class CollectorRequest {
   #consent: localizableText;
   #requester: {name: string};
   #app: {id: string, url: string | null, data: any};
+  #permissionsExtra: Array<PermissionItemLight>;
   #permissions: Array<PermissionItem>;
   #sections: Array<CollectorRequestSection>;
 
@@ -34,6 +36,7 @@ export class CollectorRequest {
     this.#requester = { name: null };
     this.#app = { id: null, url: null, data: {} };
     this.#permissions = [];
+    this.#permissionsExtra = [];
     this.#sections = [];
     this.setContent(content);
   }
@@ -46,8 +49,6 @@ export class CollectorRequest {
   loadFromInviteEvent(inviteEvent: any) {
     this.setContent(inviteEvent.content);
   }
-
-
 
   /**
    * Loadfrom status event from Collector
@@ -106,22 +107,33 @@ export class CollectorRequest {
 
     // -- sections
     if (futureContent.sections != null) {
+      this.#sections = []; // reset sections
       for (const sectionData of futureContent.sections) {
-        const section = new CollectorRequestSection(sectionData.key, sectionData.type);
+        const section = this.createSection(sectionData.key, sectionData.type);
         section.setName(sectionData.name);
         section.addItemKeys(sectionData.itemKeys);
-        this.#sections.push(section);
       }
+      delete futureContent.sections;
     }
 
     // -- permissions
     if (futureContent.permissions) {
       this.#permissions = []; // reset permissions
       futureContent.permissions.forEach((p: PermissionItem)=> {
-        this.addPermissions(p.streamId, p.defaultName, p.level);
+        this.addPermission(p.streamId, p.defaultName, p.level);
       });
       delete futureContent.permissions;
     }
+
+    // -- permissionsExtra
+    if (futureContent.permissionsExtra) {
+      this.#permissionsExtra = []; // reset permissions Extra
+      futureContent.permissionsExtra.forEach((p: PermissionItem)=> {
+        this.addPermissionExtra(p);
+      });
+      delete futureContent.permissionsExtra;
+    }
+
     this.#extraContent = futureContent;
   }
 
@@ -152,6 +164,7 @@ export class CollectorRequest {
   get appCustomData() { return this.#app.data; }
 
   get permissions() { return this.#permissions; }
+  get permissionsExtra() { return this.#permissionsExtra; }
 
   // --- section --- //
 
@@ -162,9 +175,17 @@ export class CollectorRequest {
   get sectionsData () {
     const result = [];
     for (const section of this.#sections) {
-      result.push(section.getData());
+      const data = section.getData();
+      result.push(data);
     }
     return result;
+  }
+
+  createSection (key: string, type: RequestSectionType) {
+    if (this.getSectionByKey(key) != null) throw new HDSLibError(`Section with key: ${key} already exists`)
+    const section = new CollectorRequestSection(key, type);
+    this.#sections.push(section);
+    return section;
   }
 
   getSectionByKey (key: string) {
@@ -172,8 +193,47 @@ export class CollectorRequest {
   }
 
   // ---------- permissions ---------- //
-  addPermissions (streamId: string, defaultName: string, level: string) {
+  addPermissions (permissions: Array<{streamId: string, defaultName: string, level: string}>) {
+    for (const permission of permissions) {
+      this.addPermission(permission.streamId, permission.defaultName, permission.level);
+    }
+  }
+
+  addPermission (streamId: string, defaultName: string, level: string) {
     this.#permissions.push({streamId, defaultName, level});
+  }
+
+  /**
+   * Add a static permission, not linked to itemKeys for other usages
+   * @param permission 
+   */
+  addPermissionExtra (permission: PermissionItemLight) {
+    // todo standard checks
+    this.#permissionsExtra.push(permission);
+  }
+
+  /**
+   * Reset permissions
+   */
+  resetPermissions() {
+    this.#permissions.splice(0, this.#permissions.length);
+  }
+
+  /**
+   * Rebuild permissions based on sections itemKeys and staticPermissions
+   */
+  buildPermissions () {
+    // 1- get all items form the questionnary sections
+    const itemKeys = [];
+    for (const section of this.sections) {
+      itemKeys.push(...section.itemKeys);
+    }
+    // 2 - get the permissions with eventual preRequest 
+    const preRequest = this.permissionsExtra || [];
+    const permissions = getModel().authorizations.forItemKeys(itemKeys, { preRequest });
+    // 3 - if no error araised - reset permissions
+    this.resetPermissions();
+    this.addPermissions(permissions);
   }
 
   // ---------- sections ------------- //
@@ -190,6 +250,7 @@ export class CollectorRequest {
       requester: {
         name: this.requesterName
       },
+      permissionsExtra: this.permissionsExtra,
       permissions: this.permissions,
       app: {
         id: this.appId,
