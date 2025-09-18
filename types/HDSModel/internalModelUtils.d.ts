@@ -1,4 +1,5 @@
-import type HDSModel from "./HDSModel";
+import type HDSModel from './HDSModel';
+import HDSItemDef = require('./HDSItemDef');
 /**
  * Some call support either arrays of itemKeys or itemDefs
  * test if they are strings or itemDefs and returns an array of itemDefs
@@ -15,4 +16,3 @@ export function itemKeysOrDefsToDefs(model: HDSModel, keysOrDefs: Array<string> 
  * @return {HDSItemDef}
  */
 export function itemKeyOrDefToDef(model: HDSModel, keyOrDef: string | HDSItemDef): HDSItemDef;
-import HDSItemDef = require("./HDSItemDef");

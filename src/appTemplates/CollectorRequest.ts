@@ -3,7 +3,6 @@ import { getModel } from '../HDSModel/HDSModelInitAndSingleton.js';
 import { validateLocalizableText } from '../localizeText.js';
 import type { localizableText, localizableTextLanguages } from '../../types/localizeText.d.ts';
 
-
 declare type PermissionItem = {streamId: string, defaultName: string, level: string};
 declare type PermissionItemLight = {streamId: string, defaultName?: string, level?: string};
 
@@ -44,18 +43,18 @@ export class CollectorRequest {
   /**
    * Loadfrom invite event
    * used by CollectorClient only
-   * @param invite 
+   * @param invite
    */
-  loadFromInviteEvent(inviteEvent: any) {
+  loadFromInviteEvent (inviteEvent: any) {
     this.setContent(inviteEvent.content);
   }
 
   /**
    * Loadfrom status event from Collector
    * used by Collector only
-   * @param statusEvent 
+   * @param statusEvent
    */
-  loadFromStatusEvent(statusEvent: any) {
+  loadFromStatusEvent (statusEvent: any) {
     // content.data is deprecated it was used in a previous version, should be removed
     let potentialContent = statusEvent.content.request || statusEvent.content.data;
     // for some reason to be investigated sometime the data is in requestContent
@@ -65,17 +64,17 @@ export class CollectorRequest {
 
   /**
    * Temp content
-   * @param content 
+   * @param content
    */
-  setContent(content: any) {
+  setContent (content: any) {
     const futureContent = structuredClone(content);
-    
+
     // validate content
     if (futureContent.version != null) {
       const numV = Number.parseInt(futureContent.version);
       if (numV === 0) {
         vo0ToV1(futureContent); // convert to v1 if needed
-      } else {  
+      } else {
         if (numV !== this.#version) throw new HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
       }
       delete futureContent.version;
@@ -89,7 +88,7 @@ export class CollectorRequest {
       delete futureContent[key];
     }
 
-    // -- requester 
+    // -- requester
     if (futureContent.requester) {
       if (futureContent.requester.name != null) {
         this.requesterName = futureContent.requester.name;
@@ -119,7 +118,7 @@ export class CollectorRequest {
     // -- permissions
     if (futureContent.permissions) {
       this.#permissions = []; // reset permissions
-      futureContent.permissions.forEach((p: PermissionItem)=> {
+      futureContent.permissions.forEach((p: PermissionItem) => {
         this.addPermission(p.streamId, p.defaultName, p.level);
       });
       delete futureContent.permissions;
@@ -128,7 +127,7 @@ export class CollectorRequest {
     // -- permissionsExtra
     if (futureContent.permissionsExtra) {
       this.#permissionsExtra = []; // reset permissions Extra
-      futureContent.permissionsExtra.forEach((p: PermissionItem)=> {
+      futureContent.permissionsExtra.forEach((p: PermissionItem) => {
         this.addPermissionExtra(p);
       });
       delete futureContent.permissionsExtra;
@@ -151,20 +150,19 @@ export class CollectorRequest {
   get description () { return this.#description; }
 
   set requesterName (name: string) { this.#requester.name = validateString('requester:name', name); }
-  get requesterName () { return  this.#requester.name; }
+  get requesterName () { return this.#requester.name; }
 
+  set appId (id: string) { this.#app.id = validateString('app:id', id); }
+  get appId () { return this.#app.id; }
 
-  set appId(id: string) { this.#app.id = validateString('app:id', id); }
-  get appId() { return this.#app.id; }
+  set appUrl (url: string) { this.#app.url = validateString('app:url', url); }
+  get appUrl () { return this.#app.url; }
 
-  set appUrl(url: string) { this.#app.url = validateString('app:url', url); }
-  get appUrl() { return this.#app.url; }
+  set appCustomData (data: any) { this.#app.data = data; }
+  get appCustomData () { return this.#app.data; }
 
-  set appCustomData(data: any) { this.#app.data = data; }
-  get appCustomData() { return this.#app.data; }
-
-  get permissions() { return this.#permissions; }
-  get permissionsExtra() { return this.#permissionsExtra; }
+  get permissions () { return this.#permissions; }
+  get permissionsExtra () { return this.#permissionsExtra; }
 
   // --- section --- //
 
@@ -182,7 +180,7 @@ export class CollectorRequest {
   }
 
   createSection (key: string, type: RequestSectionType) {
-    if (this.getSectionByKey(key) != null) throw new HDSLibError(`Section with key: ${key} already exists`)
+    if (this.getSectionByKey(key) != null) throw new HDSLibError(`Section with key: ${key} already exists`);
     const section = new CollectorRequestSection(key, type);
     this.#sections.push(section);
     return section;
@@ -200,12 +198,12 @@ export class CollectorRequest {
   }
 
   addPermission (streamId: string, defaultName: string, level: string) {
-    this.#permissions.push({streamId, defaultName, level});
+    this.#permissions.push({ streamId, defaultName, level });
   }
 
   /**
    * Add a static permission, not linked to itemKeys for other usages
-   * @param permission 
+   * @param permission
    */
   addPermissionExtra (permission: PermissionItemLight) {
     // todo standard checks
@@ -215,7 +213,7 @@ export class CollectorRequest {
   /**
    * Reset permissions
    */
-  resetPermissions() {
+  resetPermissions () {
     this.#permissions.splice(0, this.#permissions.length);
   }
 
@@ -228,7 +226,7 @@ export class CollectorRequest {
     for (const section of this.sections) {
       itemKeys.push(...section.itemKeys);
     }
-    // 2 - get the permissions with eventual preRequest 
+    // 2 - get the permissions with eventual preRequest
     const preRequest = this.permissionsExtra || [];
     const permissions = getModel().authorizations.forItemKeys(itemKeys, { preRequest });
     // 3 - if no error araised - reset permissions
@@ -272,8 +270,8 @@ function validateString (key, totest) {
 const RequestSectionType = {
   recurring: 'recurring',
   permanent: 'permanent'
-}
-type RequestSectionType = (typeof RequestSectionType )[keyof typeof RequestSectionType ];
+};
+type RequestSectionType = (typeof RequestSectionType)[keyof typeof RequestSectionType ];
 
 class CollectorRequestSection {
   #type: RequestSectionType;
@@ -287,50 +285,49 @@ class CollectorRequestSection {
     this.#itemKeys = [];
     this.#name = {
       en: ''
-    }
+    };
   }
 
-  addItemKeys(keys: Array<string>) {
+  addItemKeys (keys: Array<string>) {
     keys.forEach((k) => this.addItemKey(k));
   }
 
-  addItemKey(key: string) {
+  addItemKey (key: string) {
     getModel().itemsDefs.forKey(key); // will throw error if not found
     if (this.#itemKeys.includes(key)) return; // avoid double entries
     this.#itemKeys.push(key);
   }
 
-  setName(localizedName: localizableText) {
+  setName (localizedName: localizableText) {
     for (const [languageCode, name] of Object.entries(localizedName)) {
       this.setNameLocal(languageCode as localizableTextLanguages, name);
     }
   }
 
-  setNameLocal(languageCode: localizableTextLanguages, name: string) {
+  setNameLocal (languageCode: localizableTextLanguages, name: string) {
     this.#name[languageCode] = name;
   }
 
-  get type(): RequestSectionType { return this.#type }
-  get key(): string { return this.#key }
-  get itemKeys() { return this.#itemKeys }
-  get name(): localizableText { return this.#name }
+  get type (): RequestSectionType { return this.#type; }
+  get key (): string { return this.#key; }
+  get itemKeys () { return this.#itemKeys; }
+  get name (): localizableText { return this.#name; }
 
-  getData() {
+  getData () {
     return {
       key: this.key,
       type: this.#type,
       name: this.#name,
       itemKeys: this.#itemKeys
-    }
+    };
   }
-
 }
 
 /**
  * Transform data to match v1
  * @param v0Data
  */
-function vo0ToV1(v0Data: any) {
+function vo0ToV1 (v0Data: any) {
   if (v0Data.app?.data?.forms) {
     if (v0Data.sections) throw new HDSLibError('Cannot mix data.forms & sections', v0Data);
     v0Data.sections = [];
@@ -338,8 +335,8 @@ function vo0ToV1(v0Data: any) {
       value.key = key;
       value.name = {
         en: value.name
-      }
-      v0Data.sections.push(value)
+      };
+      v0Data.sections.push(value);
     }
     delete v0Data.app.data.forms;
   }

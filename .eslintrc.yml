@@ -1,3 +1,44 @@
 root: true
-extends: 'semistandard'
-ignorePatterns: ['docs/*']
+env:
+  es2022: true
+  browser: true
+  node: true
+  mocha: true
+extends:
+  - standard
+  - semistandard
+parserOptions:
+  ecmaVersion: 2022
+  sourceType: module
+overrides:
+  - files:
+      - '**/*.ts'
+      - '**/*.d.ts'
+    parser: '@typescript-eslint/parser'
+    plugins:
+      - '@typescript-eslint'
+    extends:
+      - 'plugin:@typescript-eslint/recommended'
+    rules:
+      '@typescript-eslint/semi':
+        - error
+        - always
+      semi: off
+      '@typescript-eslint/no-explicit-any': off
+      # types are hoisted; avoid false positives in TS
+      no-use-before-define: off
+      '@typescript-eslint/no-use-before-define': off
+  - files:
+      - '**/*.d.ts'
+    rules:
+      # declaration files often have forward refs and unused imports for typing only
+      '@typescript-eslint/no-unused-vars': off
+      no-use-before-define: off
+      '@typescript-eslint/no-use-before-define': off
+      # allow {} in generated/handwritten d.ts where compatible with runtime
+      '@typescript-eslint/ban-types': off
+ignorePatterns:
+  - node_modules/
+  - coverage/
+  - docs/
+  - tests-browser/

@@ -1,4 +1,4 @@
-import { setPreferredLocales } from "./localizeText";
+import { setPreferredLocales } from './localizeText';
 /**
  * Set default service info URL
  * @param {string} url

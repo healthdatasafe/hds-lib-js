@@ -1,6 +1,6 @@
-import HDSModelStreams from "./HDSModel-Streams";
-import HDSModelItemsDefs from "./HDSModel-ItemsDefs";
-import HDSModelAuthorizations from "./HDSModel-Authorizations";
+import HDSModelStreams from './HDSModel-Streams';
+import HDSModelItemsDefs from './HDSModel-ItemsDefs';
+import HDSModelAuthorizations from './HDSModel-Authorizations';
 export = HDSModel;
 /**
  * @class {HDSModel}
@@ -10,25 +10,25 @@ export = HDSModel;
  * @property {HDSModelAuthorizations} authorizations
  */
 declare class HDSModel {
-    /**
+  /**
      * @param {string} modelUrl - JSON definition file URL. Should come from service/info assets.hds-model
      */
-    constructor(modelUrl: string);
-    /**
+  constructor(modelUrl: string);
+  /**
      * @private
      * Map of properties loaded "on demand"
      */
-    private laziliyLoadedMap;
-    get isLoaded(): boolean;
-    /**
+  private laziliyLoadedMap;
+  get isLoaded(): boolean;
+  /**
      * Load model definitions
      */
-    load(modelUrl?: string): Promise<void>;
-    /** RAW model data */
-    get modelData(): any;
-    
-    get itemsDefs(): HDSModelItemsDefs;
-    get streams(): HDSModelStreams;
-    get authorizations(): HDSModelAuthorizations;
-    #private;
+  load(modelUrl?: string): Promise<void>;
+  /** RAW model data */
+  get modelData(): any;
+
+  get itemsDefs(): HDSModelItemsDefs;
+  get streams(): HDSModelStreams;
+  get authorizations(): HDSModelAuthorizations;
+  #private;
 }

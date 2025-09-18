@@ -22369,7 +22369,6 @@ class CollectorRequest {
      * @param content
      */
     setContent(content) {
-        console.log('$$$$$$$ CONTENT', content, new Error());
         const futureContent = structuredClone(content);
         // validate content
         if (futureContent.version != null) {
@@ -22390,7 +22389,7 @@ class CollectorRequest {
             }
             delete futureContent[key];
         }
-        // -- requester 
+        // -- requester
         if (futureContent.requester) {
             if (futureContent.requester.name != null) {
                 this.requesterName = futureContent.requester.name;
@@ -22469,7 +22468,6 @@ class CollectorRequest {
         return result;
     }
     createSection(key, type) {
-        console.log('$$$$ create section', key, type, __classPrivateFieldGet(this, _CollectorRequest_extraContent, "f"));
         if (this.getSectionByKey(key) != null)
             throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Section with key: ${key} already exists`);
         const section = new CollectorRequestSection(key, type);
@@ -22511,7 +22509,7 @@ class CollectorRequest {
         for (const section of this.sections) {
             itemKeys.push(...section.itemKeys);
         }
-        // 2 - get the permissions with eventual preRequest 
+        // 2 - get the permissions with eventual preRequest
         const preRequest = this.permissionsExtra || [];
         const permissions = (0,_HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__.getModel)().authorizations.forItemKeys(itemKeys, { preRequest });
         // 3 - if no error araised - reset permissions
@@ -23428,6 +23426,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        permissionsExtra: [],
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
           {
@@ -23701,6 +23700,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        permissionsExtra: [],
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
           {
