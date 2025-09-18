@@ -9,7 +9,7 @@
     "build": "webpack",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "lint:change": "eslint $(git diff --name-only HEAD | grep -E '\\.(js|jsx)$' | xargs)"
+    "lint:change": "eslint $(git diff --name-only HEAD | grep -E '\\.(js|jsx|ts|tsx)$' | xargs)"
   },
   "repository": {
     "type": "git",
@@ -34,6 +34,8 @@
     "eslint": "^8.57.0",
     "eslint-config-semistandard": "^17.0.0",
     "eslint-config-standard": "^17.1.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
     "eslint-plugin-import": "^2.29.1",
     "eslint-plugin-n": "^15.7.0",
     "eslint-plugin-promise": "^6.1.1",

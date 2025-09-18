@@ -1,2 +1,2 @@
+import pryv = require('pryv');
 export = pryv;
-import pryv = require("pryv");

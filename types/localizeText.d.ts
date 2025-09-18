@@ -1,4 +1,3 @@
-
 export enum localizableTextLanguages {
     English = 'en',
     French = 'fr',
@@ -9,7 +8,7 @@ export type localizableText = {
     [localizableTextLanguages.English]: string;
     [localizableTextLanguages.French]?: string;
     [localizableTextLanguages.Spanish]?: string;
-}
+};
 
 /**
  * return the translation of this item considering the setting of preffered language

@@ -1,1 +1,1 @@
-export let StreamsAutoCreate: typeof import("./StreamsAutoCreate");
+export let StreamsAutoCreate: typeof import('./StreamsAutoCreate');

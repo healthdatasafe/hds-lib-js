@@ -2,7 +2,7 @@
   // Change this to match your project
   "include": ["src/**/*"],
   "compilerOptions": {
-     "allowJs": true,
+    "allowJs": true,
     "sourceMap": false,
     "target": "es2017",
   }
