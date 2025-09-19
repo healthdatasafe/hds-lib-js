@@ -325,7 +325,7 @@ class Collector {
    */
   async revokeInvite (invite, alreadyChecked = false) {
     // Invalidate Invite APIEndpoint(s)
-    if (invite.status === 'active') { // invalidate eventual authorization granted
+    if (invite.status === 'active' && !alreadyChecked) { // invalidate eventual authorization granted
       const accessInfo = await invite.checkAndGetAccessInfo(true);
       const deletionResult = await invite.connection.apiOne('accesses.delete', { id: accessInfo.id });
       if (deletionResult?.accessDeletion?.id == null) {
