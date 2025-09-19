@@ -1,5 +1,4 @@
 import pryv = require('pryv');
-import type AppClientAccount from './AppClientAccount';
 export = Application;
 /**
  * Settings for application

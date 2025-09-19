@@ -32,7 +32,6 @@ overrides:
       - '**/*.d.ts'
     rules:
       # declaration files often have forward refs and unused imports for typing only
-      '@typescript-eslint/no-unused-vars': off
       no-use-before-define: off
       '@typescript-eslint/no-use-before-define': off
       # allow {} in generated/handwritten d.ts where compatible with runtime
