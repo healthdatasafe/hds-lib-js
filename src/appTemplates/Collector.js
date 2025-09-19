@@ -320,9 +320,10 @@ class Collector {
   /**
    * @private
    * @param {CollectorInvite} invite
+   * @param {boolean} alreadyChecked // to avoid loops
    * @returns {CollectorInvite}
    */
-  async revokeInvite (invite) {
+  async revokeInvite (invite, alreadyChecked = false) {
     // Invalidate Invite APIEndpoint(s)
     if (invite.status === 'active') { // invalidate eventual authorization granted
       const accessInfo = await invite.checkAndGetAccessInfo(true);
