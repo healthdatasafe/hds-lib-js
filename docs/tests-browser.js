@@ -21012,16 +21012,17 @@ class AppClientAccount extends Application {
       const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
       logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
       if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
-        console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-        // throw new HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+        // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+        throw new HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
         // we might consider reseting() in the future;
-        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
       }
       if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-        // throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-        console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+        throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+        // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
         // we might consider reseting() in the future;
-        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+        // return null;
       }
       return collectorClient;
     }
@@ -21739,9 +21740,10 @@ class Collector {
   /**
    * @private
    * @param {CollectorInvite} invite
+   * @param {boolean} alreadyChecked // to avoid loops
    * @returns {CollectorInvite}
    */
-  async revokeInvite (invite) {
+  async revokeInvite (invite, alreadyChecked = false) {
     // Invalidate Invite APIEndpoint(s)
     if (invite.status === 'active') { // invalidate eventual authorization granted
       const accessInfo = await invite.checkAndGetAccessInfo(true);
@@ -22235,7 +22237,7 @@ class CollectorInvite {
     } catch (e) {
       this.#accessInfo = null;
       if (e.response?.body?.error?.id === 'invalid-access-token') {
-        await this.revoke();
+        await this.collector.revokeInvite(this, true);
         return null;
       }
       throw e;
