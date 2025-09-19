@@ -21012,14 +21012,16 @@ class AppClientAccount extends Application {
       const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
       logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
       if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
-        throw new HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+        console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+        // throw new HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
         // we might consider reseting() in the future;
-        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
       }
       if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-        throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+        // throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+        console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
         // we might consider reseting() in the future;
-        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+        return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
       }
       return collectorClient;
     }
