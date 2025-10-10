@@ -28,9 +28,22 @@ class HDSModelItemsDefs {
   }
 
   /**
+   * get all itemDefs
+   * @returns {Array<HDSItemDef>}
+   */
+  getAll () {
+    const res = [];
+    for (const key of Object.keys(this.#model.modelData.items)) {
+      res.push(this.forKey(key));
+    }
+    return res;
+  }
+
+  /**
    * get item for a key
    * @param {string} key
    * @param {boolean} [throwErrorIfNotFound] default `true`
+   * @return {HDSItemDef | null}
    */
   forKey (key, throwErrorIfNotFound = true) {
     if (this.#itemsDefs[key]) return this.#itemsDefs[key];

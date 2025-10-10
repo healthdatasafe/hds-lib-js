@@ -29,6 +29,16 @@ describe('[MODX] Model', () => {
     assert.deepEqual(itemDef.eventTypes, ['ratio/generic']);
   });
 
+  it('[MODN] get All itemsDef', async () => {
+    const modelLoad = new HDSModel(modelURL);
+    await modelLoad.load();
+    const itemDefs = modelLoad.itemsDefs.getAll();
+    assert.ok(itemDefs.length > 0);
+    for (const itemDef of itemDefs) {
+      assert.ok(itemDef.key);
+    }
+  });
+
   // ---------- items ------------ //
   describe('[MOLX] items localization', function () {
     afterEach(() => {
