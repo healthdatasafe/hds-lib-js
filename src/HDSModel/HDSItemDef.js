@@ -11,7 +11,7 @@ class HDSItemDef {
 
   get eventTypes () {
     if (this.#data.eventType) return [this.#data.eventType];
-    return Object.keys(this.#data.variations.eventType);
+    return this.#data.variations.eventType.options.map(o => o.value);
   }
 
   get key () {

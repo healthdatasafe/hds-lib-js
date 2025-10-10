@@ -92,8 +92,10 @@ function loadModelDataByStreamIdEventTypes (model, map) {
     if (item.eventType) {
       eventTypes.push(item.eventType);
     } else {
-      eventTypes.push(...Object.keys(item.variations.eventType));
+      const types = item.variations.eventType.options.map(o => o.value);
+      eventTypes.push(...types);
     }
+
     for (const eventType of eventTypes) {
       const keyStreamIdEventType = item.streamId + ':' + eventType;
       if (map[keyStreamIdEventType]) {
