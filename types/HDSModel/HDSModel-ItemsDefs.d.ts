@@ -8,16 +8,23 @@ export = HDSModelItemsDefs;
 declare class HDSModelItemsDefs {
   constructor(model: HDSModel);
   /**
+   * get all itemDefs
+   * @returns {Array<HDSItemDef>}
+   */
+  getAll(): HDSItemDef[];
+
+  /**
      * get item for a key
      * @param {string} key
      * @param {boolean} [throwErrorIfNotFound] default `true`
      */
-  forKey(key: string, throwErrorIfNotFound?: boolean): HDSItemDef;
+  forKey(key: string, throwErrorIfNotFound?: boolean): HDSItemDef | null;
+
   /**
      * get a definition for an event
      * @param {Event} event
      * @param {boolean} [throwErrorIfNotFound] default `true`
      */
-  forEvent(event: pryv.Event, throwErrorIfNotFound?: boolean): HDSItemDef;
+  forEvent(event: pryv.Event, throwErrorIfNotFound?: boolean): HDSItemDef | null;
   #private;
 }

@@ -20568,9 +20568,22 @@ class HDSModelItemsDefs {
   }
 
   /**
+   * get all itemDefs
+   * @returns {Array<HDSItemDef>}
+   */
+  getAll () {
+    const res = [];
+    for (const key of Object.keys(this.#model.modelData.items)) {
+      res.push(this.forKey(key));
+    }
+    return res;
+  }
+
+  /**
    * get item for a key
    * @param {string} key
    * @param {boolean} [throwErrorIfNotFound] default `true`
+   * @return {HDSItemDef | null}
    */
   forKey (key, throwErrorIfNotFound = true) {
     if (this.#itemsDefs[key]) return this.#itemsDefs[key];
@@ -23957,6 +23970,16 @@ describe('[MODX] Model', () => {
     await modelLoad.load();
     const itemDef = modelLoad.itemsDefs.forKey('body-vulva-wetness-feeling');
     assert.deepEqual(itemDef.eventTypes, ['ratio/generic']);
+  });
+
+  it('[MODN] get All itemsDef', async () => {
+    const modelLoad = new HDSModel(modelURL);
+    await modelLoad.load();
+    const itemDefs = modelLoad.itemsDefs.getAll();
+    assert.ok(itemDefs.length > 0);
+    for (const itemDef of itemDefs) {
+      assert.ok(itemDef.key);
+    }
   });
 
   // ---------- items ------------ //
