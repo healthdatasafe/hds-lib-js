@@ -1,9 +1,25 @@
 {
-  // Change this to match your project
   "include": ["src/**/*"],
   "compilerOptions": {
     "allowJs": true,
-    "sourceMap": false,
-    "target": "es2017",
-  }
+    "sourceMap": true,
+    "target": "es2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "noImplicitReturns": false,
+    "noImplicitThis": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "noEmitOnError": false,
+    "outDir": "./lib",
+    "rootDir": "./src"
+  },
+  "exclude": ["node_modules", "dist", "lib", "tests", "coverage"]
 }

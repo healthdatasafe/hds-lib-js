@@ -1,6 +1,2871 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ "./lib/HDSModel/HDSItemDef.js":
+/*!************************************!*\
+  !*** ./lib/HDSModel/HDSItemDef.js ***!
+  \************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const localizeText_1 = __webpack_require__(/*! ../localizeText */ "./lib/localizeText.js");
+class HDSItemDef {
+    #data;
+    #key;
+    constructor(key, definitionData) {
+        this.#key = key;
+        this.#data = definitionData;
+    }
+    get eventTypes() {
+        if (this.#data.eventType)
+            return [this.#data.eventType];
+        return this.#data.variations.eventType.options.map((o) => o.value);
+    }
+    get key() {
+        return this.#key;
+    }
+    get data() {
+        return this.#data;
+    }
+    /** label Localized */
+    get label() {
+        return (0, localizeText_1.localizeText)(this.#data.label);
+    }
+    /** description Localized */
+    get description() {
+        return (0, localizeText_1.localizeText)(this.#data.description);
+    }
+    /**
+     * a template event with eventType and streamIds
+     * // TODO handle variations
+     */
+    eventTemplate() {
+        return {
+            streamId: this.#data.streamId,
+            type: this.eventTypes[0]
+        };
+    }
+}
+exports["default"] = HDSItemDef;
+//# sourceMappingURL=HDSItemDef.js.map
+
+/***/ }),
+
+/***/ "./lib/HDSModel/HDSModel-Authorizations.js":
+/*!*************************************************!*\
+  !*** ./lib/HDSModel/HDSModel-Authorizations.js ***!
+  \*************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+/**
+ * Authorizations - Extension of HDSModel
+ */
+class HDSModelAuthorizations {
+    /**
+     * Model instance
+     */
+    #model;
+    constructor(model) {
+        this.#model = model;
+    }
+    /**
+     * Get minimal Authorization set for itemKeys
+     * /!\ Does not handle requests with streamId = "*"
+     */
+    forItemKeys(itemKeys, options = {}) {
+        const opts = {
+            defaultLevel: 'read',
+            preRequest: [],
+            includeDefaultName: true
+        };
+        Object.assign(opts, options);
+        const streamsRequested = {};
+        for (const pre of opts.preRequest) {
+            if (!pre.streamId)
+                throw new Error(`Missing streamId in options.preRequest item: ${JSON.stringify(pre)}`);
+            // complete pre with defaultName if missing
+            if (opts.includeDefaultName && !pre.defaultName) {
+                // try to get it from streams Data
+                const stream = this.#model.streams.getDataById(pre.streamId, false);
+                if (stream) {
+                    pre.defaultName = stream.name;
+                }
+                else {
+                    throw new Error(`No "defaultName" in options.preRequest item: ${JSON.stringify(pre)} and cannot find matching streams in default list`);
+                }
+            }
+            // check there is no defaultName if not required
+            if (!opts.includeDefaultName) {
+                if (pre.defaultName)
+                    throw new Error(`Do not include defaultName when not included explicitely on ${JSON.stringify(pre)}`);
+            }
+            // add default level
+            if (!pre.level) {
+                pre.level = opts.defaultLevel;
+            }
+            streamsRequested[pre.streamId] = pre;
+        }
+        // add streamId not already in
+        for (const itemKey of itemKeys) {
+            const itemDef = this.#model.itemsDefs.forKey(itemKey);
+            const streamId = itemDef.data.streamId;
+            if (!streamsRequested[streamId]) { // new streamId
+                const auth = { streamId, level: opts.defaultLevel };
+                if (opts.includeDefaultName) {
+                    const stream = this.#model.streams.getDataById(streamId);
+                    auth.defaultName = stream.name;
+                }
+                streamsRequested[streamId] = auth;
+            }
+            else { // existing just adapt level
+                streamsRequested[streamId].level = mixAuthorizationLevels(streamsRequested[streamId].level, opts.defaultLevel);
+            }
+        }
+        // remove all permissions with a parent having identical or higher level
+        for (const auth of Object.values(streamsRequested)) {
+            const parents = this.#model.streams.getParentsIds(auth.streamId, false);
+            for (const parent of parents) {
+                const found = streamsRequested[parent];
+                if (found && authorizationOverride(found.level, auth.level)) {
+                    // delete entry
+                    delete streamsRequested[auth.streamId];
+                    // break loop
+                    continue;
+                }
+            }
+        }
+        return Object.values(streamsRequested);
+    }
+}
+exports["default"] = HDSModelAuthorizations;
+/**
+ * Authorization level1 (parent) does override level2
+ * Return "true" if identical or level1 == "manage"
+ */
+function authorizationOverride(level1, level2) {
+    if (level1 === level2)
+        return true;
+    if (level1 === 'manage')
+        return true;
+    if (level1 === 'contribute' && level2 !== 'manage')
+        return true;
+    return false;
+}
+/**
+ * Given two authorization level, give the resulting one
+ */
+function mixAuthorizationLevels(level1, level2) {
+    if (level1 === level2)
+        return level1;
+    // sort level in orders [ 'contribute', 'manage', 'read', 'writeOnly' ]
+    const levels = [level1, level2].sort();
+    if (levels.includes('manage'))
+        return 'manage'; // any & manage
+    if (levels[0] === 'contribute')
+        return 'contribute'; // read ore writeOnly & contribute
+    if (levels[1] === 'writeOnly')
+        return 'contribute'; // mix read & writeOnly
+    /* c8 ignore next */ // error if there .. 'read' & 'read' should have already be found
+    throw new Error(`Invalid level found level1: ${level1}, level2 ${level2}`);
+}
+//# sourceMappingURL=HDSModel-Authorizations.js.map
+
+/***/ }),
+
+/***/ "./lib/HDSModel/HDSModel-ItemsDefs.js":
+/*!********************************************!*\
+  !*** ./lib/HDSModel/HDSModel-ItemsDefs.js ***!
+  \********************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const HDSItemDef_1 = __importDefault(__webpack_require__(/*! ./HDSItemDef */ "./lib/HDSModel/HDSItemDef.js"));
+/**
+ * ItemsDefs - Extension of HDSModel
+ */
+class HDSModelItemsDefs {
+    /**
+     * Model instance
+     */
+    #model;
+    /**
+     * ItemDefs Cache
+     * KeyValue of itemsDefs
+     */
+    #itemsDefs;
+    /**
+     * get itemsData by streamId and eventType
+     */
+    #modelDataByStreamIdEventTypes;
+    constructor(model) {
+        this.#model = model;
+        this.#itemsDefs = {};
+        this.#modelDataByStreamIdEventTypes = {};
+        loadModelDataByStreamIdEventTypes(this.#model.modelData.items, this.#modelDataByStreamIdEventTypes);
+    }
+    /**
+     * get all itemDefs
+     */
+    getAll() {
+        const res = [];
+        for (const key of Object.keys(this.#model.modelData.items)) {
+            res.push(this.forKey(key));
+        }
+        return res;
+    }
+    /**
+     * get item for a key
+     */
+    forKey(key, throwErrorIfNotFound = true) {
+        if (this.#itemsDefs[key])
+            return this.#itemsDefs[key];
+        const defData = this.#model.modelData.items[key];
+        if (!defData) {
+            if (throwErrorIfNotFound)
+                throw new Error('Cannot find item definition with key: ' + key);
+            return null;
+        }
+        this.#itemsDefs[key] = new HDSItemDef_1.default(key, defData);
+        return this.#itemsDefs[key];
+    }
+    /**
+     * get a definition for an event
+     */
+    forEvent(event, throwErrorIfNotFound = true) {
+        const candidates = [];
+        for (const streamId of event.streamIds) {
+            const keyStreamIdEventType = streamId + ':' + event.type;
+            const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
+            if (candidate)
+                candidates.push(candidate);
+        }
+        if (candidates.length === 0) {
+            if (throwErrorIfNotFound)
+                throw new Error('Cannot find definition for event: ' + JSON.stringify(event));
+            return null;
+        }
+        if (candidates.length > 1) {
+            throw new Error(`Found multiple matching definitions "${candidates.map(c => (c.key)).join(', ')}" for event: ${JSON.stringify(event)}`);
+        }
+        return this.forKey(candidates[0].key, throwErrorIfNotFound);
+    }
+}
+exports["default"] = HDSModelItemsDefs;
+/**
+ * Add key to model items and
+ * load modeldata item into modelDataByStreamIdEventTypes for fast search
+ */
+function loadModelDataByStreamIdEventTypes(model, map) {
+    for (const item of Object.values(model)) {
+        const eventTypes = [];
+        if (item.eventType) {
+            eventTypes.push(item.eventType);
+        }
+        else {
+            const types = item.variations.eventType.options.map((o) => o.value);
+            eventTypes.push(...types);
+        }
+        for (const eventType of eventTypes) {
+            const keyStreamIdEventType = item.streamId + ':' + eventType;
+            if (map[keyStreamIdEventType]) {
+                // should be tested with a faulty model
+                throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+            }
+            map[keyStreamIdEventType] = item;
+        }
+    }
+}
+//# sourceMappingURL=HDSModel-ItemsDefs.js.map
+
+/***/ }),
+
+/***/ "./lib/HDSModel/HDSModel-Streams.js":
+/*!******************************************!*\
+  !*** ./lib/HDSModel/HDSModel-Streams.js ***!
+  \******************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const internalModelUtils_1 = __webpack_require__(/*! ./internalModelUtils */ "./lib/HDSModel/internalModelUtils.js");
+/**
+ * Streams - Extension of HDSModel
+ */
+class HDSModelStreams {
+    /**
+     * Model instance
+     */
+    #model;
+    /**
+     * streamsById
+     * Map to find streams by Id
+     */
+    #modelStreamsById;
+    constructor(model) {
+        this.#model = model;
+        this.#modelStreamsById = {};
+        loadModelStreamsById(this.#model.modelData.streams, this.#modelStreamsById);
+    }
+    /**
+     * Get a list of streams to be created for usage of these keys (whithout children)
+     */
+    getNecessaryListForItems(itemKeysOrDefs, params = {}) {
+        const itemDefs = (0, internalModelUtils_1.itemKeysOrDefsToDefs)(this.#model, itemKeysOrDefs);
+        const knowExistingStreamsIds = params.knowExistingStreamsIds || [];
+        const nameProperty = params.nameProperty || 'name';
+        const result = [];
+        const streams = new Map(); // tempMap to keep streams already in
+        for (const knowStreamId of knowExistingStreamsIds) {
+            const strs = this.getParentsIds(knowStreamId, false, [knowStreamId]).reverse();
+            for (const strId of strs) {
+                streams.set(strId, true);
+            }
+        }
+        for (const itemDef of itemDefs) {
+            const streamParentIds = this.getParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
+            const resultToBeReversed = [];
+            for (let i = streamParentIds.length - 1; i > -1; i--) { // loop reverse to break as soon as we find an existing stream
+                const streamId = streamParentIds[i];
+                if (streams.has(streamId))
+                    break;
+                const stream = this.getDataById(streamId);
+                streams.set(streamId, true); // just to flag
+                const itemStream = { id: streamId, parentId: stream.parentId };
+                if (nameProperty !== 'none') {
+                    itemStream[nameProperty] = stream.name; // to be translated
+                }
+                resultToBeReversed.push(itemStream);
+            }
+            // result need to be reversed in order to get parents created before
+            result.push(...resultToBeReversed.reverse());
+        }
+        return result;
+    }
+    /**
+     * Get stream Data by Id;
+     */
+    getDataById(streamId, throwErrorIfNotFound = true) {
+        const streamData = this.#modelStreamsById[streamId];
+        if (throwErrorIfNotFound && !streamData)
+            throw new Error(`Stream with id: "${streamId}" not found`);
+        return streamData;
+    }
+    /**
+     * Get all parents id;
+     */
+    getParentsIds(streamId, throwErrorIfNotFound = true, initialArray = []) {
+        const streamData = this.getDataById(streamId, throwErrorIfNotFound);
+        if (!streamData)
+            return initialArray;
+        if (streamData.parentId !== null) {
+            initialArray.unshift(streamData.parentId);
+            this.getParentsIds(streamData.parentId, true, initialArray);
+        }
+        return initialArray;
+    }
+}
+exports["default"] = HDSModelStreams;
+/**
+ * @param streams
+ * @param map - key value map
+ */
+function loadModelStreamsById(streams, map) {
+    if (!streams)
+        return;
+    for (const stream of streams) {
+        if (map[stream.id]) {
+            // should be tested with a faulty model
+            throw new Error(`Duplicate streamId "${stream.id}" for strean ${JSON.stringify(stream)}`);
+        }
+        map[stream.id] = stream;
+        loadModelStreamsById(stream.children, map);
+    }
+}
+//# sourceMappingURL=HDSModel-Streams.js.map
+
+/***/ }),
+
+/***/ "./lib/HDSModel/HDSModel.js":
+/*!**********************************!*\
+  !*** ./lib/HDSModel/HDSModel.js ***!
+  \**********************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
+const utils_1 = __webpack_require__(/*! ../utils */ "./lib/utils.js");
+const HDSModel_Streams_1 = __importDefault(__webpack_require__(/*! ./HDSModel-Streams */ "./lib/HDSModel/HDSModel-Streams.js"));
+const HDSModel_Authorizations_1 = __importDefault(__webpack_require__(/*! ./HDSModel-Authorizations */ "./lib/HDSModel/HDSModel-Authorizations.js"));
+const HDSModel_ItemsDefs_1 = __importDefault(__webpack_require__(/*! ./HDSModel-ItemsDefs */ "./lib/HDSModel/HDSModel-ItemsDefs.js"));
+class HDSModel {
+    /**
+     * JSON definition file URL.
+     * Should come from service/info assets.hds-model
+     */
+    #modelUrl;
+    /** RAW content of model definitions */
+    #modelData;
+    /**
+     * Map of properties loaded "on demand"
+     */
+    laziliyLoadedMap = {};
+    /**
+     * @param modelUrl - JSON definition file URL. Should come from service/info assets.hds-model
+     */
+    constructor(modelUrl) {
+        this.#modelUrl = modelUrl;
+        this.laziliyLoadedMap = {};
+    }
+    get isLoaded() {
+        return !!this.#modelData;
+    }
+    /**
+     * Load model definitions
+     */
+    async load(modelUrl = null) {
+        if (modelUrl) {
+            this.#modelUrl = modelUrl;
+        }
+        const response = await fetch(this.#modelUrl);
+        const resultText = await response.text();
+        const result = JSON.parse(resultText);
+        this.#modelData = result;
+        // add key to items before freezing;
+        for (const [key, item] of Object.entries(this.#modelData.items)) {
+            item.key = key;
+        }
+        // make sure it cannot be modified
+        (0, utils_1.deepFreeze)(this.#modelData);
+    }
+    /** RAW model data */
+    get modelData() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        return this.#modelData;
+    }
+    get itemsDefs() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.itemsDefs) {
+            this.laziliyLoadedMap.itemsDefs = new HDSModel_ItemsDefs_1.default(this);
+        }
+        return this.laziliyLoadedMap.itemsDefs;
+    }
+    get streams() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.streams) {
+            this.laziliyLoadedMap.streams = new HDSModel_Streams_1.default(this);
+        }
+        return this.laziliyLoadedMap.streams;
+    }
+    get authorizations() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.authorizations) {
+            this.laziliyLoadedMap.authorizations = new HDSModel_Authorizations_1.default(this);
+        }
+        return this.laziliyLoadedMap.authorizations;
+    }
+}
+exports["default"] = HDSModel;
+function throwNotLoadedError() {
+    throw new errors_1.HDSLibError('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+}
+//# sourceMappingURL=HDSModel.js.map
+
+/***/ }),
+
+/***/ "./lib/HDSModel/HDSModelInitAndSingleton.js":
+/*!**************************************************!*\
+  !*** ./lib/HDSModel/HDSModelInitAndSingleton.js ***!
+  \**************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getModel = getModel;
+exports.resetModel = resetModel;
+exports.initHDSModel = initHDSModel;
+const HDSModel_1 = __importDefault(__webpack_require__(/*! ./HDSModel */ "./lib/HDSModel/HDSModel.js"));
+const HDSService_1 = __importDefault(__webpack_require__(/*! ../HDSService */ "./lib/HDSService.js"));
+let model = null;
+function getModel() {
+    if (model == null) {
+        model = new HDSModel_1.default('');
+    }
+    return model;
+}
+/**
+ * Mostly used during test to unload model
+ */
+function resetModel() {
+    model = null;
+}
+/**
+ * Initialized model singleton
+ */
+async function initHDSModel() {
+    if (!model) {
+        getModel();
+    }
+    if (!model.isLoaded) {
+        const service = new HDSService_1.default();
+        const serviceInfo = await service.info();
+        await model.load(serviceInfo.assets['hds-model']);
+    }
+    return model;
+}
+//# sourceMappingURL=HDSModelInitAndSingleton.js.map
+
+/***/ }),
+
+/***/ "./lib/HDSModel/internalModelUtils.js":
+/*!********************************************!*\
+  !*** ./lib/HDSModel/internalModelUtils.js ***!
+  \********************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.itemKeysOrDefsToDefs = itemKeysOrDefsToDefs;
+exports.itemKeyOrDefToDef = itemKeyOrDefToDef;
+const HDSItemDef_1 = __importDefault(__webpack_require__(/*! ./HDSItemDef */ "./lib/HDSModel/HDSItemDef.js"));
+/**
+ * Some call support either arrays of itemKeys or itemDefs
+ * test if they are strings or itemDefs and returns an array of itemDefs
+ */
+function itemKeysOrDefsToDefs(model, keysOrDefs) {
+    const res = [];
+    for (const keyOrDef of keysOrDefs) {
+        res.push(itemKeyOrDefToDef(model, keyOrDef));
+    }
+    return res;
+}
+/**
+ * Some call support either itemKey or itemDef
+ * test if string or itemDef and returns an itemDef
+ */
+function itemKeyOrDefToDef(model, keyOrDef) {
+    if (keyOrDef instanceof HDSItemDef_1.default)
+        return keyOrDef;
+    return model.itemsDefs.forKey(keyOrDef);
+}
+//# sourceMappingURL=internalModelUtils.js.map
+
+/***/ }),
+
+/***/ "./lib/HDSService.js":
+/*!***************************!*\
+  !*** ./lib/HDSService.js ***!
+  \***************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const settings = __importStar(__webpack_require__(/*! ./settings */ "./lib/settings.js"));
+const patchedPryv_1 = __importDefault(__webpack_require__(/*! ./patchedPryv */ "./lib/patchedPryv.js"));
+// makes Pryv service aware of default serviceUrl
+class HDSService extends patchedPryv_1.default.Service {
+    constructor(serviceInfoUrl, serviceCustomizations) {
+        serviceInfoUrl = serviceInfoUrl || settings.getServiceInfoURL();
+        super(serviceInfoUrl, serviceCustomizations);
+    }
+}
+exports["default"] = HDSService;
+//# sourceMappingURL=HDSService.js.map
+
+/***/ }),
+
+/***/ "./lib/appTemplates/AppClientAccount.js":
+/*!**********************************************!*\
+  !*** ./lib/appTemplates/AppClientAccount.js ***!
+  \**********************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
+const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
+const Application_1 = __importDefault(__webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js"));
+const CollectorClient_1 = __importDefault(__webpack_require__(/*! ./CollectorClient */ "./lib/appTemplates/CollectorClient.js"));
+const logger = __importStar(__webpack_require__(/*! ../logger */ "./lib/logger.js"));
+/**
+ * - applications
+ *   - [baseStreamId] "Root" stream from this app
+ */
+const MAX_COLLECTORS = 1000;
+class AppClientAccount extends Application_1.default {
+    constructor(baseStreamId, connection, appName, features) {
+        super(baseStreamId, connection, appName, features);
+        this.cache.collectorClientsMap = {};
+    }
+    get appSettings() {
+        return {
+            canBePersonnal: true,
+            mustBeMaster: true
+        };
+    }
+    /**
+     * When the app receives a new request for data sharing
+     */
+    async handleIncomingRequest(apiEndpoint, incomingEventId) {
+        // make sure that collectorClientsMap is initialized
+        await this.getCollectorClients();
+        const requesterConnection = new patchedPryv_1.default.Connection(apiEndpoint);
+        const accessInfo = await requesterConnection.accessInfo();
+        // check if request is known
+        const collectorClientKey = CollectorClient_1.default.keyFromInfo(accessInfo);
+        logger.debug('AppClient:handleIncomingRequest', { collectorClientKey, accessInfo, incomingEventId });
+        if (this.cache.collectorClientsMap[collectorClientKey]) {
+            const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
+            logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
+            if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
+                // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+                throw new errors_1.HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+                // we might consider reseting() in the future;
+                // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+            }
+            if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
+                throw new errors_1.HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+                // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+                // we might consider reseting() in the future;
+                // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+                // return null;
+            }
+            return collectorClient;
+        }
+        // check if comming form hdsCollector
+        if (!accessInfo?.clientData?.hdsCollector || accessInfo.clientData?.hdsCollector?.version !== 0) {
+            throw new errors_1.HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
+        }
+        // else create it
+        const collectorClient = await CollectorClient_1.default.create(this, apiEndpoint, incomingEventId, accessInfo);
+        this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
+        return collectorClient;
+    }
+    async getCollectorClientByKey(collectorKey) {
+        // ensure collectors are initialized
+        await this.getCollectorClients();
+        return this.cache.collectorClientsMap[collectorKey];
+    }
+    async getCollectorClients(forceRefresh = false) {
+        if (!forceRefresh && this.cache.collectorClientsMapInitialized)
+            return Object.values(this.cache.collectorClientsMap);
+        const apiCalls = [{
+                method: 'accesses.get',
+                params: { includeDeletions: true }
+            }, {
+                method: 'events.get',
+                params: { types: ['request/collector-client-v1'], streams: [this.baseStreamId], limit: MAX_COLLECTORS }
+            }];
+        const [accessesRes, eventRes] = await this.connection.api(apiCalls);
+        const accessHDSCollectorMap = {};
+        for (const access of accessesRes.accesses) {
+            if (access.clientData.hdsCollectorClient) {
+                accessHDSCollectorMap[access.name] = access;
+            }
+        }
+        for (const event of eventRes.events) {
+            const collectorClient = new CollectorClient_1.default(this, event);
+            if (accessHDSCollectorMap[collectorClient.key] != null)
+                collectorClient.accessData = accessHDSCollectorMap[collectorClient.key];
+            // temp process - might be removed
+            await collectorClient.checkConsistency();
+            this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
+        }
+        this.cache.collectorClientsMapInitialized = true;
+        return Object.values(this.cache.collectorClientsMap);
+    }
+    /**
+     * - Check connection validity
+     * - Make sure stream structure exists
+     */
+    async init() {
+        return super.init();
+    }
+}
+exports["default"] = AppClientAccount;
+//# sourceMappingURL=AppClientAccount.js.map
+
+/***/ }),
+
+/***/ "./lib/appTemplates/AppManagingAccount.js":
+/*!************************************************!*\
+  !*** ./lib/appTemplates/AppManagingAccount.js ***!
+  \************************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const short_unique_id_1 = __importDefault(__webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js"));
+const Application_1 = __importDefault(__webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js"));
+const Collector_1 = __importDefault(__webpack_require__(/*! ./Collector */ "./lib/appTemplates/Collector.js"));
+const collectorIdGenerator = new short_unique_id_1.default({ dictionary: 'alphanum_lower', length: 7 });
+/**
+ * App which manages Collectors
+ * A "Collector" can be seen as a "Request" and set of "Responses"
+ * - Responses are authorization tokens from individuals
+ *
+ * The App can create multiple "collectors e.g. Questionnaires"
+ *
+ * Stream structure
+ * - applications
+ *   - [baseStreamId]  "Root" stream for this app
+ *     - [baseStreamId]-[collectorsId] Each "questionnaire" or "request for a set of data" has it's own stream
+ *       - [baseStreamId]-[collectorsId]-internal Private stuff not to be shared
+ *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
+ *       - [baseStreamId]-[collectorsId]-pending Contains events with "pending" requests
+ *       - [baseStreamId]-[collectorsId]-inbox Contains events with "inbox" requests Will be shared in createOnly
+ *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
+ *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
+ */
+class AppManagingAccount extends Application_1.default {
+    // used by Application.init();
+    get appSettings() {
+        return {
+            canBePersonnal: true,
+            mustBeMaster: true,
+            appNameFromAccessInfo: true // application name will be taken from Access-Info Name
+        };
+    }
+    async init() {
+        await super.init();
+        // -- check if stream structure exists
+        await this.getCollectors();
+        return this;
+    }
+    async getCollectors(forceRefresh) {
+        await this.#updateCollectorsIfNeeded(forceRefresh);
+        return Object.values(this.cache.collectorsMap);
+    }
+    async getCollectorById(id) {
+        await this.#updateCollectorsIfNeeded();
+        return this.cache.collectorsMap[id];
+    }
+    async #updateCollectorsIfNeeded(forceRefresh = false) {
+        if (!forceRefresh && this.cache.collectorsMap)
+            return;
+        if (forceRefresh)
+            await this.loadStreamData();
+        // TODO do not replace the map, but update collectors if streamData has changed and add new collectors
+        const streams = this.streamData.children || [];
+        const collectorsMap = {};
+        for (const stream of streams) {
+            const collector = new Collector_1.default(this, stream);
+            collectorsMap[collector.id] = collector;
+        }
+        this.cache.collectorsMap = collectorsMap;
+    }
+    /**
+     * Create an initialized Collector
+     */
+    async createCollector(name) {
+        const collector = await this.createCollectorUnitialized(name);
+        await collector.init();
+        return collector;
+    }
+    /**
+     * Create an un-initialized Collector (mostly used by tests)
+     */
+    async createCollectorUnitialized(name) {
+        const streamId = this.baseStreamId + '-' + collectorIdGenerator.rnd();
+        const params = {
+            id: streamId,
+            name,
+            parentId: this.baseStreamId
+        };
+        const stream = await this.connection.apiOne('streams.create', params, 'stream');
+        // add new stream to streamCache
+        this.streamData.children.push(stream);
+        const collector = new Collector_1.default(this, stream);
+        this.cache.collectorsMap[collector.streamId] = collector;
+        return collector;
+    }
+}
+exports["default"] = AppManagingAccount;
+//# sourceMappingURL=AppManagingAccount.js.map
+
+/***/ }),
+
+/***/ "./lib/appTemplates/Application.js":
+/*!*****************************************!*\
+  !*** ./lib/appTemplates/Application.js ***!
+  \*****************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
+const toolkit_1 = __webpack_require__(/*! ../toolkit */ "./lib/toolkit/index.js");
+/**
+ * Common code for AppClientAccount and AppManagingAccount
+ */
+class Application {
+    /** Pryv.Connection */
+    connection;
+    /** string */
+    baseStreamId;
+    /** string */
+    appName;
+    cache = {};
+    /** ApplicationFeatures */
+    features;
+    /**
+     * Get application stream structure
+     * Initialized at init()
+     * Can be refreshed with loadStreamData
+     */
+    get streamData() {
+        if (!this.cache.streamData)
+            throw new Error('Call .init() first');
+        return this.cache.streamData;
+    }
+    get appSettings() {
+        throw new Error('appSettings must be implemented');
+        // possible return values:
+        /**
+         * return {
+         *  canBePersonnal: true,
+         *  mustBeMaster: true
+         *  appNameFromAccessInfo: true // application name will be taken from Access-Info Name
+         * };
+         */
+    }
+    /**
+     * Create with an apiEnpoint
+     */
+    static async newFromApiEndpoint(baseStreamId, apiEndpoint, appName, features) {
+        const connection = new patchedPryv_1.default.Connection(apiEndpoint);
+        // in a static method, "this" is the class (here the extending class)
+        return await this.newFromConnection(baseStreamId, connection, appName, features);
+    }
+    /**
+    * Create with an apiEnpoint
+    */
+    static async newFromConnection(baseStreamId, connection, appName, features) {
+        // in a static method "this" is the class (here the extending class)
+        const app = new this(baseStreamId, connection, appName, features);
+        await app.init();
+        return app;
+    }
+    /**
+     * @private
+     * use .newFrom...() to create new AppManagingAccount
+     */
+    constructor(baseStreamId, connection, appName, features) {
+        if (!baseStreamId || baseStreamId.length < 2)
+            throw new Error('Missing or too short baseStreamId');
+        this.baseStreamId = baseStreamId;
+        if (appName == null && !this.appSettings.appNameFromAccessInfo) {
+            throw new Error('appName must be given unless appSettings.appNameFromAccessInfo = true');
+        }
+        this.appName = appName || '';
+        this.connection = connection;
+        this.features = Object.assign({ streamsAutoCreate: true }, features);
+        if (this.features.streamsAutoCreate) {
+            toolkit_1.StreamsAutoCreate.attachToConnection(this.connection, undefined);
+        }
+        this.cache = {};
+    }
+    async init() {
+        await createAppStreams(this);
+        return this;
+    }
+    /**
+     * Save anything you want for your app
+     */
+    async setCustomSettings(content) {
+        const currentCustomSettings = await this.getCustomSettings();
+        if (currentCustomSettings != null) { // update
+            const id = this.cache.customSettingsEvent.id;
+            const updatedEvent = await this.connection.apiOne('events.update', { id, update: { content } }, 'event');
+            this.cache.customSettingsEvent = updatedEvent;
+        }
+        else {
+            await this.#createCustomSettings(content);
+        }
+        return this.cache.customSettingsEvent?.content;
+    }
+    /**
+     * @private
+     * Used by getCustomSettings & setCustomSettings
+     */
+    async #createCustomSettings(content) {
+        const createdEvent = await this.connection.apiOne('events.create', { streamIds: [this.baseStreamId], type: 'settings/any', content }, 'event');
+        this.cache.customSettingsEvent = createdEvent;
+    }
+    /**
+     * Get current settings previously set with setCustomSettings()
+     */
+    async getCustomSettings(forceRefresh = false) {
+        if (forceRefresh || !this.cache.customSettingsEvent) {
+            const customSettingsEvent = (await this.connection.apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
+            this.cache.customSettingsEvent = customSettingsEvent;
+        }
+        if (!this.cache.customSettingsEvent) {
+            await this.#createCustomSettings({});
+        }
+        return this.cache.customSettingsEvent?.content;
+    }
+    /**
+     * Force loading of streamData
+     */
+    async loadStreamData() {
+        const streamData = (await this.connection.apiOne('streams.get', { id: this.baseStreamId }, 'streams'))[0];
+        if (streamData) {
+            this.cache.streamData = streamData;
+        }
+        return streamData;
+    }
+}
+exports["default"] = Application;
+// create app Streams
+async function createAppStreams(app) {
+    // check that connection has a personal or master token or has "manage" rights on baseStream
+    const infos = await app.connection.accessInfo();
+    if (app.appSettings.appNameFromAccessInfo) {
+        app.appName = infos.name;
+    }
+    let isPersonalOrMaster = infos.type === 'personal';
+    if (!app.appSettings.canBePersonnal && infos.type === 'personal') {
+        throw new Error('Application should not use a personal token');
+    }
+    if (!isPersonalOrMaster) {
+        const allowPersonalStr = app.appSettings.canBePersonnal ? '"personal" or ' : '';
+        if (infos.type !== 'app')
+            throw new Error(`Application requires a ${allowPersonalStr} "app" type of access`);
+        const masterFound = infos.permissions.find((p) => (p.streamId === '*' && p.level === 'manage'));
+        isPersonalOrMaster = true;
+        if (app.appSettings.mustBemaster && !masterFound) {
+            throw new Error('Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
+        }
+        if (!masterFound) { // check that app has "manage" level on baseStreamId
+            const baseStreamFound = infos.permissions.find((p) => (p.streamId === app.baseStreamId && p.level === 'manage'));
+            if (!baseStreamFound)
+                throw new Error(`Application with "app" type of access requires  (streamId = "${app.baseStreamId}", level = "manage") or master access`);
+        }
+    }
+    // get streamStructure
+    let found = false;
+    try {
+        const streamData = await app.loadStreamData();
+        if (streamData)
+            found = true;
+    }
+    catch (e) {
+        if (e.innerObject?.id !== 'unknown-referenced-resource' || e.innerObject?.data?.id !== app.baseStreamId) {
+            throw e;
+        }
+    }
+    // not found create streams
+    if (!found) {
+        if (!isPersonalOrMaster) {
+            throw new Error('Token has not sufficient right to create App streams. Create them upfront');
+        }
+        const apiCalls = [
+            { method: 'streams.create', params: { id: 'applications', name: 'Applications' } },
+            { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: 'applications' } }
+        ];
+        const streamCreateResult = await app.connection.api(apiCalls);
+        for (const r of streamCreateResult) {
+            if (r.error)
+                throw new Error('Failed creating app streams');
+        }
+        const stream = streamCreateResult[1].stream;
+        app.cache.streamData = stream;
+    }
+}
+//# sourceMappingURL=Application.js.map
+
+/***/ }),
+
+/***/ "./lib/appTemplates/Collector.js":
+/*!***************************************!*\
+  !*** ./lib/appTemplates/Collector.js ***!
+  \***************************************/
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const CollectorRequest_1 = __webpack_require__(/*! ./CollectorRequest */ "./lib/appTemplates/CollectorRequest.js");
+const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
+const utils_1 = __webpack_require__(/*! ../utils */ "./lib/utils.js");
+const CollectorInvite_1 = __importDefault(__webpack_require__(/*! ./CollectorInvite */ "./lib/appTemplates/CollectorInvite.js"));
+const logger = __importStar(__webpack_require__(/*! ../logger */ "./lib/logger.js"));
+const COLLECTOR_STREAMID_SUFFIXES = {
+    archive: 'archive',
+    internal: 'internal',
+    public: 'public',
+    pending: 'pending',
+    inbox: 'inbox',
+    active: 'active',
+    error: 'error'
+};
+Object.freeze(COLLECTOR_STREAMID_SUFFIXES);
+/**
+ * Collector is used by AppManagingAccount
+ * A "Collector" can be seen as a "Request" and set of "Responses"
+ * - Responses are authorization tokens from individuals
+ */
+class Collector {
+    static STREAMID_SUFFIXES = COLLECTOR_STREAMID_SUFFIXES;
+    static STATUSES = Object.freeze({
+        draft: 'draft',
+        active: 'active',
+        deactivated: 'deactivated'
+    });
+    appManaging;
+    streamId;
+    name;
+    #streamData;
+    #cache;
+    request;
+    /**
+     * @param appManaging
+     * @param streamData
+     */
+    constructor(appManaging, streamData) {
+        this.streamId = streamData.id;
+        this.name = streamData.name;
+        this.appManaging = appManaging;
+        this.#streamData = streamData;
+        this.request = new CollectorRequest_1.CollectorRequest({
+            id: this.id
+        });
+        this.#cache = {
+            initialized: false,
+            invites: {},
+            invitesInitialized: false,
+            invitesInitializing: false,
+            statusEvent: null
+        };
+    }
+    /**
+     * @property {string} id - shortcut for streamId
+     */
+    get id() {
+        return this.streamId;
+    }
+    /**
+     * @property {string} one of 'draft', 'active', 'deactivated'
+     */
+    get statusCode() {
+        if (this.#cache.statusEvent == null)
+            throw new Error('Init Collector first');
+        return this.#cache.statusEvent.content.status;
+    }
+    /**
+     * Fetch online data
+     */
+    async init(forceRefresh = false) {
+        if (!forceRefresh && this.#cache.initialized)
+            return;
+        await this.checkStreamStructure(forceRefresh);
+        await this.#loadStatus(forceRefresh);
+        this.#cache.initialized = true;
+    }
+    /**
+     * @type {StatusEvent} - extends PryvEvent with a specific content
+     * @property {Object} content - content
+     * @property {String} content.status - one of 'draft', 'active', 'deactivated'
+     * @property {CollectorRequestData} content.request - app specific data
+     */
+    /**
+     * Load Collector status,
+     * @param forceRefresh - if true, forces fetching the status from the server
+     */
+    async #loadStatus(forceRefresh = false) {
+        if (!forceRefresh && this.#cache.statusEvent)
+            return this.#cache.statusEvent;
+        const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(_a.STREAMID_SUFFIXES.internal)] };
+        const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
+        if (statusEvents.length === 0) { // non existent set "draft" status
+            return this.#setStatus(_a.STATUSES.draft);
+        }
+        this.#cache.statusEvent = statusEvents[0];
+        this.request.loadFromStatusEvent(statusEvents[0]);
+    }
+    /**
+     * Change the status
+     * @param status one of 'draft', 'active', 'deactivated'
+     * @returns {StatusEvent}
+     */
+    async #setStatus(status) {
+        if (!_a.STATUSES[status])
+            throw new errors_1.HDSLibError('Unknown status key', { status });
+        const event = {
+            type: 'status/collector-v1',
+            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.internal)],
+            content: {
+                status,
+                request: this.request.content
+            }
+        };
+        const statusEvent = await this.appManaging.connection.apiOne('events.create', event, 'event');
+        this.#cache.statusEvent = statusEvent;
+        this.request.loadFromStatusEvent(statusEvent);
+        return this.#cache.statusEvent;
+    }
+    async save() {
+        if (this.statusCode !== _a.STATUSES.draft)
+            throw new Error(`Cannot save when status = "${this.statusCode}".`);
+        return await this.#setStatus(_a.STATUSES.draft);
+    }
+    async publish() {
+        const publicEventData = {
+            type: 'request/collector-v1',
+            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.public)],
+            content: this.request.content
+        };
+        await this.appManaging.connection.apiOne('events.create', publicEventData, 'event');
+        return await this.#setStatus(_a.STATUSES.active);
+    }
+    #addOrUpdateInvite(eventData) {
+        const key = CollectorInvite_1.default.getKeyForEvent(eventData);
+        if (this.#cache.invites[key]) {
+            this.#cache.invites[key].setEventData(eventData);
+        }
+        else {
+            this.#cache.invites[key] = new CollectorInvite_1.default(this, eventData);
+        }
+        return this.#cache.invites[key];
+    }
+    /**
+     * Retrieve an invite by its key
+     */
+    async getInviteByKey(key) {
+        await this.init(); // do not forceRefresh on Init();
+        await this.#initInvites(false);
+        return this.#cache.invites[key];
+    }
+    /**
+     * Retreive all invites
+     * @param {boolean} [forceRefresh]
+     * @returns {Array<CollectorInvite>}
+     */
+    async getInvites(forceRefresh = false) {
+        await this.init(); // do not forceRefresh on Init();
+        await this.#initInvites(forceRefresh);
+        return Object.values(this.#cache.invites);
+    }
+    async #initInvites(forceRefresh) {
+        await (0, utils_1.waitUntilFalse)(() => (this.#cache.invitesInitializing));
+        if (!forceRefresh && this.#cache.invitesInitialized)
+            return;
+        this.#cache.invitesInitializing = true;
+        const queryParams = { types: ['invite/collector-v1'], streams: [this.streamId], fromTime: 0, toTime: 8640000000000000, limit: 10000 };
+        try {
+            await this.appManaging.connection.getEventsStreamed(queryParams, (eventData) => {
+                this.#addOrUpdateInvite(eventData);
+            });
+        }
+        catch (e) {
+            this.#cache.invitesInitialized = true;
+            this.#cache.invitesInitializing = false;
+            throw e;
+        }
+        this.#cache.invitesInitialized = true;
+        this.#cache.invitesInitializing = false;
+    }
+    async checkInbox() {
+        const newCollectorInvites = [];
+        const params = { types: ['response/collector-v1'], limit: 1000, streams: [this.streamIdFor(_a.STREAMID_SUFFIXES.inbox)] };
+        const responseEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
+        for (const responseEvent of responseEvents) {
+            // fetch corresponding invite
+            const inviteEvent = await this.appManaging.connection.apiOne('events.getOne', { id: responseEvent.content.eventId }, 'event');
+            if (inviteEvent == null)
+                throw new errors_1.HDSLibError(`Cannot find invite event matching id: ${responseEvent.content.eventId}`, responseEvent);
+            const updateInvite = {
+                content: structuredClone(inviteEvent.content)
+            };
+            updateInvite.content.sourceEventId = responseEvent.id;
+            // check type of response
+            switch (responseEvent.content.type) {
+                case 'accept':
+                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.active)];
+                    Object.assign(updateInvite.content, { apiEndpoint: responseEvent.content.apiEndpoint });
+                    break;
+                case 'refuse':
+                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
+                    updateInvite.content.errorType = 'refused';
+                    break;
+                case 'revoke':
+                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
+                    updateInvite.content.errorType = 'revoked';
+                    break;
+                default:
+                    throw new errors_1.HDSLibError(`Unkown or undefined ${responseEvent.content.type}`, responseEvent);
+            }
+            // update inviteEvent and archive inbox message
+            const apiCalls = [
+                {
+                    method: 'events.update',
+                    params: {
+                        id: inviteEvent.id,
+                        update: updateInvite
+                    }
+                },
+                {
+                    method: 'events.update',
+                    params: {
+                        id: responseEvent.id,
+                        update: {
+                            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.archive)]
+                        }
+                    }
+                }
+            ];
+            const results = await this.appManaging.connection.api(apiCalls);
+            const errors = results.filter((r) => (!r.event));
+            if (errors.length > 0)
+                throw new errors_1.HDSLibError('Error activating incoming request', errors);
+            const eventUpdated = results[0].event;
+            const inviteUpdated = this.#addOrUpdateInvite(eventUpdated);
+            newCollectorInvites.push(inviteUpdated);
+        }
+        return newCollectorInvites;
+    }
+    /**
+     * Create a "pending" invite to be sent to an app using AppSharingAccount
+     * @param {string} name a default display name for this request
+     * @param {Object} [options]
+     * @param {Object} [options.customData] any data to be used by the client app
+     */
+    async createInvite(name, options = {}) {
+        if (this.statusCode !== _a.STATUSES.active)
+            throw new Error(`Collector must be in "active" state error to create invite, current: ${this.statusCode}`);
+        const eventParams = {
+            type: 'invite/collector-v1',
+            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.pending)],
+            content: {
+                name,
+                customData: options.customData || {}
+            }
+        };
+        const newInvite = await this.appManaging.connection.apiOne('events.create', eventParams, 'event');
+        const invite = this.#addOrUpdateInvite(newInvite);
+        return invite;
+    }
+    /**
+     * Get sharing api endpoint
+     */
+    async sharingApiEndpoint() {
+        if (this.statusCode !== _a.STATUSES.active)
+            throw new Error(`Collector must be in "active" state error to get sharing link, current: ${this.statusCode}`);
+        if (this.#cache.sharingApiEndpoint)
+            return this.#cache.sharingApiEndpoint;
+        // check if sharing present
+        const sharedAccessId = 'a-' + this.streamId;
+        const accesses = await this.appManaging.connection.apiOne('accesses.get', {}, 'accesses');
+        const sharedAccess = accesses.find((access) => access.name === sharedAccessId);
+        // found return it
+        if (sharedAccess) {
+            this.#cache.sharingApiEndpoint = sharedAccess.apiEndpoint;
+            return sharedAccess.apiEndpoint;
+        }
+        // not found create it
+        const permissions = [
+            { streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.inbox), level: 'create-only' },
+            { streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.public), level: 'read' },
+            // for "publicly shared access" always forbid the selfRevoke feature
+            { feature: 'selfRevoke', setting: 'forbidden' },
+            // for "publicly shared access" always forbid the selfAudit feature
+            { feature: 'selfAudit', setting: 'forbidden' }
+        ];
+        const clientData = {
+            hdsCollector: {
+                version: 0,
+                public: {
+                    streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.public)
+                },
+                inbox: {
+                    streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.inbox)
+                }
+            }
+        };
+        const params = { name: sharedAccessId, type: 'shared', permissions, clientData };
+        const access = await this.appManaging.connection.apiOne('accesses.create', params, 'access');
+        const newSharingApiEndpoint = access?.apiEndpoint;
+        if (!newSharingApiEndpoint)
+            throw new errors_1.HDSLibError('Cannot find apiEndpoint in sharing creation request', { result: access, requestParams: params });
+        this.#cache.sharingApiEndpoint = newSharingApiEndpoint;
+        return newSharingApiEndpoint;
+    }
+    /**
+     * @private
+     * @param {CollectorInvite} invite
+     * @param {boolean} alreadyChecked // to avoid loops
+     * @returns {CollectorInvite}
+     */
+    async revokeInvite(invite, alreadyChecked = false) {
+        // Invalidate Invite APIEndpoint(s)
+        if (invite.status === 'active' && !alreadyChecked) { // invalidate eventual authorization granted
+            const accessInfo = await invite.checkAndGetAccessInfo(true);
+            const deletionResult = await invite.connection.apiOne('accesses.delete', { id: accessInfo.id });
+            if (deletionResult?.accessDeletion?.id == null) {
+                logger.warn(`Failed revoking invite access for ${accessInfo.name}`);
+            }
+        }
+        // invalidate this access
+        const updateInvite = {
+            id: invite.eventData.id,
+            update: {
+                content: structuredClone(invite.eventData.content),
+                streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.error)]
+            }
+        };
+        updateInvite.update.content.errorType = 'revoked';
+        const eventData = await this.appManaging.connection.apiOne('events.update', updateInvite, 'event');
+        invite.eventData = eventData;
+        return invite;
+    }
+    /**
+     * check if required streams are present, if not create them
+     */
+    async checkStreamStructure(forceRefresh = false) {
+        // if streamData has correct child structure, we assume all is OK
+        const childrenData = this.#streamData.children;
+        const toCreate = Object.values(_a.STREAMID_SUFFIXES)
+            .filter((suffix) => {
+            if (!childrenData)
+                return true;
+            if (childrenData.find(child => child.id === this.streamIdFor(suffix)))
+                return false;
+            return true;
+        });
+        if (toCreate.length === 0)
+            return { created: [] };
+        // create required streams
+        const apiCalls = toCreate.map(suffix => ({
+            method: 'streams.create',
+            params: {
+                id: this.streamIdFor(suffix),
+                parentId: this.streamId,
+                name: this.name + ' ' + suffix
+            }
+        }));
+        const result = { created: [], errors: [] };
+        const resultsApi = await this.appManaging.connection.api(apiCalls);
+        for (const resultCreate of resultsApi) {
+            if (resultCreate.error) {
+                result.errors.push(resultCreate.error);
+                continue;
+            }
+            if (resultCreate.stream) {
+                result.created.push(resultCreate.stream);
+                if (!this.#streamData.children)
+                    this.#streamData.children = [];
+                this.#streamData.children.push(resultCreate.stream);
+                continue;
+            }
+            result.errors.push({ id: 'unkown-error', message: 'Cannot find stream in result', data: resultCreate });
+        }
+        return result;
+    }
+    /**
+     * @param {string} suffix
+     */
+    streamIdFor(suffix) {
+        return this.streamId + '-' + suffix;
+    }
+    /**
+     * Invite Status for streamId
+     * reverse of streamIdFor
+     */
+    inviteStatusForStreamId(streamId) {
+        // init cache if needed
+        if (!this.#cache.inviteStatusForStreamId) {
+            this.#cache.inviteStatusForStreamId = {};
+            for (const status of [COLLECTOR_STREAMID_SUFFIXES.pending, COLLECTOR_STREAMID_SUFFIXES.active, COLLECTOR_STREAMID_SUFFIXES.error]) {
+                this.#cache.inviteStatusForStreamId[this.streamIdFor(status)] = status;
+            }
+        }
+        // look for status
+        const status = this.#cache.inviteStatusForStreamId[streamId];
+        if (status == null)
+            throw new errors_1.HDSLibError(`Cannot find status for streamId: ${streamId}`);
+        return status;
+    }
+}
+_a = Collector;
+exports["default"] = Collector;
+module.exports = Collector;
+/**
+ * @typedef {CollectorRequest}
+ * @property {number} version
+ * @property {Localizable} description
+ * @property {Localizable} consent
+ * @property {Array<Permission>} permissions - Like Pryv permission request
+ * @property {Object} app
+ * @property {String} app.id
+ * @property {String} app.url
+ * @property {Object} app.data - to be finalized
+ */
+//# sourceMappingURL=Collector.js.map
+
+/***/ }),
+
+/***/ "./lib/appTemplates/CollectorClient.js":
+/*!*********************************************!*\
+  !*** ./lib/appTemplates/CollectorClient.js ***!
+  \*********************************************/
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const CollectorRequest_1 = __webpack_require__(/*! ./CollectorRequest */ "./lib/appTemplates/CollectorRequest.js");
+const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
+const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
+const logger = __importStar(__webpack_require__(/*! ../logger */ "./lib/logger.js"));
+/**
+ * Client App in relation to an AppManagingAccount/Collector
+ */
+class CollectorClient {
+    static STATUSES = Object.freeze({
+        incoming: 'Incoming',
+        active: 'Active',
+        deactivated: 'Deactivated',
+        refused: 'Refused'
+    });
+    app;
+    eventData;
+    accessData;
+    request;
+    /** @property {String} - identified within user's account - can be used to retrieve a Collector Client from an app */
+    get key() {
+        return _a.keyFromInfo(this.eventData.content.accessInfo);
+    }
+    /** @property {String} - id matching an event within requester's account - used as a reference to communicate with requester */
+    get requesterEventId() {
+        return this.eventData.content.requesterEventId;
+    }
+    /** @property {String}  */
+    get requesterApiEndpoint() {
+        return this.eventData.content.apiEndpoint;
+    }
+    /** @property {Object} - full content of the request */
+    get requestData() {
+        return this.eventData.content.requesterEventData.content;
+    }
+    /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
+    get status() {
+        const eventStatus = this.eventData.content.status;
+        if (eventStatus === _a.STATUSES.deactivated || eventStatus === _a.STATUSES.refused) {
+            if (!this.accessData?.deleted) {
+                logger.error('>> CollectorClient.status TODO check consistency when access is still valid and deactivated or refused', this.accessData);
+            }
+            return eventStatus;
+        }
+        if (this.accessData && !this.accessData.deleted && this.eventData.content.status !== _a.STATUSES.active) {
+            logger.error('>> CollectorClient.status: accessData ', this.accessData);
+            throw new errors_1.HDSLibError('Should be active, try checkConsistency()');
+        }
+        if (!eventStatus) {
+            logger.error('>> CollectorClient.status is null', { eventData: this.eventData, accessData: this.accessData });
+        }
+        return eventStatus;
+    }
+    constructor(app, eventData, accessData = null) {
+        this.app = app;
+        this.eventData = eventData;
+        this.accessData = accessData;
+        this.request = new CollectorRequest_1.CollectorRequest({});
+        this.request.loadFromInviteEvent(eventData.content.requesterEventData);
+    }
+    /**
+     * @private
+     * used by appClientAccount.handleIncomingRequest
+     */
+    static async create(app, apiEndpoint, requesterEventId, accessInfo) {
+        // check content of accessInfo
+        const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
+        // get request event cont
+        const requesterConnection = new patchedPryv_1.default.Connection(apiEndpoint);
+        const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
+        if (!requesterEvents[0])
+            throw new errors_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
+        const eventData = {
+            type: 'request/collector-client-v1',
+            streamIds: [app.baseStreamId],
+            content: {
+                apiEndpoint,
+                requesterEventId,
+                requesterEventData: requesterEvents[0],
+                accessInfo,
+                status: _a.STATUSES.incoming
+            }
+        };
+        const event = await app.connection.apiOne('events.create', eventData, 'event');
+        return new _a(app, event);
+    }
+    /**
+     * @private
+     * reset with new request Event of ApiEndpoint
+     * Identical as create but keep current event
+     */
+    async reset(apiEndpoint, requesterEventId) {
+        if (this.accessData && this.accessData?.deleted != null) {
+            logger.error('TODO try to revoke current access');
+        }
+        // get accessInfo
+        const requesterConnection = new patchedPryv_1.default.Connection(apiEndpoint);
+        const accessInfo = await requesterConnection.accessInfo();
+        // check content of accessInfo
+        const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
+        // get request event cont
+        const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
+        if (!requesterEvents[0])
+            throw new errors_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
+        const eventData = await this.app.connection.apiOne('events.update', {
+            id: this.eventData.id,
+            update: {
+                content: {
+                    apiEndpoint,
+                    requesterEventId,
+                    requesterEventData: requesterEvents[0],
+                    accessInfo,
+                    status: _a.STATUSES.incoming
+                }
+            }
+        }, 'event');
+        this.eventData = eventData;
+        this.request.loadFromInviteEvent(requesterEvents[0]);
+        return this;
+    }
+    /**
+     * Update business event with new status
+     * @param {string} newStatus
+     * @param {Object} [extraData] - if given this will be added to content ⚠️ - This can overide content!
+     */
+    async #updateStatus(newStatus, extraData = null) {
+        const newContent = structuredClone(this.eventData.content);
+        newContent.status = newStatus;
+        if (extraData !== null)
+            Object.assign(newContent, extraData);
+        const eventData = await this.app.connection.apiOne('events.update', {
+            id: this.eventData.id,
+            update: {
+                content: newContent
+            }
+        }, 'event');
+        this.eventData = eventData;
+    }
+    /**
+     * Accept current request
+     * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
+     */
+    async accept(forceAndSkipAccessCreation = false) {
+        if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
+            forceAndSkipAccessCreation = true;
+            logger.error('CollectorClient.accept TODO fix accept when access valid');
+        }
+        if (forceAndSkipAccessCreation) {
+            if (!this.accessData?.apiEndpoint || this.accessData?.delete)
+                throw new errors_1.HDSLibError('Cannot force accept with empty or deleted accessData', this.accessData);
+        }
+        else {
+            if (this.status === 'Active')
+                throw new errors_1.HDSLibError('Cannot accept an Active CollectorClient');
+            // create access for requester
+            const cleanedPermissions = this.requestData.permissions.map((p) => {
+                if (p.streamId)
+                    return { streamId: p.streamId, level: p.level };
+                return p;
+            });
+            const accessCreateData = {
+                name: this.key,
+                type: 'shared',
+                permissions: cleanedPermissions,
+                clientData: {
+                    hdsCollectorClient: {
+                        version: 0,
+                        eventData: this.eventData
+                    }
+                }
+            };
+            const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
+            this.accessData = accessData;
+            if (!this.accessData?.apiEndpoint)
+                throw new errors_1.HDSLibError('Failed creating request access', accessData);
+        }
+        const responseContent = {
+            apiEndpoint: this.accessData.apiEndpoint
+        };
+        const requesterEvent = await this.#updateRequester('accept', responseContent);
+        if (requesterEvent != null) {
+            await this.#updateStatus(_a.STATUSES.active);
+            return { accessData: this.accessData, requesterEvent };
+        }
+        return null;
+    }
+    async revoke() {
+        if (!this.accessData) {
+            throw new errors_1.HDSLibError('Cannot revoke if no accessData');
+        }
+        if (this.accessData.deleted && this.status === _a.STATUSES.deactivated) {
+            throw new errors_1.HDSLibError('Already revoked');
+        }
+        // revoke access
+        await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
+        // lazyly flag currentAccess as deleted
+        this.accessData.deleted = Date.now() / 1000;
+        const responseContent = {};
+        const requesterEvent = await this.#updateRequester('revoke', responseContent);
+        if (requesterEvent != null) {
+            await this.#updateStatus(_a.STATUSES.deactivated);
+            return { requesterEvent };
+        }
+        return null;
+    }
+    async refuse() {
+        const responseContent = {};
+        const requesterEvent = await this.#updateRequester('refuse', responseContent);
+        if (requesterEvent != null) {
+            await this.#updateStatus(_a.STATUSES.refused);
+            return { requesterEvent };
+        }
+        return null;
+    }
+    /**
+     * @param {string} type - one of 'accpet', 'revoke', 'refuse'
+     * @param {object} responseContent - content is related to type
+     * @returns {Object} - response
+     */
+    async #updateRequester(type, responseContent) {
+        // sent access credentials to requester
+        // check content of accessInfo
+        const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
+        const requesterEventId = this.requesterEventId;
+        const requestrerApiEndpoint = this.eventData.content.apiEndpoint;
+        // add eventId to content
+        const content = Object.assign({ type, eventId: requesterEventId }, responseContent);
+        // acceptEvent to be sent to requester
+        const responseEvent = {
+            type: 'response/collector-v1',
+            streamIds: [publicStreamId],
+            content
+        };
+        try {
+            const requesterConnection = new patchedPryv_1.default.Connection(requestrerApiEndpoint);
+            const requesterEvent = await requesterConnection.apiOne('events.create', responseEvent, 'event');
+            return requesterEvent;
+        }
+        catch (e) {
+            const deactivatedDetail = {
+                type: 'error',
+                message: e.message
+            };
+            if (e.innerObject)
+                deactivatedDetail.data = e.innerObject;
+            logger.error('Failed activating', deactivatedDetail);
+            const deactivatedResult = await this.#updateStatus(_a.STATUSES.deactivated, { deactivatedDetail });
+            console.log('***** ', { deactivatedResult });
+            return null;
+        }
+    }
+    /**
+     * Probable temporary internal to fix possible inconsenticies during lib early stages
+     */
+    async checkConsistency() {
+        // accessData but not active
+        if (this.accessData && this.eventData.content.status == null) {
+            logger.info('Found discrepency with accessData and status not active, fixing it');
+            if (!this.accessData.deleted) {
+                await this.accept(true);
+            }
+            else {
+                await this.revoke();
+            }
+        }
+        else {
+            // logger.debug('CollectorClient:checkConsistency', this.accessData);
+        }
+    }
+    /**
+     * return the key to discriminate collectorClients
+     * @param {PryvAccessInfo} accessInfo
+     */
+    static keyFromInfo(info) {
+        return info.user.username + ':' + info.name;
+    }
+}
+_a = CollectorClient;
+exports["default"] = CollectorClient;
+module.exports = CollectorClient;
+//# sourceMappingURL=CollectorClient.js.map
+
+/***/ }),
+
+/***/ "./lib/appTemplates/CollectorInvite.js":
+/*!*********************************************!*\
+  !*** ./lib/appTemplates/CollectorInvite.js ***!
+  \*********************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
+const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
+/**
+ * Collector Invite
+ * There is one Collector Invite per Collector => Enduser connection
+ */
+class CollectorInvite {
+    /**
+     * get the key that will be assigned to this event;
+     */
+    static getKeyForEvent(eventData) {
+        return eventData.id;
+    }
+    collector;
+    eventData;
+    #connection = null;
+    #accessInfo = null;
+    get key() {
+        return CollectorInvite.getKeyForEvent(this.eventData);
+    }
+    get status() {
+        return this.collector.inviteStatusForStreamId(this.eventData.streamIds[0]);
+    }
+    get apiEndpoint() {
+        if (this.status !== 'active') {
+            throw new errors_1.HDSLibError('invite.apiEndpoint is accessible only when active');
+        }
+        return this.eventData.content.apiEndpoint;
+    }
+    get errorType() {
+        return this.eventData.content?.errorType;
+    }
+    get dateCreation() {
+        return new Date(this.eventData.created * 1000);
+    }
+    get connection() {
+        if (this.#connection == null) {
+            this.#connection = new patchedPryv_1.default.Connection(this.apiEndpoint);
+        }
+        return this.#connection;
+    }
+    /**
+     * Check if connection is valid. (only if active)
+     * If result is "forbidden" update and set as revoked
+     * @returns accessInfo if valid.
+     */
+    async checkAndGetAccessInfo(forceRefresh = false) {
+        if (!forceRefresh && this.#accessInfo)
+            return this.#accessInfo;
+        try {
+            this.#accessInfo = await this.connection.accessInfo();
+            return this.#accessInfo;
+        }
+        catch (e) {
+            this.#accessInfo = null;
+            if (e.response?.body?.error?.id === 'invalid-access-token') {
+                await this.collector.revokeInvite(this, true);
+                return null;
+            }
+            throw e;
+        }
+    }
+    /**
+     * revoke the invite
+     */
+    async revoke() {
+        return this.collector.revokeInvite(this);
+    }
+    get displayName() {
+        return this.eventData.content.name;
+    }
+    constructor(collector, eventData) {
+        if (eventData.type !== 'invite/collector-v1')
+            throw new errors_1.HDSLibError('Wrong type of event', eventData);
+        this.collector = collector;
+        this.eventData = eventData;
+    }
+    /**
+     * private
+     */
+    setEventData(eventData) {
+        if (eventData.id !== this.eventData.id)
+            throw new errors_1.HDSLibError('CollectInvite event id does not match new Event');
+        this.eventData = eventData;
+    }
+    async getSharingData() {
+        if (this.status !== 'pending')
+            throw new errors_1.HDSLibError('Only pendings can be shared');
+        return {
+            apiEndpoint: await this.collector.sharingApiEndpoint(),
+            eventId: this.eventData.id
+        };
+    }
+}
+exports["default"] = CollectorInvite;
+//# sourceMappingURL=CollectorInvite.js.map
+
+/***/ }),
+
+/***/ "./lib/appTemplates/CollectorRequest.js":
+/*!**********************************************!*\
+  !*** ./lib/appTemplates/CollectorRequest.js ***!
+  \**********************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CollectorRequest = void 0;
+const errors_js_1 = __webpack_require__(/*! ../errors.js */ "./lib/errors.js");
+const HDSModelInitAndSingleton_js_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./lib/HDSModel/HDSModelInitAndSingleton.js");
+const localizeText_js_1 = __webpack_require__(/*! ../localizeText.js */ "./lib/localizeText.js");
+const CURRENT_VERSION = 1;
+/**
+ * Each Collector has one Request
+ * Which contains
+ * - the name of the requester
+ * - a title
+ * - a description
+ * - a consent message
+ * - a set of permission requests
+ * - a version
+ */
+class CollectorRequest {
+    #version;
+    #title;
+    #description;
+    #consent;
+    #requester;
+    #app;
+    #permissionsExtra;
+    #permissions;
+    #sections;
+    #extraContent;
+    constructor(content) {
+        this.#version = CURRENT_VERSION;
+        this.#requester = { name: null };
+        this.#app = { id: null, url: null, data: {} };
+        this.#permissions = [];
+        this.#permissionsExtra = [];
+        this.#sections = [];
+        this.setContent(content);
+    }
+    /**
+     * Loadfrom invite event
+     * used by CollectorClient only
+     * @param invite
+     */
+    loadFromInviteEvent(inviteEvent) {
+        this.setContent(inviteEvent.content);
+    }
+    /**
+     * Loadfrom status event from Collector
+     * used by Collector only
+     * @param statusEvent
+     */
+    loadFromStatusEvent(statusEvent) {
+        // content.data is deprecated it was used in a previous version, should be removed
+        let potentialContent = statusEvent.content.request || statusEvent.content.data;
+        // for some reason to be investigated sometime the data is in requestContent
+        if (potentialContent.requestContent)
+            potentialContent = potentialContent.requestContent;
+        this.setContent(potentialContent);
+    }
+    /**
+     * Temp content
+     * @param content
+     */
+    setContent(content) {
+        const futureContent = structuredClone(content);
+        // validate content
+        if (futureContent.version != null) {
+            const numV = Number.parseInt(futureContent.version);
+            if (numV === 0) {
+                vo0ToV1(futureContent); // convert to v1 if needed
+            }
+            else {
+                if (numV !== this.#version)
+                    throw new errors_js_1.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
+            }
+            delete futureContent.version;
+        }
+        // -- title, consent, description
+        for (const key of ['title', 'consent', 'description']) {
+            if (futureContent[key] != null) {
+                this[key] = futureContent[key];
+            }
+            delete futureContent[key];
+        }
+        // -- requester
+        if (futureContent.requester) {
+            if (futureContent.requester.name != null) {
+                this.requesterName = futureContent.requester.name;
+            }
+            delete futureContent.requester;
+        }
+        // -- app
+        if (futureContent.app) {
+            if (futureContent.app.id != null) {
+                this.appId = futureContent.app.id;
+            }
+            if (futureContent.app.url != null) {
+                this.appUrl = futureContent.app.url;
+            }
+            if (futureContent.app.data != null) {
+                this.appCustomData = futureContent.app.data;
+            }
+            delete futureContent.app;
+        }
+        // -- sections
+        if (futureContent.sections != null) {
+            this.#sections = []; // reset sections
+            for (const sectionData of futureContent.sections) {
+                const section = this.createSection(sectionData.key, sectionData.type);
+                section.setName(sectionData.name);
+                section.addItemKeys(sectionData.itemKeys);
+            }
+            delete futureContent.sections;
+        }
+        // -- permissions
+        if (futureContent.permissions) {
+            this.#permissions = []; // reset permissions
+            futureContent.permissions.forEach((p) => {
+                this.addPermission(p.streamId, p.defaultName, p.level);
+            });
+            delete futureContent.permissions;
+        }
+        // -- permissionsExtra
+        if (futureContent.permissionsExtra) {
+            this.#permissionsExtra = []; // reset permissions Extra
+            futureContent.permissionsExtra.forEach((p) => {
+                this.addPermissionExtra(p);
+            });
+            delete futureContent.permissionsExtra;
+        }
+        this.#extraContent = futureContent;
+    }
+    // ------------- getter and setters ------------ //
+    get version() { return this.#version; }
+    set title(title) { this.#title = (0, localizeText_js_1.validateLocalizableText)('title', title); }
+    get title() { return this.#title; }
+    set consent(consent) { this.#consent = (0, localizeText_js_1.validateLocalizableText)('consent', consent); }
+    get consent() { return this.#consent; }
+    set description(description) { this.#description = (0, localizeText_js_1.validateLocalizableText)('description', description); }
+    get description() { return this.#description; }
+    set requesterName(name) { this.#requester.name = validateString('requester:name', name); }
+    get requesterName() { return this.#requester.name; }
+    set appId(id) { this.#app.id = validateString('app:id', id); }
+    get appId() { return this.#app.id; }
+    set appUrl(url) { this.#app.url = validateString('app:url', url); }
+    get appUrl() { return this.#app.url; }
+    set appCustomData(data) { this.#app.data = data; }
+    get appCustomData() { return this.#app.data; }
+    get permissions() { return this.#permissions; }
+    get permissionsExtra() { return this.#permissionsExtra; }
+    // --- section --- //
+    get sections() {
+        return this.#sections;
+    }
+    get sectionsData() {
+        const result = [];
+        for (const section of this.#sections) {
+            const data = section.getData();
+            result.push(data);
+        }
+        return result;
+    }
+    createSection(key, type) {
+        if (this.getSectionByKey(key) != null)
+            throw new errors_js_1.HDSLibError(`Section with key: ${key} already exists`);
+        const section = new CollectorRequestSection(key, type);
+        this.#sections.push(section);
+        return section;
+    }
+    getSectionByKey(key) {
+        return this.#sections.find((s) => (s.key === key));
+    }
+    // ---------- permissions ---------- //
+    addPermissions(permissions) {
+        for (const permission of permissions) {
+            this.addPermission(permission.streamId, permission.defaultName, permission.level);
+        }
+    }
+    addPermission(streamId, defaultName, level) {
+        this.#permissions.push({ streamId, defaultName, level });
+    }
+    /**
+     * Add a static permission, not linked to itemKeys for other usages
+     * @param permission
+     */
+    addPermissionExtra(permission) {
+        // todo standard checks
+        this.#permissionsExtra.push(permission);
+    }
+    /**
+     * Reset permissions
+     */
+    resetPermissions() {
+        this.#permissions.splice(0, this.#permissions.length);
+    }
+    /**
+     * Rebuild permissions based on sections itemKeys and staticPermissions
+     */
+    buildPermissions() {
+        // 1- get all items form the questionnary sections
+        const itemKeys = [];
+        for (const section of this.sections) {
+            itemKeys.push(...section.itemKeys);
+        }
+        // 2 - get the permissions with eventual preRequest
+        const preRequest = this.permissionsExtra || [];
+        const permissions = (0, HDSModelInitAndSingleton_js_1.getModel)().authorizations.forItemKeys(itemKeys, { preRequest });
+        // 3 - if no error araised - reset permissions
+        this.resetPermissions();
+        this.addPermissions(permissions);
+    }
+    // ---------- sections ------------- //
+    /**
+     * Return Content to comply with initial implementation as an object
+     */
+    get content() {
+        const content = {
+            version: this.version,
+            title: this.title,
+            consent: this.consent,
+            description: this.description,
+            requester: {
+                name: this.requesterName
+            },
+            permissionsExtra: this.permissionsExtra,
+            permissions: this.permissions,
+            app: {
+                id: this.appId,
+                url: this.appUrl,
+                data: this.appCustomData
+            },
+            sections: this.sectionsData
+        };
+        Object.assign(content, this.#extraContent);
+        return content;
+    }
+}
+exports.CollectorRequest = CollectorRequest;
+function validateString(key, totest) {
+    if (totest == null || typeof totest !== 'string')
+        throw new errors_js_1.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
+    return totest;
+}
+const RequestSectionType = {
+    recurring: 'recurring',
+    permanent: 'permanent'
+};
+class CollectorRequestSection {
+    #type;
+    #name;
+    #key;
+    #itemKeys;
+    constructor(key, type) {
+        this.#key = key;
+        this.#type = type;
+        this.#itemKeys = [];
+        this.#name = {
+            en: ''
+        };
+    }
+    addItemKeys(keys) {
+        keys.forEach((k) => this.addItemKey(k));
+    }
+    addItemKey(key) {
+        (0, HDSModelInitAndSingleton_js_1.getModel)().itemsDefs.forKey(key); // will throw error if not found
+        if (this.#itemKeys.includes(key))
+            return; // avoid double entries
+        this.#itemKeys.push(key);
+    }
+    setName(localizedName) {
+        for (const [languageCode, name] of Object.entries(localizedName)) {
+            this.setNameLocal(languageCode, name);
+        }
+    }
+    setNameLocal(languageCode, name) {
+        this.#name[languageCode] = name;
+    }
+    get type() { return this.#type; }
+    get key() { return this.#key; }
+    get itemKeys() { return this.#itemKeys; }
+    get name() { return this.#name; }
+    getData() {
+        return {
+            key: this.key,
+            type: this.#type,
+            name: this.#name,
+            itemKeys: this.#itemKeys
+        };
+    }
+}
+/**
+ * Transform data to match v1
+ * @param v0Data
+ */
+function vo0ToV1(v0Data) {
+    if (v0Data.app?.data?.forms) {
+        if (v0Data.sections)
+            throw new errors_js_1.HDSLibError('Cannot mix data.forms & sections', v0Data);
+        v0Data.sections = [];
+        for (const [key, value] of Object.entries(v0Data.app.data.forms)) {
+            value.key = key;
+            value.name = {
+                en: value.name
+            };
+            v0Data.sections.push(value);
+        }
+        delete v0Data.app.data.forms;
+    }
+    v0Data.version = 1;
+}
+//# sourceMappingURL=CollectorRequest.js.map
+
+/***/ }),
+
+/***/ "./lib/appTemplates/appTemplates.js":
+/*!******************************************!*\
+  !*** ./lib/appTemplates/appTemplates.js ***!
+  \******************************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AppClientAccount = exports.AppManagingAccount = void 0;
+const AppManagingAccount_1 = __importDefault(__webpack_require__(/*! ./AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js"));
+exports.AppManagingAccount = AppManagingAccount_1.default;
+const AppClientAccount_1 = __importDefault(__webpack_require__(/*! ./AppClientAccount */ "./lib/appTemplates/AppClientAccount.js"));
+exports.AppClientAccount = AppClientAccount_1.default;
+//# sourceMappingURL=appTemplates.js.map
+
+/***/ }),
+
+/***/ "./lib/errors.js":
+/*!***********************!*\
+  !*** ./lib/errors.js ***!
+  \***********************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSLibError = void 0;
+class HDSLibError extends Error {
+    innerObject;
+    constructor(message, innerObject = {}) {
+        const msg = (innerObject.message != null) ? message + ' >> ' + innerObject.message : message;
+        super(msg);
+        this.innerObject = innerObject;
+    }
+    toString() {
+        const res = super.toString();
+        return res + '\nInner Object:\n' + JSON.stringify(this.innerObject, null, 2);
+    }
+}
+exports.HDSLibError = HDSLibError;
+//# sourceMappingURL=errors.js.map
+
+/***/ }),
+
+/***/ "./lib/index.js":
+/*!**********************!*\
+  !*** ./lib/index.js ***!
+  \**********************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
+const localizeText_1 = __webpack_require__(/*! ./localizeText */ "./lib/localizeText.js");
+Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
+Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
+const settings = __importStar(__webpack_require__(/*! ./settings */ "./lib/settings.js"));
+exports.settings = settings;
+const patchedPryv_1 = __importDefault(__webpack_require__(/*! ./patchedPryv */ "./lib/patchedPryv.js"));
+exports.pryv = patchedPryv_1.default;
+const HDSModel_1 = __importDefault(__webpack_require__(/*! ./HDSModel/HDSModel */ "./lib/HDSModel/HDSModel.js"));
+exports.HDSModel = HDSModel_1.default;
+const appTemplates = __importStar(__webpack_require__(/*! ./appTemplates/appTemplates */ "./lib/appTemplates/appTemplates.js"));
+exports.appTemplates = appTemplates;
+const logger = __importStar(__webpack_require__(/*! ./logger */ "./lib/logger.js"));
+exports.logger = logger;
+const HDSService_1 = __importDefault(__webpack_require__(/*! ./HDSService */ "./lib/HDSService.js"));
+exports.HDService = HDSService_1.default;
+const HDSModelInitAndSingleton = __importStar(__webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js"));
+const toolkit = __importStar(__webpack_require__(/*! ./toolkit */ "./lib/toolkit/index.js"));
+exports.toolkit = toolkit;
+exports.model = (() => {
+    console.warn('HDSLib.model is deprecated use getHDSModel() instead');
+    return HDSModelInitAndSingleton.getModel();
+})();
+exports.getHDSModel = HDSModelInitAndSingleton.getModel;
+exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ "./lib/localizeText.js":
+/*!*****************************!*\
+  !*** ./lib/localizeText.js ***!
+  \*****************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+/**
+ * basic localization functions
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getPreferredLocales = getPreferredLocales;
+exports.getSupportedLocales = getSupportedLocales;
+exports.resetPreferredLocales = resetPreferredLocales;
+exports.localizeText = localizeText;
+exports.setPreferredLocales = setPreferredLocales;
+exports.validateLocalizableText = validateLocalizableText;
+const errors_1 = __webpack_require__(/*! ./errors */ "./lib/errors.js");
+const supportedLocales = ['en', 'fr', 'es'];
+Object.freeze(supportedLocales);
+let preferredLocales = [...supportedLocales];
+/**
+ * get the current preferred locales
+ */
+function getPreferredLocales() {
+    return [...preferredLocales];
+}
+/**
+ * get the current supported locales
+ */
+function getSupportedLocales() {
+    return [...supportedLocales];
+}
+/**
+ * reset prefferedLocalesTo Original state
+ */
+function resetPreferredLocales() {
+    setPreferredLocales([...supportedLocales]);
+}
+/**
+ * return the translation of this item considering the setting of preffered language
+ */
+function localizeText(textItem) {
+    if (textItem == null)
+        return null;
+    if (!textItem.en)
+        throw new errors_1.HDSLibError('textItems must have an english translation', { textItem });
+    for (const l of preferredLocales) {
+        if (textItem[l])
+            return textItem[l];
+    }
+    return textItem.en;
+}
+/**
+ * Change prefferedLocal order
+ */
+function setPreferredLocales(arrayOfLocals) {
+    if (!Array.isArray(arrayOfLocals)) {
+        throw new errors_1.HDSLibError('setPreferredLocales takes an array of language codes');
+    }
+    const unsupportedLocales = arrayOfLocals.filter(l => (supportedLocales.indexOf(l) < 0));
+    if (unsupportedLocales.length > 0) {
+        throw new errors_1.HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
+    }
+    preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
+}
+/**
+ * throw errors if an item is not of type localizableText
+ */
+function validateLocalizableText(key, toTest) {
+    if (toTest.en == null || typeof toTest.en !== 'string')
+        throw new errors_1.HDSLibError(`Missing or invalid localizable text for ${key}`, { [key]: toTest });
+    for (const optionalLang of supportedLocales) {
+        if (optionalLang === 'en')
+            continue;
+        if (toTest[optionalLang] != null && typeof toTest[optionalLang] !== 'string')
+            throw new errors_1.HDSLibError(`Missing or invalid localizable text for ${key} languagecode: ${optionalLang}`, { [key]: toTest, languageCode: optionalLang });
+    }
+    return toTest;
+}
+//# sourceMappingURL=localizeText.js.map
+
+/***/ }),
+
+/***/ "./lib/logger.js":
+/*!***********************!*\
+  !*** ./lib/logger.js ***!
+  \***********************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Basic logger
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.setLogger = setLogger;
+exports.info = info;
+exports.error = error;
+exports.debug = debug;
+exports.warn = warn;
+let logger = {
+    info: log('info'),
+    error: log('error'),
+    debug: log('debug')
+};
+function setLogger(newLogger) {
+    logger = newLogger;
+}
+function info(...args) { logger.info(...args); }
+function error(...args) { logger.error(...args); }
+function debug(...args) {
+    logger.debug(...args);
+}
+function warn(...args) {
+    logger.info(...args); // Use info for warn for now
+}
+function log(type) {
+    return function (...args) {
+        console.log(`Logger: [${type}]`, ...args);
+    };
+}
+//# sourceMappingURL=logger.js.map
+
+/***/ }),
+
+/***/ "./lib/patchedPryv.js":
+/*!****************************!*\
+  !*** ./lib/patchedPryv.js ***!
+  \****************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * While developing this lib some functionalities should be
+ * added to pryv js-lib in a second step
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const pryv = __importStar(__webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js"));
+const monitor = __importStar(__webpack_require__(/*! @pryv/monitor */ "./node_modules/@pryv/monitor/src/index.js"));
+const socketIo = __importStar(__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js"));
+monitor(pryv);
+socketIo(pryv);
+// patch Pryv only if needed.
+if (!pryv.Connection.prototype.apiOne) {
+    /**
+     * Make one api Api call
+     */
+    pryv.Connection.prototype.apiOne = async function apiOne(method, params = {}, expectedKey) {
+        const result = await this.api([{ method, params }]);
+        if (result[0] == null || result[0].error || (expectedKey != null && result[0][expectedKey] == null)) {
+            const innerObject = result[0]?.error || result;
+            const error = new Error(`Error for api method: "${method}" with params: ${JSON.stringify(params)} >> Result: ${JSON.stringify(innerObject)}"`);
+            error.innerObject = innerObject;
+            throw error;
+        }
+        if (expectedKey != null)
+            return result[0][expectedKey];
+        return result[0];
+    };
+    /**
+     * Revoke : Delete the accessId
+     * - Do not throw error if access is already revoked, just return null;
+     */
+    pryv.Connection.prototype.revoke = async function revoke(throwOnFail = true, usingConnection) {
+        usingConnection = usingConnection || this;
+        let accessInfo = null;
+        // get accessId
+        try {
+            accessInfo = await this.accessInfo();
+        }
+        catch (e) {
+            if (e.response?.body?.error?.id === 'invalid-access-token') {
+                return null; // Already revoked OK..
+            }
+            if (throwOnFail)
+                throw e;
+            return null;
+        }
+        // delete access
+        try {
+            const result = usingConnection.apiOne('accesses.delete', { id: accessInfo.id });
+            return result;
+        }
+        catch (e) {
+            if (throwOnFail)
+                throw e;
+            return null;
+        }
+    };
+}
+exports["default"] = pryv;
+//# sourceMappingURL=patchedPryv.js.map
+
+/***/ }),
+
+/***/ "./lib/settings.js":
+/*!*************************!*\
+  !*** ./lib/settings.js ***!
+  \*************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.setPreferredLocales = void 0;
+exports.setServiceInfoURL = setServiceInfoURL;
+exports.getServiceInfoURL = getServiceInfoURL;
+const localizeText_1 = __webpack_require__(/*! ./localizeText */ "./lib/localizeText.js");
+Object.defineProperty(exports, "setPreferredLocales", ({ enumerable: true, get: function () { return localizeText_1.setPreferredLocales; } }));
+// todo change when in production
+let serviceInfoUrl = 'https://demo.datasafe.dev/reg/service/info';
+/**
+ * Set default service info URL
+ */
+function setServiceInfoURL(url) {
+    serviceInfoUrl = url;
+}
+/**
+ * Get default service info URL
+ */
+function getServiceInfoURL() {
+    return serviceInfoUrl;
+}
+//# sourceMappingURL=settings.js.map
+
+/***/ }),
+
+/***/ "./lib/toolkit/StreamsAutoCreate.js":
+/*!******************************************!*\
+  !*** ./lib/toolkit/StreamsAutoCreate.js ***!
+  \******************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
+const HDSModelInitAndSingleton_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js");
+class StreamsAutoCreate {
+    connection;
+    knownStreams = {};
+    /**
+     * Safe way to create StreamsAutoCreate as it check if ones is already attached to connection
+     */
+    static attachToConnection(connection, knownStreamStructure) {
+        const streamsAutoCreate = connection.streamsAutoCreate || new StreamsAutoCreate(connection);
+        streamsAutoCreate.addStreamStructure(knownStreamStructure);
+        return streamsAutoCreate;
+    }
+    /**
+     * @private
+     * Don't use.. use StreamsAutoCreate.attachToConnection
+     */
+    constructor(connection) {
+        // make connection a weak reference to avoid cycles
+        this.connection = new WeakRef(connection);
+        this.knownStreams = {};
+        connection.streamsAutoCreate = this;
+    }
+    /**
+     * @param keysOrDefs - Array or Set of itemDefs or itemKeys
+     */
+    async ensureExistsForItems(keysOrDefs) {
+        // get existing streamIds;
+        const modelStreams = (0, HDSModelInitAndSingleton_1.getModel)().streams;
+        const streamsToCreate = modelStreams.getNecessaryListForItems(Array.from(keysOrDefs), { knowExistingStreamsIds: this.knowStreamIds() });
+        const apiCalls = streamsToCreate.map((s) => ({
+            method: 'streams.create',
+            params: s
+        }));
+        const connection = this.connection?.deref();
+        if (!connection) {
+            throw new Error('Lost reference to connection');
+        }
+        const results = await connection.api(apiCalls);
+        const streamsCreated = [];
+        const errors = [];
+        for (const result of results) {
+            if (result.stream?.id) {
+                streamsCreated.push(result.stream);
+                continue;
+            }
+            if (result.error) {
+                if (result.error.id === 'item-already-exists')
+                    continue; // all OK
+                errors.push(result.error);
+                continue;
+            }
+            // shouldn't be there
+            errors.push({
+                id: 'unexpected-error',
+                message: 'Unexpected content in api response',
+                data: result
+            });
+        }
+        if (errors.length > 0) {
+            throw new errors_1.HDSLibError('Error creating streams', errors);
+        }
+        return streamsCreated;
+    }
+    knowStreamIds() {
+        return Object.keys(this.knownStreams);
+    }
+    addStreamStructure(streamStructure) {
+        if (streamStructure == null)
+            return;
+        for (const stream of allStreamsAndChildren(streamStructure)) {
+            this.#addStream(stream);
+        }
+    }
+    #addStream(stream) {
+        if (!this.knownStreams[stream.id]) {
+            this.knownStreams[stream.id] = {};
+        }
+    }
+}
+exports["default"] = StreamsAutoCreate;
+/**
+ * Iterate all streams and children
+ */
+function* allStreamsAndChildren(streamStructure) {
+    for (const stream of streamStructure) {
+        yield stream;
+        if (stream.children && stream.children.length > 0) {
+            for (const child of allStreamsAndChildren(stream.children)) {
+                yield child;
+            }
+        }
+    }
+}
+//# sourceMappingURL=StreamsAutoCreate.js.map
+
+/***/ }),
+
+/***/ "./lib/toolkit/index.js":
+/*!******************************!*\
+  !*** ./lib/toolkit/index.js ***!
+  \******************************/
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.StreamsAutoCreate = void 0;
+const StreamsAutoCreate_1 = __importDefault(__webpack_require__(/*! ./StreamsAutoCreate */ "./lib/toolkit/StreamsAutoCreate.js"));
+exports.StreamsAutoCreate = StreamsAutoCreate_1.default;
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ "./lib/utils.js":
+/*!**********************!*\
+  !*** ./lib/utils.js ***!
+  \**********************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Set of Misc utilities
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.waitUntilFalse = waitUntilFalse;
+exports.deepFreeze = deepFreeze;
+/**
+ * Timed semaphore
+ */
+async function waitUntilFalse(callBackToReturnFalse, maxWaitMs = 5000) {
+    const started = Date.now();
+    while (callBackToReturnFalse()) {
+        await new Promise((resolve) => { setTimeout(resolve, 100); });
+        if (Date.now() - started > maxWaitMs)
+            throw new Error(`Timeout after ${maxWaitMs}ms`);
+    }
+}
+/**
+ * Recursively make immutable an object
+ */
+function deepFreeze(object) {
+    // Retrieve the property names defined on object
+    const propNames = Reflect.ownKeys(object);
+    // Freeze properties before freezing self
+    for (const name of propNames) {
+        const value = object[name];
+        if ((value && typeof value === 'object') || typeof value === 'function') {
+            deepFreeze(value);
+        }
+    }
+    return Object.freeze(object);
+}
+//# sourceMappingURL=utils.js.map
+
+/***/ }),
+
 /***/ "./node_modules/@pryv/monitor/src/Monitor.js":
 /*!***************************************************!*\
   !*** ./node_modules/@pryv/monitor/src/Monitor.js ***!
@@ -20336,2811 +23201,6 @@ module.exports = function whichTypedArray(value) {
 
 /***/ }),
 
-/***/ "./src/HDSModel/HDSItemDef.js":
-/*!************************************!*\
-  !*** ./src/HDSModel/HDSItemDef.js ***!
-  \************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { localizeText } = __webpack_require__(/*! ../localizeText */ "./src/localizeText.js");
-
-class HDSItemDef {
-  #data;
-  #key;
-
-  constructor (key, definitionData) {
-    this.#key = key;
-    this.#data = definitionData;
-  }
-
-  get eventTypes () {
-    if (this.#data.eventType) return [this.#data.eventType];
-    return this.#data.variations.eventType.options.map(o => o.value);
-  }
-
-  get key () {
-    return this.#key;
-  }
-
-  get data () {
-    return this.#data;
-  }
-
-  /** @type {string} label Localized */
-  get label () {
-    return localizeText(this.#data.label);
-  }
-
-  /** @type {string} description Localized */
-  get description () {
-    return localizeText(this.#data.description);
-  }
-
-  /**
-   * a template event with eventType and streamIds
-   * // TODO handle variations
-   * @returns {Object}
-   */
-  eventTemplate () {
-    return {
-      streamIds: [this.#data.streamId],
-      type: this.eventTypes[0]
-    };
-  }
-}
-
-module.exports = HDSItemDef;
-
-
-/***/ }),
-
-/***/ "./src/HDSModel/HDSModel-Authorizations.js":
-/*!*************************************************!*\
-  !*** ./src/HDSModel/HDSModel-Authorizations.js ***!
-  \*************************************************/
-/***/ ((module) => {
-
-/**
- * Authorizations - Extension of HDSModel
- */
-class HDSModelAuthorizations {
-  /**
-   * @type {HDSModel}
-   */
-  #model;
-
-  constructor (model) {
-    this.#model = model;
-  }
-
-  /**
-   * Get minimal Authorization set for itemKeys
-   * /!\ Does not handle requests with streamId = "*"
-   * @param {Array<itemKeys>} itemKeys
-   * @param {Object} [options]
-   * @param {string} [options.defaultLevel] (default = write) one of 'read', 'manage', 'contribute', 'writeOnly'
-   * @param {boolean} [options.includeDefaultName] (default = true) defaultNames are needed for permission requests but not for access creation
-   * @param {Array<AuthorizationPreRequestItem>} [options.preRequest]
-   * @return {Array<AuthorizationRequestItem>}
-   */
-  forItemKeys (itemKeys, options = {}) {
-    const opts = {
-      defaultLevel: 'read',
-      preRequest: [],
-      includeDefaultName: true
-    };
-    Object.assign(opts, options);
-    const streamsRequested = {};
-    for (const pre of opts.preRequest) {
-      if (!pre.streamId) throw new Error(`Missing streamId in options.preRequest item: ${JSON.stringify(pre)}`);
-      // complete pre with defaultName if missing
-      if (opts.includeDefaultName && !pre.defaultName) {
-        // try to get it from streams Data
-        const stream = this.#model.streams.getDataById(pre.streamId, false);
-        if (stream) {
-          pre.defaultName = stream.name;
-        } else {
-          throw new Error(`No "defaultName" in options.preRequest item: ${JSON.stringify(pre)} and cannot find matching streams in default list`);
-        }
-      }
-      // check there is no defaultName if not required
-      if (!opts.includeDefaultName) {
-        if (pre.defaultName) throw new Error(`Do not include defaultName when not included explicitely on ${JSON.stringify(pre)}`);
-      }
-      // add default level
-      if (!pre.level) {
-        pre.level = opts.defaultLevel;
-      }
-      streamsRequested[pre.streamId] = pre;
-    }
-    // add streamId not already in
-    for (const itemKey of itemKeys) {
-      const itemDef = this.#model.itemsDefs.forKey(itemKey);
-      const streamId = itemDef.data.streamId;
-      if (!streamsRequested[streamId]) { // new streamId
-        const auth = { streamId, level: opts.defaultLevel };
-        if (opts.includeDefaultName) {
-          const stream = this.#model.streams.getDataById(streamId);
-          auth.defaultName = stream.name;
-        }
-        streamsRequested[streamId] = auth;
-      } else { // existing just adapt level
-        streamsRequested[streamId].level = mixAuthorizationLevels(streamsRequested[streamId].level, opts.defaultLevel);
-      }
-    }
-    // remove all permissions with a parent having identical or higher level
-    for (const auth of Object.values(streamsRequested)) {
-      const parents = this.#model.streams.getParentsIds(auth.streamId, false);
-      for (const parent of parents) {
-        const found = streamsRequested[parent];
-        if (found && authorizationOverride(found.level, auth.level)) {
-          // delete entry
-          delete streamsRequested[auth.streamId];
-          // break loop
-          continue;
-        }
-      }
-    }
-    return Object.values(streamsRequested);
-  }
-}
-
-/**
- * @typedef {Object} AuthorizationRequestItem
- * @property {string} streamId
- * @property {string} level
- * @property {string} defaultName
- */
-
-/**
- * @typedef {Object} AuthorizationpreRequestItem
- * @property {string} streamId
- * @property {string} [level]
- * @property {string} [defaultName]
- */
-
-/**
- * Authorization level1 (parent) does override level2
- * Return "true" if identical or level1 == "manage"
- */
-function authorizationOverride (level1, level2) {
-  if (level1 === level2) return true;
-  if (level1 === 'manage') return true;
-  if (level1 === 'contribute' && level2 !== 'manage') return true;
-  return false;
-}
-
-/**
- * Given two authorization level, give the resulting one
- * @param {string} level1
- * @param {string} level1
- * @returns {string} level
- */
-function mixAuthorizationLevels (level1, level2) {
-  if (level1 === level2) return level1;
-  // sort level in orders [ 'contribute', 'manage', 'read', 'writeOnly' ]
-  const levels = [level1, level2].sort();
-  if (levels.includes('manage')) return 'manage'; // any & manage
-  if (levels[0] === 'contribute') return 'contribute'; // read ore writeOnly & contribute
-  if (levels[1] === 'writeOnly') return 'contribute'; // mix read & writeOnly
-  /* c8 ignore next */ // error if there .. 'read' & 'read' should have already be found
-  throw new Error(`Invalid level found level1: ${level1}, level2 ${level2}`);
-}
-
-module.exports = HDSModelAuthorizations;
-
-
-/***/ }),
-
-/***/ "./src/HDSModel/HDSModel-ItemsDefs.js":
-/*!********************************************!*\
-  !*** ./src/HDSModel/HDSModel-ItemsDefs.js ***!
-  \********************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const HDSItemDef = __webpack_require__(/*! ./HDSItemDef */ "./src/HDSModel/HDSItemDef.js");
-
-/**
- * ItemsDefs - Extension of HDSModel
- */
-class HDSModelItemsDefs {
-  /**
-   * @type {HDSModel}
-   */
-  #model;
-
-  /**
-   * ItemDefs Cache
-   * KeyValue of itemsDefs
-   */
-  #itemsDefs;
-
-  /**
-   * get itemsData by streamId and eventType
-   */
-  #modelDataByStreamIdEventTypes;
-
-  constructor (model) {
-    this.#model = model;
-    this.#itemsDefs = {};
-    this.#modelDataByStreamIdEventTypes = {};
-    loadModelDataByStreamIdEventTypes(this.#model.modelData.items, this.#modelDataByStreamIdEventTypes);
-  }
-
-  /**
-   * get all itemDefs
-   * @returns {Array<HDSItemDef>}
-   */
-  getAll () {
-    const res = [];
-    for (const key of Object.keys(this.#model.modelData.items)) {
-      res.push(this.forKey(key));
-    }
-    return res;
-  }
-
-  /**
-   * get item for a key
-   * @param {string} key
-   * @param {boolean} [throwErrorIfNotFound] default `true`
-   * @return {HDSItemDef | null}
-   */
-  forKey (key, throwErrorIfNotFound = true) {
-    if (this.#itemsDefs[key]) return this.#itemsDefs[key];
-    const defData = this.#model.modelData.items[key];
-    if (!defData) {
-      if (throwErrorIfNotFound) throw new Error('Cannot find item definition with key: ' + key);
-      return null;
-    }
-    this.#itemsDefs[key] = new HDSItemDef(key, defData);
-    return this.#itemsDefs[key];
-  }
-
-  /**
-   * get a definition for an event
-   * @param {Event} event
-   * @param {boolean} [throwErrorIfNotFound] default `true`
-   */
-  forEvent (event, throwErrorIfNotFound = true) {
-    const candidates = [];
-    for (const streamId of event.streamIds) {
-      const keyStreamIdEventType = streamId + ':' + event.type;
-      const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
-      if (candidate) candidates.push(candidate);
-    }
-    if (candidates.length === 0) {
-      if (throwErrorIfNotFound) throw new Error('Cannot find definition for event: ' + JSON.stringify(event));
-      return null;
-    }
-    if (candidates.length > 1) {
-      throw new Error(`Found multiple matching definitions "${candidates.map(c => (c.key)).join(', ')}" for event: ${JSON.stringify(event)}`);
-    }
-    return this.forKey(candidates[0].key, throwErrorIfNotFound);
-  }
-}
-
-module.exports = HDSModelItemsDefs;
-
-/**
- * @private
- * Add key to model items and
- * load modeldata item into modelDataByStreamIdEventTypes for fast search
- */
-function loadModelDataByStreamIdEventTypes (model, map) {
-  for (const item of Object.values(model)) {
-    const eventTypes = [];
-    if (item.eventType) {
-      eventTypes.push(item.eventType);
-    } else {
-      const types = item.variations.eventType.options.map(o => o.value);
-      eventTypes.push(...types);
-    }
-
-    for (const eventType of eventTypes) {
-      const keyStreamIdEventType = item.streamId + ':' + eventType;
-      if (map[keyStreamIdEventType]) {
-        // should be tested with a faulty model
-        throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
-      }
-      map[keyStreamIdEventType] = item;
-    }
-  }
-}
-
-
-/***/ }),
-
-/***/ "./src/HDSModel/HDSModel-Streams.js":
-/*!******************************************!*\
-  !*** ./src/HDSModel/HDSModel-Streams.js ***!
-  \******************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { itemKeysOrDefsToDefs } = __webpack_require__(/*! ./internalModelUtils */ "./src/HDSModel/internalModelUtils.js");
-
-/**
- * Streams - Extension of HDSModel
- */
-class HDSModelStreams {
-  /**
-   * @type {HDSModel}
-   */
-  #model;
-
-  /**
-   * streamsById
-   * Map to find streams by Id
-   */
-  #modelStreamsById;
-
-  constructor (model) {
-    this.#model = model;
-    this.#modelStreamsById = {};
-    loadModelStreamsById(this.#model.modelData.streams, this.#modelStreamsById);
-  }
-
-  /**
-   * Get a list of streams to be created for usage of these keys (whithout children)
-   * @param {Array<string>|Array<HDSItemDef>} itemKeysOrDefs
-   * @param {Object} params
-   * @param {String} [params.nameProperty = 'name'] - can be set to 'name' (default), 'defaultName' or 'none' => if you want nothing
-   * @param {Array<string>} [params.knowExistingStreamsIds]
-   */
-  getNecessaryListForItems (itemKeysOrDefs, params = {}) {
-    const itemDefs = itemKeysOrDefsToDefs(this.#model, itemKeysOrDefs);
-    const knowExistingStreamsIds = params.knowExistingStreamsIds || [];
-    const nameProperty = params.nameProperty || 'name';
-
-    const result = [];
-    const streams = new Map(); // tempMap to keep streams already in
-    for (const knowStreamId of knowExistingStreamsIds) {
-      const strs = this.getParentsIds(knowStreamId, false, [knowStreamId]).reverse();
-      for (const strId of strs) {
-        streams.set(strId, true);
-      }
-    }
-    for (const itemDef of itemDefs) {
-      const streamParentIds = this.getParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
-      const resultToBeReversed = [];
-      for (let i = streamParentIds.length - 1; i > -1; i--) { // loop reverse to break as soon as we find an existing stream
-        const streamId = streamParentIds[i];
-        if (streams.has(streamId)) break;
-        const stream = this.getDataById(streamId);
-        streams.set(streamId, true); // just to flag
-        const itemStream = { id: streamId, parentId: stream.parentId };
-        if (nameProperty !== 'none') {
-          itemStream[nameProperty] = stream.name; // to be translated
-        }
-        resultToBeReversed.push(itemStream);
-      }
-      // result need to be reversed in order to get parents created before
-      result.push(...resultToBeReversed.reverse());
-    }
-    return result;
-  }
-
-  /**
-   * Get stream Data by Id;
-   * @param {string} streamId
-   */
-  getDataById (streamId, throwErrorIfNotFound = true) {
-    const streamData = this.#modelStreamsById[streamId];
-    if (throwErrorIfNotFound && !streamData) throw new Error(`Stream with id: "${streamId}" not found`);
-    return streamData;
-  }
-
-  /**
-   * Get all parents id;
-   * @param {string} streamId
-   * @param {boolean} [throwErrorIfNotFound] default `true`
-   * @param {Array} [initialArray] - a pre-filled array
-   */
-  getParentsIds (streamId, throwErrorIfNotFound = true, initialArray = []) {
-    const streamData = this.getDataById(streamId, throwErrorIfNotFound);
-    if (!streamData) return initialArray;
-    if (streamData.parentId !== null) {
-      initialArray.unshift(streamData.parentId);
-      this.getParentsIds(streamData.parentId, true, initialArray);
-    }
-    return initialArray;
-  }
-}
-
-module.exports = HDSModelStreams;
-
-/**
- * @param {Array<stream>} streams
- * @param {Object<string, stream>} map - key value map
- */
-function loadModelStreamsById (streams, map) {
-  if (!streams) return;
-  for (const stream of streams) {
-    if (map[stream.id]) {
-      // should be tested with a faulty model
-      throw new Error(`Duplicate streamId "${stream.id}" for strean ${JSON.stringify(stream)}`);
-    }
-    map[stream.id] = stream;
-    loadModelStreamsById(stream.children, map);
-  }
-}
-
-
-/***/ }),
-
-/***/ "./src/HDSModel/HDSModel.js":
-/*!**********************************!*\
-  !*** ./src/HDSModel/HDSModel.js ***!
-  \**********************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
-const { deepFreeze } = __webpack_require__(/*! ../utils */ "./src/utils.js");
-
-const LAZILY_LOADED = {
-  streams: __webpack_require__(/*! ./HDSModel-Streams */ "./src/HDSModel/HDSModel-Streams.js"),
-  authorizations: __webpack_require__(/*! ./HDSModel-Authorizations */ "./src/HDSModel/HDSModel-Authorizations.js"),
-  itemsDefs: __webpack_require__(/*! ./HDSModel-ItemsDefs */ "./src/HDSModel/HDSModel-ItemsDefs.js")
-};
-
-/**
- * @class {HDSModel}
- * @property {object} modelData - Raw ModelData
- * @property {HDSModelItemsDefs} itemsDefs
- * @property {HDSModelStreams} streams
- * @property {HDSModelAuthorizations} authorizations
- */
-class HDSModel {
-  /**
-   * JSON definition file URL.
-   * Should come from service/info assets.hds-model
-   * @type {string}
-   */
-  #modelUrl;
-
-  /** @type {object} RAW content of model definitions */
-  #modelData;
-
-  /**
-   * @private
-   * Map of properties loaded "on demand"
-   */
-  laziliyLoadedMap;
-
-  /**
-   * @param {string} modelUrl - JSON definition file URL. Should come from service/info assets.hds-model
-   */
-  constructor (modelUrl) {
-    this.#modelUrl = modelUrl;
-    this.laziliyLoadedMap = { };
-  }
-
-  get isLoaded () {
-    return !!this.#modelData;
-  }
-
-  /**
-   * Load model definitions
-   */
-  async load (modelUrl = null) {
-    if (modelUrl) {
-      this.#modelUrl = modelUrl;
-    }
-    const response = await fetch(this.#modelUrl);
-    const resultText = await response.text();
-    const result = JSON.parse(resultText);
-    this.#modelData = result;
-    // add key to items before freezing;
-    for (const [key, item] of Object.entries(this.#modelData.items)) {
-      item.key = key;
-    }
-    // make sure it cannot be modified
-    deepFreeze(this.#modelData);
-  }
-
-  /** RAW model data */
-  get modelData () {
-    if (!this.isLoaded) throwNotLoadedError();
-    return this.#modelData;
-  }
-}
-
-// add properties to be lazily loaded
-for (const [prop, Obj] of Object.entries(LAZILY_LOADED)) {
-  Object.defineProperty(HDSModel.prototype, prop, {
-    get: function () {
-      if (!this.isLoaded) throwNotLoadedError();
-      if (!this.laziliyLoadedMap[prop]) this.laziliyLoadedMap[prop] = new Obj(this);
-      return this.laziliyLoadedMap[prop];
-    }
-  });
-}
-
-module.exports = HDSModel;
-
-function throwNotLoadedError () {
-  throw new HDSLibError('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
-}
-
-
-/***/ }),
-
-/***/ "./src/HDSModel/HDSModelInitAndSingleton.js":
-/*!**************************************************!*\
-  !*** ./src/HDSModel/HDSModelInitAndSingleton.js ***!
-  \**************************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-let model = null;
-const HDSModel = __webpack_require__(/*! ./HDSModel */ "./src/HDSModel/HDSModel.js");
-const HDService = __webpack_require__(/*! ../HDSService */ "./src/HDSService.js");
-
-module.exports = {
-  getModel,
-  initHDSModel,
-  resetModel
-};
-
-function getModel () {
-  if (model == null) {
-    model = new HDSModel();
-  }
-  return model;
-}
-/**
- * Mostly used during test to unlod model
- */
-function resetModel () {
-  model = null;
-}
-
-/**
- * Initialized model singleton
- * @returns {HDSModel}
- */
-async function initHDSModel () {
-  if (!model) {
-    getModel();
-  }
-  if (!model.isLoaded) {
-    const service = new HDService();
-    const serviceInfo = await service.info();
-    await model.load(serviceInfo.assets['hds-model']);
-  }
-  return model;
-}
-
-
-/***/ }),
-
-/***/ "./src/HDSModel/internalModelUtils.js":
-/*!********************************************!*\
-  !*** ./src/HDSModel/internalModelUtils.js ***!
-  \********************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const HDSItemDef = __webpack_require__(/*! ./HDSItemDef */ "./src/HDSModel/HDSItemDef.js");
-
-module.exports = {
-  itemKeysOrDefsToDefs,
-  itemKeyOrDefToDef
-};
-
-/**
- * Some call support either arrays of itemKeys or itemDefs
- * test if they are strings or itemDefs and returns an array of itemDefs
- * @param {HDSModel} model
- * @param {Array<string>|Array<HDSItemDef>} keysOrDefs
- * @return {Array<HDSItemDef>}
- */
-function itemKeysOrDefsToDefs (model, keysOrDefs) {
-  const res = [];
-  for (const keyOrDef of keysOrDefs) {
-    res.push(itemKeyOrDefToDef(model, keyOrDef));
-  }
-  return res;
-}
-
-/**
- * Some call support either itemKey or itemDef
- * test if string or itemDef and returns an itemDef
- * @param {HDSModel} model
- * @param {string|HDSItemDef} keyOrDef
- * @return {HDSItemDef}
- */
-function itemKeyOrDefToDef (model, keyOrDef) {
-  if (keyOrDef instanceof HDSItemDef) return keyOrDef;
-  return model.itemsDefs.forKey(keyOrDef);
-}
-
-
-/***/ }),
-
-/***/ "./src/HDSService.js":
-/*!***************************!*\
-  !*** ./src/HDSService.js ***!
-  \***************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const settings = __webpack_require__(/*! ./settings */ "./src/settings.js");
-const pryv = __webpack_require__(/*! ./patchedPryv */ "./src/patchedPryv.js");
-
-// makes Pryv service aware of default serviceUrl
-class HDSService extends pryv.Service {
-  constructor (serviceInfoUrl, serviceCustomizations) {
-    serviceInfoUrl = serviceInfoUrl || settings.getServiceInfoURL();
-    super(serviceInfoUrl, serviceCustomizations);
-  }
-}
-
-module.exports = HDSService;
-
-
-/***/ }),
-
-/***/ "./src/appTemplates/AppClientAccount.js":
-/*!**********************************************!*\
-  !*** ./src/appTemplates/AppClientAccount.js ***!
-  \**********************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
-const pryv = __webpack_require__(/*! ../patchedPryv */ "./src/patchedPryv.js");
-const Application = __webpack_require__(/*! ./Application */ "./src/appTemplates/Application.js");
-const CollectorClient = __webpack_require__(/*! ./CollectorClient */ "./src/appTemplates/CollectorClient.js");
-const logger = __webpack_require__(/*! ../logger */ "./src/logger.js");
-
-/**
- * - applications
- *   - [baseStreamId] "Root" stream from this app
- */
-
-const MAX_COLLECTORS = 1000;
-class AppClientAccount extends Application {
-  constructor (baseStreamId, connection, appName, features) {
-    super(...arguments);
-    this.cache.collectorClientsMap = {};
-  }
-
-  get appSettings () {
-    return {
-      canBePersonnal: true,
-      mustBeMaster: true
-    };
-  }
-
-  /**
-   * When the app receives a new request for data sharing
-   * @param {string} apiEndpoint
-   * @param {string} [incomingEventId] - Information for the recipient
-   * @returns {CollectorClient}
-   */
-  async handleIncomingRequest (apiEndpoint, incomingEventId) {
-    // make sure that collectorClientsMap is initialized
-    await this.getCollectorClients();
-
-    const requesterConnection = new pryv.Connection(apiEndpoint);
-    const accessInfo = await requesterConnection.accessInfo();
-    // check if request is known
-    const collectorClientKey = CollectorClient.keyFromInfo(accessInfo);
-    logger.debug('AppClient:handleIncomingRequest', { collectorClientKey, accessInfo, incomingEventId });
-    if (this.cache.collectorClientsMap[collectorClientKey]) {
-      const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
-      logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
-      if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
-        // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-        throw new HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-        // we might consider reseting() in the future;
-        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
-      }
-      if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-        throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-        // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-        // we might consider reseting() in the future;
-        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
-        // return null;
-      }
-      return collectorClient;
-    }
-    // check if comming form hdsCollector
-    if (!accessInfo?.clientData?.hdsCollector || accessInfo.clientData?.hdsCollector?.version !== 0) {
-      throw new HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
-    }
-    // else create it
-    const collectorClient = await CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
-    this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
-    return collectorClient;
-  }
-
-  async getCollectorClientByKey (collectorKey) {
-    // ensure collectors are initialized
-    await this.getCollectorClients();
-    return this.cache.collectorClientsMap[collectorKey];
-  }
-
-  async getCollectorClients (forceRefresh = false) {
-    if (!forceRefresh && this.cache.collectorClientsMapInitialized) return Object.values(this.cache.collectorClientsMap);
-    const apiCalls = [{
-      method: 'accesses.get',
-      params: { includeDeletions: true }
-    }, {
-      method: 'events.get',
-      params: { types: ['request/collector-client-v1'], streams: [this.baseStreamId], limit: MAX_COLLECTORS }
-    }];
-    const [accessesRes, eventRes] = await this.connection.api(apiCalls);
-    const accessHDSCollectorMap = {};
-    for (const access of accessesRes.accesses) {
-      if (access.clientData.hdsCollectorClient) {
-        accessHDSCollectorMap[access.name] = access;
-      }
-    }
-    for (const event of eventRes.events) {
-      const collectorClient = new CollectorClient(this, event);
-      if (accessHDSCollectorMap[collectorClient.key] != null) collectorClient.accessData = accessHDSCollectorMap[collectorClient.key];
-      // temp process - might be removed
-      await collectorClient.checkConsistency();
-      this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
-    }
-
-    this.cache.collectorClientsMapInitialized = true;
-    return Object.values(this.cache.collectorClientsMap);
-  }
-
-  /**
-   * - Check connection validity
-   * - Make sure stream structure exists
-   */
-  async init () {
-    return super.init();
-  }
-}
-
-module.exports = AppClientAccount;
-
-
-/***/ }),
-
-/***/ "./src/appTemplates/AppManagingAccount.js":
-/*!************************************************!*\
-  !*** ./src/appTemplates/AppManagingAccount.js ***!
-  \************************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const ShortUniqueId = __webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js");
-const collectorIdGenerator = new ShortUniqueId({ dictionary: 'alphanum_lower', length: 7 });
-const Application = __webpack_require__(/*! ./Application */ "./src/appTemplates/Application.js");
-const Collector = __webpack_require__(/*! ./Collector */ "./src/appTemplates/Collector.js");
-
-/**
- * App which manages Collectors
- * A "Collector" can be seen as a "Request" and set of "Responses"
- * - Responses are authorization tokens from individuals
- *
- * The App can create multiple "collectors e.g. Questionnaries"
- *
- * Stream structure
- * - applications
- *   - [baseStreamId]  "Root" stream for this app
- *     - [baseStreamId]-[collectorsId] Each "questionnaire" or "request for a set of data" has it's own stream
- *       - [baseStreamId]-[collectorsId]-internal Private stuff not to be shared
- *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
- *       - [baseStreamId]-[collectorsId]-pending Contains events with "pending" requests
- *       - [baseStreamId]-[collectorsId]-inbox Contains events with "inbox" requests Will be shared in createOnly
- *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
- *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
- */
-class AppManagingAccount extends Application {
-  // used by Application.init();
-  get appSettings () {
-    return {
-      canBePersonnal: true,
-      mustBeMaster: true,
-      appNameFromAccessInfo: true // application name will be taken from Access-Info Name
-    };
-  }
-
-  async init () {
-    await super.init();
-    // -- check if stream structure exists
-    await this.getCollectors();
-    return this;
-  }
-
-  async getCollectors (forceRefresh) {
-    await this.#updateCollectorsIfNeeded(forceRefresh);
-    return Object.values(this.cache.collectorsMap);
-  }
-
-  async getCollectorById (id) {
-    await this.#updateCollectorsIfNeeded();
-    return this.cache.collectorsMap[id];
-  }
-
-  async #updateCollectorsIfNeeded (forceRefresh = false) {
-    if (!forceRefresh && this.cache.collectorsMap) return;
-    if (forceRefresh) await this.loadStreamData();
-    // TODO do not replace the map, but update collectors if streamData has changed and add new collectors
-    const streams = this.streamData.children || [];
-    const collectorsMap = {};
-    for (const stream of streams) {
-      const collector = new Collector(this, stream);
-      collectorsMap[collector.id] = collector;
-    }
-    this.cache.collectorsMap = collectorsMap;
-  }
-
-  /**
-   * Create an iniatilized Collector
-   * @param {string} name
-   * @returns {Collector}
-   */
-  async createCollector (name) {
-    const collector = await this.createCollectorUnitialized(name);
-    await collector.init();
-    return collector;
-  }
-
-  /**
-   * Create an un-initialized Collector (mostly used by tests)
-   * @param {string} name
-   * @returns {Collector}
-   */
-  async createCollectorUnitialized (name) {
-    const streamId = this.baseStreamId + '-' + collectorIdGenerator.rnd();
-    const params = {
-      id: streamId,
-      name,
-      parentId: this.baseStreamId
-    };
-    const stream = await this.connection.apiOne('streams.create', params, 'stream');
-    // add new stream to streamCache
-    this.streamData.children.push(stream);
-    const collector = new Collector(this, stream);
-    this.cache.collectorsMap[collector.streamId] = collector;
-    return collector;
-  }
-}
-
-module.exports = AppManagingAccount;
-
-
-/***/ }),
-
-/***/ "./src/appTemplates/Application.js":
-/*!*****************************************!*\
-  !*** ./src/appTemplates/Application.js ***!
-  \*****************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const pryv = __webpack_require__(/*! ../patchedPryv */ "./src/patchedPryv.js");
-const { StreamsAutoCreate } = __webpack_require__(/*! ../toolkit */ "./src/toolkit/index.js");
-
-/**
- * Settings for application
- * @typedef {Object} ApplicationFeatures
- * @property {Boolean} [streamsAutoCreate = true] - attach an instance of StreamsAutoCreate to connection
- */
-
-/**
- * Common code for AppClientAccount and AppManagingAccount
- */
-class Application {
-  /** @type {Pryv.Connection} */
-  connection;
-  /** @type {string} */
-  baseStreamId;
-  /** @type {string} */
-  appName;
-
-  cache;
-
-  /** @property {ApplicationFeatures} */
-  features;
-
-  /**
-   * Get application stream structure
-   * Initialized at init()
-   * Can be refreshed with loadStreamData
-   */
-  get streamData () {
-    if (!this.cache.streamData) throw new Error('Call .init() first');
-    return this.cache.streamData;
-  }
-
-  get appSettings () {
-    throw new Error('appSettings must be implemented');
-    // possible return values:
-    /**
-     * return {
-     *  canBePersonnal: true,
-     *  mustBeMaster: true
-     *  appNameFromAccessInfo: true // application name will be taken from Access-Info Name
-     * };
-     */
-  }
-
-  /**
-   * Create with an apiEnpoint
-   * @param {string} apiEndpoint
-   * @param {string} baseStreamId - application base Strem ID
-   * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
-   * @param {ApplicationFeatures} [features]
-   * @returns {AppClientAccount}
-   */
-  static async newFromApiEndpoint (baseStreamId, apiEndpoint, appName, features) {
-    const connection = new pryv.Connection(apiEndpoint);
-    // in a static method, "this" is the class (here the extending class)
-    return await this.newFromConnection(baseStreamId, connection, appName);
-  }
-
-  /**
-  * Create with an apiEnpoint
-  * @param {Pryv.connection} connection - must be a connection with personnalToken or masterToken
-  * @param {string} baseStreamId - application base Strem ID
-  * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
-  * @param {ApplicationFeatures} [features]
-  * @returns {AppClientAccount}
-  */
-  static async newFromConnection (baseStreamId, connection, appName, features) {
-    // in a static method "this" is the class (here the extending class)
-    const app = new this(baseStreamId, connection, appName, features);
-    await app.init();
-    return app;
-  }
-
-  /**
-   * @private
-   * use .newFrom...() to create new AppManagingAccount
-   * @param {string} baseStreamId
-   * @param {Pryv.Connection} connection
-   * @param {string} [appName] - optional if appSettings.appNameFromAccessInfo is set to true
-   * @param {ApplicationFeatures} [features]
-   */
-  constructor (baseStreamId, connection, appName, features) {
-    if (!baseStreamId || baseStreamId.length < 2) throw new Error('Missing or too short baseStreamId');
-    this.baseStreamId = baseStreamId;
-    if (appName == null && !this.appSettings.appNameFromAccessInfo) {
-      throw new Error('appName must be given unless appSettings.appNameFromAccessInfo = true');
-    }
-    this.appName = appName;
-    this.connection = connection;
-    this.features = Object.assign({ streamsAutoCreate: true }, features);
-
-    if (this.features.streamsAutoCreate) {
-      StreamsAutoCreate.attachToConnection(this.connection);
-    }
-
-    this.cache = { };
-  }
-
-  async init () {
-    await createAppStreams(this);
-  }
-
-  /**
-   * Save anything you want for your app
-   * @param {Object} content will fully replace any existing content
-   */
-  async setCustomSettings (content) {
-    const currentCustomSettings = await this.getCustomSettings();
-    if (currentCustomSettings != null) { // update
-      const id = this.cache.customSettingsEvent.id;
-      const updatedEvent = await this.connection.apiOne('events.update', { id, update: { content } }, 'event');
-      this.cache.customSettingsEvent = updatedEvent;
-    } else {
-      await this.#createCustomSettings(content);
-    }
-    return this.cache.customSettingsEvent?.content;
-  }
-
-  /**
-   * @private
-   * Used by getCustomSettings & setCustomSettings
-   * @param {*} content
-   */
-  async #createCustomSettings (content) {
-    const createdEvent = await this.connection.apiOne('events.create', { streamIds: [this.baseStreamId], type: 'settings/any', content }, 'event');
-    this.cache.customSettingsEvent = createdEvent;
-  }
-
-  /**
-   * Get current settings previously set with setCustomSettings()
-   */
-  async getCustomSettings (forceRefresh = false) {
-    if (forceRefresh || !this.cache.customSettingsEvent) {
-      const customSettingsEvent = (await this.connection.apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
-      this.cache.customSettingsEvent = customSettingsEvent;
-    }
-    if (!this.cache.customSettingsEvent) {
-      await this.#createCustomSettings({});
-    }
-    return this.cache.customSettingsEvent?.content;
-  }
-
-  /**
-   * Force loading of streamData
-   */
-  async loadStreamData () {
-    const streamData = (await this.connection.apiOne('streams.get', { id: this.baseStreamId }, 'streams'))[0];
-    if (streamData) {
-      this.cache.streamData = streamData;
-    }
-    return streamData;
-  }
-}
-
-module.exports = Application;
-
-// create app Streams
-
-async function createAppStreams (app) {
-  // check that connection has a personal or master token or has "manage" rights on baseStream
-  const infos = await app.connection.accessInfo();
-  if (app.appSettings.appNameFromAccessInfo) {
-    app.appName = infos.name;
-  }
-  let isPersonalOrMaster = infos.type === 'personal';
-  if (!app.appSettings.canBePersonnal && infos.type === 'personal') {
-    throw new Error('Application should not use a personal token');
-  }
-  if (!isPersonalOrMaster) {
-    const allowPersonalStr = app.appSettings.canBePersonnal ? '"personal" or ' : '';
-
-    if (infos.type !== 'app') throw new Error(`Application requires a ${allowPersonalStr} "app" type of access`);
-    const masterFound = infos.permissions.find(p => (p.streamId === '*' && p.level === 'manage'));
-    isPersonalOrMaster = true;
-    if (app.appSettings.mustBemaster && !masterFound) {
-      throw new Error('Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
-    }
-    if (!masterFound) { // check that app has "manage" level on baseStreamId
-      const baseStreamFound = infos.permissions.find(p => (p.streamId === app.baseStreamId && p.level === 'manage'));
-      if (!baseStreamFound) throw new Error(`Application with "app" type of access requires  (streamId = "${app.baseStreamId}", level = "manage") or master access`);
-    }
-  }
-  // get streamStructure
-  let found = false;
-  try {
-    const streamData = await app.loadStreamData();
-    if (streamData) found = true;
-  } catch (e) {
-    if (e.innerObject?.id !== 'unknown-referenced-resource' || e.innerObject?.data?.id !== app.baseStreamId) {
-      throw e;
-    }
-  }
-  // not found create streams
-  if (!found) {
-    if (!isPersonalOrMaster) {
-      throw new Error('Token has not sufficient right to create App streams. Create them upfront');
-    }
-    const apiCalls = [
-      { method: 'streams.create', params: { id: 'applications', name: 'Applications' } },
-      { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: 'applications' } }
-    ];
-    const streamCreateResult = await app.connection.api(apiCalls);
-    for (const r of streamCreateResult) {
-      if (r.error) throw new Error('Failed creating app streams', { apiCalls, streamCreateResult });
-    }
-    const stream = streamCreateResult[1].stream;
-    app.cache.streamData = stream;
-  }
-}
-
-
-/***/ }),
-
-/***/ "./src/appTemplates/Collector.js":
-/*!***************************************!*\
-  !*** ./src/appTemplates/Collector.js ***!
-  \***************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { CollectorRequest } = __webpack_require__(/*! ./CollectorRequest.ts */ "./src/appTemplates/CollectorRequest.ts");
-const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
-const { waitUntilFalse } = __webpack_require__(/*! ../utils */ "./src/utils.js");
-const CollectorInvite = __webpack_require__(/*! ./CollectorInvite */ "./src/appTemplates/CollectorInvite.js");
-const logger = __webpack_require__(/*! ../logger */ "./src/logger.js");
-
-const COLLECTOR_STREAMID_SUFFIXES = {
-  archive: 'archive',
-  internal: 'internal',
-  public: 'public',
-  pending: 'pending',
-  inbox: 'inbox',
-  active: 'active',
-  error: 'error'
-};
-Object.freeze(COLLECTOR_STREAMID_SUFFIXES);
-
-/**
- * Collector is used by AppManagingAccount
- * A "Collector" can be seen as a "Request" and set of "Responses"
- * - Responses are authorization tokens from individuals
- */
-class Collector {
-  static STREAMID_SUFFIXES = COLLECTOR_STREAMID_SUFFIXES;
-  static STATUSES = Object.freeze({
-    draft: 'draft',
-    active: 'active',
-    deactivated: 'deactivated'
-  });
-
-  appManaging;
-  streamId;
-  name;
-  #streamData;
-  #cache;
-  request;
-
-  /**
-   * @param {AppManagingAccount} appManaging
-   * @param {Pryv.Stream} streamData
-   */
-  constructor (appManaging, streamData) {
-    this.streamId = streamData.id;
-    this.name = streamData.name;
-    this.appManaging = appManaging;
-    this.#streamData = streamData;
-    this.request = new CollectorRequest({
-      id: this.id
-    });
-    this.#cache = {
-      initialized: false,
-      invites: {},
-      invitesInitialized: false,
-      invitesInitializing: false,
-      statusEvent: null
-    };
-  }
-
-  /**
-   * @property {string} id - shortcut for steamid
-   */
-  get id () {
-    return this.streamId;
-  }
-
-  /**
-   * @property {string} one of 'draft', 'active', 'deactivated'
-   */
-  get statusCode () {
-    if (this.#cache.statusEvent == null) throw new Error('Init Collector first');
-    return this.#cache.statusEvent.content.status;
-  }
-
-  /**
-   * Fetch online data
-   */
-  async init (forceRefresh = false) {
-    if (!forceRefresh && this.#cache.initialized) return;
-    await this.checkStreamStructure(forceRefresh);
-    await this.#loadStatus(forceRefresh);
-    this.#cache.initialized = true;
-  }
-
-  /**
-   * @type {StatusEvent} - extends PryvEvent with a specific content
-   * @property {Object} content - content
-   * @property {String} content.status - one of 'draft', 'active', 'deactivated'
-   * @property {CollectorRequestData} content.request - app specific data
-   */
-
-  /**
-   * Load Collector status,
-   * @param {boolean} forceRefresh - if true, forces fetching the status from the server
-   */
-  async #loadStatus (forceRefresh = false) {
-    if (!forceRefresh && this.#cache.statusEvent) return this.#cache.statusEvent;
-    const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)] };
-    const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
-    if (statusEvents.length === 0) { // non exsitent set "draft" status
-      return this.#setStatus(Collector.STATUSES.draft);
-    }
-    this.#cache.statusEvent = statusEvents[0];
-    this.request.loadFromStatusEvent(statusEvents[0]);
-  }
-
-  /**
-   * Change the status
-   * @param {string} status one of of 'draft', 'active', 'deactivated'
-   * @returns {StatusEvent}
-   */
-  async #setStatus (status) {
-    if (!Collector.STATUSES[status]) throw new HDSLibError('Unkown status key', { status });
-
-    const event = {
-      type: 'status/collector-v1',
-      streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)],
-      content: {
-        status,
-        request: this.request.content
-      }
-    };
-    const statusEvent = await this.appManaging.connection.apiOne('events.create', event, 'event');
-    this.#cache.statusEvent = statusEvent;
-    this.request.loadFromStatusEvent(statusEvent);
-    return this.#cache.statusEvent;
-  }
-
-  async save () {
-    if (this.statusCode !== Collector.STATUSES.draft) throw new Error(`Cannot save when status = "${this.statusCode}".`);
-    return await this.#setStatus(Collector.STATUSES.draft);
-  }
-
-  async publish () {
-    const publicEventData = {
-      type: 'request/collector-v1',
-      streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.public)],
-      content: this.request.content
-    };
-    await this.appManaging.connection.apiOne('events.create', publicEventData, 'event');
-    return await this.#setStatus(Collector.STATUSES.active);
-  }
-
-  #addOrUpdateInvite (eventData) {
-    const key = CollectorInvite.getKeyForEvent(eventData);
-    if (this.#cache.invites[key]) {
-      this.#cache.invites[key].setEventData(eventData);
-    } else {
-      this.#cache.invites[key] = new CollectorInvite(this, eventData);
-    }
-    return this.#cache.invites[key];
-  }
-
-  /**
-   * Retrieve an invite by its key
-   */
-  async getInviteByKey (key) {
-    await this.init(); // do not forceRefresh on Init();
-    await this.#initInvites();
-    return this.#cache.invites[key];
-  }
-
-  /**
-   * Retreive all invites
-   * @param {boolean} [forceRefresh]
-   * @returns {Array<CollectorInvite>}
-   */
-  async getInvites (forceRefresh = false) {
-    await this.init(); // do not forceRefresh on Init();
-    await this.#initInvites(forceRefresh);
-    return Object.values(this.#cache.invites);
-  }
-
-  async #initInvites (forceRefresh) {
-    await waitUntilFalse(() => (this.#cache.invitesInitializing));
-    if (!forceRefresh && this.#cache.invitesInitialized) return;
-    this.#cache.invitesInitializing = true;
-    const queryParams = { types: ['invite/collector-v1'], streams: [this.streamId], fromTime: 0, toTime: 8640000000000000, limit: 10000 };
-    try {
-      await this.appManaging.connection.getEventsStreamed(queryParams, (eventData) => {
-        this.#addOrUpdateInvite(eventData);
-      });
-    } catch (e) {
-      this.#cache.invitesInitialized = true;
-      this.#cache.invitesInitializing = false;
-      throw e;
-    }
-    this.#cache.invitesInitialized = true;
-    this.#cache.invitesInitializing = false;
-  }
-
-  async checkInbox () {
-    const newCollectorInvites = [];
-
-    const params = { types: ['response/collector-v1'], limit: 1000, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox)] };
-    const responseEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
-    for (const responseEvent of responseEvents) {
-      // fetch corresponding invite
-      const inviteEvent = await this.appManaging.connection.apiOne('events.getOne', { id: responseEvent.content.eventId }, 'event');
-      if (inviteEvent == null) throw new HDSLibError(`Cannot find invite event matching id: ${responseEvent.content.eventId}`, responseEvent);
-
-      const updateInvite = {
-        content: structuredClone(inviteEvent.content)
-      };
-      updateInvite.content.sourceEventId = responseEvent.id;
-
-      // check type of response
-      switch (responseEvent.content.type) {
-        case 'accept':
-          updateInvite.streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)];
-          Object.assign(updateInvite.content, { apiEndpoint: responseEvent.content.apiEndpoint });
-          break;
-        case 'refuse':
-          updateInvite.streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)];
-          updateInvite.content.errorType = 'refused';
-          break;
-        case 'revoke':
-          updateInvite.streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)];
-          updateInvite.content.errorType = 'revoked';
-          break;
-        default:
-          throw new HDSLibError(`Unkown or undefined ${responseEvent.content.type}`, responseEvent);
-      }
-
-      // update inviteEvent and archive inbox message
-      const apiCalls = [
-        {
-          method: 'events.update',
-          params: {
-            id: inviteEvent.id,
-            update: updateInvite
-          }
-        },
-        {
-          method: 'events.update',
-          params: {
-            id: responseEvent.id,
-            update: {
-              streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.archive)]
-            }
-          }
-        }
-      ];
-      const results = await this.appManaging.connection.api(apiCalls);
-      const errors = results.filter((r) => (!r.event));
-      if (errors.length > 0) throw new HDSLibError('Error activating incoming request', errors);
-      const eventUpdated = results[0].event;
-      const inviteUpdated = this.#addOrUpdateInvite(eventUpdated);
-      newCollectorInvites.push(inviteUpdated);
-    }
-    return newCollectorInvites;
-  }
-
-  /**
-   * Create a "pending" invite to be sent to an app using AppSharingAccount
-   * @param {string} name a default display name for this request
-   * @param {Object} [options]
-   * @param {Object} [options.customData] any data to be used by the client app
-   */
-  async createInvite (name, options = {}) {
-    if (this.statusCode !== Collector.STATUSES.active) throw new Error(`Collector must be in "active" state error to create invite, current: ${this.statusCode}`);
-    const eventParams = {
-      type: 'invite/collector-v1',
-      streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.pending)],
-      content: {
-        name,
-        customData: options.customData || {}
-      }
-    };
-    const newInvite = await this.appManaging.connection.apiOne('events.create', eventParams, 'event');
-    const invite = this.#addOrUpdateInvite(newInvite);
-    return invite;
-  }
-
-  /**
-   * Get sharing api endpoint
-   */
-  async sharingApiEndpoint () {
-    if (this.statusCode !== Collector.STATUSES.active) throw new Error(`Collector must be in "active" state error to get sharing link, current: ${this.statusCode}`);
-    if (this.#cache.sharingApiEndpoint) return this.#cache.sharingApiEndpoint;
-    // check if sharing present
-    const sharedAccessId = 'a-' + this.streamId;
-    const accesses = await this.appManaging.connection.apiOne('accesses.get', {}, 'accesses');
-    const sharedAccess = accesses.find(
-      (access) => access.name === sharedAccessId
-    );
-    // found return it
-    if (sharedAccess) {
-      this.#cache.sharingApiEndpoint = sharedAccess.apiEndpoint;
-      return sharedAccess.apiEndpoint;
-    }
-
-    // not found create it
-    const permissions = [
-      { streamId: this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox), level: 'create-only' },
-      { streamId: this.streamIdFor(Collector.STREAMID_SUFFIXES.public), level: 'read' },
-      // for "publicly shared access" always forbid the selfRevoke feature
-      { feature: 'selfRevoke', setting: 'forbidden' },
-      // for "publicly shared access" always forbid the selfAudit feature
-      { feature: 'selfAudit', setting: 'forbidden' }
-    ];
-    const clientData = {
-      hdsCollector: {
-        version: 0,
-        public: {
-          streamId: this.streamIdFor(Collector.STREAMID_SUFFIXES.public)
-        },
-        inbox: {
-          streamId: this.streamIdFor(Collector.STREAMID_SUFFIXES.inbox)
-        }
-      }
-    };
-    const params = { name: sharedAccessId, type: 'shared', permissions, clientData };
-    const access = await this.appManaging.connection.apiOne('accesses.create', params, 'access');
-    const newSharingApiEndpoint = access?.apiEndpoint;
-    if (!newSharingApiEndpoint) throw new HDSLibError('Cannot find apiEndpoint in sharing creation request', { result: access, requestParams: params });
-    this.#cache.sharingApiEndpoint = newSharingApiEndpoint;
-    return newSharingApiEndpoint;
-  }
-
-  /**
-   * @private
-   * @param {CollectorInvite} invite
-   * @param {boolean} alreadyChecked // to avoid loops
-   * @returns {CollectorInvite}
-   */
-  async revokeInvite (invite, alreadyChecked = false) {
-    // Invalidate Invite APIEndpoint(s)
-    if (invite.status === 'active' && !alreadyChecked) { // invalidate eventual authorization granted
-      const accessInfo = await invite.checkAndGetAccessInfo(true);
-      const deletionResult = await invite.connection.apiOne('accesses.delete', { id: accessInfo.id });
-      if (deletionResult?.accessDeletion?.id == null) {
-        logger.warn(`Failed revoking invite access for ${accessInfo.name}`);
-      }
-    }
-
-    // invalidate this access
-    const updateInvite = {
-      id: invite.eventData.id,
-      update: {
-        content: structuredClone(invite.eventData.content),
-        streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)]
-      }
-    };
-
-    updateInvite.update.content.errorType = 'revoked';
-    const eventData = await this.appManaging.connection.apiOne('events.update', updateInvite, 'event');
-    invite.eventData = eventData;
-    return invite;
-  }
-
-  /**
-   * check if required streams are present, if not create them
-   */
-  async checkStreamStructure () {
-    // if streamData has correct child structure, we assume all is OK
-    const childrenData = this.#streamData.children;
-    const toCreate = Object.values(Collector.STREAMID_SUFFIXES)
-      .filter((suffix) => {
-        if (!childrenData) return true;
-        if (childrenData.find(child => child.id === this.streamIdFor(suffix))) return false;
-        return true;
-      });
-
-    if (toCreate.length === 0) return { created: [] };
-    // create required streams
-    const apiCalls = toCreate.map(suffix => ({
-      method: 'streams.create',
-      params: {
-        id: this.streamIdFor(suffix),
-        parentId: this.streamId,
-        name: this.name + ' ' + suffix
-      }
-    }));
-    const result = { created: [], errors: [] };
-    const resultsApi = await this.appManaging.connection.api(apiCalls);
-    for (const resultCreate of resultsApi) {
-      if (resultCreate.error) {
-        result.errors.push(resultCreate.error);
-        continue;
-      }
-      if (resultCreate.stream) {
-        result.created.push(resultCreate.stream);
-        if (!this.#streamData.children) this.#streamData.children = [];
-        this.#streamData.children.push(resultCreate.stream);
-        continue;
-      }
-      result.errors.push({ id: 'unkown-error', message: 'Cannot find stream in result', data: resultCreate });
-    }
-    return result;
-  }
-
-  /**
-   * @param {string} suffix
-   */
-  streamIdFor (suffix) {
-    return this.streamId + '-' + suffix;
-  }
-
-  /**
-   * Invite Status for streamId
-   * reverse of streamIdFor
-   */
-  inviteStatusForStreamId (streamId) {
-    // init cache if needed
-    if (!this.#cache.inviteStatusForStreamId) {
-      this.#cache.inviteStatusForStreamId = {};
-      for (const status of [COLLECTOR_STREAMID_SUFFIXES.pending, COLLECTOR_STREAMID_SUFFIXES.active, COLLECTOR_STREAMID_SUFFIXES.error]) {
-        this.#cache.inviteStatusForStreamId[this.streamIdFor(status)] = status;
-      }
-    }
-    // look for status
-    const status = this.#cache.inviteStatusForStreamId[streamId];
-    if (status == null) throw new HDSLibError(`Cannot find status for streamId: ${streamId}`);
-    return status;
-  }
-}
-
-module.exports = Collector;
-
-/**
- * @typedef {CollectorRequest}
- * @property {number} version
- * @property {Localizable} description
- * @property {Localizable} consent
- * @property {Array<Permission>} permissions - Like Pryv permission request
- * @property {Object} app
- * @property {String} app.id
- * @property {String} app.url
- * @property {Object} app.data - to be finalized
- */
-
-
-/***/ }),
-
-/***/ "./src/appTemplates/CollectorClient.js":
-/*!*********************************************!*\
-  !*** ./src/appTemplates/CollectorClient.js ***!
-  \*********************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { CollectorRequest } = __webpack_require__(/*! ./CollectorRequest.ts */ "./src/appTemplates/CollectorRequest.ts");
-const pryv = __webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js");
-const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
-const logger = __webpack_require__(/*! ../logger */ "./src/logger.js");
-
-/**
- * Client App in relation to an AppManagingAccount/Collector
- */
-class CollectorClient {
-  static STATUSES = Object.freeze({
-    incoming: 'Incoming',
-    active: 'Active',
-    deactivated: 'Deactivated',
-    refused: 'Refused'
-  });
-
-  /** @type {AppClientAccount} */
-  app;
-  /** @type {PryvEvent} */
-  eventData;
-  /** @type {Object} - when active or deactivated - there is a link with accessData */
-  accessData;
-  /** @type {CollectorRequest} */
-  request;
-
-  /** @property {String} - identified within user's account - can be used to retreive a Collector Client from an app */
-  get key () {
-    return CollectorClient.keyFromInfo(this.eventData.content.accessInfo);
-  }
-
-  /** @property {String} - id matching an event within requester's account - used as a reference to communicate with requester */
-  get requesterEventId () {
-    return this.eventData.content.requesterEventId;
-  }
-
-  /** @property {String}  */
-  get requesterApiEndpoint () {
-    return this.eventData.content.apiEndpoint;
-  }
-
-  /** @property {Object} - full content of the request */
-  get requestData () {
-    return this.eventData.content.requesterEventData.content;
-  }
-
-  /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
-  get status () {
-    const eventStatus = this.eventData.content.status;
-    if (eventStatus === CollectorClient.STATUSES.deactivated || eventStatus === CollectorClient.STATUSES.refused) {
-      if (!this.accessData?.deleted) {
-        logger.error('>> CollectorClient.status TODO check consitency when access is still valid and deactivated or refused', this.accessData);
-      }
-      return eventStatus;
-    }
-
-    if (this.accessData && !this.accessData.deleted && this.eventData.content.status !== CollectorClient.STATUSES.active) {
-      logger.error('>> CollectorClient.status: accessData ', this.accessData);
-      throw new HDSLibError('Should be active, try checkConsiency()');
-    }
-    if (!eventStatus) {
-      logger.error('>> CollectorClient.status is null', { eventData: this.eventData, accessData: this.accessData });
-    }
-
-    return eventStatus;
-  }
-
-  constructor (app, eventData, accessData = null) {
-    this.app = app;
-    this.eventData = eventData;
-    this.accessData = accessData;
-    this.request = new CollectorRequest({});
-    this.request.loadFromInviteEvent(eventData.content.requesterEventData);
-  }
-
-  /**
-   * @private
-   * used by appClientAccount.handleIncomingRequest
-   */
-  static async create (app, apiEndpoint, requesterEventId, accessInfo) {
-    // check content of accessInfo
-    const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
-    // get request event cont
-    const requesterConnection = new pryv.Connection(apiEndpoint);
-    const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
-    if (!requesterEvents[0]) throw new HDSLibError('Cannot find requester event in public stream', requesterEvents);
-
-    const eventData = {
-      type: 'request/collector-client-v1',
-      streamIds: [app.baseStreamId],
-      content: {
-        apiEndpoint,
-        requesterEventId,
-        requesterEventData: requesterEvents[0],
-        accessInfo,
-        status: CollectorClient.STATUSES.incoming
-      }
-    };
-    const event = await app.connection.apiOne('events.create', eventData, 'event');
-    return new CollectorClient(app, event);
-  }
-
-  /**
-   * @private
-   * reset with new request Event of ApiEndpoint
-   * Identical as create but keep current event
-   */
-  async reset (apiEndpoint, requesterEventId) {
-    if (this.accessData && this.accessData?.deleted != null) {
-      logger.error('TODO try to revoke current access');
-    }
-    // get accessInfo
-    const requesterConnection = new pryv.Connection(apiEndpoint);
-    const accessInfo = await requesterConnection.accessInfo();
-    // check content of accessInfo
-    const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
-    // get request event cont
-    const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
-    if (!requesterEvents[0]) throw new HDSLibError('Cannot find requester event in public stream', requesterEvents);
-
-    const eventData = await this.app.connection.apiOne('events.update', {
-      id: this.eventData.id,
-      update: {
-        content: {
-          apiEndpoint,
-          requesterEventId,
-          requesterEventData: requesterEvents[0],
-          accessInfo,
-          status: CollectorClient.STATUSES.incoming
-        }
-      }
-    }, 'event');
-    this.eventData = eventData;
-    this.request.loadFromInviteEvent(requesterEvents[0]);
-    return this;
-  }
-
-  /**
-   * Update business event with new status
-   * @param {string} newStatus
-   * @param {Object} [extraData] - if given this will be added to content ⚠️ - This can overide content!
-   */
-  async #updateStatus (newStatus, extraData = null) {
-    const newContent = structuredClone(this.eventData.content);
-    newContent.status = newStatus;
-    if (extraData !== null) Object.assign(newContent, extraData);
-    const eventData = await this.app.connection.apiOne('events.update', {
-      id: this.eventData.id,
-      update: {
-        content: newContent
-      }
-    }, 'event');
-    this.eventData = eventData;
-  }
-
-  /**
-   * Accept current request
-   * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
-   */
-  async accept (forceAndSkipAccessCreation = false) {
-    if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
-      forceAndSkipAccessCreation = true;
-      logger.error('CollectorClient.accept TODO fix accept when access valid');
-    }
-    if (forceAndSkipAccessCreation) {
-      if (!this.accessData?.apiEndpoint || this.accessData?.delete) throw new HDSLibError('Cannot force accept with empty or deleted accessData', this.accessData);
-    } else {
-      if (this.status === 'Active') throw new HDSLibError('Cannot accept an Active CollectorClient');
-      // create access for requester
-      const cleanedPermissions = this.requestData.permissions.map((p) => {
-        if (p.streamId) return { streamId: p.streamId, level: p.level };
-        return p;
-      });
-      const accessCreateData = {
-        name: this.key,
-        type: 'shared',
-        permissions: cleanedPermissions,
-        clientData: {
-          hdsCollectorClient: {
-            version: 0,
-            eventData: this.eventData
-          }
-        }
-      };
-      const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
-      this.accessData = accessData;
-      if (!this.accessData?.apiEndpoint) throw new HDSLibError('Failed creating request access', accessData);
-    }
-
-    const responseContent = {
-      apiEndpoint: this.accessData.apiEndpoint
-    };
-
-    const requesterEvent = await this.#updateRequester('accept', responseContent);
-    if (requesterEvent != null) {
-      await this.#updateStatus(CollectorClient.STATUSES.active);
-      return { accessData: this.accessData, requesterEvent };
-    }
-    return null;
-  }
-
-  async revoke () {
-    if (!this.accessData) {
-      throw new HDSLibError('Cannot revoke if no accessData');
-    }
-    if (this.accessData.deleted && this.status === CollectorClient.STATUSES.deactivated) {
-      throw new HDSLibError('Already revoked');
-    }
-    // revoke access
-    await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
-    // lazyly flag currentAccess as deleted
-    this.accessData.deleted = Date.now() / 1000;
-
-    const responseContent = { };
-    const requesterEvent = await this.#updateRequester('revoke', responseContent);
-    if (requesterEvent != null) {
-      await this.#updateStatus(CollectorClient.STATUSES.deactivated);
-      return { requesterEvent };
-    }
-    return null;
-  }
-
-  async refuse () {
-    const responseContent = { };
-
-    const requesterEvent = await this.#updateRequester('refuse', responseContent);
-    if (requesterEvent != null) {
-      await this.#updateStatus(CollectorClient.STATUSES.refused);
-      return { requesterEvent };
-    }
-    return null;
-  }
-
-  /**
-   * @param {string} type - one of 'accpet', 'revoke', 'refuse'
-   * @param {object} responseContent - content is related to type
-   * @returns {Object} - response
-   */
-  async #updateRequester (type, responseContent) {
-    // sent access credentials to requester
-    // check content of accessInfo
-    const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
-    const requesterEventId = this.requesterEventId;
-    const requestrerApiEndpoint = this.eventData.content.apiEndpoint;
-
-    // add eventId to content
-    const content = Object.assign({ type, eventId: requesterEventId }, responseContent);
-
-    // acceptEvent to be sent to requester
-    const responseEvent = {
-      type: 'response/collector-v1',
-      streamIds: [publicStreamId],
-      content
-    };
-
-    try {
-      const requesterConnection = new pryv.Connection(requestrerApiEndpoint);
-      const requesterEvent = await requesterConnection.apiOne('events.create', responseEvent, 'event');
-      return requesterEvent;
-    } catch (e) {
-      const deactivatedDetail = {
-        type: 'error',
-        message: e.message
-      };
-      if (e.innerObject) deactivatedDetail.data = e.innerObject;
-      logger.error('Failed activating', deactivatedDetail);
-      const deactivatedResult = await this.#updateStatus(CollectorClient.STATUSES.deactivated, { deactivatedDetail });
-      console.log('***** ', { deactivatedResult });
-      return null;
-    }
-  }
-
-  /**
-   * Probable temporary internal to fix possible inconsenticies during lib early stages
-   */
-  async checkConsistency () {
-    // accessData but not active
-    if (this.accessData && this.eventData.content.status == null) {
-      logger.info('Found discrepency with accessData and status not active, fixing it');
-      if (!this.accessData.deleted) {
-        await this.accept(true);
-      } else {
-        await this.revoke();
-      }
-    } else {
-      // logger.debug('CollectorClient:checkConsistency', this.accessData);
-    }
-  }
-
-  /**
-   * return the key to discriminate collectorClients
-   * @param {PryvAccessInfo} accessInfo
-   */
-  static keyFromInfo (info) {
-    return info.user.username + ':' + info.name;
-  }
-}
-
-module.exports = CollectorClient;
-
-
-/***/ }),
-
-/***/ "./src/appTemplates/CollectorInvite.js":
-/*!*********************************************!*\
-  !*** ./src/appTemplates/CollectorInvite.js ***!
-  \*********************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const pryv = __webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js");
-const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
-
-/**
- * Collector Invite
- * There is one Collector Invite per Collector => Enduser connection
- */
-
-class CollectorInvite {
-  /**
-   * get the key that will be assigne to this event;
-   * @param {Event} eventData
-   * @returns {string}
-   */
-  static getKeyForEvent (eventData) {
-    return eventData.id;
-  }
-
-  /** @type {Collector} */
-  collector;
-  /** @type {Event} */
-  eventData;
-  /** @type {pryv.Connection} */
-  #connection;
-  /** @type {Object} accessInfo from account */
-  #accessInfo;
-
-  get key () {
-    return CollectorInvite.getKeyForEvent(this.eventData);
-  }
-
-  get status () {
-    return this.collector.inviteStatusForStreamId(this.eventData.streamIds[0]);
-  }
-
-  get apiEndpoint () {
-    if (this.status !== 'active') {
-      throw new HDSLibError('invite.apiEndpoint is accessible only when active');
-    }
-    return this.eventData.content.apiEndpoint;
-  }
-
-  /** @type {string} - on of 'revoked', 'refused' */
-  get errorType () {
-    return this.eventData.content?.errorType;
-  }
-
-  get dateCreation () {
-    return new Date(this.eventData.created * 1000);
-  }
-
-  get connection () {
-    if (this.#connection == null) {
-      this.#connection = new pryv.Connection(this.apiEndpoint);
-    }
-    return this.#connection;
-  }
-
-  /**
-   * Check if connection is valid. (only if active)
-   * If result is "forbidden" update and set as revoked
-   * @returns {Object} accessInfo if valid.
-   */
-  async checkAndGetAccessInfo (forceRefresh = false) {
-    if (!forceRefresh && this.#accessInfo) return this.#accessInfo;
-    try {
-      this.#accessInfo = await this.connection.accessInfo();
-      return this.#accessInfo;
-    } catch (e) {
-      this.#accessInfo = null;
-      if (e.response?.body?.error?.id === 'invalid-access-token') {
-        await this.collector.revokeInvite(this, true);
-        return null;
-      }
-      throw e;
-    }
-  }
-
-  /**
-   * revoke the invite
-   */
-  async revoke () {
-    return this.collector.revokeInvite(this);
-  }
-
-  get displayName () {
-    return this.eventData.content.name;
-  }
-
-  constructor (collector, eventData) {
-    if (eventData.type !== 'invite/collector-v1') throw new HDSLibError('Wrong type of event', eventData);
-    this.collector = collector;
-    this.eventData = eventData;
-  }
-
-  /**
-   * private
-   * @param {*} eventData
-   */
-  setEventData (eventData) {
-    if (eventData.id !== this.eventData.id) throw new HDSLibError('CollectInvite event id does not match new Event');
-    this.eventData = eventData;
-  }
-
-  async getSharingData () {
-    if (this.status !== 'pending') throw new HDSLibError('Only pendings can be shared');
-    return {
-      apiEndpoint: await this.collector.sharingApiEndpoint(),
-      eventId: this.eventData.id
-    };
-  }
-}
-
-module.exports = CollectorInvite;
-
-
-/***/ }),
-
-/***/ "./src/appTemplates/CollectorRequest.ts":
-/*!**********************************************!*\
-  !*** ./src/appTemplates/CollectorRequest.ts ***!
-  \**********************************************/
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   CollectorRequest: () => (/* binding */ CollectorRequest)
-/* harmony export */ });
-/* harmony import */ var _errors_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../errors.js */ "./src/errors.js");
-/* harmony import */ var _errors_js__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(_errors_js__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./src/HDSModel/HDSModelInitAndSingleton.js");
-/* harmony import */ var _HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(_HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var _localizeText_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../localizeText.js */ "./src/localizeText.js");
-/* harmony import */ var _localizeText_js__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(_localizeText_js__WEBPACK_IMPORTED_MODULE_2__);
-var __classPrivateFieldSet = (undefined && undefined.__classPrivateFieldSet) || function (receiver, state, value, kind, f) {
-    if (kind === "m") throw new TypeError("Private method is not writable");
-    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
-    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
-    return (kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value)), value;
-};
-var __classPrivateFieldGet = (undefined && undefined.__classPrivateFieldGet) || function (receiver, state, kind, f) {
-    if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
-    if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
-    return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
-};
-var _CollectorRequest_version, _CollectorRequest_title, _CollectorRequest_description, _CollectorRequest_consent, _CollectorRequest_requester, _CollectorRequest_app, _CollectorRequest_permissionsExtra, _CollectorRequest_permissions, _CollectorRequest_sections, _CollectorRequest_extraContent, _CollectorRequestSection_type, _CollectorRequestSection_name, _CollectorRequestSection_key, _CollectorRequestSection_itemKeys;
-
-
-
-const CURRENT_VERSION = 1;
-/**
- * Each Collector has one Request
- * Which contains
- * - the name of the requester
- * - a title
- * - a description
- * - a consent message
- * - a set of permission requests
- * - a version
- */
-class CollectorRequest {
-    constructor(content) {
-        _CollectorRequest_version.set(this, void 0);
-        _CollectorRequest_title.set(this, void 0);
-        _CollectorRequest_description.set(this, void 0);
-        _CollectorRequest_consent.set(this, void 0);
-        _CollectorRequest_requester.set(this, void 0);
-        _CollectorRequest_app.set(this, void 0);
-        _CollectorRequest_permissionsExtra.set(this, void 0);
-        _CollectorRequest_permissions.set(this, void 0);
-        _CollectorRequest_sections.set(this, void 0);
-        _CollectorRequest_extraContent.set(this, void 0);
-        __classPrivateFieldSet(this, _CollectorRequest_version, CURRENT_VERSION, "f");
-        __classPrivateFieldSet(this, _CollectorRequest_requester, { name: null }, "f");
-        __classPrivateFieldSet(this, _CollectorRequest_app, { id: null, url: null, data: {} }, "f");
-        __classPrivateFieldSet(this, _CollectorRequest_permissions, [], "f");
-        __classPrivateFieldSet(this, _CollectorRequest_permissionsExtra, [], "f");
-        __classPrivateFieldSet(this, _CollectorRequest_sections, [], "f");
-        this.setContent(content);
-    }
-    /**
-     * Loadfrom invite event
-     * used by CollectorClient only
-     * @param invite
-     */
-    loadFromInviteEvent(inviteEvent) {
-        this.setContent(inviteEvent.content);
-    }
-    /**
-     * Loadfrom status event from Collector
-     * used by Collector only
-     * @param statusEvent
-     */
-    loadFromStatusEvent(statusEvent) {
-        // content.data is deprecated it was used in a previous version, should be removed
-        let potentialContent = statusEvent.content.request || statusEvent.content.data;
-        // for some reason to be investigated sometime the data is in requestContent
-        if (potentialContent.requestContent)
-            potentialContent = potentialContent.requestContent;
-        this.setContent(potentialContent);
-    }
-    /**
-     * Temp content
-     * @param content
-     */
-    setContent(content) {
-        const futureContent = structuredClone(content);
-        // validate content
-        if (futureContent.version != null) {
-            const numV = Number.parseInt(futureContent.version);
-            if (numV === 0) {
-                vo0ToV1(futureContent); // convert to v1 if needed
-            }
-            else {
-                if (numV !== __classPrivateFieldGet(this, _CollectorRequest_version, "f"))
-                    throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
-            }
-            delete futureContent.version;
-        }
-        // -- title, consent, description
-        for (const key of ['title', 'consent', 'description']) {
-            if (futureContent[key] != null) {
-                this[key] = futureContent[key];
-            }
-            delete futureContent[key];
-        }
-        // -- requester
-        if (futureContent.requester) {
-            if (futureContent.requester.name != null) {
-                this.requesterName = futureContent.requester.name;
-            }
-            delete futureContent.requester;
-        }
-        // -- app
-        if (futureContent.app) {
-            if (futureContent.app.id != null) {
-                this.appId = futureContent.app.id;
-            }
-            if (futureContent.app.url != null) {
-                this.appUrl = futureContent.app.url;
-            }
-            if (futureContent.app.data != null) {
-                this.appCustomData = futureContent.app.data;
-            }
-            delete futureContent.app;
-        }
-        // -- sections
-        if (futureContent.sections != null) {
-            __classPrivateFieldSet(this, _CollectorRequest_sections, [], "f"); // reset sections
-            for (const sectionData of futureContent.sections) {
-                const section = this.createSection(sectionData.key, sectionData.type);
-                section.setName(sectionData.name);
-                section.addItemKeys(sectionData.itemKeys);
-            }
-            delete futureContent.sections;
-        }
-        // -- permissions
-        if (futureContent.permissions) {
-            __classPrivateFieldSet(this, _CollectorRequest_permissions, [], "f"); // reset permissions
-            futureContent.permissions.forEach((p) => {
-                this.addPermission(p.streamId, p.defaultName, p.level);
-            });
-            delete futureContent.permissions;
-        }
-        // -- permissionsExtra
-        if (futureContent.permissionsExtra) {
-            __classPrivateFieldSet(this, _CollectorRequest_permissionsExtra, [], "f"); // reset permissions Extra
-            futureContent.permissionsExtra.forEach((p) => {
-                this.addPermissionExtra(p);
-            });
-            delete futureContent.permissionsExtra;
-        }
-        __classPrivateFieldSet(this, _CollectorRequest_extraContent, futureContent, "f");
-    }
-    // ------------- getter and setters ------------ //
-    get version() { return __classPrivateFieldGet(this, _CollectorRequest_version, "f"); }
-    set title(title) { __classPrivateFieldSet(this, _CollectorRequest_title, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_2__.validateLocalizableText)('title', title), "f"); }
-    get title() { return __classPrivateFieldGet(this, _CollectorRequest_title, "f"); }
-    set consent(consent) { __classPrivateFieldSet(this, _CollectorRequest_consent, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_2__.validateLocalizableText)('consent', consent), "f"); }
-    get consent() { return __classPrivateFieldGet(this, _CollectorRequest_consent, "f"); }
-    set description(description) { __classPrivateFieldSet(this, _CollectorRequest_description, (0,_localizeText_js__WEBPACK_IMPORTED_MODULE_2__.validateLocalizableText)('description', description), "f"); }
-    get description() { return __classPrivateFieldGet(this, _CollectorRequest_description, "f"); }
-    set requesterName(name) { __classPrivateFieldGet(this, _CollectorRequest_requester, "f").name = validateString('requester:name', name); }
-    get requesterName() { return __classPrivateFieldGet(this, _CollectorRequest_requester, "f").name; }
-    set appId(id) { __classPrivateFieldGet(this, _CollectorRequest_app, "f").id = validateString('app:id', id); }
-    get appId() { return __classPrivateFieldGet(this, _CollectorRequest_app, "f").id; }
-    set appUrl(url) { __classPrivateFieldGet(this, _CollectorRequest_app, "f").url = validateString('app:url', url); }
-    get appUrl() { return __classPrivateFieldGet(this, _CollectorRequest_app, "f").url; }
-    set appCustomData(data) { __classPrivateFieldGet(this, _CollectorRequest_app, "f").data = data; }
-    get appCustomData() { return __classPrivateFieldGet(this, _CollectorRequest_app, "f").data; }
-    get permissions() { return __classPrivateFieldGet(this, _CollectorRequest_permissions, "f"); }
-    get permissionsExtra() { return __classPrivateFieldGet(this, _CollectorRequest_permissionsExtra, "f"); }
-    // --- section --- //
-    get sections() {
-        return __classPrivateFieldGet(this, _CollectorRequest_sections, "f");
-    }
-    get sectionsData() {
-        const result = [];
-        for (const section of __classPrivateFieldGet(this, _CollectorRequest_sections, "f")) {
-            const data = section.getData();
-            result.push(data);
-        }
-        return result;
-    }
-    createSection(key, type) {
-        if (this.getSectionByKey(key) != null)
-            throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Section with key: ${key} already exists`);
-        const section = new CollectorRequestSection(key, type);
-        __classPrivateFieldGet(this, _CollectorRequest_sections, "f").push(section);
-        return section;
-    }
-    getSectionByKey(key) {
-        return __classPrivateFieldGet(this, _CollectorRequest_sections, "f").find((s) => (s.key === key));
-    }
-    // ---------- permissions ---------- //
-    addPermissions(permissions) {
-        for (const permission of permissions) {
-            this.addPermission(permission.streamId, permission.defaultName, permission.level);
-        }
-    }
-    addPermission(streamId, defaultName, level) {
-        __classPrivateFieldGet(this, _CollectorRequest_permissions, "f").push({ streamId, defaultName, level });
-    }
-    /**
-     * Add a static permission, not linked to itemKeys for other usages
-     * @param permission
-     */
-    addPermissionExtra(permission) {
-        // todo standard checks
-        __classPrivateFieldGet(this, _CollectorRequest_permissionsExtra, "f").push(permission);
-    }
-    /**
-     * Reset permissions
-     */
-    resetPermissions() {
-        __classPrivateFieldGet(this, _CollectorRequest_permissions, "f").splice(0, __classPrivateFieldGet(this, _CollectorRequest_permissions, "f").length);
-    }
-    /**
-     * Rebuild permissions based on sections itemKeys and staticPermissions
-     */
-    buildPermissions() {
-        // 1- get all items form the questionnary sections
-        const itemKeys = [];
-        for (const section of this.sections) {
-            itemKeys.push(...section.itemKeys);
-        }
-        // 2 - get the permissions with eventual preRequest
-        const preRequest = this.permissionsExtra || [];
-        const permissions = (0,_HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__.getModel)().authorizations.forItemKeys(itemKeys, { preRequest });
-        // 3 - if no error araised - reset permissions
-        this.resetPermissions();
-        this.addPermissions(permissions);
-    }
-    // ---------- sections ------------- //
-    /**
-     * Return Content to comply with initial implementation as an object
-     */
-    get content() {
-        const content = {
-            version: this.version,
-            title: this.title,
-            consent: this.consent,
-            description: this.description,
-            requester: {
-                name: this.requesterName
-            },
-            permissionsExtra: this.permissionsExtra,
-            permissions: this.permissions,
-            app: {
-                id: this.appId,
-                url: this.appUrl,
-                data: this.appCustomData
-            },
-            sections: this.sectionsData
-        };
-        Object.assign(content, __classPrivateFieldGet(this, _CollectorRequest_extraContent, "f"));
-        return content;
-    }
-}
-_CollectorRequest_version = new WeakMap(), _CollectorRequest_title = new WeakMap(), _CollectorRequest_description = new WeakMap(), _CollectorRequest_consent = new WeakMap(), _CollectorRequest_requester = new WeakMap(), _CollectorRequest_app = new WeakMap(), _CollectorRequest_permissionsExtra = new WeakMap(), _CollectorRequest_permissions = new WeakMap(), _CollectorRequest_sections = new WeakMap(), _CollectorRequest_extraContent = new WeakMap();
-function validateString(key, totest) {
-    if (totest == null || typeof totest !== 'string')
-        throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
-    return totest;
-}
-const RequestSectionType = {
-    recurring: 'recurring',
-    permanent: 'permanent'
-};
-class CollectorRequestSection {
-    constructor(key, type) {
-        _CollectorRequestSection_type.set(this, void 0);
-        _CollectorRequestSection_name.set(this, void 0);
-        _CollectorRequestSection_key.set(this, void 0);
-        _CollectorRequestSection_itemKeys.set(this, void 0);
-        __classPrivateFieldSet(this, _CollectorRequestSection_key, key, "f");
-        __classPrivateFieldSet(this, _CollectorRequestSection_type, type, "f");
-        __classPrivateFieldSet(this, _CollectorRequestSection_itemKeys, [], "f");
-        __classPrivateFieldSet(this, _CollectorRequestSection_name, {
-            en: ''
-        }, "f");
-    }
-    addItemKeys(keys) {
-        keys.forEach((k) => this.addItemKey(k));
-    }
-    addItemKey(key) {
-        (0,_HDSModel_HDSModelInitAndSingleton_js__WEBPACK_IMPORTED_MODULE_1__.getModel)().itemsDefs.forKey(key); // will throw error if not found
-        if (__classPrivateFieldGet(this, _CollectorRequestSection_itemKeys, "f").includes(key))
-            return; // avoid double entries
-        __classPrivateFieldGet(this, _CollectorRequestSection_itemKeys, "f").push(key);
-    }
-    setName(localizedName) {
-        for (const [languageCode, name] of Object.entries(localizedName)) {
-            this.setNameLocal(languageCode, name);
-        }
-    }
-    setNameLocal(languageCode, name) {
-        __classPrivateFieldGet(this, _CollectorRequestSection_name, "f")[languageCode] = name;
-    }
-    get type() { return __classPrivateFieldGet(this, _CollectorRequestSection_type, "f"); }
-    get key() { return __classPrivateFieldGet(this, _CollectorRequestSection_key, "f"); }
-    get itemKeys() { return __classPrivateFieldGet(this, _CollectorRequestSection_itemKeys, "f"); }
-    get name() { return __classPrivateFieldGet(this, _CollectorRequestSection_name, "f"); }
-    getData() {
-        return {
-            key: this.key,
-            type: __classPrivateFieldGet(this, _CollectorRequestSection_type, "f"),
-            name: __classPrivateFieldGet(this, _CollectorRequestSection_name, "f"),
-            itemKeys: __classPrivateFieldGet(this, _CollectorRequestSection_itemKeys, "f")
-        };
-    }
-}
-_CollectorRequestSection_type = new WeakMap(), _CollectorRequestSection_name = new WeakMap(), _CollectorRequestSection_key = new WeakMap(), _CollectorRequestSection_itemKeys = new WeakMap();
-/**
- * Transform data to match v1
- * @param v0Data
- */
-function vo0ToV1(v0Data) {
-    var _a, _b;
-    if ((_b = (_a = v0Data.app) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.forms) {
-        if (v0Data.sections)
-            throw new _errors_js__WEBPACK_IMPORTED_MODULE_0__.HDSLibError('Cannot mix data.forms & sections', v0Data);
-        v0Data.sections = [];
-        for (const [key, value] of Object.entries(v0Data.app.data.forms)) {
-            value.key = key;
-            value.name = {
-                en: value.name
-            };
-            v0Data.sections.push(value);
-        }
-        delete v0Data.app.data.forms;
-    }
-    v0Data.version = 1;
-}
-
-
-/***/ }),
-
-/***/ "./src/appTemplates/appTemplates.js":
-/*!******************************************!*\
-  !*** ./src/appTemplates/appTemplates.js ***!
-  \******************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const AppManagingAccount = __webpack_require__(/*! ./AppManagingAccount */ "./src/appTemplates/AppManagingAccount.js");
-const AppClientAccount = __webpack_require__(/*! ./AppClientAccount */ "./src/appTemplates/AppClientAccount.js");
-
-module.exports = {
-  AppManagingAccount,
-  AppClientAccount
-};
-
-
-/***/ }),
-
-/***/ "./src/errors.js":
-/*!***********************!*\
-  !*** ./src/errors.js ***!
-  \***********************/
-/***/ ((module) => {
-
-class HDSLibError extends Error {
-  constructor (message, innerObject = { }) {
-    const msg = (innerObject.message != null) ? message + ' >> ' + innerObject.message : message;
-    super(msg);
-    this.innerObject = innerObject;
-  }
-
-  toString () {
-    const res = super.toString();
-    return res + '\nInner Object:\n' + JSON.stringify(this.innerObject, null, 2);
-  }
-}
-
-module.exports = {
-  HDSLibError
-};
-
-
-/***/ }),
-
-/***/ "./src/index.js":
-/*!**********************!*\
-  !*** ./src/index.js ***!
-  \**********************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { localizeText } = __webpack_require__(/*! ./localizeText */ "./src/localizeText.js");
-const settings = __webpack_require__(/*! ./settings */ "./src/settings.js");
-const pryv = __webpack_require__(/*! ./patchedPryv */ "./src/patchedPryv.js");
-const HDSModel = __webpack_require__(/*! ./HDSModel/HDSModel */ "./src/HDSModel/HDSModel.js");
-const appTemplates = __webpack_require__(/*! ./appTemplates/appTemplates */ "./src/appTemplates/appTemplates.js");
-const logger = __webpack_require__(/*! ./logger */ "./src/logger.js");
-const HDService = __webpack_require__(/*! ./HDSService */ "./src/HDSService.js");
-const HDSModelInitAndSingleton = __webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton */ "./src/HDSModel/HDSModelInitAndSingleton.js");
-const toolkit = __webpack_require__(/*! ./toolkit */ "./src/toolkit/index.js");
-
-module.exports = {
-  pryv,
-  settings,
-  HDService,
-  HDSModel,
-  get model () {
-    console.warn('HDSLib.model is deprecated use getHDSModel() instead');
-    return HDSModelInitAndSingleton.getModel();
-  },
-  getHDSModel: HDSModelInitAndSingleton.getModel,
-  initHDSModel: HDSModelInitAndSingleton.initHDSModel,
-  appTemplates,
-  localizeText,
-  l: localizeText, // shortcut to HDSLib.localizeText
-  toolkit,
-  logger
-};
-
-
-/***/ }),
-
-/***/ "./src/localizeText.js":
-/*!*****************************!*\
-  !*** ./src/localizeText.js ***!
-  \*****************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-/**
- * basic localization functions
- */
-
-const { HDSLibError } = __webpack_require__(/*! ./errors */ "./src/errors.js");
-
-module.exports = {
-  localizeText,
-  setPreferredLocales,
-  getPreferredLocales,
-  getSupportedLocales,
-  resetPreferredLocales,
-  validateLocalizableText
-};
-
-const supportedLocales = ['en', 'fr', 'es'];
-Object.freeze(supportedLocales);
-let preferredLocales = [...supportedLocales];
-
-/**
- * get the current preferred locales
-* @returns {Array<string>}
- */
-function getPreferredLocales () {
-  return [...preferredLocales];
-}
-/**
- * get the current supported locales
-* @returns {Array<string>}
- */
-function getSupportedLocales () {
-  return [...supportedLocales];
-}
-
-/**
- * reset prefferedLocalesTo Original state
- */
-function resetPreferredLocales () {
-  setPreferredLocales(supportedLocales);
-}
-
-/**
- * return the translation of this item considering the setting of preffered language
- * @param {Object} textItem
- * @param {string} textItem.en
- * @param {string} [textItem.fr] - French translation
- * @param {string} [textItem.es] - Spanish translation
- */
-function localizeText (textItem) {
-  if (textItem == null) return null;
-  if (!textItem.en) throw new HDSLibError('textItems must have an english translation', { textItem });
-  for (const l of preferredLocales) {
-    if (textItem[l]) return textItem[l];
-  }
-  return textItem.en;
-}
-
-/**
- * Change prefferedLocal order
- * @param {Array<string>} arrayOfLocals of local codes
- */
-function setPreferredLocales (arrayOfLocals) {
-  if (!Array.isArray(arrayOfLocals)) {
-    throw new HDSLibError('setPreferredLocales takes an array of language codes');
-  }
-  const unsupportedLocales = arrayOfLocals.filter(l => (supportedLocales.indexOf(l) < 0));
-  if (unsupportedLocales.length > 0) {
-    throw new HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
-  }
-
-  preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
-}
-/**
- * throw errors if an item is not of type localizableText
- * @param {string} key
- * @param {*} toTest
- * @returns {import('../types/localizeText').localizableText}
- */
-function validateLocalizableText (key, toTest) {
-  if (toTest.en == null || typeof toTest.en !== 'string') throw new HDSLibError(`Missing or invalid localizable text for ${key}`, { [key]: toTest });
-  for (const optionalLang of supportedLocales) {
-    if (optionalLang === 'en') continue;
-    if (toTest[optionalLang] != null && typeof toTest[optionalLang] !== 'string') throw new HDSLibError(`Missing or invalid localizable text for ${key} languagecode: ${optionalLang}`, { [key]: toTest, languageCode: optionalLang });
-  }
-  return toTest;
-}
-
-
-/***/ }),
-
-/***/ "./src/logger.js":
-/*!***********************!*\
-  !*** ./src/logger.js ***!
-  \***********************/
-/***/ ((module) => {
-
-/**
- * Basic logger
- */
-module.exports = {
-  setLogger,
-  info,
-  error,
-  debug
-};
-
-let logger = {
-  info: log('info'),
-  error: log('error'),
-  debug: log('debug')
-};
-
-function setLogger (newLogger) {
-  logger = newLogger;
-}
-
-function info () { logger.info(...arguments); }
-function error () { logger.error(...arguments); }
-function debug () {
-  // logger.debug(...arguments);
-}
-
-function log (type) {
-  return function () {
-    console.log(`Logger: [${type}]`, ...arguments);
-  };
-}
-
-
-/***/ }),
-
-/***/ "./src/patchedPryv.js":
-/*!****************************!*\
-  !*** ./src/patchedPryv.js ***!
-  \****************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-/**
- * While developping this lib some functionnalities should be
- * added to pyv js-lib in a second step
- */
-const pryv = __webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js");
-__webpack_require__(/*! @pryv/monitor */ "./node_modules/@pryv/monitor/src/index.js")(pryv);
-__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js")(pryv);
-
-// patch Pryv only if needed.
-if (!pryv.Connection.prototype.apiOne) {
-/**
- * Make one api Api call
- * @param {string} method - methodId
- * @param {object} [params] - the method associated with this result
- * @param {string} [resultKey] - if given, returns the value or throws an error if not present
- * @throws {Error} if .error is present the response
- */
-  pryv.Connection.prototype.apiOne = async function apiOne (method, params = {}, expectedKey) {
-    const result = await this.api([{ method, params }]);
-    if (result[0] == null || result[0].error || (expectedKey != null && result[0][expectedKey] == null)) {
-      const innerObject = result[0]?.error || result;
-      const error = new Error(`Error for api method: "${method}" with params: ${JSON.stringify(params)} >> Result: ${JSON.stringify(innerObject)}"`);
-      error.innerObject = innerObject;
-      throw error;
-    }
-    if (expectedKey != null) return result[0][expectedKey];
-    return result[0];
-  };
-
-  /**
-   * Revoke : Delete the accessId
-   * - Do not thow error if access is already revoked, just return null;
-   * @param {boolean} [throwOnFail = true] - if set to false do not throw Error on failure
-   * @param {Connection} [usingConnection] - specify which connection issues the revoke, might be necessary when selfRovke
-   */
-  pryv.Connection.prototype.revoke = async function revoke (throwOnFail = true, usingConnection) {
-    usingConnection = usingConnection || this;
-    let accessInfo = null;
-    // get accessId
-    try {
-      accessInfo = await this.accessInfo();
-    } catch (e) {
-      if (e.response?.body?.error?.id === 'invalid-access-token') {
-        return null; // Already revoked OK..
-      }
-      if (throwOnFail) throw e;
-      return null;
-    }
-    // delete access
-    try {
-      const result = usingConnection.apiOne('accesses.delete', { id: accessInfo.id });
-      return result;
-    } catch (e) {
-      if (throwOnFail) throw e;
-      return null;
-    }
-  };
-}
-
-module.exports = pryv;
-
-
-/***/ }),
-
-/***/ "./src/settings.js":
-/*!*************************!*\
-  !*** ./src/settings.js ***!
-  \*************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { setPreferredLocales } = __webpack_require__(/*! ./localizeText */ "./src/localizeText.js");
-
-module.exports = {
-  setPreferredLocales,
-  setServiceInfoURL,
-  getServiceInfoURL
-};
-
-// todo change when in production
-let serviceInfoUrl = 'https://demo.datasafe.dev/reg/service/info';
-/**
- * Set default service info URL
- * @param {string} url
- */
-function setServiceInfoURL (url) {
-  serviceInfoUrl = url;
-}
-
-/**
- * Get default service info URL
- * @returns {string}
- */
-function getServiceInfoURL () {
-  return serviceInfoUrl;
-}
-
-
-/***/ }),
-
-/***/ "./src/toolkit/StreamsAutoCreate.js":
-/*!******************************************!*\
-  !*** ./src/toolkit/StreamsAutoCreate.js ***!
-  \******************************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-const { HDSLibError } = __webpack_require__(/*! ../errors */ "./src/errors.js");
-const { getModel } = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton */ "./src/HDSModel/HDSModelInitAndSingleton.js");
-
-class StreamsAutoCreate {
-  connection;
-
-  /**
-   * Safe way to create StreamsAutoCreate as it check if ones is already attached to connection
-   * @param {Connection} connection
-   * @param {*} knownStreamStructure
-   * @returns {StreamsAutoCreate}
-   */
-  static attachToConnection (connection, knownStreamStructure) {
-    const streamsAutoCreate = connection.streamsAutoCreate || new StreamsAutoCreate(connection);
-    streamsAutoCreate.addStreamStructure(knownStreamStructure);
-    return streamsAutoCreate;
-  }
-
-  /**
-   * @private
-   * Don't use.. use StreamsAutoCreate.attachToConnection
-   * @param {Connection} connection
-   */
-  constructor (connection) {
-    // make connection a weak reference to avoif cycles
-    this.connection = new WeakRef(connection);
-    this.knownStreams = {};
-    connection.streamsAutoCreate = this;
-  }
-
-  /**
-   * @param {Array<String|HDSItemDef>|Set<String|HDSItemDef>} keysOrDefs - Array or Set of itemDefs or itemKeys
-   */
-  async ensureExistsForItems (keysOrDefs) {
-    // get existing streamIds;
-    const modelStreams = getModel().streams;
-    const streamsToCreate = modelStreams.getNecessaryListForItems(keysOrDefs, this.knowStreamIds());
-    const apiCalls = streamsToCreate.map((s) => ({
-      method: 'streams.create',
-      params: s
-    }));
-    const connection = this.connection?.deref();
-    if (!connection) {
-      throw new Error('Lost reference to connection');
-    }
-
-    const results = await connection.api(apiCalls);
-    const streamsCreated = [];
-    const errors = [];
-    for (const result of results) {
-      if (result.stream?.id) {
-        streamsCreated.push(result.stream);
-        continue;
-      }
-      if (result.error) {
-        if (result.error.id === 'item-already-exists') continue; // all OK
-        errors.push(result.error);
-        continue;
-      }
-      // shouldn't be there
-      errors.push({
-        id: 'unexpected-error',
-        message: 'Unexpected content in api response',
-        data: result
-      });
-    }
-    if (errors.length > 0) {
-      throw new HDSLibError('Error creating streams', errors);
-    }
-    return streamsCreated;
-  }
-
-  knowStreamIds () {
-    return Object.keys(this.knownStreams);
-  }
-
-  addStreamStructure (streamStructure) {
-    if (streamStructure == null) return;
-    for (const stream of allStreamsAndChildren(streamStructure)) {
-      this.#addStream(stream);
-    }
-  }
-
-  #addStream (stream) {
-    if (!this.knownStreams[stream.id]) {
-      this.knownStreams[stream.id] = {};
-    }
-  }
-}
-
-module.exports = StreamsAutoCreate;
-
-/**
- * Iterate all streams and children
- * @param {*} streamStructure
- */
-function * allStreamsAndChildren (streamStructure) {
-  for (const stream of streamStructure) {
-    yield stream;
-    if (stream.children && stream.children.length > 0) {
-      for (const child of allStreamsAndChildren(stream.children)) {
-        yield child;
-      }
-    }
-  }
-}
-
-
-/***/ }),
-
-/***/ "./src/toolkit/index.js":
-/*!******************************!*\
-  !*** ./src/toolkit/index.js ***!
-  \******************************/
-/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
-
-module.exports = {
-  StreamsAutoCreate: __webpack_require__(/*! ./StreamsAutoCreate */ "./src/toolkit/StreamsAutoCreate.js")
-};
-
-
-/***/ }),
-
-/***/ "./src/utils.js":
-/*!**********************!*\
-  !*** ./src/utils.js ***!
-  \**********************/
-/***/ ((module) => {
-
-/**
- * Set of Misc utilities
- */
-
-module.exports = {
-  deepFreeze,
-  waitUntilFalse
-};
-
-/**
- * Timed semaphore
- */
-async function waitUntilFalse (callBackToReturnFalse, maxWaitMs = 5000) {
-  const started = Date.now();
-  while (callBackToReturnFalse()) {
-    await new Promise((resolve) => { setTimeout(resolve, 100); });
-    if (Date.now() - started > maxWaitMs) throw new Error(`Timeout after ${maxWaitMs}ms`);
-  }
-}
-
-/**
- * Recursively make immutable an object
- * @param {*} object
- * @returns {*}
- */
-function deepFreeze (object) {
-  // Retrieve the property names defined on object
-  const propNames = Reflect.ownKeys(object);
-
-  // Freeze properties before freezing self
-  for (const name of propNames) {
-    const value = object[name];
-
-    if ((value && typeof value === 'object') || typeof value === 'function') {
-      deepFreeze(value);
-    }
-  }
-
-  return Object.freeze(object);
-}
-
-
-/***/ }),
-
 /***/ "./tests/applicationClass.test.js":
 /*!****************************************!*\
   !*** ./tests/applicationClass.test.js ***!
@@ -23150,7 +23210,7 @@ function deepFreeze (object) {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 const { createUserAndPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-const Application = __webpack_require__(/*! ../src/appTemplates/Application */ "./src/appTemplates/Application.js");
+const Application = __webpack_require__(/*! ../lib/appTemplates/Application */ "./lib/appTemplates/Application.js");
 
 describe('[APAX] Application class', () => {
   const baseStreamId = 'application-class';
@@ -23299,12 +23359,12 @@ describe('[APAX] Application class', () => {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 const { pryv, createUserPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-const AppManagingAccount = __webpack_require__(/*! ../src/appTemplates/AppManagingAccount */ "./src/appTemplates/AppManagingAccount.js");
-const AppClientAccount = __webpack_require__(/*! ../src/appTemplates/AppClientAccount */ "./src/appTemplates/AppClientAccount.js");
-const Collector = __webpack_require__(/*! ../src/appTemplates/Collector */ "./src/appTemplates/Collector.js");
-const CollectorClient = __webpack_require__(/*! ../src/appTemplates/CollectorClient */ "./src/appTemplates/CollectorClient.js");
-const { HDSLibError } = __webpack_require__(/*! ../src/errors */ "./src/errors.js");
-const { initHDSModel } = __webpack_require__(/*! ../src/index.js */ "./src/index.js");
+const AppManagingAccount = __webpack_require__(/*! ../lib/appTemplates/AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js");
+const AppClientAccount = __webpack_require__(/*! ../lib/appTemplates/AppClientAccount */ "./lib/appTemplates/AppClientAccount.js");
+const Collector = __webpack_require__(/*! ../lib/appTemplates/Collector */ "./lib/appTemplates/Collector.js");
+const CollectorClient = __webpack_require__(/*! ../lib/appTemplates/CollectorClient */ "./lib/appTemplates/CollectorClient.js");
+const { HDSLibError } = __webpack_require__(/*! ../lib/errors */ "./lib/errors.js");
+const { initHDSModel } = __webpack_require__(/*! ../lib/index.js */ "./lib/index.js");
 const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
 
 describe('[APTX] appTemplates', function () {
@@ -23826,7 +23886,7 @@ describe('[APTX] appTemplates', function () {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 
-const { HDSLibError } = __webpack_require__(/*! ../src/errors */ "./src/errors.js");
+const { HDSLibError } = __webpack_require__(/*! ../lib/errors */ "./lib/errors.js");
 
 describe('[ERRX] HDSLibError', () => {
   it('[ERRS] HDSLibError.toString() without inner message', async () => {
@@ -23864,9 +23924,9 @@ const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/te
 /**
  * Tests related to HDSLib.index.js & utils
  */
-const HDSLib = __webpack_require__(/*! ../src */ "./src/index.js");
-const { waitUntilFalse } = __webpack_require__(/*! ../src/utils */ "./src/utils.js");
-const { resetModel } = __webpack_require__(/*! ../src/HDSModel/HDSModelInitAndSingleton */ "./src/HDSModel/HDSModelInitAndSingleton.js");
+const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
+const { waitUntilFalse } = __webpack_require__(/*! ../lib/utils */ "./lib/utils.js");
+const { resetModel } = __webpack_require__(/*! ../lib/HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js");
 
 describe('[HDLX] HDSLib.index.js', () => {
   before(() => {
@@ -23948,8 +24008,8 @@ const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/te
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
-const { HDSModel } = __webpack_require__(/*! ../ */ "./src/index.js");
-const { resetPreferredLocales, setPreferredLocales } = __webpack_require__(/*! ../src/localizeText */ "./src/localizeText.js");
+const { HDSModel } = __webpack_require__(Object(function webpackMissingModule() { var e = new Error("Cannot find module '../'"); e.code = 'MODULE_NOT_FOUND'; throw e; }()));
+const { resetPreferredLocales, setPreferredLocales } = __webpack_require__(/*! ../lib/localizeText */ "./lib/localizeText.js");
 
 describe('[MODX] Model', () => {
   let model;
@@ -24371,7 +24431,7 @@ describe('[MODX] Model', () => {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 
-const HDSLib = __webpack_require__(/*! ../src */ "./src/index.js");
+const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
 
 describe('[LISX] Lib settings', () => {
   before(async () => {
@@ -24401,7 +24461,7 @@ describe('[LISX] Lib settings', () => {
 
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = __webpack_require__(/*! ../src/localizeText */ "./src/localizeText.js");
+const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = __webpack_require__(/*! ../lib/localizeText */ "./lib/localizeText.js");
 
 describe('[LOCX] Localization', () => {
   afterEach(() => {
@@ -24557,8 +24617,8 @@ module.exports = {
 
 const { assert } = __webpack_require__(/*! ./deps-node */ "./tests/test-utils/deps-browser.js");
 const { createUserAndPermissions, pryv, createUser, createUserPermissions } = __webpack_require__(/*! ./pryvService */ "./tests/test-utils/pryvService.js");
-const AppManagingAccount = __webpack_require__(/*! ../../src/appTemplates/AppManagingAccount */ "./src/appTemplates/AppManagingAccount.js");
-const AppClientAccount = __webpack_require__(/*! ../../src/appTemplates/AppClientAccount */ "./src/appTemplates/AppClientAccount.js");
+const AppManagingAccount = __webpack_require__(/*! ../../lib/appTemplates/AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js");
+const AppClientAccount = __webpack_require__(/*! ../../lib/appTemplates/AppClientAccount */ "./lib/appTemplates/AppClientAccount.js");
 
 module.exports = {
   helperNewAppAndUsers,
@@ -24654,15 +24714,15 @@ async function helperNewInvite (appManaging, appClient, code) {
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 __webpack_require__(/*! ./debug */ "./tests/test-utils/debug.js");
-const pryv = __webpack_require__(/*! ../../src/patchedPryv */ "./src/patchedPryv.js");
-const HDSService = __webpack_require__(/*! ../../src/HDSService */ "./src/HDSService.js");
+const pryv = __webpack_require__(/*! ../../lib/patchedPryv */ "./lib/patchedPryv.js");
+const HDSService = __webpack_require__(/*! ../../lib/HDSService */ "./lib/HDSService.js");
 const superagent = pryv.utils.superagent;
 
 const ShortUniqueId = __webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js");
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
 
 const config = __webpack_require__(/*! ./config */ "./tests/test-utils/config.js");
-const { setServiceInfoURL } = __webpack_require__(/*! ../../src/settings */ "./src/settings.js");
+const { setServiceInfoURL } = __webpack_require__(/*! ../../lib/settings */ "./lib/settings.js");
 
 module.exports = {
   init,
@@ -24856,7 +24916,7 @@ function getNewUserId (startWith = 'x') {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 
-const HDSLib = __webpack_require__(/*! ../src */ "./src/index.js");
+const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
 const { createUserAndPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
 
 describe('[TKSX] toolKit Stream Auto Create', () => {
@@ -24924,18 +24984,6 @@ describe('[TKSX] toolKit Stream Auto Create', () => {
 /******/ 	}
 /******/ 	
 /************************************************************************/
-/******/ 	/* webpack/runtime/compat get default export */
-/******/ 	(() => {
-/******/ 		// getDefaultExport function for compatibility with non-harmony modules
-/******/ 		__webpack_require__.n = (module) => {
-/******/ 			var getter = module && module.__esModule ?
-/******/ 				() => (module['default']) :
-/******/ 				() => (module);
-/******/ 			__webpack_require__.d(getter, { a: getter });
-/******/ 			return getter;
-/******/ 		};
-/******/ 	})();
-/******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
 /******/ 		// define getter functions for harmony exports

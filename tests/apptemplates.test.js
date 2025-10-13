@@ -1,12 +1,12 @@
 /* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 const { pryv, createUserPermissions } = require('./test-utils/pryvService');
-const AppManagingAccount = require('../src/appTemplates/AppManagingAccount');
-const AppClientAccount = require('../src/appTemplates/AppClientAccount');
-const Collector = require('../src/appTemplates/Collector');
-const CollectorClient = require('../src/appTemplates/CollectorClient');
-const { HDSLibError } = require('../src/errors');
-const { initHDSModel } = require('../src/index.js');
+const AppManagingAccount = require('../lib/appTemplates/AppManagingAccount');
+const AppClientAccount = require('../lib/appTemplates/AppClientAccount');
+const Collector = require('../lib/appTemplates/Collector');
+const CollectorClient = require('../lib/appTemplates/CollectorClient');
+const { HDSLibError } = require('../lib/errors');
+const { initHDSModel } = require('../lib/index.js');
 const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = require('./test-utils/helpersAppTemplate.js');
 
 describe('[APTX] appTemplates', function () {
