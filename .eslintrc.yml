@@ -41,3 +41,5 @@ ignorePatterns:
   - coverage/
   - docs/
   - tests-browser/
+  - lib/
+  - dist/

@@ -3,9 +3,9 @@ const { assert } = require('./test-utils/deps-node');
 /**
  * Tests related to HDSLib.index.js & utils
  */
-const HDSLib = require('../src');
-const { waitUntilFalse } = require('../src/utils');
-const { resetModel } = require('../src/HDSModel/HDSModelInitAndSingleton');
+const HDSLib = require('../lib');
+const { waitUntilFalse } = require('../lib/utils');
+const { resetModel } = require('../lib/HDSModel/HDSModelInitAndSingleton');
 
 describe('[HDLX] HDSLib.index.js', () => {
   before(() => {

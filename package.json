@@ -2,11 +2,12 @@
   "name": "hds-lib",
   "version": "0.1.7",
   "description": "Health Data Safe - Library",
-  "main": "src/index.js",
   "scripts": {
     "test": "NODE_ENV=test mocha tests --test-reporter=spec",
     "test:coverage": "NODE_ENV=test c8 mocha tests --test-reporter=spec",
-    "build": "webpack",
+    "build": "npm run build:ts && npm run build:webpack",
+    "build:ts": "tsc",
+    "build:webpack": "webpack",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:change": "eslint $(git diff --name-only HEAD | grep -E '\\.(js|jsx|ts|tsx)$' | xargs)"
@@ -15,7 +16,7 @@
     "type": "git",
     "url": "git+https://github.com/healthdatasafe/hds-lib-js.git"
   },
-  "types": "types/index.d.ts",
+  "types": "lib/index.d.ts",
   "keywords": [
     "HDS",
     "Health",

@@ -1,7 +1,9 @@
 import { HDSLibError } from '../errors.js';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.js';
 import { validateLocalizableText } from '../localizeText.js';
-import type { localizableText, localizableTextLanguages } from '../../types/localizeText.d.ts';
+import type { localizableText } from '../localizeText';
+
+type localizableTextLanguages = keyof localizableText;
 
 declare type PermissionItem = {streamId: string, defaultName: string, level: string};
 declare type PermissionItemLight = {streamId: string, defaultName?: string, level?: string};
@@ -300,7 +302,7 @@ class CollectorRequestSection {
 
   setName (localizedName: localizableText) {
     for (const [languageCode, name] of Object.entries(localizedName)) {
-      this.setNameLocal(languageCode as localizableTextLanguages, name);
+      this.setNameLocal(languageCode as localizableTextLanguages, name as string);
     }
   }
 

@@ -1,13 +1,13 @@
 require('./debug');
-const pryv = require('../../src/patchedPryv');
-const HDSService = require('../../src/HDSService');
-const superagent = pryv.utils.superagent;
+const pryv = require('../../lib/patchedPryv');
+const HDSService = require('../../lib/HDSService');
+const superagent = null; //pryv.utils.superagent;
 
 const ShortUniqueId = require('short-unique-id');
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
 
 const config = require('./config');
-const { setServiceInfoURL } = require('../../src/settings');
+const { setServiceInfoURL } = require('../../lib/settings');
 
 module.exports = {
   init,
