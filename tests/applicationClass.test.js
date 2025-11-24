@@ -1,7 +1,7 @@
 /* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 const { createUserAndPermissions } = require('./test-utils/pryvService');
-const Application = require('../lib/appTemplates/Application');
+const Application = require('../lib/appTemplates/Application').default;
 
 describe('[APAX] Application class', () => {
   const baseStreamId = 'application-class';

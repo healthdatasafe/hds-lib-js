@@ -58,7 +58,7 @@ export default class AppClientAccount extends Application {
       throw new HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
     }
     // else create it
-    const collectorClient = await (CollectorClient as any).create(this, apiEndpoint, incomingEventId, accessInfo);
+    const collectorClient = await CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
     this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
     return collectorClient;
   }
@@ -78,7 +78,7 @@ export default class AppClientAccount extends Application {
       method: 'events.get',
       params: { types: ['request/collector-client-v1'], streams: [this.baseStreamId], limit: MAX_COLLECTORS }
     }];
-    const [accessesRes, eventRes] = await (this.connection as any).api(apiCalls);
+    const [accessesRes, eventRes] = await this.connection.api(apiCalls);
     const accessHDSCollectorMap: { [key: string]: any } = {};
     for (const access of accessesRes.accesses) {
       if (access.clientData.hdsCollectorClient) {

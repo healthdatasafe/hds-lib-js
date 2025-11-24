@@ -91,7 +91,7 @@ export default class CollectorClient {
         status: CollectorClient.STATUSES.incoming
       }
     };
-    const event = await (app.connection as any).apiOne('events.create', eventData, 'event');
+    const event = await app.connection.apiOne('events.create', eventData, 'event');
     return new CollectorClient(app, event);
   }
 
@@ -113,7 +113,7 @@ export default class CollectorClient {
     const requesterEvents = await (requesterConnection as any).apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
     if (!requesterEvents[0]) throw new HDSLibError('Cannot find requester event in public stream', requesterEvents);
 
-    const eventData = await (this.app.connection as any).apiOne('events.update', {
+    const eventData = await this.app.connection.apiOne('events.update', {
       id: this.eventData.id,
       update: {
         content: {
@@ -139,7 +139,7 @@ export default class CollectorClient {
     const newContent = structuredClone(this.eventData.content);
     newContent.status = newStatus;
     if (extraData !== null) Object.assign(newContent, extraData);
-    const eventData = await (this.app.connection as any).apiOne('events.update', {
+    const eventData = await this.app.connection.apiOne('events.update', {
       id: this.eventData.id,
       update: {
         content: newContent
@@ -177,7 +177,7 @@ export default class CollectorClient {
           }
         }
       };
-      const accessData = await (this.app.connection as any).apiOne('accesses.create', accessCreateData, 'access');
+      const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
       this.accessData = accessData;
       if (!this.accessData?.apiEndpoint) throw new HDSLibError('Failed creating request access', accessData);
     }
@@ -202,7 +202,7 @@ export default class CollectorClient {
       throw new HDSLibError('Already revoked');
     }
     // revoke access
-    await (this.app.connection as any).apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
+    await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
     // lazyly flag currentAccess as deleted
     this.accessData.deleted = Date.now() / 1000;
 
