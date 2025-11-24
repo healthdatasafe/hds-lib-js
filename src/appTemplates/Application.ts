@@ -57,7 +57,7 @@ export default class Application {
   static async newFromApiEndpoint (baseStreamId: string, apiEndpoint: string, appName?: string, features?: ApplicationFeatures): Promise<Application> {
     const connection = new pryv.Connection(apiEndpoint);
     // in a static method, "this" is the class (here the extending class)
-    return await (this as any).newFromConnection(baseStreamId, connection, appName, features);
+    return await this.newFromConnection(baseStreamId, connection, appName, features);
   }
 
   /**
@@ -65,7 +65,7 @@ export default class Application {
   */
   static async newFromConnection (baseStreamId: string, connection: pryv.Connection, appName?: string, features?: ApplicationFeatures): Promise<Application> {
     // in a static method "this" is the class (here the extending class)
-    const app = new (this as any)(baseStreamId, connection, appName, features);
+    const app = new Application(baseStreamId, connection, appName, features);
     await app.init();
     return app;
   }
@@ -85,7 +85,7 @@ export default class Application {
     this.features = Object.assign({ streamsAutoCreate: true }, features);
 
     if (this.features.streamsAutoCreate) {
-      StreamsAutoCreate.attachToConnection(this.connection as any, undefined);
+      StreamsAutoCreate.attachToConnection(this.connection, undefined);
     }
 
     this.cache = {};
@@ -103,7 +103,7 @@ export default class Application {
     const currentCustomSettings = await this.getCustomSettings();
     if (currentCustomSettings != null) { // update
       const id = this.cache.customSettingsEvent.id;
-      const updatedEvent = await (this.connection as any).apiOne('events.update', { id, update: { content } }, 'event');
+      const updatedEvent = await this.connection.apiOne('events.update', { id, update: { content } }, 'event');
       this.cache.customSettingsEvent = updatedEvent;
     } else {
       await this.#createCustomSettings(content);
@@ -116,7 +116,7 @@ export default class Application {
    * Used by getCustomSettings & setCustomSettings
    */
   async #createCustomSettings (content: any): Promise<void> {
-    const createdEvent = await (this.connection as any).apiOne('events.create', { streamIds: [this.baseStreamId], type: 'settings/any', content }, 'event');
+    const createdEvent = await this.connection.apiOne('events.create', { streamIds: [this.baseStreamId], type: 'settings/any', content }, 'event');
     this.cache.customSettingsEvent = createdEvent;
   }
 
@@ -125,7 +125,7 @@ export default class Application {
    */
   async getCustomSettings (forceRefresh: boolean = false): Promise<any> {
     if (forceRefresh || !this.cache.customSettingsEvent) {
-      const customSettingsEvent = (await (this.connection as any).apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
+      const customSettingsEvent = (await this.connection.apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
       this.cache.customSettingsEvent = customSettingsEvent;
     }
     if (!this.cache.customSettingsEvent) {
@@ -138,7 +138,7 @@ export default class Application {
    * Force loading of streamData
    */
   async loadStreamData (): Promise<any> {
-    const streamData = (await (this.connection as any).apiOne('streams.get', { id: this.baseStreamId }, 'streams'))[0];
+    const streamData = (await this.connection.apiOne('streams.get', { id: this.baseStreamId }, 'streams'))[0];
     if (streamData) {
       this.cache.streamData = streamData;
     }
@@ -191,7 +191,7 @@ async function createAppStreams (app: Application): Promise<void> {
       { method: 'streams.create', params: { id: 'applications', name: 'Applications' } },
       { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: 'applications' } }
     ];
-    const streamCreateResult = await (app.connection as any).api(apiCalls);
+    const streamCreateResult = await connection.api(apiCalls);
     for (const r of streamCreateResult) {
       if ((r as any).error) throw new Error('Failed creating app streams');
     }

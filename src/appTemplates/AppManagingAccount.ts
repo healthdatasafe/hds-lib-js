@@ -81,7 +81,7 @@ export default class AppManagingAccount extends Application {
       name,
       parentId: this.baseStreamId
     };
-    const stream = await (this.connection as any).apiOne('streams.create', params, 'stream');
+    const stream = await this.connection.apiOne('streams.create', params, 'stream');
     // add new stream to streamCache
     this.streamData.children.push(stream);
     const collector = new Collector(this, stream);

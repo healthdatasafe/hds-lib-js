@@ -4,7 +4,7 @@ import pryv from './patchedPryv';
 import HDSModel from './HDSModel/HDSModel';
 import * as appTemplates from './appTemplates/appTemplates';
 import * as logger from './logger';
-import HDService from './HDSService';
+import HDSService from './HDSService';
 import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton';
 import * as toolkit from './toolkit';
 
@@ -15,4 +15,4 @@ export const model = (() => {
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };

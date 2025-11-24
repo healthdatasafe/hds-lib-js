@@ -2404,7 +2404,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
+exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
 const localizeText_1 = __webpack_require__(/*! ./localizeText */ "./lib/localizeText.js");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
@@ -2419,7 +2419,7 @@ exports.appTemplates = appTemplates;
 const logger = __importStar(__webpack_require__(/*! ./logger */ "./lib/logger.js"));
 exports.logger = logger;
 const HDSService_1 = __importDefault(__webpack_require__(/*! ./HDSService */ "./lib/HDSService.js"));
-exports.HDService = HDSService_1.default;
+exports.HDSService = HDSService_1.default;
 const HDSModelInitAndSingleton = __importStar(__webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js"));
 const toolkit = __importStar(__webpack_require__(/*! ./toolkit */ "./lib/toolkit/index.js"));
 exports.toolkit = toolkit;

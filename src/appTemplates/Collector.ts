@@ -104,7 +104,7 @@ export default class Collector {
   async #loadStatus (forceRefresh: boolean = false): Promise<any> {
     if (!forceRefresh && this.#cache.statusEvent) return this.#cache.statusEvent;
     const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(Collector.STREAMID_SUFFIXES.internal)] };
-    const statusEvents = await (this.appManaging.connection as any).apiOne('events.get', params, 'events');
+    const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
     if (statusEvents.length === 0) { // non existent set "draft" status
       return this.#setStatus(Collector.STATUSES.draft);
     }

@@ -1,5 +1,5 @@
 import HDSModel from './HDSModel';
-import HDService from '../HDSService';
+import HDSService from '../HDSService';
 
 let model: HDSModel | null = null;
 
@@ -25,7 +25,7 @@ export async function initHDSModel (): Promise<HDSModel> {
     getModel();
   }
   if (!model!.isLoaded) {
-    const service = new HDService();
+    const service = new HDSService();
     const serviceInfo = await service.info();
     await model!.load(serviceInfo.assets['hds-model']);
   }

@@ -43,7 +43,7 @@ export default class StreamsAutoCreate {
       throw new Error('Lost reference to connection');
     }
 
-    const results = await (connection as any).api(apiCalls);
+    const results = await connection.api(apiCalls);
     const streamsCreated: any[] = [];
     const errors: any[] = [];
     for (const result of results) {
