@@ -57,7 +57,7 @@ describe('[APAX] Application class', () => {
       }
     });
 
-    it('[APAA] Application name form accessInfo fails in not in settings', () => {
+    it('[APAA] Application name from accessInfo fails in not in settings', () => {
       class Dummy extends Application {
         get appSettings () {
           return { };
@@ -73,7 +73,7 @@ describe('[APAX] Application class', () => {
       }
     });
 
-    it('[APAB] Application name form accessInfo', async () => {
+    it('[APAB] Application name from accessInfo', async () => {
       class Dummy2 extends Application {
         get appSettings () {
           return {

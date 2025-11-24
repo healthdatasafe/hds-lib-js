@@ -10012,7 +10012,7 @@ process.umask = function() { return 0; };
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"2.4.4","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js"},"license":"BSD-3-Clause","author":"Pryv S.A. <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"superagent":"^9.0.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"2.4.5","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js"},"license":"BSD-3-Clause","author":"Pryv S.A. <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"superagent":"^9.0.0"}}');
 
 /***/ }),
 
@@ -10781,7 +10781,7 @@ const browserGetEventStreamed = __webpack_require__(/*! ./lib/browser-getEventSt
  * @param {pryv.Service} [service] - eventually initialize Connection with a Service
  */
 class Connection {
-  constructor (apiEndpoint, service) {
+  constructor(apiEndpoint, service) {
     const { token, endpoint } = utils.extractTokenAndAPIEndpoint(apiEndpoint);
     this.token = token;
     this.endpoint = endpoint;
@@ -10789,7 +10789,7 @@ class Connection {
     this.options.chunkSize = 1000;
     this._deltaTime = { value: 0, weight: 0 };
     if (service && !(service instanceof Service)) {
-      throw new Error('Invalid service param');
+      throw new Error("Invalid service param");
     }
     this._service = service;
   }
@@ -10799,9 +10799,9 @@ class Connection {
    * @readonly
    * @property {pryv.Service} service
    */
-  get service () {
+  get service() {
     if (this._service) return this._service;
-    this._service = new Service(this.endpoint + 'service/info');
+    this._service = new Service(this.endpoint + "service/info");
     return this._service;
   }
 
@@ -10811,7 +10811,7 @@ class Connection {
    * @param {*} arrayOfAPICalls
    * @param {*} progress
    */
-  async username () {
+  async username() {
     const accessInfo = await this.accessInfo();
     return accessInfo.user.username;
   }
@@ -10820,8 +10820,8 @@ class Connection {
    * get access info
    * It's async as it is constructed with get function.
    */
-  async accessInfo () {
-    return this.get('access-info', null);
+  async accessInfo() {
+    return this.get("access-info", null);
   }
 
   /**
@@ -10832,49 +10832,131 @@ class Connection {
    * @param {Function} [progress] Return percentage of progress (0 - 100);
    * @returns {Promise<Array>} Promise to Array of results matching each method call in order
    */
-  async api (arrayOfAPICalls, progress) {
-    function httpHandler (batchCall) {
-      return this.post('', batchCall);
+  async api(arrayOfAPICalls, progress) {
+    function httpHandler(batchCall) {
+      return this.post("", batchCall);
     }
-    return await this._chunkedBatchCall(arrayOfAPICalls, progress, httpHandler.bind(this));
+    return await this._chunkedBatchCall(
+      arrayOfAPICalls,
+      progress,
+      httpHandler.bind(this)
+    );
+  }
+
+  /**
+   * Make one api Api call
+   * @param {string} method - methodId
+   * @param {Object|Array} [params] - the params associated with this methodId
+   * @param {string} [resultKey] - if given, returns the value or throws an error if not present
+   * @throws {Error} if .error is present the response
+   */
+  async apiOne(method, params = {}, expectedKey) {
+    const result = await this.api([{ method, params }]);
+    if (
+      result[0] == null ||
+      result[0].error ||
+      (expectedKey != null && result[0][expectedKey] == null)
+    ) {
+      const innerObject = result[0]?.error || result;
+      const error = new Error(
+        `Error for api method: "${method}" with params: ${JSON.stringify(
+          params
+        )} >> Result: ${JSON.stringify(innerObject)}"`
+      );
+      error.innerObject = innerObject;
+      throw error;
+    }
+    if (expectedKey != null) return result[0][expectedKey];
+    return result[0];
+  }
+
+  /**
+   * Revoke : Delete the accessId
+   * - Do not thow error if access is already revoked, just return null;
+   * @param {boolean} [throwOnFail = true] - if set to false do not throw Error on failure
+   * @param {Connection} [usingConnection] - specify which connection issues the revoke, might be necessary when selfRovke
+   */
+  async revoke(throwOnFail = true, usingConnection) {
+    usingConnection = usingConnection || this;
+    let accessInfo = null;
+    // get accessId
+    try {
+      accessInfo = await this.accessInfo();
+    } catch (e) {
+      if (e.response?.body?.error?.id === "invalid-access-token") {
+        return null; // Already revoked OK..
+      }
+      if (throwOnFail) throw e;
+      return null;
+    }
+    // delete access
+    try {
+      const result = usingConnection.apiOne("accesses.delete", {
+        id: accessInfo.id,
+      });
+      return result;
+    } catch (e) {
+      if (throwOnFail) throw e;
+      return null;
+    }
   }
 
   /**
    * @private
    */
-  async _chunkedBatchCall (arrayOfAPICalls, progress, callHandler) {
+  async _chunkedBatchCall(arrayOfAPICalls, progress, callHandler) {
     if (!Array.isArray(arrayOfAPICalls)) {
-      throw new Error('Connection.api() takes an array as input');
+      throw new Error("Connection.api() takes an array as input");
     }
 
     const res = [];
     let percent = 0;
-    for (let cursor = 0; arrayOfAPICalls.length >= cursor; cursor += this.options.chunkSize) {
+    for (
+      let cursor = 0;
+      arrayOfAPICalls.length >= cursor;
+      cursor += this.options.chunkSize
+    ) {
       const thisBatch = [];
-      const cursorMax = Math.min(cursor + this.options.chunkSize, arrayOfAPICalls.length);
+      const cursorMax = Math.min(
+        cursor + this.options.chunkSize,
+        arrayOfAPICalls.length
+      );
       // copy only method and params into a back call to be exuted
       for (let i = cursor; i < cursorMax; i++) {
-        thisBatch.push({ method: arrayOfAPICalls[i].method, params: arrayOfAPICalls[i].params });
+        thisBatch.push({
+          method: arrayOfAPICalls[i].method,
+          params: arrayOfAPICalls[i].params,
+        });
       }
       const resRequest = await callHandler(thisBatch);
 
       // result checks
       if (!resRequest || !Array.isArray(resRequest.results)) {
-        throw new Error('API call result is not an Array: ' + JSON.stringify(resRequest));
+        throw new Error(
+          "API call result is not an Array: " + JSON.stringify(resRequest)
+        );
       }
       if (resRequest.results.length !== thisBatch.length) {
-        throw new Error('API call result Array does not match request: ' + JSON.stringify(resRequest));
+        throw new Error(
+          "API call result Array does not match request: " +
+            JSON.stringify(resRequest)
+        );
       }
 
       // eventually call handleResult
       for (let i = 0; i < resRequest.results.length; i++) {
         if (arrayOfAPICalls[i + cursor].handleResult) {
-          await arrayOfAPICalls[i + cursor].handleResult.call(null, resRequest.results[i]);
+          await arrayOfAPICalls[i + cursor].handleResult.call(
+            null,
+            resRequest.results[i]
+          );
         }
       }
       Array.prototype.push.apply(res, resRequest.results);
-      percent = Math.round(100 * res.length / arrayOfAPICalls.length);
-      if (progress) { progress(percent, res); }
+      percent = Math.round((100 * res.length) / arrayOfAPICalls.length);
+      if (progress) {
+        progress(percent, res);
+      }
     }
     return res;
   }
@@ -10886,7 +10968,7 @@ class Connection {
    * @param {string} path
    * @returns {Promise<Array|Object>} Promise to result.body
    */
-  async post (path, data, queryParams) {
+  async post(path, data, queryParams) {
     const now = getTimestamp();
     const res = await this.postRaw(path, data, queryParams);
     this._handleMeta(res.body, now);
@@ -10900,16 +10982,15 @@ class Connection {
    * @param {string} path
    * @returns {request.superagent}  Promise from superagent's post request
    */
-  async postRaw (path, data, queryParams) {
-    return this._post(path)
-      .query(queryParams)
-      .send(data);
+  async postRaw(path, data, queryParams) {
+    return this._post(path).query(queryParams).send(data);
   }
 
-  _post (path) {
-    return utils.superagent.post(this.endpoint + path)
-      .set('Authorization', this.token)
-      .set('accept', 'json');
+  _post(path) {
+    return utils.superagent
+      .post(this.endpoint + path)
+      .set("Authorization", this.token)
+      .set("accept", "json");
   }
 
   /**
@@ -10918,7 +10999,7 @@ class Connection {
    * @param {string} path
    * @returns {Promise<Array|Object>}  Promise to result.body
    */
-  async get (path, queryParams) {
+  async get(path, queryParams) {
     const now = getTimestamp();
     const res = await this.getRaw(path, queryParams);
     this._handleMeta(res.body, now);
@@ -10931,11 +11012,12 @@ class Connection {
    * @param {string} path
    * @returns {request.superagent}  Promise from superagent's get request
    */
-  getRaw (path, queryParams) {
-    path = path || '';
-    return utils.superagent.get(this.endpoint + path)
-      .set('Authorization', this.token)
-      .set('accept', 'json')
+  getRaw(path, queryParams) {
+    path = path || "";
+    return utils.superagent
+      .get(this.endpoint + path)
+      .set("Authorization", this.token)
+      .set("accept", "json")
       .query(queryParams);
   }
 
@@ -10943,15 +11025,14 @@ class Connection {
    * ADD Data Points to HFEvent (flatJSON format)
    * https://api.pryv.com/reference/#add-hf-series-data-points
    */
-  async addPointsToHFEvent (eventId, fields, points) {
-    const res = await this.post('events/' + eventId + '/series',
-      {
-        format: 'flatJSON',
-        fields: fields,
-        points: points
-      });
-    if (!res.status === 'ok') {
-      throw new Error('Failed loading serie: ' + JSON.stringify(res.status));
+  async addPointsToHFEvent(eventId, fields, points) {
+    const res = await this.post("events/" + eventId + "/series", {
+      format: "flatJSON",
+      fields: fields,
+      points: points,
+    });
+    if (!res.status === "ok") {
+      throw new Error("Failed loading serie: " + JSON.stringify(res.status));
     }
     return res;
   }
@@ -10964,25 +11045,34 @@ class Connection {
    * @param {Function} forEachEvent Function taking one event as parameter. Will be called for each event
    * @returns {Promise<Object>} Promise to result.body transformed with `eventsCount: {count}` replacing `events: [...]`
    */
-  async getEventsStreamed (queryParams, forEachEvent) {
+  async getEventsStreamed(queryParams, forEachEvent) {
     const myParser = jsonParser(forEachEvent, queryParams.includeDeletions);
     let res = null;
-    if (typeof window === 'undefined') { // node
-      res = await this.getRaw('events', queryParams)
+    if (typeof window === "undefined") {
+      // node
+      res = await this.getRaw("events", queryParams)
         .buffer(false)
         .parse(myParser);
-    } else if (typeof fetch !== 'undefined' && !(typeof navigator !== 'undefined' && navigator.product === 'ReactNative')) { // browser supports fetch and it is not react native
+    } else if (
+      typeof fetch !== "undefined" &&
+      !(typeof navigator !== "undefined" && navigator.product === "ReactNative")
+    ) {
+      // browser supports fetch and it is not react native
       res = await browserGetEventStreamed(this, queryParams, myParser);
-    } else { // browser no fetch supports
-      console.log('WARNING: Browser does not support fetch() required by pryv.Connection.getEventsStreamed()');
-      res = await this.getRaw('events', queryParams);
+    } else {
+      // browser no fetch supports
+      console.log(
+        "WARNING: Browser does not support fetch() required by pryv.Connection.getEventsStreamed()"
+      );
+      res = await this.getRaw("events", queryParams);
       res.body.eventsCount = 0;
       if (res.body.events) {
         res.body.events.forEach(forEachEvent);
         res.body.eventsCount += res.body.events.length;
         delete res.body.events;
       }
-      if (res.body.eventDeletions) { // deletions are in a seprated Array
+      if (res.body.eventDeletions) {
+        // deletions are in a seprated Array
         res.body.eventDeletions.forEach(forEachEvent);
         res.body.eventsCount += res.body.eventDeletions.length;
         delete res.body.eventDeletions;
@@ -11000,10 +11090,10 @@ class Connection {
    * @param {Event} event
    * @param {string} filePath
    */
-  async createEventWithFile (event, filePath) {
-    const res = await this._post('events')
-      .field('event', JSON.stringify(event))
-      .attach('file', filePath);
+  async createEventWithFile(event, filePath) {
+    const res = await this._post("events")
+      .field("event", JSON.stringify(event))
+      .attach("file", filePath);
 
     const now = getTimestamp();
     this._handleMeta(res.body, now);
@@ -11016,11 +11106,12 @@ class Connection {
    * @param {Buffer|Blob} bufferData - Buffer for node, Blob for browser
    * @param {string} fileName
    */
-  async createEventWithFileFromBuffer (event, bufferData, filename) {
-    if (typeof window === 'undefined') { // node
-      const res = await this._post('events')
-        .field('event', JSON.stringify(event))
-        .attach('file', bufferData, filename);
+  async createEventWithFileFromBuffer(event, bufferData, filename) {
+    if (typeof window === "undefined") {
+      // node
+      const res = await this._post("events")
+        .field("event", JSON.stringify(event))
+        .attach("file", bufferData, filename);
 
       const now = getTimestamp();
       this._handleMeta(res.body, now);
@@ -11028,21 +11119,21 @@ class Connection {
     } else {
       /* global FormData */
       const formData = new FormData();
-      formData.append('file', bufferData, filename);
+      formData.append("file", bufferData, filename);
       const body = await this.createEventWithFormData(event, formData);
       return body;
     }
   }
 
   /**
- * Create an event with attached formData
- * !! BROWSER ONLY
- * @param {Event} event
- * @param {FormData} formData https://developer.mozilla.org/en-US/docs/Web/API/FormData/FormData
- */
-  async createEventWithFormData (event, formData) {
-    formData.append('event', JSON.stringify(event));
-    const res = await this._post('events').send(formData);
+   * Create an event with attached formData
+   * !! BROWSER ONLY
+   * @param {Event} event
+   * @param {FormData} formData https://developer.mozilla.org/en-US/docs/Web/API/FormData/FormData
+   */
+  async createEventWithFormData(event, formData) {
+    formData.append("event", JSON.stringify(event));
+    const res = await this._post("events").send(formData);
     return res.body;
   }
 
@@ -11052,7 +11143,7 @@ class Connection {
    * @readonly
    * @property {number} deltaTime
    */
-  get deltaTime () {
+  get deltaTime() {
     return this._deltaTime.value;
   }
 
@@ -11061,17 +11152,22 @@ class Connection {
    * @readonly
    * @property {APIEndpoint} deltaTime
    */
-  get apiEndpoint () {
+  get apiEndpoint() {
     return utils.buildAPIEndpoint(this);
   }
 
   // private method that handle meta data parsing
-  _handleMeta (res, requestLocalTimestamp) {
-    if (!res.meta) throw new Error('Cannot find .meta in response.');
-    if (!res.meta.serverTime) throw new Error('Cannot find .meta.serverTime in response.');
+  _handleMeta(res, requestLocalTimestamp) {
+    if (!res.meta) throw new Error("Cannot find .meta in response.");
+    if (!res.meta.serverTime)
+      throw new Error("Cannot find .meta.serverTime in response.");
 
     // update deltaTime and weight it
-    this._deltaTime.value = (this._deltaTime.value * this._deltaTime.weight + res.meta.serverTime - requestLocalTimestamp) / ++this._deltaTime.weight;
+    this._deltaTime.value =
+      (this._deltaTime.value * this._deltaTime.weight +
+        res.meta.serverTime -
+        requestLocalTimestamp) /
+      ++this._deltaTime.weight;
   }
 }
 
@@ -20872,7 +20968,7 @@ function throwNotLoadedError () {
 
 let model = null;
 const HDSModel = __webpack_require__(/*! ./HDSModel */ "./src/HDSModel/HDSModel.js");
-const HDService = __webpack_require__(/*! ../HDSService */ "./src/HDSService.js");
+const HDSService = __webpack_require__(/*! ../HDSService */ "./src/HDSService.js");
 
 module.exports = {
   getModel,
@@ -20902,7 +20998,7 @@ async function initHDSModel () {
     getModel();
   }
   if (!model.isLoaded) {
-    const service = new HDService();
+    const service = new HDSService();
     const serviceInfo = await service.info();
     await model.load(serviceInfo.assets['hds-model']);
   }
@@ -22695,14 +22791,15 @@ const pryv = __webpack_require__(/*! ./patchedPryv */ "./src/patchedPryv.js");
 const HDSModel = __webpack_require__(/*! ./HDSModel/HDSModel */ "./src/HDSModel/HDSModel.js");
 const appTemplates = __webpack_require__(/*! ./appTemplates/appTemplates */ "./src/appTemplates/appTemplates.js");
 const logger = __webpack_require__(/*! ./logger */ "./src/logger.js");
-const HDService = __webpack_require__(/*! ./HDSService */ "./src/HDSService.js");
+const HDSService = __webpack_require__(/*! ./HDSService */ "./src/HDSService.js");
 const HDSModelInitAndSingleton = __webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton */ "./src/HDSModel/HDSModelInitAndSingleton.js");
 const toolkit = __webpack_require__(/*! ./toolkit */ "./src/toolkit/index.js");
 
 module.exports = {
   pryv,
   settings,
-  HDService,
+  HDSService,
+  HDService: HDSService, // TO Be removed - typo in previous build
   HDSModel,
   get model () {
     console.warn('HDSLib.model is deprecated use getHDSModel() instead');
@@ -23206,7 +23303,7 @@ describe('[APAX] Application class', () => {
       }
     });
 
-    it('[APAA] Application name form accessInfo fails in not in settings', () => {
+    it('[APAA] Application name from accessInfo fails in not in settings', () => {
       class Dummy extends Application {
         get appSettings () {
           return { };
@@ -23222,7 +23319,7 @@ describe('[APAX] Application class', () => {
       }
     });
 
-    it('[APAB] Application name form accessInfo', async () => {
+    it('[APAB] Application name from accessInfo', async () => {
       class Dummy2 extends Application {
         get appSettings () {
           return {
