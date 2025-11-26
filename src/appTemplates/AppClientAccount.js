@@ -84,7 +84,7 @@ class AppClientAccount extends Application {
     const [accessesRes, eventRes] = await this.connection.api(apiCalls);
     const accessHDSCollectorMap = {};
     for (const access of accessesRes.accesses) {
-      if (access.clientData.hdsCollectorClient) {
+      if (access.clientData?.hdsCollectorClient) {
         accessHDSCollectorMap[access.name] = access;
       }
     }
