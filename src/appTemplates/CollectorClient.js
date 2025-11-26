@@ -18,7 +18,7 @@ class CollectorClient {
   app;
   /** @type {PryvEvent} */
   eventData;
-  /** @type {Object} - when active or deactivated - there is a link with accessData */
+  /** @type {pryv.Access} - when active or deactivated - there is a link with accessData */
   accessData;
   /** @type {CollectorRequest} */
   request;

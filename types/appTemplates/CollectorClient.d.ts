@@ -30,7 +30,7 @@ declare class CollectorClient {
   /** @type {PryvEvent} */
   eventData: pryv.Event;
   /** @type {Object} - when active or deactivated - there is a link with accessData */
-  accessData: any;
+  accessData?: pryv.Access;
   /** @property {String} - identified within user's account - can be used to retreive a Collector Client from an app */
   get key(): string;
   /** @property {String} - id matching an event within requester's account - used as a reference to communicate with requester */

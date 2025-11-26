@@ -21165,7 +21165,7 @@ class AppClientAccount extends Application {
     const [accessesRes, eventRes] = await this.connection.api(apiCalls);
     const accessHDSCollectorMap = {};
     for (const access of accessesRes.accesses) {
-      if (access.clientData.hdsCollectorClient) {
+      if (access.clientData?.hdsCollectorClient) {
         accessHDSCollectorMap[access.name] = access;
       }
     }
@@ -21989,7 +21989,7 @@ class CollectorClient {
   app;
   /** @type {PryvEvent} */
   eventData;
-  /** @type {Object} - when active or deactivated - there is a link with accessData */
+  /** @type {pryv.Access} - when active or deactivated - there is a link with accessData */
   accessData;
   /** @type {CollectorRequest} */
   request;
