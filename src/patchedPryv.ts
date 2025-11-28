@@ -6,7 +6,6 @@
 import * as pryv from 'pryv';
 import monitor from '@pryv/monitor';
 import socketIo from '@pryv/socket.io';
-console.log(pryv.utils);
 monitor(pryv);
 socketIo(pryv);
 

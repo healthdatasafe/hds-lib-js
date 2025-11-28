@@ -65,7 +65,7 @@ export default class Application {
   */
   static async newFromConnection (baseStreamId: string, connection: pryv.Connection, appName?: string, features?: ApplicationFeatures): Promise<Application> {
     // in a static method "this" is the class (here the extending class)
-    const app = new Application(baseStreamId, connection, appName, features);
+    const app = new this(baseStreamId, connection, appName, features);
     await app.init();
     return app;
   }
@@ -187,11 +187,11 @@ async function createAppStreams (app: Application): Promise<void> {
     if (!isPersonalOrMaster) {
       throw new Error('Token has not sufficient right to create App streams. Create them upfront');
     }
-    const apiCalls = [
+    const apiCalls: pryv.APICall[] = [
       { method: 'streams.create', params: { id: 'applications', name: 'Applications' } },
       { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: 'applications' } }
     ];
-    const streamCreateResult = await connection.api(apiCalls);
+    const streamCreateResult = await app.connection.api(apiCalls);
     for (const r of streamCreateResult) {
       if ((r as any).error) throw new Error('Failed creating app streams');
     }

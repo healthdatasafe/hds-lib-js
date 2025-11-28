@@ -34,7 +34,7 @@ export default class StreamsAutoCreate {
     // get existing streamIds;
     const modelStreams = getModel().streams;
     const streamsToCreate = modelStreams.getNecessaryListForItems(Array.from(keysOrDefs) as any, { knowExistingStreamsIds: this.knowStreamIds() });
-    const apiCalls = streamsToCreate.map((s) => ({
+    const apiCalls: pryv.APICall[] = streamsToCreate.map((s) => ({
       method: 'streams.create',
       params: s
     }));

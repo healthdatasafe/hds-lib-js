@@ -71,7 +71,7 @@ export default class AppClientAccount extends Application {
 
   async getCollectorClients (forceRefresh: boolean = false): Promise<CollectorClient[]> {
     if (!forceRefresh && this.cache.collectorClientsMapInitialized) return Object.values(this.cache.collectorClientsMap);
-    const apiCalls = [{
+    const apiCalls: pryv.APICall[] = [{
       method: 'accesses.get',
       params: { includeDeletions: true }
     }, {
@@ -81,7 +81,7 @@ export default class AppClientAccount extends Application {
     const [accessesRes, eventRes] = await this.connection.api(apiCalls);
     const accessHDSCollectorMap: { [key: string]: any } = {};
     for (const access of accessesRes.accesses) {
-      if (access.clientData.hdsCollectorClient) {
+      if (access.clientData?.hdsCollectorClient) {
         accessHDSCollectorMap[access.name] = access;
       }
     }

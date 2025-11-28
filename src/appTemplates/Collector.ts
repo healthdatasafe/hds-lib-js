@@ -360,7 +360,7 @@ export default class Collector {
   /**
    * check if required streams are present, if not create them
    */
-  async checkStreamStructure (forceRefresh: boolean = false) {
+  async checkStreamStructure () {
     // if streamData has correct child structure, we assume all is OK
     const childrenData = this.#streamData.children;
     const toCreate = Object.values(Collector.STREAMID_SUFFIXES)

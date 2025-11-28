@@ -1,8 +1,8 @@
 /* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 const { pryv, createUserPermissions } = require('./test-utils/pryvService');
-const AppManagingAccount = require('../lib/appTemplates/AppManagingAccount');
-const AppClientAccount = require('../lib/appTemplates/AppClientAccount');
+const AppManagingAccount = require('../lib/appTemplates/AppManagingAccount').default;
+const AppClientAccount = require('../lib/appTemplates/AppClientAccount').default;
 const Collector = require('../lib/appTemplates/Collector');
 const CollectorClient = require('../lib/appTemplates/CollectorClient');
 const { HDSLibError } = require('../lib/errors');
