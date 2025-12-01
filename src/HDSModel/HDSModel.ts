@@ -25,6 +25,7 @@ export default class HDSModel {
   constructor (modelUrl: string) {
     this.#modelUrl = modelUrl;
     this.laziliyLoadedMap = {};
+    this.#modelData = null;
   }
 
   get isLoaded (): boolean {

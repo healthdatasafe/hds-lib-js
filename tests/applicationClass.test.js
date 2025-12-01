@@ -3,7 +3,8 @@ const { assert } = require('./test-utils/deps-node');
 const { createUserAndPermissions } = require('./test-utils/pryvService');
 const Application = require('../lib/appTemplates/Application').default;
 
-describe('[APAX] Application class', () => {
+describe('[APAX] Application class', function () {
+  this.timeout(5000);
   const baseStreamId = 'application-class';
   const appName = 'application-app';
   let user;

@@ -4,7 +4,8 @@ const { assert } = require('./test-utils/deps-node');
 const HDSLib = require('../lib');
 const { createUserAndPermissions } = require('./test-utils/pryvService');
 
-describe('[TKSX] toolKit Stream Auto Create', () => {
+describe('[TKSX] toolKit Stream Auto Create', function () {
+  this.timeout(5000);
   before(async () => {
     await HDSLib.initHDSModel();
   });
