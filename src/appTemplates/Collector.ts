@@ -85,7 +85,7 @@ export default class Collector {
    */
   async init (forceRefresh: boolean = false): Promise<void> {
     if (!forceRefresh && this.#cache.initialized) return;
-    await this.checkStreamStructure(forceRefresh);
+    await this.checkStreamStructure();
     await this.#loadStatus(forceRefresh);
     this.#cache.initialized = true;
   }
