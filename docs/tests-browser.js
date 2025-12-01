@@ -431,6 +431,7 @@ class HDSModel {
     constructor(modelUrl) {
         this.#modelUrl = modelUrl;
         this.laziliyLoadedMap = {};
+        this.#modelData = null;
     }
     get isLoaded() {
         return !!this.#modelData;
@@ -760,7 +761,7 @@ class AppClientAccount extends Application_1.default {
         const [accessesRes, eventRes] = await this.connection.api(apiCalls);
         const accessHDSCollectorMap = {};
         for (const access of accessesRes.accesses) {
-            if (access.clientData.hdsCollectorClient) {
+            if (access.clientData?.hdsCollectorClient) {
                 accessHDSCollectorMap[access.name] = access;
             }
         }
@@ -904,6 +905,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
 const toolkit_1 = __webpack_require__(/*! ../toolkit */ "./lib/toolkit/index.js");
+const APPS_ROOT_STREAM = 'applications';
 /**
  * Common code for AppClientAccount and AppManagingAccount
  */
@@ -1018,7 +1020,8 @@ class Application {
      * Force loading of streamData
      */
     async loadStreamData() {
-        const streamData = (await this.connection.apiOne('streams.get', { id: this.baseStreamId }, 'streams'))[0];
+        const streams = (await this.connection.apiOne('streams.get', {}, 'streams'));
+        const streamData = findStreamByid(streams, this.baseStreamId);
         if (streamData) {
             this.cache.streamData = streamData;
         }
@@ -1026,6 +1029,19 @@ class Application {
     }
 }
 exports["default"] = Application;
+// findStream in a tree
+function findStreamByid(streams, streamId) {
+    for (const stream of streams) {
+        if (stream.id === streamId)
+            return stream;
+        if (stream.children?.length > 0) {
+            const streamFromChildren = findStreamByid(stream.children, streamId);
+            if (streamFromChildren != null)
+                return streamFromChildren;
+        }
+    }
+    return null;
+}
 // create app Streams
 async function createAppStreams(app) {
     // check that connection has a personal or master token or has "manage" rights on baseStream
@@ -1070,14 +1086,12 @@ async function createAppStreams(app) {
             throw new Error('Token has not sufficient right to create App streams. Create them upfront');
         }
         const apiCalls = [
-            { method: 'streams.create', params: { id: 'applications', name: 'Applications' } },
-            { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: 'applications' } }
+            { method: 'streams.create', params: { id: APPS_ROOT_STREAM, name: 'Applications' } },
+            { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: APPS_ROOT_STREAM } }
         ];
         const streamCreateResult = await app.connection.api(apiCalls);
-        for (const r of streamCreateResult) {
-            if (r.error)
-                throw new Error('Failed creating app streams');
-        }
+        if (streamCreateResult[1].error)
+            throw new Error('Failed creating app streams ' + JSON.stringify(streamCreateResult[1].error));
         const stream = streamCreateResult[1].stream;
         app.cache.streamData = stream;
     }
@@ -1205,7 +1219,7 @@ class Collector {
     async init(forceRefresh = false) {
         if (!forceRefresh && this.#cache.initialized)
             return;
-        await this.checkStreamStructure(forceRefresh);
+        await this.checkStreamStructure();
         await this.#loadStatus(forceRefresh);
         this.#cache.initialized = true;
     }
@@ -1468,7 +1482,7 @@ class Collector {
     /**
      * check if required streams are present, if not create them
      */
-    async checkStreamStructure(forceRefresh = false) {
+    async checkStreamStructure() {
         // if streamData has correct child structure, we assume all is OK
         const childrenData = this.#streamData.children;
         const toCreate = Object.values(_a.STREAMID_SUFFIXES)
@@ -2605,60 +2619,15 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const pryv = __importStar(__webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js"));
-const monitor = __importStar(__webpack_require__(/*! @pryv/monitor */ "./node_modules/@pryv/monitor/src/index.js"));
-const socketIo = __importStar(__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js"));
-monitor(pryv);
-socketIo(pryv);
-// patch Pryv only if needed.
-if (!pryv.Connection.prototype.apiOne) {
-    /**
-     * Make one api Api call
-     */
-    pryv.Connection.prototype.apiOne = async function apiOne(method, params = {}, expectedKey) {
-        const result = await this.api([{ method, params }]);
-        if (result[0] == null || result[0].error || (expectedKey != null && result[0][expectedKey] == null)) {
-            const innerObject = result[0]?.error || result;
-            const error = new Error(`Error for api method: "${method}" with params: ${JSON.stringify(params)} >> Result: ${JSON.stringify(innerObject)}"`);
-            error.innerObject = innerObject;
-            throw error;
-        }
-        if (expectedKey != null)
-            return result[0][expectedKey];
-        return result[0];
-    };
-    /**
-     * Revoke : Delete the accessId
-     * - Do not throw error if access is already revoked, just return null;
-     */
-    pryv.Connection.prototype.revoke = async function revoke(throwOnFail = true, usingConnection) {
-        usingConnection = usingConnection || this;
-        let accessInfo = null;
-        // get accessId
-        try {
-            accessInfo = await this.accessInfo();
-        }
-        catch (e) {
-            if (e.response?.body?.error?.id === 'invalid-access-token') {
-                return null; // Already revoked OK..
-            }
-            if (throwOnFail)
-                throw e;
-            return null;
-        }
-        // delete access
-        try {
-            const result = usingConnection.apiOne('accesses.delete', { id: accessInfo.id });
-            return result;
-        }
-        catch (e) {
-            if (throwOnFail)
-                throw e;
-            return null;
-        }
-    };
-}
+const monitor_1 = __importDefault(__webpack_require__(/*! @pryv/monitor */ "./node_modules/@pryv/monitor/src/index.js"));
+const socket_io_1 = __importDefault(__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js"));
+(0, monitor_1.default)(pryv);
+(0, socket_io_1.default)(pryv);
 exports["default"] = pryv;
 //# sourceMappingURL=patchedPryv.js.map
 
@@ -12877,7 +12846,7 @@ process.umask = function() { return 0; };
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"2.4.4","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js"},"license":"BSD-3-Clause","author":"Pryv S.A. <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"superagent":"^9.0.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"2.4.5","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js"},"license":"BSD-3-Clause","author":"Pryv S.A. <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"superagent":"^9.0.0"}}');
 
 /***/ }),
 
@@ -13646,7 +13615,7 @@ const browserGetEventStreamed = __webpack_require__(/*! ./lib/browser-getEventSt
  * @param {pryv.Service} [service] - eventually initialize Connection with a Service
  */
 class Connection {
-  constructor (apiEndpoint, service) {
+  constructor(apiEndpoint, service) {
     const { token, endpoint } = utils.extractTokenAndAPIEndpoint(apiEndpoint);
     this.token = token;
     this.endpoint = endpoint;
@@ -13654,7 +13623,7 @@ class Connection {
     this.options.chunkSize = 1000;
     this._deltaTime = { value: 0, weight: 0 };
     if (service && !(service instanceof Service)) {
-      throw new Error('Invalid service param');
+      throw new Error("Invalid service param");
     }
     this._service = service;
   }
@@ -13664,9 +13633,9 @@ class Connection {
    * @readonly
    * @property {pryv.Service} service
    */
-  get service () {
+  get service() {
     if (this._service) return this._service;
-    this._service = new Service(this.endpoint + 'service/info');
+    this._service = new Service(this.endpoint + "service/info");
     return this._service;
   }
 
@@ -13676,7 +13645,7 @@ class Connection {
    * @param {*} arrayOfAPICalls
    * @param {*} progress
    */
-  async username () {
+  async username() {
     const accessInfo = await this.accessInfo();
     return accessInfo.user.username;
   }
@@ -13685,8 +13654,8 @@ class Connection {
    * get access info
    * It's async as it is constructed with get function.
    */
-  async accessInfo () {
-    return this.get('access-info', null);
+  async accessInfo() {
+    return this.get("access-info", null);
   }
 
   /**
@@ -13697,49 +13666,131 @@ class Connection {
    * @param {Function} [progress] Return percentage of progress (0 - 100);
    * @returns {Promise<Array>} Promise to Array of results matching each method call in order
    */
-  async api (arrayOfAPICalls, progress) {
-    function httpHandler (batchCall) {
-      return this.post('', batchCall);
+  async api(arrayOfAPICalls, progress) {
+    function httpHandler(batchCall) {
+      return this.post("", batchCall);
     }
-    return await this._chunkedBatchCall(arrayOfAPICalls, progress, httpHandler.bind(this));
+    return await this._chunkedBatchCall(
+      arrayOfAPICalls,
+      progress,
+      httpHandler.bind(this)
+    );
+  }
+
+  /**
+   * Make one api Api call
+   * @param {string} method - methodId
+   * @param {Object|Array} [params] - the params associated with this methodId
+   * @param {string} [resultKey] - if given, returns the value or throws an error if not present
+   * @throws {Error} if .error is present the response
+   */
+  async apiOne(method, params = {}, expectedKey) {
+    const result = await this.api([{ method, params }]);
+    if (
+      result[0] == null ||
+      result[0].error ||
+      (expectedKey != null && result[0][expectedKey] == null)
+    ) {
+      const innerObject = result[0]?.error || result;
+      const error = new Error(
+        `Error for api method: "${method}" with params: ${JSON.stringify(
+          params
+        )} >> Result: ${JSON.stringify(innerObject)}"`
+      );
+      error.innerObject = innerObject;
+      throw error;
+    }
+    if (expectedKey != null) return result[0][expectedKey];
+    return result[0];
+  }
+
+  /**
+   * Revoke : Delete the accessId
+   * - Do not thow error if access is already revoked, just return null;
+   * @param {boolean} [throwOnFail = true] - if set to false do not throw Error on failure
+   * @param {Connection} [usingConnection] - specify which connection issues the revoke, might be necessary when selfRovke
+   */
+  async revoke(throwOnFail = true, usingConnection) {
+    usingConnection = usingConnection || this;
+    let accessInfo = null;
+    // get accessId
+    try {
+      accessInfo = await this.accessInfo();
+    } catch (e) {
+      if (e.response?.body?.error?.id === "invalid-access-token") {
+        return null; // Already revoked OK..
+      }
+      if (throwOnFail) throw e;
+      return null;
+    }
+    // delete access
+    try {
+      const result = usingConnection.apiOne("accesses.delete", {
+        id: accessInfo.id,
+      });
+      return result;
+    } catch (e) {
+      if (throwOnFail) throw e;
+      return null;
+    }
   }
 
   /**
    * @private
    */
-  async _chunkedBatchCall (arrayOfAPICalls, progress, callHandler) {
+  async _chunkedBatchCall(arrayOfAPICalls, progress, callHandler) {
     if (!Array.isArray(arrayOfAPICalls)) {
-      throw new Error('Connection.api() takes an array as input');
+      throw new Error("Connection.api() takes an array as input");
     }
 
     const res = [];
     let percent = 0;
-    for (let cursor = 0; arrayOfAPICalls.length >= cursor; cursor += this.options.chunkSize) {
+    for (
+      let cursor = 0;
+      arrayOfAPICalls.length >= cursor;
+      cursor += this.options.chunkSize
+    ) {
       const thisBatch = [];
-      const cursorMax = Math.min(cursor + this.options.chunkSize, arrayOfAPICalls.length);
+      const cursorMax = Math.min(
+        cursor + this.options.chunkSize,
+        arrayOfAPICalls.length
+      );
       // copy only method and params into a back call to be exuted
       for (let i = cursor; i < cursorMax; i++) {
-        thisBatch.push({ method: arrayOfAPICalls[i].method, params: arrayOfAPICalls[i].params });
+        thisBatch.push({
+          method: arrayOfAPICalls[i].method,
+          params: arrayOfAPICalls[i].params,
+        });
       }
       const resRequest = await callHandler(thisBatch);
 
       // result checks
       if (!resRequest || !Array.isArray(resRequest.results)) {
-        throw new Error('API call result is not an Array: ' + JSON.stringify(resRequest));
+        throw new Error(
+          "API call result is not an Array: " + JSON.stringify(resRequest)
+        );
       }
       if (resRequest.results.length !== thisBatch.length) {
-        throw new Error('API call result Array does not match request: ' + JSON.stringify(resRequest));
+        throw new Error(
+          "API call result Array does not match request: " +
+            JSON.stringify(resRequest)
+        );
       }
 
       // eventually call handleResult
       for (let i = 0; i < resRequest.results.length; i++) {
         if (arrayOfAPICalls[i + cursor].handleResult) {
-          await arrayOfAPICalls[i + cursor].handleResult.call(null, resRequest.results[i]);
+          await arrayOfAPICalls[i + cursor].handleResult.call(
+            null,
+            resRequest.results[i]
+          );
         }
       }
       Array.prototype.push.apply(res, resRequest.results);
-      percent = Math.round(100 * res.length / arrayOfAPICalls.length);
-      if (progress) { progress(percent, res); }
+      percent = Math.round((100 * res.length) / arrayOfAPICalls.length);
+      if (progress) {
+        progress(percent, res);
+      }
     }
     return res;
   }
@@ -13751,7 +13802,7 @@ class Connection {
    * @param {string} path
    * @returns {Promise<Array|Object>} Promise to result.body
    */
-  async post (path, data, queryParams) {
+  async post(path, data, queryParams) {
     const now = getTimestamp();
     const res = await this.postRaw(path, data, queryParams);
     this._handleMeta(res.body, now);
@@ -13765,16 +13816,15 @@ class Connection {
    * @param {string} path
    * @returns {request.superagent}  Promise from superagent's post request
    */
-  async postRaw (path, data, queryParams) {
-    return this._post(path)
-      .query(queryParams)
-      .send(data);
+  async postRaw(path, data, queryParams) {
+    return this._post(path).query(queryParams).send(data);
   }
 
-  _post (path) {
-    return utils.superagent.post(this.endpoint + path)
-      .set('Authorization', this.token)
-      .set('accept', 'json');
+  _post(path) {
+    return utils.superagent
+      .post(this.endpoint + path)
+      .set("Authorization", this.token)
+      .set("accept", "json");
   }
 
   /**
@@ -13783,7 +13833,7 @@ class Connection {
    * @param {string} path
    * @returns {Promise<Array|Object>}  Promise to result.body
    */
-  async get (path, queryParams) {
+  async get(path, queryParams) {
     const now = getTimestamp();
     const res = await this.getRaw(path, queryParams);
     this._handleMeta(res.body, now);
@@ -13796,11 +13846,12 @@ class Connection {
    * @param {string} path
    * @returns {request.superagent}  Promise from superagent's get request
    */
-  getRaw (path, queryParams) {
-    path = path || '';
-    return utils.superagent.get(this.endpoint + path)
-      .set('Authorization', this.token)
-      .set('accept', 'json')
+  getRaw(path, queryParams) {
+    path = path || "";
+    return utils.superagent
+      .get(this.endpoint + path)
+      .set("Authorization", this.token)
+      .set("accept", "json")
       .query(queryParams);
   }
 
@@ -13808,15 +13859,14 @@ class Connection {
    * ADD Data Points to HFEvent (flatJSON format)
    * https://api.pryv.com/reference/#add-hf-series-data-points
    */
-  async addPointsToHFEvent (eventId, fields, points) {
-    const res = await this.post('events/' + eventId + '/series',
-      {
-        format: 'flatJSON',
-        fields: fields,
-        points: points
-      });
-    if (!res.status === 'ok') {
-      throw new Error('Failed loading serie: ' + JSON.stringify(res.status));
+  async addPointsToHFEvent(eventId, fields, points) {
+    const res = await this.post("events/" + eventId + "/series", {
+      format: "flatJSON",
+      fields: fields,
+      points: points,
+    });
+    if (!res.status === "ok") {
+      throw new Error("Failed loading serie: " + JSON.stringify(res.status));
     }
     return res;
   }
@@ -13829,25 +13879,34 @@ class Connection {
    * @param {Function} forEachEvent Function taking one event as parameter. Will be called for each event
    * @returns {Promise<Object>} Promise to result.body transformed with `eventsCount: {count}` replacing `events: [...]`
    */
-  async getEventsStreamed (queryParams, forEachEvent) {
+  async getEventsStreamed(queryParams, forEachEvent) {
     const myParser = jsonParser(forEachEvent, queryParams.includeDeletions);
     let res = null;
-    if (typeof window === 'undefined') { // node
-      res = await this.getRaw('events', queryParams)
+    if (typeof window === "undefined") {
+      // node
+      res = await this.getRaw("events", queryParams)
         .buffer(false)
         .parse(myParser);
-    } else if (typeof fetch !== 'undefined' && !(typeof navigator !== 'undefined' && navigator.product === 'ReactNative')) { // browser supports fetch and it is not react native
+    } else if (
+      typeof fetch !== "undefined" &&
+      !(typeof navigator !== "undefined" && navigator.product === "ReactNative")
+    ) {
+      // browser supports fetch and it is not react native
       res = await browserGetEventStreamed(this, queryParams, myParser);
-    } else { // browser no fetch supports
-      console.log('WARNING: Browser does not support fetch() required by pryv.Connection.getEventsStreamed()');
-      res = await this.getRaw('events', queryParams);
+    } else {
+      // browser no fetch supports
+      console.log(
+        "WARNING: Browser does not support fetch() required by pryv.Connection.getEventsStreamed()"
+      );
+      res = await this.getRaw("events", queryParams);
       res.body.eventsCount = 0;
       if (res.body.events) {
         res.body.events.forEach(forEachEvent);
         res.body.eventsCount += res.body.events.length;
         delete res.body.events;
       }
-      if (res.body.eventDeletions) { // deletions are in a seprated Array
+      if (res.body.eventDeletions) {
+        // deletions are in a seprated Array
         res.body.eventDeletions.forEach(forEachEvent);
         res.body.eventsCount += res.body.eventDeletions.length;
         delete res.body.eventDeletions;
@@ -13865,10 +13924,10 @@ class Connection {
    * @param {Event} event
    * @param {string} filePath
    */
-  async createEventWithFile (event, filePath) {
-    const res = await this._post('events')
-      .field('event', JSON.stringify(event))
-      .attach('file', filePath);
+  async createEventWithFile(event, filePath) {
+    const res = await this._post("events")
+      .field("event", JSON.stringify(event))
+      .attach("file", filePath);
 
     const now = getTimestamp();
     this._handleMeta(res.body, now);
@@ -13881,11 +13940,12 @@ class Connection {
    * @param {Buffer|Blob} bufferData - Buffer for node, Blob for browser
    * @param {string} fileName
    */
-  async createEventWithFileFromBuffer (event, bufferData, filename) {
-    if (typeof window === 'undefined') { // node
-      const res = await this._post('events')
-        .field('event', JSON.stringify(event))
-        .attach('file', bufferData, filename);
+  async createEventWithFileFromBuffer(event, bufferData, filename) {
+    if (typeof window === "undefined") {
+      // node
+      const res = await this._post("events")
+        .field("event", JSON.stringify(event))
+        .attach("file", bufferData, filename);
 
       const now = getTimestamp();
       this._handleMeta(res.body, now);
@@ -13893,21 +13953,21 @@ class Connection {
     } else {
       /* global FormData */
       const formData = new FormData();
-      formData.append('file', bufferData, filename);
+      formData.append("file", bufferData, filename);
       const body = await this.createEventWithFormData(event, formData);
       return body;
     }
   }
 
   /**
- * Create an event with attached formData
- * !! BROWSER ONLY
- * @param {Event} event
- * @param {FormData} formData https://developer.mozilla.org/en-US/docs/Web/API/FormData/FormData
- */
-  async createEventWithFormData (event, formData) {
-    formData.append('event', JSON.stringify(event));
-    const res = await this._post('events').send(formData);
+   * Create an event with attached formData
+   * !! BROWSER ONLY
+   * @param {Event} event
+   * @param {FormData} formData https://developer.mozilla.org/en-US/docs/Web/API/FormData/FormData
+   */
+  async createEventWithFormData(event, formData) {
+    formData.append("event", JSON.stringify(event));
+    const res = await this._post("events").send(formData);
     return res.body;
   }
 
@@ -13917,7 +13977,7 @@ class Connection {
    * @readonly
    * @property {number} deltaTime
    */
-  get deltaTime () {
+  get deltaTime() {
     return this._deltaTime.value;
   }
 
@@ -13926,17 +13986,22 @@ class Connection {
    * @readonly
    * @property {APIEndpoint} deltaTime
    */
-  get apiEndpoint () {
+  get apiEndpoint() {
     return utils.buildAPIEndpoint(this);
   }
 
   // private method that handle meta data parsing
-  _handleMeta (res, requestLocalTimestamp) {
-    if (!res.meta) throw new Error('Cannot find .meta in response.');
-    if (!res.meta.serverTime) throw new Error('Cannot find .meta.serverTime in response.');
+  _handleMeta(res, requestLocalTimestamp) {
+    if (!res.meta) throw new Error("Cannot find .meta in response.");
+    if (!res.meta.serverTime)
+      throw new Error("Cannot find .meta.serverTime in response.");
 
     // update deltaTime and weight it
-    this._deltaTime.value = (this._deltaTime.value * this._deltaTime.weight + res.meta.serverTime - requestLocalTimestamp) / ++this._deltaTime.weight;
+    this._deltaTime.value =
+      (this._deltaTime.value * this._deltaTime.weight +
+        res.meta.serverTime -
+        requestLocalTimestamp) /
+      ++this._deltaTime.weight;
   }
 }
 
@@ -23210,9 +23275,10 @@ module.exports = function whichTypedArray(value) {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 const { createUserAndPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-const Application = __webpack_require__(/*! ../lib/appTemplates/Application */ "./lib/appTemplates/Application.js");
+const Application = (__webpack_require__(/*! ../lib/appTemplates/Application */ "./lib/appTemplates/Application.js")["default"]);
 
-describe('[APAX] Application class', () => {
+describe('[APAX] Application class', function () {
+  this.timeout(5000);
   const baseStreamId = 'application-class';
   const appName = 'application-app';
   let user;
@@ -23359,8 +23425,8 @@ describe('[APAX] Application class', () => {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 const { pryv, createUserPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-const AppManagingAccount = __webpack_require__(/*! ../lib/appTemplates/AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js");
-const AppClientAccount = __webpack_require__(/*! ../lib/appTemplates/AppClientAccount */ "./lib/appTemplates/AppClientAccount.js");
+const AppManagingAccount = (__webpack_require__(/*! ../lib/appTemplates/AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js")["default"]);
+const AppClientAccount = (__webpack_require__(/*! ../lib/appTemplates/AppClientAccount */ "./lib/appTemplates/AppClientAccount.js")["default"]);
 const Collector = __webpack_require__(/*! ../lib/appTemplates/Collector */ "./lib/appTemplates/Collector.js");
 const CollectorClient = __webpack_require__(/*! ../lib/appTemplates/CollectorClient */ "./lib/appTemplates/CollectorClient.js");
 const { HDSLibError } = __webpack_require__(/*! ../lib/errors */ "./lib/errors.js");
@@ -23485,7 +23551,9 @@ describe('[APTX] appTemplates', function () {
     assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
   });
 
-  describe('[APIX] Collector invite flows & internals', () => {
+  describe('[APIX] Collector invite flows & internals', async function () {
+    this.timeout(10000);
+
     it('[APTI] Collector invite accept full flow testing internal', async () => {
       const newCollector = await appManaging.createCollector('Invite test 1');
       assert(newCollector.statusCode, 'draft');
@@ -23929,14 +23997,15 @@ const { waitUntilFalse } = __webpack_require__(/*! ../lib/utils */ "./lib/utils.
 const { resetModel } = __webpack_require__(/*! ../lib/HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js");
 
 describe('[HDLX] HDSLib.index.js', () => {
-  before(() => {
+  before(async () => {
+    await HDSLib.initHDSModel();
     resetModel();
   });
 
-  it('[HDME] HDSLib.model throws error if not initialized', () => {
+  it('[HDME] HDSLib.getHDSModel() throws error if not initialized', () => {
     try {
       // eslint-disable-next-line no-unused-expressions
-      HDSLib.model.modelData;
+      HDSLib.getHDSModel().modelData;
       throw new Error('Should throw an error');
     } catch (e) {
       assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
@@ -23944,7 +24013,7 @@ describe('[HDLX] HDSLib.index.js', () => {
 
     try {
       // eslint-disable-next-line no-unused-expressions
-      HDSLib.model.streams;
+      HDSLib.getHDSModel().streams;
       throw new Error('Should throw an error');
     } catch (e) {
       assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
@@ -23955,8 +24024,8 @@ describe('[HDLX] HDSLib.index.js', () => {
     const model0 = await HDSLib.initHDSModel();
     const model1 = await HDSLib.initHDSModel();
     assert.equal(model0, model1, 'HDSLib.initHDSModel() should used cached model');
-    const model2 = HDSLib.model;
-    assert.equal(model0, model2, 'HDSLib.model should used cached model');
+    const model2 = HDSLib.getHDSModel();
+    assert.equal(model0, model2, 'HDSLib.getHDSModel() should used cached model');
     // -- refresh model
   });
 
@@ -24008,7 +24077,7 @@ const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/te
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
-const { HDSModel } = __webpack_require__(Object(function webpackMissingModule() { var e = new Error("Cannot find module '../'"); e.code = 'MODULE_NOT_FOUND'; throw e; }()));
+const { HDSModel } = __webpack_require__(/*! ../lib/ */ "./lib/index.js");
 const { resetPreferredLocales, setPreferredLocales } = __webpack_require__(/*! ../lib/localizeText */ "./lib/localizeText.js");
 
 describe('[MODX] Model', () => {
@@ -24617,8 +24686,8 @@ module.exports = {
 
 const { assert } = __webpack_require__(/*! ./deps-node */ "./tests/test-utils/deps-browser.js");
 const { createUserAndPermissions, pryv, createUser, createUserPermissions } = __webpack_require__(/*! ./pryvService */ "./tests/test-utils/pryvService.js");
-const AppManagingAccount = __webpack_require__(/*! ../../lib/appTemplates/AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js");
-const AppClientAccount = __webpack_require__(/*! ../../lib/appTemplates/AppClientAccount */ "./lib/appTemplates/AppClientAccount.js");
+const AppManagingAccount = (__webpack_require__(/*! ../../lib/appTemplates/AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js")["default"]);
+const AppClientAccount = (__webpack_require__(/*! ../../lib/appTemplates/AppClientAccount */ "./lib/appTemplates/AppClientAccount.js")["default"]);
 
 module.exports = {
   helperNewAppAndUsers,
@@ -24714,9 +24783,8 @@ async function helperNewInvite (appManaging, appClient, code) {
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 __webpack_require__(/*! ./debug */ "./tests/test-utils/debug.js");
-const pryv = __webpack_require__(/*! ../../lib/patchedPryv */ "./lib/patchedPryv.js");
-const HDSService = __webpack_require__(/*! ../../lib/HDSService */ "./lib/HDSService.js");
-const superagent = pryv.utils.superagent;
+const pryv = (__webpack_require__(/*! ../../lib/patchedPryv */ "./lib/patchedPryv.js")["default"]);
+const HDSService = (__webpack_require__(/*! ../../lib/HDSService */ "./lib/HDSService.js")["default"]);
 
 const ShortUniqueId = __webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js");
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
@@ -24865,7 +24933,7 @@ async function createUserPermissions (user, permissions, initialStreams = [], ap
  */
 async function userExists (userId) {
   await init();
-  const userExists = (await superagent.get(infosSingleton.register + userId + '/check_username')).body;
+  const userExists = (await pryv.utils.superagent.get(infosSingleton.register + userId + '/check_username')).body;
   if (typeof userExists.reserved === 'undefined') throw Error('Pryv invalid user exists response ' + JSON.stringify(userExists));
   return userExists.reserved;
 }
@@ -24877,7 +24945,7 @@ async function userExists (userId) {
 async function getHost () {
   await init();
   // get available hosting
-  const hostings = (await superagent.get(infosSingleton.register + 'hostings').set('accept', 'json')).body;
+  const hostings = (await pryv.utils.superagent.get(infosSingleton.register + 'hostings').set('accept', 'json')).body;
   let hostingCandidate = null;
   findOneHostingKey(hostings, 'N');
   function findOneHostingKey (o, parentKey) {
@@ -24919,7 +24987,8 @@ const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/te
 const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
 const { createUserAndPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
 
-describe('[TKSX] toolKit Stream Auto Create', () => {
+describe('[TKSX] toolKit Stream Auto Create', function () {
+  this.timeout(5000);
   before(async () => {
     await HDSLib.initHDSModel();
   });

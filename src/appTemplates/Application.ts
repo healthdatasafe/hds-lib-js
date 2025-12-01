@@ -1,6 +1,8 @@
 import pryv from '../patchedPryv';
 import { StreamsAutoCreate } from '../toolkit';
 
+const APPS_ROOT_STREAM = 'applications';
+
 /**
  * Settings for application
  */
@@ -138,12 +140,25 @@ export default class Application {
    * Force loading of streamData
    */
   async loadStreamData (): Promise<any> {
-    const streamData = (await this.connection.apiOne('streams.get', { id: this.baseStreamId }, 'streams'))[0];
+    const streams = (await this.connection.apiOne('streams.get', { }, 'streams'));
+    const streamData = findStreamByid(streams, this.baseStreamId);
     if (streamData) {
       this.cache.streamData = streamData;
     }
     return streamData;
   }
+}
+
+// findStream in a tree
+function findStreamByid (streams: pryv.Stream[], streamId: string): pryv.Stream | null {
+  for (const stream of streams) {
+    if (stream.id === streamId) return stream;
+    if (stream.children?.length > 0) {
+      const streamFromChildren = findStreamByid(stream.children, streamId);
+      if (streamFromChildren != null) return streamFromChildren;
+    }
+  }
+  return null;
 }
 
 // create app Streams
@@ -188,13 +203,11 @@ async function createAppStreams (app: Application): Promise<void> {
       throw new Error('Token has not sufficient right to create App streams. Create them upfront');
     }
     const apiCalls: pryv.APICall[] = [
-      { method: 'streams.create', params: { id: 'applications', name: 'Applications' } },
-      { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: 'applications' } }
+      { method: 'streams.create', params: { id: APPS_ROOT_STREAM, name: 'Applications' } },
+      { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: APPS_ROOT_STREAM } }
     ];
     const streamCreateResult = await app.connection.api(apiCalls);
-    for (const r of streamCreateResult) {
-      if ((r as any).error) throw new Error('Failed creating app streams');
-    }
+    if (streamCreateResult[1].error) throw new Error('Failed creating app streams ' + JSON.stringify(streamCreateResult[1].error));
     const stream = (streamCreateResult[1] as any).stream;
     app.cache.streamData = stream;
   }
