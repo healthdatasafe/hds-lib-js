@@ -16,7 +16,8 @@
     "type": "git",
     "url": "git+https://github.com/healthdatasafe/hds-lib-js.git"
   },
-  "types": "lib/index.d.ts",
+  "main": "lib/index.js",
+  "types": "lib/index.d.js",
   "keywords": [
     "HDS",
     "Health",
