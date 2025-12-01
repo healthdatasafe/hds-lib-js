@@ -16,3 +16,19 @@ export const model = (() => {
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };
+
+// also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
+const HDSLib = {
+  getHDSModel,
+  initHDSModel,
+  pryv,
+  settings,
+  HDSService,
+  HDSModel,
+  appTemplates,
+  localizeText,
+  l: localizeText,
+  toolkit,
+  logger
+};
+export default HDSLib;
