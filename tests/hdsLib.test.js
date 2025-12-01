@@ -8,14 +8,15 @@ const { waitUntilFalse } = require('../lib/utils');
 const { resetModel } = require('../lib/HDSModel/HDSModelInitAndSingleton');
 
 describe('[HDLX] HDSLib.index.js', () => {
-  before(() => {
+  before(async () => {
+    await HDSLib.initHDSModel();
     resetModel();
   });
 
-  it('[HDME] HDSLib.model throws error if not initialized', () => {
+  it('[HDME] HDSLib.getHDSModel() throws error if not initialized', () => {
     try {
       // eslint-disable-next-line no-unused-expressions
-      HDSLib.model.modelData;
+      HDSLib.getHDSModel().modelData;
       throw new Error('Should throw an error');
     } catch (e) {
       assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
@@ -23,7 +24,7 @@ describe('[HDLX] HDSLib.index.js', () => {
 
     try {
       // eslint-disable-next-line no-unused-expressions
-      HDSLib.model.streams;
+      HDSLib.getHDSModel().streams;
       throw new Error('Should throw an error');
     } catch (e) {
       assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
@@ -34,8 +35,8 @@ describe('[HDLX] HDSLib.index.js', () => {
     const model0 = await HDSLib.initHDSModel();
     const model1 = await HDSLib.initHDSModel();
     assert.equal(model0, model1, 'HDSLib.initHDSModel() should used cached model');
-    const model2 = HDSLib.model;
-    assert.equal(model0, model2, 'HDSLib.model should used cached model');
+    const model2 = HDSLib.getHDSModel();
+    assert.equal(model0, model2, 'HDSLib.getHDSModel() should used cached model');
     // -- refresh model
   });
 

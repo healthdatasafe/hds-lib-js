@@ -53,7 +53,7 @@ await model.load();
 **Per service auto loading.** (preferred way)
 0. (Optional) You may set the defaultService info of the lib with  `HDSLib.setServiceInfoURL()`.
 1. Initialize model singleton once with `await HDSLib.initHDSModel()`
-2. Use model from `HDSLib.model`
+2. Use model from `HDSLib.getHDSModel()`
 
 #### HDSModel.ItemDef
 
@@ -194,7 +194,7 @@ await connection.streamsAutoCreate.ensureExistsForItems(['body-weight', 'profile
       // init model in async code
       (async () => {
         await HDSLib.initHDSModel(); // need just one
-        // from now on an in all your code you use HDSLib.model 
+        // from now on an in all your code you use HDSLib.getHDSModel() 
 
         // you may create new HDSService with:
         const service = new HDSService();

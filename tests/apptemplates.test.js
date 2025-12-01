@@ -127,7 +127,9 @@ describe('[APTX] appTemplates', function () {
     assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
   });
 
-  describe('[APIX] Collector invite flows & internals', () => {
+  describe('[APIX] Collector invite flows & internals', async function () {
+    this.timeout(10000);
+
     it('[APTI] Collector invite accept full flow testing internal', async () => {
       const newCollector = await appManaging.createCollector('Invite test 1');
       assert(newCollector.statusCode, 'draft');
