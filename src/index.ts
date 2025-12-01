@@ -1,7 +1,7 @@
 import { localizeText } from './localizeText';
 import * as settings from './settings';
 import { pryv } from './patchedPryv';
-import HDSModel from './HDSModel/HDSModel';
+import { HDSModel } from './HDSModel/HDSModel';
 import * as appTemplates from './appTemplates/appTemplates';
 import * as logger from './logger';
 import { HDSService } from './HDSService';

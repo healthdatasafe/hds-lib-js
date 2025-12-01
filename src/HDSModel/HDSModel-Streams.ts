@@ -1,11 +1,11 @@
 import { itemKeysOrDefsToDefs } from './internalModelUtils';
-import HDSModel from './HDSModel';
-import HDSItemDef from './HDSItemDef';
+import { HDSModel } from './HDSModel';
+import { HDSItemDef } from './HDSItemDef';
 
 /**
  * Streams - Extension of HDSModel
  */
-export default class HDSModelStreams {
+export class HDSModelStreams {
   /**
    * Model instance
    */

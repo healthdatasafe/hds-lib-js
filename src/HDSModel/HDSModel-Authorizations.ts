@@ -1,4 +1,4 @@
-import HDSModel from './HDSModel';
+import { HDSModel } from './HDSModel';
 
 export type AuthorizationRequestItem = {
   streamId: string;
@@ -15,7 +15,7 @@ export type AuthorizationPreRequestItem = {
 /**
  * Authorizations - Extension of HDSModel
  */
-export default class HDSModelAuthorizations {
+export class HDSModelAuthorizations {
   /**
    * Model instance
    */

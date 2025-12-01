@@ -1,10 +1,10 @@
-import HDSItemDef from './HDSItemDef';
-import HDSModel from './HDSModel';
+import { HDSItemDef } from './HDSItemDef';
+import { HDSModel } from './HDSModel';
 
 /**
  * ItemsDefs - Extension of HDSModel
  */
-export default class HDSModelItemsDefs {
+export class HDSModelItemsDefs {
   /**
    * Model instance
    */

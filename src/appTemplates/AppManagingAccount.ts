@@ -22,7 +22,7 @@ const collectorIdGenerator = new ShortUniqueId({ dictionary: 'alphanum_lower', l
  *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
  *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
  */
-export default class AppManagingAccount extends Application {
+export class AppManagingAccount extends Application {
   // used by Application.init();
   get appSettings (): any {
     return {

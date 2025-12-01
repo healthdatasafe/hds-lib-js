@@ -1,10 +1,10 @@
 import { HDSLibError } from '../errors';
 import { deepFreeze } from '../utils';
-import HDSModelStreams from './HDSModel-Streams';
-import HDSModelAuthorizations from './HDSModel-Authorizations';
-import HDSModelItemsDefs from './HDSModel-ItemsDefs';
+import { HDSModelStreams } from './HDSModel-Streams';
+import { HDSModelAuthorizations } from './HDSModel-Authorizations';
+import { HDSModelItemsDefs } from './HDSModel-ItemsDefs';
 
-export default class HDSModel {
+export class HDSModel {
   /**
    * JSON definition file URL.
    * Should come from service/info assets.hds-model
