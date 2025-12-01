@@ -1,12 +1,12 @@
 import { CollectorRequest } from './CollectorRequest';
-import pryv from '../patchedPryv';
+import { pryv } from '../patchedPryv';
 import { HDSLibError } from '../errors';
 import * as logger from '../logger';
 
 /**
  * Client App in relation to an AppManagingAccount/Collector
  */
-export default class CollectorClient {
+export class CollectorClient {
   static STATUSES = Object.freeze({
     incoming: 'Incoming',
     active: 'Active',
@@ -290,5 +290,3 @@ export default class CollectorClient {
     return info.user.username + ':' + info.name;
   }
 }
-
-module.exports = CollectorClient;

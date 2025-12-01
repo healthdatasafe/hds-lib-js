@@ -1,7 +1,8 @@
 /* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 const { createUserAndPermissions } = require('./test-utils/pryvService');
-const Application = require('../lib/appTemplates/Application').default;
+const HDSLib = require('../lib');
+const Application = HDSLib.appTemplates.Application;
 
 describe('[APAX] Application class', function () {
   this.timeout(5000);

@@ -1,4 +1,4 @@
-import pryv from '../patchedPryv';
+import { pryv } from '../patchedPryv';
 import { StreamsAutoCreate } from '../toolkit';
 
 const APPS_ROOT_STREAM = 'applications';
@@ -16,7 +16,7 @@ export type ApplicationFeatures = {
 /**
  * Common code for AppClientAccount and AppManagingAccount
  */
-export default class Application {
+export class Application {
   /** Pryv.Connection */
   connection: pryv.Connection;
   /** string */

@@ -1,4 +1,4 @@
-import pryv from '../patchedPryv';
+import { pryv } from '../patchedPryv';
 import { HDSLibError } from '../errors';
 
 /**
@@ -6,7 +6,7 @@ import { HDSLibError } from '../errors';
  * There is one Collector Invite per Collector => Enduser connection
  */
 
-export default class CollectorInvite {
+export class CollectorInvite {
   /**
    * get the key that will be assigned to this event;
    */

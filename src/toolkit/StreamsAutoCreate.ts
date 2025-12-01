@@ -1,6 +1,6 @@
 import { HDSLibError } from '../errors';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton';
-import pryv from '../patchedPryv';
+import { pryv } from '../patchedPryv';
 import HDSItemDef from '../HDSModel/HDSItemDef';
 
 export default class StreamsAutoCreate {

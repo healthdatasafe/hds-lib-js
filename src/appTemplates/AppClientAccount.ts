@@ -1,7 +1,7 @@
 import { HDSLibError } from '../errors';
-import pryv from '../patchedPryv';
-import Application from './Application';
-import CollectorClient from './CollectorClient';
+import { pryv } from '../patchedPryv';
+import { Application } from './Application';
+import { CollectorClient } from './CollectorClient';
 import * as logger from '../logger';
 
 /**
@@ -10,7 +10,7 @@ import * as logger from '../logger';
  */
 
 const MAX_COLLECTORS = 1000;
-export default class AppClientAccount extends Application {
+export class AppClientAccount extends Application {
   constructor (baseStreamId: string, connection: pryv.Connection, appName?: string, features?: any) {
     super(baseStreamId, connection, appName, features);
     this.cache.collectorClientsMap = {};

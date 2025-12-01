@@ -509,7 +509,7 @@ exports.getModel = getModel;
 exports.resetModel = resetModel;
 exports.initHDSModel = initHDSModel;
 const HDSModel_1 = __importDefault(__webpack_require__(/*! ./HDSModel */ "./lib/HDSModel/HDSModel.js"));
-const HDSService_1 = __importDefault(__webpack_require__(/*! ../HDSService */ "./lib/HDSService.js"));
+const HDSService_1 = __webpack_require__(/*! ../HDSService */ "./lib/HDSService.js");
 let model = null;
 function getModel() {
     if (model == null) {
@@ -531,7 +531,7 @@ async function initHDSModel() {
         getModel();
     }
     if (!model.isLoaded) {
-        const service = new HDSService_1.default();
+        const service = new HDSService_1.HDSService();
         const serviceInfo = await service.info();
         await model.load(serviceInfo.assets['hds-model']);
     }
@@ -621,20 +621,18 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSService = void 0;
 const settings = __importStar(__webpack_require__(/*! ./settings */ "./lib/settings.js"));
-const patchedPryv_1 = __importDefault(__webpack_require__(/*! ./patchedPryv */ "./lib/patchedPryv.js"));
+const patchedPryv_1 = __webpack_require__(/*! ./patchedPryv */ "./lib/patchedPryv.js");
 // makes Pryv service aware of default serviceUrl
-class HDSService extends patchedPryv_1.default.Service {
+class HDSService extends patchedPryv_1.pryv.Service {
     constructor(serviceInfoUrl, serviceCustomizations) {
         serviceInfoUrl = serviceInfoUrl || settings.getServiceInfoURL();
         super(serviceInfoUrl, serviceCustomizations);
     }
 }
-exports["default"] = HDSService;
+exports.HDSService = HDSService;
 //# sourceMappingURL=HDSService.js.map
 
 /***/ }),
@@ -680,21 +678,19 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AppClientAccount = void 0;
 const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
-const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
-const Application_1 = __importDefault(__webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js"));
-const CollectorClient_1 = __importDefault(__webpack_require__(/*! ./CollectorClient */ "./lib/appTemplates/CollectorClient.js"));
+const patchedPryv_1 = __webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js");
+const Application_1 = __webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js");
+const CollectorClient_1 = __webpack_require__(/*! ./CollectorClient */ "./lib/appTemplates/CollectorClient.js");
 const logger = __importStar(__webpack_require__(/*! ../logger */ "./lib/logger.js"));
 /**
  * - applications
  *   - [baseStreamId] "Root" stream from this app
  */
 const MAX_COLLECTORS = 1000;
-class AppClientAccount extends Application_1.default {
+class AppClientAccount extends Application_1.Application {
     constructor(baseStreamId, connection, appName, features) {
         super(baseStreamId, connection, appName, features);
         this.cache.collectorClientsMap = {};
@@ -711,10 +707,10 @@ class AppClientAccount extends Application_1.default {
     async handleIncomingRequest(apiEndpoint, incomingEventId) {
         // make sure that collectorClientsMap is initialized
         await this.getCollectorClients();
-        const requesterConnection = new patchedPryv_1.default.Connection(apiEndpoint);
+        const requesterConnection = new patchedPryv_1.pryv.Connection(apiEndpoint);
         const accessInfo = await requesterConnection.accessInfo();
         // check if request is known
-        const collectorClientKey = CollectorClient_1.default.keyFromInfo(accessInfo);
+        const collectorClientKey = CollectorClient_1.CollectorClient.keyFromInfo(accessInfo);
         logger.debug('AppClient:handleIncomingRequest', { collectorClientKey, accessInfo, incomingEventId });
         if (this.cache.collectorClientsMap[collectorClientKey]) {
             const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
@@ -739,7 +735,7 @@ class AppClientAccount extends Application_1.default {
             throw new errors_1.HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
         }
         // else create it
-        const collectorClient = await CollectorClient_1.default.create(this, apiEndpoint, incomingEventId, accessInfo);
+        const collectorClient = await CollectorClient_1.CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
         this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
         return collectorClient;
     }
@@ -766,7 +762,7 @@ class AppClientAccount extends Application_1.default {
             }
         }
         for (const event of eventRes.events) {
-            const collectorClient = new CollectorClient_1.default(this, event);
+            const collectorClient = new CollectorClient_1.CollectorClient(this, event);
             if (accessHDSCollectorMap[collectorClient.key] != null)
                 collectorClient.accessData = accessHDSCollectorMap[collectorClient.key];
             // temp process - might be removed
@@ -784,7 +780,7 @@ class AppClientAccount extends Application_1.default {
         return super.init();
     }
 }
-exports["default"] = AppClientAccount;
+exports.AppClientAccount = AppClientAccount;
 //# sourceMappingURL=AppClientAccount.js.map
 
 /***/ }),
@@ -802,8 +798,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const short_unique_id_1 = __importDefault(__webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js"));
-const Application_1 = __importDefault(__webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js"));
-const Collector_1 = __importDefault(__webpack_require__(/*! ./Collector */ "./lib/appTemplates/Collector.js"));
+const Application_1 = __webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js");
+const Collector_1 = __webpack_require__(/*! ./Collector */ "./lib/appTemplates/Collector.js");
+console.log(Application_1.Application);
 const collectorIdGenerator = new short_unique_id_1.default({ dictionary: 'alphanum_lower', length: 7 });
 /**
  * App which manages Collectors
@@ -823,7 +820,7 @@ const collectorIdGenerator = new short_unique_id_1.default({ dictionary: 'alphan
  *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
  *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
  */
-class AppManagingAccount extends Application_1.default {
+class AppManagingAccount extends Application_1.Application {
     // used by Application.init();
     get appSettings() {
         return {
@@ -855,7 +852,7 @@ class AppManagingAccount extends Application_1.default {
         const streams = this.streamData.children || [];
         const collectorsMap = {};
         for (const stream of streams) {
-            const collector = new Collector_1.default(this, stream);
+            const collector = new Collector_1.Collector(this, stream);
             collectorsMap[collector.id] = collector;
         }
         this.cache.collectorsMap = collectorsMap;
@@ -881,7 +878,7 @@ class AppManagingAccount extends Application_1.default {
         const stream = await this.connection.apiOne('streams.create', params, 'stream');
         // add new stream to streamCache
         this.streamData.children.push(stream);
-        const collector = new Collector_1.default(this, stream);
+        const collector = new Collector_1.Collector(this, stream);
         this.cache.collectorsMap[collector.streamId] = collector;
         return collector;
     }
@@ -895,15 +892,13 @@ exports["default"] = AppManagingAccount;
 /*!*****************************************!*\
   !*** ./lib/appTemplates/Application.js ***!
   \*****************************************/
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
+exports.Application = void 0;
+const patchedPryv_1 = __webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js");
 const toolkit_1 = __webpack_require__(/*! ../toolkit */ "./lib/toolkit/index.js");
 const APPS_ROOT_STREAM = 'applications';
 /**
@@ -944,7 +939,7 @@ class Application {
      * Create with an apiEnpoint
      */
     static async newFromApiEndpoint(baseStreamId, apiEndpoint, appName, features) {
-        const connection = new patchedPryv_1.default.Connection(apiEndpoint);
+        const connection = new patchedPryv_1.pryv.Connection(apiEndpoint);
         // in a static method, "this" is the class (here the extending class)
         return await this.newFromConnection(baseStreamId, connection, appName, features);
     }
@@ -1028,7 +1023,7 @@ class Application {
         return streamData;
     }
 }
-exports["default"] = Application;
+exports.Application = Application;
 // findStream in a tree
 function findStreamByid(streams, streamId) {
     for (const stream of streams) {
@@ -1104,7 +1099,7 @@ async function createAppStreams(app) {
 /*!***************************************!*\
   !*** ./lib/appTemplates/Collector.js ***!
   \***************************************/
-/***/ (function(module, exports, __webpack_require__) {
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
 
@@ -1141,15 +1136,13 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Collector = void 0;
 const CollectorRequest_1 = __webpack_require__(/*! ./CollectorRequest */ "./lib/appTemplates/CollectorRequest.js");
 const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
 const utils_1 = __webpack_require__(/*! ../utils */ "./lib/utils.js");
-const CollectorInvite_1 = __importDefault(__webpack_require__(/*! ./CollectorInvite */ "./lib/appTemplates/CollectorInvite.js"));
+const CollectorInvite_1 = __webpack_require__(/*! ./CollectorInvite */ "./lib/appTemplates/CollectorInvite.js");
 const logger = __importStar(__webpack_require__(/*! ../logger */ "./lib/logger.js"));
 const COLLECTOR_STREAMID_SUFFIXES = {
     archive: 'archive',
@@ -1280,12 +1273,12 @@ class Collector {
         return await this.#setStatus(_a.STATUSES.active);
     }
     #addOrUpdateInvite(eventData) {
-        const key = CollectorInvite_1.default.getKeyForEvent(eventData);
+        const key = CollectorInvite_1.CollectorInvite.getKeyForEvent(eventData);
         if (this.#cache.invites[key]) {
             this.#cache.invites[key].setEventData(eventData);
         }
         else {
-            this.#cache.invites[key] = new CollectorInvite_1.default(this, eventData);
+            this.#cache.invites[key] = new CollectorInvite_1.CollectorInvite(this, eventData);
         }
         return this.#cache.invites[key];
     }
@@ -1547,9 +1540,8 @@ class Collector {
         return status;
     }
 }
+exports.Collector = Collector;
 _a = Collector;
-exports["default"] = Collector;
-module.exports = Collector;
 /**
  * @typedef {CollectorRequest}
  * @property {number} version
@@ -1569,7 +1561,7 @@ module.exports = Collector;
 /*!*********************************************!*\
   !*** ./lib/appTemplates/CollectorClient.js ***!
   \*********************************************/
-/***/ (function(module, exports, __webpack_require__) {
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
 
@@ -1606,13 +1598,11 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CollectorClient = void 0;
 const CollectorRequest_1 = __webpack_require__(/*! ./CollectorRequest */ "./lib/appTemplates/CollectorRequest.js");
-const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
+const patchedPryv_1 = __webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js");
 const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
 const logger = __importStar(__webpack_require__(/*! ../logger */ "./lib/logger.js"));
 /**
@@ -1678,7 +1668,7 @@ class CollectorClient {
         // check content of accessInfo
         const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
         // get request event cont
-        const requesterConnection = new patchedPryv_1.default.Connection(apiEndpoint);
+        const requesterConnection = new patchedPryv_1.pryv.Connection(apiEndpoint);
         const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
         if (!requesterEvents[0])
             throw new errors_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
@@ -1706,7 +1696,7 @@ class CollectorClient {
             logger.error('TODO try to revoke current access');
         }
         // get accessInfo
-        const requesterConnection = new patchedPryv_1.default.Connection(apiEndpoint);
+        const requesterConnection = new patchedPryv_1.pryv.Connection(apiEndpoint);
         const accessInfo = await requesterConnection.accessInfo();
         // check content of accessInfo
         const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
@@ -1844,7 +1834,7 @@ class CollectorClient {
             content
         };
         try {
-            const requesterConnection = new patchedPryv_1.default.Connection(requestrerApiEndpoint);
+            const requesterConnection = new patchedPryv_1.pryv.Connection(requestrerApiEndpoint);
             const requesterEvent = await requesterConnection.apiOne('events.create', responseEvent, 'event');
             return requesterEvent;
         }
@@ -1887,9 +1877,8 @@ class CollectorClient {
         return info.user.username + ':' + info.name;
     }
 }
+exports.CollectorClient = CollectorClient;
 _a = CollectorClient;
-exports["default"] = CollectorClient;
-module.exports = CollectorClient;
 //# sourceMappingURL=CollectorClient.js.map
 
 /***/ }),
@@ -1898,15 +1887,13 @@ module.exports = CollectorClient;
 /*!*********************************************!*\
   !*** ./lib/appTemplates/CollectorInvite.js ***!
   \*********************************************/
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const patchedPryv_1 = __importDefault(__webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js"));
+exports.CollectorInvite = void 0;
+const patchedPryv_1 = __webpack_require__(/*! ../patchedPryv */ "./lib/patchedPryv.js");
 const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
 /**
  * Collector Invite
@@ -1943,7 +1930,7 @@ class CollectorInvite {
     }
     get connection() {
         if (this.#connection == null) {
-            this.#connection = new patchedPryv_1.default.Connection(this.apiEndpoint);
+            this.#connection = new patchedPryv_1.pryv.Connection(this.apiEndpoint);
         }
         return this.#connection;
     }
@@ -2000,7 +1987,7 @@ class CollectorInvite {
         };
     }
 }
-exports["default"] = CollectorInvite;
+exports.CollectorInvite = CollectorInvite;
 //# sourceMappingURL=CollectorInvite.js.map
 
 /***/ }),
@@ -2337,11 +2324,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.AppClientAccount = exports.AppManagingAccount = void 0;
+exports.CollectorRequest = exports.CollectorInvite = exports.CollectorClient = exports.Collector = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = void 0;
 const AppManagingAccount_1 = __importDefault(__webpack_require__(/*! ./AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js"));
 exports.AppManagingAccount = AppManagingAccount_1.default;
-const AppClientAccount_1 = __importDefault(__webpack_require__(/*! ./AppClientAccount */ "./lib/appTemplates/AppClientAccount.js"));
-exports.AppClientAccount = AppClientAccount_1.default;
+const AppClientAccount_1 = __webpack_require__(/*! ./AppClientAccount */ "./lib/appTemplates/AppClientAccount.js");
+Object.defineProperty(exports, "AppClientAccount", ({ enumerable: true, get: function () { return AppClientAccount_1.AppClientAccount; } }));
+const Application_1 = __webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js");
+Object.defineProperty(exports, "Application", ({ enumerable: true, get: function () { return Application_1.Application; } }));
+const Collector_1 = __webpack_require__(/*! ./Collector */ "./lib/appTemplates/Collector.js");
+Object.defineProperty(exports, "Collector", ({ enumerable: true, get: function () { return Collector_1.Collector; } }));
+const CollectorClient_1 = __webpack_require__(/*! ./CollectorClient */ "./lib/appTemplates/CollectorClient.js");
+Object.defineProperty(exports, "CollectorClient", ({ enumerable: true, get: function () { return CollectorClient_1.CollectorClient; } }));
+const CollectorInvite_1 = __webpack_require__(/*! ./CollectorInvite */ "./lib/appTemplates/CollectorInvite.js");
+Object.defineProperty(exports, "CollectorInvite", ({ enumerable: true, get: function () { return CollectorInvite_1.CollectorInvite; } }));
+const CollectorRequest_1 = __webpack_require__(/*! ./CollectorRequest */ "./lib/appTemplates/CollectorRequest.js");
+Object.defineProperty(exports, "CollectorRequest", ({ enumerable: true, get: function () { return CollectorRequest_1.CollectorRequest; } }));
 //# sourceMappingURL=appTemplates.js.map
 
 /***/ }),
@@ -2424,16 +2421,16 @@ Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: functio
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
 const settings = __importStar(__webpack_require__(/*! ./settings */ "./lib/settings.js"));
 exports.settings = settings;
-const patchedPryv_1 = __importDefault(__webpack_require__(/*! ./patchedPryv */ "./lib/patchedPryv.js"));
-exports.pryv = patchedPryv_1.default;
+const patchedPryv_1 = __webpack_require__(/*! ./patchedPryv */ "./lib/patchedPryv.js");
+Object.defineProperty(exports, "pryv", ({ enumerable: true, get: function () { return patchedPryv_1.pryv; } }));
 const HDSModel_1 = __importDefault(__webpack_require__(/*! ./HDSModel/HDSModel */ "./lib/HDSModel/HDSModel.js"));
 exports.HDSModel = HDSModel_1.default;
 const appTemplates = __importStar(__webpack_require__(/*! ./appTemplates/appTemplates */ "./lib/appTemplates/appTemplates.js"));
 exports.appTemplates = appTemplates;
 const logger = __importStar(__webpack_require__(/*! ./logger */ "./lib/logger.js"));
 exports.logger = logger;
-const HDSService_1 = __importDefault(__webpack_require__(/*! ./HDSService */ "./lib/HDSService.js"));
-exports.HDSService = HDSService_1.default;
+const HDSService_1 = __webpack_require__(/*! ./HDSService */ "./lib/HDSService.js");
+Object.defineProperty(exports, "HDSService", ({ enumerable: true, get: function () { return HDSService_1.HDSService; } }));
 const HDSModelInitAndSingleton = __importStar(__webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js"));
 const toolkit = __importStar(__webpack_require__(/*! ./toolkit */ "./lib/toolkit/index.js"));
 exports.toolkit = toolkit;
@@ -2623,12 +2620,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.pryv = void 0;
 const pryv = __importStar(__webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js"));
+exports.pryv = pryv;
 const monitor_1 = __importDefault(__webpack_require__(/*! @pryv/monitor */ "./node_modules/@pryv/monitor/src/index.js"));
 const socket_io_1 = __importDefault(__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js"));
 (0, monitor_1.default)(pryv);
 (0, socket_io_1.default)(pryv);
-exports["default"] = pryv;
 //# sourceMappingURL=patchedPryv.js.map
 
 /***/ }),
@@ -23275,7 +23273,8 @@ module.exports = function whichTypedArray(value) {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 const { createUserAndPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-const Application = (__webpack_require__(/*! ../lib/appTemplates/Application */ "./lib/appTemplates/Application.js")["default"]);
+const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
+const Application = HDSLib.appTemplates.Application;
 
 describe('[APAX] Application class', function () {
   this.timeout(5000);
@@ -23425,8 +23424,9 @@ describe('[APAX] Application class', function () {
 /* eslint-env mocha */
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 const { pryv, createUserPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-const AppManagingAccount = (__webpack_require__(/*! ../lib/appTemplates/AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js")["default"]);
-const AppClientAccount = (__webpack_require__(/*! ../lib/appTemplates/AppClientAccount */ "./lib/appTemplates/AppClientAccount.js")["default"]);
+const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
+const AppManagingAccount = HDSLib.appTemplates.AppManagingAccount;
+const AppClientAccount = HDSLib.appTemplates.AppClientAccount;
 const Collector = __webpack_require__(/*! ../lib/appTemplates/Collector */ "./lib/appTemplates/Collector.js");
 const CollectorClient = __webpack_require__(/*! ../lib/appTemplates/CollectorClient */ "./lib/appTemplates/CollectorClient.js");
 const { HDSLibError } = __webpack_require__(/*! ../lib/errors */ "./lib/errors.js");
@@ -24686,8 +24686,8 @@ module.exports = {
 
 const { assert } = __webpack_require__(/*! ./deps-node */ "./tests/test-utils/deps-browser.js");
 const { createUserAndPermissions, pryv, createUser, createUserPermissions } = __webpack_require__(/*! ./pryvService */ "./tests/test-utils/pryvService.js");
-const AppManagingAccount = (__webpack_require__(/*! ../../lib/appTemplates/AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js")["default"]);
-const AppClientAccount = (__webpack_require__(/*! ../../lib/appTemplates/AppClientAccount */ "./lib/appTemplates/AppClientAccount.js")["default"]);
+const AppManagingAccount = (__webpack_require__(/*! ../../lib/ */ "./lib/index.js").appTemplates).AppManagingAccount;
+const AppClientAccount = (__webpack_require__(/*! ../../lib/ */ "./lib/index.js").appTemplates).AppClientAccount;
 
 module.exports = {
   helperNewAppAndUsers,
@@ -24783,8 +24783,8 @@ async function helperNewInvite (appManaging, appClient, code) {
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 __webpack_require__(/*! ./debug */ "./tests/test-utils/debug.js");
-const pryv = (__webpack_require__(/*! ../../lib/patchedPryv */ "./lib/patchedPryv.js")["default"]);
-const HDSService = (__webpack_require__(/*! ../../lib/HDSService */ "./lib/HDSService.js")["default"]);
+const pryv = (__webpack_require__(/*! ../../lib/ */ "./lib/index.js").pryv);
+const HDSService = (__webpack_require__(/*! ../../lib/ */ "./lib/index.js").HDSService);
 
 const ShortUniqueId = __webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js");
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
