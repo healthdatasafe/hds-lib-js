@@ -1,6 +1,6 @@
 import ShortUniqueId from 'short-unique-id';
-import Application from './Application';
-import Collector from './Collector';
+import { Application } from './Application';
+import { Collector } from './Collector';
 
 const collectorIdGenerator = new ShortUniqueId({ dictionary: 'alphanum_lower', length: 7 });
 

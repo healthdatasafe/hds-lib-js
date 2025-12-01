@@ -9,4 +9,4 @@ import socketIo from '@pryv/socket.io';
 monitor(pryv);
 socketIo(pryv);
 
-export default pryv;
+export { pryv };

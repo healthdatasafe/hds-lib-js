@@ -1,7 +1,7 @@
 import { CollectorRequest } from './CollectorRequest';
 import { HDSLibError } from '../errors';
 import { waitUntilFalse } from '../utils';
-import CollectorInvite from './CollectorInvite';
+import { CollectorInvite } from './CollectorInvite';
 import * as logger from '../logger';
 
 const COLLECTOR_STREAMID_SUFFIXES = {
@@ -20,7 +20,7 @@ Object.freeze(COLLECTOR_STREAMID_SUFFIXES);
  * A "Collector" can be seen as a "Request" and set of "Responses"
  * - Responses are authorization tokens from individuals
  */
-export default class Collector {
+export class Collector {
   static STREAMID_SUFFIXES = COLLECTOR_STREAMID_SUFFIXES;
   static STATUSES = Object.freeze({
     draft: 'draft',
@@ -423,8 +423,6 @@ export default class Collector {
     return status;
   }
 }
-
-module.exports = Collector;
 
 /**
  * @typedef {CollectorRequest}

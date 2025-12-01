@@ -1,6 +1,6 @@
 require('./debug');
-const pryv = require('../../lib/patchedPryv').default;
-const HDSService = require('../../lib/HDSService').default;
+const pryv = require('../../lib/').pryv;
+const HDSService = require('../../lib/').HDSService;
 
 const ShortUniqueId = require('short-unique-id');
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
