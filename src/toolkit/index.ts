@@ -1,3 +1,3 @@
-import StreamsAutoCreate from './StreamsAutoCreate';
+import { StreamsAutoCreate } from './StreamsAutoCreate';
 
 export { StreamsAutoCreate };

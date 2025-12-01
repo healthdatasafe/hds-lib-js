@@ -1,4 +1,4 @@
-import AppManagingAccount from './AppManagingAccount';
+import { AppManagingAccount } from './AppManagingAccount';
 import { AppClientAccount } from './AppClientAccount';
 import { Application } from './Application';
 import { Collector } from './Collector';

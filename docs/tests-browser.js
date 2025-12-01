@@ -10,6 +10,7 @@
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSItemDef = void 0;
 const localizeText_1 = __webpack_require__(/*! ../localizeText */ "./lib/localizeText.js");
 class HDSItemDef {
     #data;
@@ -48,7 +49,7 @@ class HDSItemDef {
         };
     }
 }
-exports["default"] = HDSItemDef;
+exports.HDSItemDef = HDSItemDef;
 //# sourceMappingURL=HDSItemDef.js.map
 
 /***/ }),
@@ -62,6 +63,7 @@ exports["default"] = HDSItemDef;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelAuthorizations = void 0;
 /**
  * Authorizations - Extension of HDSModel
  */
@@ -142,7 +144,7 @@ class HDSModelAuthorizations {
         return Object.values(streamsRequested);
     }
 }
-exports["default"] = HDSModelAuthorizations;
+exports.HDSModelAuthorizations = HDSModelAuthorizations;
 /**
  * Authorization level1 (parent) does override level2
  * Return "true" if identical or level1 == "manage"
@@ -181,15 +183,13 @@ function mixAuthorizationLevels(level1, level2) {
 /*!********************************************!*\
   !*** ./lib/HDSModel/HDSModel-ItemsDefs.js ***!
   \********************************************/
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const HDSItemDef_1 = __importDefault(__webpack_require__(/*! ./HDSItemDef */ "./lib/HDSModel/HDSItemDef.js"));
+exports.HDSModelItemsDefs = void 0;
+const HDSItemDef_1 = __webpack_require__(/*! ./HDSItemDef */ "./lib/HDSModel/HDSItemDef.js");
 /**
  * ItemsDefs - Extension of HDSModel
  */
@@ -235,7 +235,7 @@ class HDSModelItemsDefs {
                 throw new Error('Cannot find item definition with key: ' + key);
             return null;
         }
-        this.#itemsDefs[key] = new HDSItemDef_1.default(key, defData);
+        this.#itemsDefs[key] = new HDSItemDef_1.HDSItemDef(key, defData);
         return this.#itemsDefs[key];
     }
     /**
@@ -260,7 +260,7 @@ class HDSModelItemsDefs {
         return this.forKey(candidates[0].key, throwErrorIfNotFound);
     }
 }
-exports["default"] = HDSModelItemsDefs;
+exports.HDSModelItemsDefs = HDSModelItemsDefs;
 /**
  * Add key to model items and
  * load modeldata item into modelDataByStreamIdEventTypes for fast search
@@ -298,6 +298,7 @@ function loadModelDataByStreamIdEventTypes(model, map) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelStreams = void 0;
 const internalModelUtils_1 = __webpack_require__(/*! ./internalModelUtils */ "./lib/HDSModel/internalModelUtils.js");
 /**
  * Streams - Extension of HDSModel
@@ -375,7 +376,7 @@ class HDSModelStreams {
         return initialArray;
     }
 }
-exports["default"] = HDSModelStreams;
+exports.HDSModelStreams = HDSModelStreams;
 /**
  * @param streams
  * @param map - key value map
@@ -400,19 +401,17 @@ function loadModelStreamsById(streams, map) {
 /*!**********************************!*\
   !*** ./lib/HDSModel/HDSModel.js ***!
   \**********************************/
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModel = void 0;
 const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
 const utils_1 = __webpack_require__(/*! ../utils */ "./lib/utils.js");
-const HDSModel_Streams_1 = __importDefault(__webpack_require__(/*! ./HDSModel-Streams */ "./lib/HDSModel/HDSModel-Streams.js"));
-const HDSModel_Authorizations_1 = __importDefault(__webpack_require__(/*! ./HDSModel-Authorizations */ "./lib/HDSModel/HDSModel-Authorizations.js"));
-const HDSModel_ItemsDefs_1 = __importDefault(__webpack_require__(/*! ./HDSModel-ItemsDefs */ "./lib/HDSModel/HDSModel-ItemsDefs.js"));
+const HDSModel_Streams_1 = __webpack_require__(/*! ./HDSModel-Streams */ "./lib/HDSModel/HDSModel-Streams.js");
+const HDSModel_Authorizations_1 = __webpack_require__(/*! ./HDSModel-Authorizations */ "./lib/HDSModel/HDSModel-Authorizations.js");
+const HDSModel_ItemsDefs_1 = __webpack_require__(/*! ./HDSModel-ItemsDefs */ "./lib/HDSModel/HDSModel-ItemsDefs.js");
 class HDSModel {
     /**
      * JSON definition file URL.
@@ -464,7 +463,7 @@ class HDSModel {
         if (!this.isLoaded)
             throwNotLoadedError();
         if (!this.laziliyLoadedMap.itemsDefs) {
-            this.laziliyLoadedMap.itemsDefs = new HDSModel_ItemsDefs_1.default(this);
+            this.laziliyLoadedMap.itemsDefs = new HDSModel_ItemsDefs_1.HDSModelItemsDefs(this);
         }
         return this.laziliyLoadedMap.itemsDefs;
     }
@@ -472,7 +471,7 @@ class HDSModel {
         if (!this.isLoaded)
             throwNotLoadedError();
         if (!this.laziliyLoadedMap.streams) {
-            this.laziliyLoadedMap.streams = new HDSModel_Streams_1.default(this);
+            this.laziliyLoadedMap.streams = new HDSModel_Streams_1.HDSModelStreams(this);
         }
         return this.laziliyLoadedMap.streams;
     }
@@ -480,12 +479,12 @@ class HDSModel {
         if (!this.isLoaded)
             throwNotLoadedError();
         if (!this.laziliyLoadedMap.authorizations) {
-            this.laziliyLoadedMap.authorizations = new HDSModel_Authorizations_1.default(this);
+            this.laziliyLoadedMap.authorizations = new HDSModel_Authorizations_1.HDSModelAuthorizations(this);
         }
         return this.laziliyLoadedMap.authorizations;
     }
 }
-exports["default"] = HDSModel;
+exports.HDSModel = HDSModel;
 function throwNotLoadedError() {
     throw new errors_1.HDSLibError('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
 }
@@ -497,23 +496,20 @@ function throwNotLoadedError() {
 /*!**************************************************!*\
   !*** ./lib/HDSModel/HDSModelInitAndSingleton.js ***!
   \**************************************************/
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getModel = getModel;
 exports.resetModel = resetModel;
 exports.initHDSModel = initHDSModel;
-const HDSModel_1 = __importDefault(__webpack_require__(/*! ./HDSModel */ "./lib/HDSModel/HDSModel.js"));
+const HDSModel_1 = __webpack_require__(/*! ./HDSModel */ "./lib/HDSModel/HDSModel.js");
 const HDSService_1 = __webpack_require__(/*! ../HDSService */ "./lib/HDSService.js");
 let model = null;
 function getModel() {
     if (model == null) {
-        model = new HDSModel_1.default('');
+        model = new HDSModel_1.HDSModel('');
     }
     return model;
 }
@@ -545,17 +541,14 @@ async function initHDSModel() {
 /*!********************************************!*\
   !*** ./lib/HDSModel/internalModelUtils.js ***!
   \********************************************/
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.itemKeysOrDefsToDefs = itemKeysOrDefsToDefs;
 exports.itemKeyOrDefToDef = itemKeyOrDefToDef;
-const HDSItemDef_1 = __importDefault(__webpack_require__(/*! ./HDSItemDef */ "./lib/HDSModel/HDSItemDef.js"));
+const HDSItemDef_1 = __webpack_require__(/*! ./HDSItemDef */ "./lib/HDSModel/HDSItemDef.js");
 /**
  * Some call support either arrays of itemKeys or itemDefs
  * test if they are strings or itemDefs and returns an array of itemDefs
@@ -572,7 +565,7 @@ function itemKeysOrDefsToDefs(model, keysOrDefs) {
  * test if string or itemDef and returns an itemDef
  */
 function itemKeyOrDefToDef(model, keyOrDef) {
-    if (keyOrDef instanceof HDSItemDef_1.default)
+    if (keyOrDef instanceof HDSItemDef_1.HDSItemDef)
         return keyOrDef;
     return model.itemsDefs.forKey(keyOrDef);
 }
@@ -797,10 +790,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AppManagingAccount = void 0;
 const short_unique_id_1 = __importDefault(__webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js"));
 const Application_1 = __webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js");
 const Collector_1 = __webpack_require__(/*! ./Collector */ "./lib/appTemplates/Collector.js");
-console.log(Application_1.Application);
 const collectorIdGenerator = new short_unique_id_1.default({ dictionary: 'alphanum_lower', length: 7 });
 /**
  * App which manages Collectors
@@ -883,7 +876,7 @@ class AppManagingAccount extends Application_1.Application {
         return collector;
     }
 }
-exports["default"] = AppManagingAccount;
+exports.AppManagingAccount = AppManagingAccount;
 //# sourceMappingURL=AppManagingAccount.js.map
 
 /***/ }),
@@ -2316,17 +2309,14 @@ function vo0ToV1(v0Data) {
 /*!******************************************!*\
   !*** ./lib/appTemplates/appTemplates.js ***!
   \******************************************/
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.CollectorRequest = exports.CollectorInvite = exports.CollectorClient = exports.Collector = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = void 0;
-const AppManagingAccount_1 = __importDefault(__webpack_require__(/*! ./AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js"));
-exports.AppManagingAccount = AppManagingAccount_1.default;
+const AppManagingAccount_1 = __webpack_require__(/*! ./AppManagingAccount */ "./lib/appTemplates/AppManagingAccount.js");
+Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_1.AppManagingAccount; } }));
 const AppClientAccount_1 = __webpack_require__(/*! ./AppClientAccount */ "./lib/appTemplates/AppClientAccount.js");
 Object.defineProperty(exports, "AppClientAccount", ({ enumerable: true, get: function () { return AppClientAccount_1.AppClientAccount; } }));
 const Application_1 = __webpack_require__(/*! ./Application */ "./lib/appTemplates/Application.js");
@@ -2411,9 +2401,6 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
 const localizeText_1 = __webpack_require__(/*! ./localizeText */ "./lib/localizeText.js");
@@ -2423,8 +2410,8 @@ const settings = __importStar(__webpack_require__(/*! ./settings */ "./lib/setti
 exports.settings = settings;
 const patchedPryv_1 = __webpack_require__(/*! ./patchedPryv */ "./lib/patchedPryv.js");
 Object.defineProperty(exports, "pryv", ({ enumerable: true, get: function () { return patchedPryv_1.pryv; } }));
-const HDSModel_1 = __importDefault(__webpack_require__(/*! ./HDSModel/HDSModel */ "./lib/HDSModel/HDSModel.js"));
-exports.HDSModel = HDSModel_1.default;
+const HDSModel_1 = __webpack_require__(/*! ./HDSModel/HDSModel */ "./lib/HDSModel/HDSModel.js");
+Object.defineProperty(exports, "HDSModel", ({ enumerable: true, get: function () { return HDSModel_1.HDSModel; } }));
 const appTemplates = __importStar(__webpack_require__(/*! ./appTemplates/appTemplates */ "./lib/appTemplates/appTemplates.js"));
 exports.appTemplates = appTemplates;
 const logger = __importStar(__webpack_require__(/*! ./logger */ "./lib/logger.js"));
@@ -2672,6 +2659,7 @@ function getServiceInfoURL() {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.StreamsAutoCreate = void 0;
 const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
 const HDSModelInitAndSingleton_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js");
 class StreamsAutoCreate {
@@ -2752,7 +2740,7 @@ class StreamsAutoCreate {
         }
     }
 }
-exports["default"] = StreamsAutoCreate;
+exports.StreamsAutoCreate = StreamsAutoCreate;
 /**
  * Iterate all streams and children
  */
@@ -2774,17 +2762,14 @@ function* allStreamsAndChildren(streamStructure) {
 /*!******************************!*\
   !*** ./lib/toolkit/index.js ***!
   \******************************/
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.StreamsAutoCreate = void 0;
-const StreamsAutoCreate_1 = __importDefault(__webpack_require__(/*! ./StreamsAutoCreate */ "./lib/toolkit/StreamsAutoCreate.js"));
-exports.StreamsAutoCreate = StreamsAutoCreate_1.default;
+const StreamsAutoCreate_1 = __webpack_require__(/*! ./StreamsAutoCreate */ "./lib/toolkit/StreamsAutoCreate.js");
+Object.defineProperty(exports, "StreamsAutoCreate", ({ enumerable: true, get: function () { return StreamsAutoCreate_1.StreamsAutoCreate; } }));
 //# sourceMappingURL=index.js.map
 
 /***/ }),
@@ -23425,10 +23410,7 @@ describe('[APAX] Application class', function () {
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 const { pryv, createUserPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
 const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
-const AppManagingAccount = HDSLib.appTemplates.AppManagingAccount;
-const AppClientAccount = HDSLib.appTemplates.AppClientAccount;
-const Collector = __webpack_require__(/*! ../lib/appTemplates/Collector */ "./lib/appTemplates/Collector.js");
-const CollectorClient = __webpack_require__(/*! ../lib/appTemplates/CollectorClient */ "./lib/appTemplates/CollectorClient.js");
+const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = HDSLib.appTemplates;
 const { HDSLibError } = __webpack_require__(/*! ../lib/errors */ "./lib/errors.js");
 const { initHDSModel } = __webpack_require__(/*! ../lib/index.js */ "./lib/index.js");
 const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");

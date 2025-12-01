@@ -1,4 +1,4 @@
-import HDSModel from './HDSModel';
+import { HDSModel } from './HDSModel';
 import { HDSService } from '../HDSService';
 
 let model: HDSModel | null = null;

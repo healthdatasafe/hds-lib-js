@@ -1,9 +1,9 @@
 import { HDSLibError } from '../errors';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton';
 import { pryv } from '../patchedPryv';
-import HDSItemDef from '../HDSModel/HDSItemDef';
+import { HDSItemDef } from '../HDSModel/HDSItemDef';
 
-export default class StreamsAutoCreate {
+export class StreamsAutoCreate {
   connection: WeakRef<pryv.Connection>;
   knownStreams: { [key: string]: any } = {};
 

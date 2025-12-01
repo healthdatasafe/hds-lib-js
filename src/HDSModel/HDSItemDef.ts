@@ -1,6 +1,6 @@
 import { localizeText } from '../localizeText';
 
-export default class HDSItemDef {
+export class HDSItemDef {
   #data: any;
   #key: string;
 
