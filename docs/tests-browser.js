@@ -1995,9 +1995,9 @@ exports.CollectorInvite = CollectorInvite;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.CollectorRequest = void 0;
-const errors_js_1 = __webpack_require__(/*! ../errors.js */ "./lib/errors.js");
-const HDSModelInitAndSingleton_js_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./lib/HDSModel/HDSModelInitAndSingleton.js");
-const localizeText_js_1 = __webpack_require__(/*! ../localizeText.js */ "./lib/localizeText.js");
+const errors_1 = __webpack_require__(/*! ../errors */ "./lib/errors.js");
+const HDSModelInitAndSingleton_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js");
+const localizeText_1 = __webpack_require__(/*! ../localizeText */ "./lib/localizeText.js");
 const CURRENT_VERSION = 1;
 /**
  * Each Collector has one Request
@@ -2064,7 +2064,7 @@ class CollectorRequest {
             }
             else {
                 if (numV !== this.#version)
-                    throw new errors_js_1.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
+                    throw new errors_1.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
             }
             delete futureContent.version;
         }
@@ -2125,11 +2125,11 @@ class CollectorRequest {
     }
     // ------------- getter and setters ------------ //
     get version() { return this.#version; }
-    set title(title) { this.#title = (0, localizeText_js_1.validateLocalizableText)('title', title); }
+    set title(title) { this.#title = (0, localizeText_1.validateLocalizableText)('title', title); }
     get title() { return this.#title; }
-    set consent(consent) { this.#consent = (0, localizeText_js_1.validateLocalizableText)('consent', consent); }
+    set consent(consent) { this.#consent = (0, localizeText_1.validateLocalizableText)('consent', consent); }
     get consent() { return this.#consent; }
-    set description(description) { this.#description = (0, localizeText_js_1.validateLocalizableText)('description', description); }
+    set description(description) { this.#description = (0, localizeText_1.validateLocalizableText)('description', description); }
     get description() { return this.#description; }
     set requesterName(name) { this.#requester.name = validateString('requester:name', name); }
     get requesterName() { return this.#requester.name; }
@@ -2155,7 +2155,7 @@ class CollectorRequest {
     }
     createSection(key, type) {
         if (this.getSectionByKey(key) != null)
-            throw new errors_js_1.HDSLibError(`Section with key: ${key} already exists`);
+            throw new errors_1.HDSLibError(`Section with key: ${key} already exists`);
         const section = new CollectorRequestSection(key, type);
         this.#sections.push(section);
         return section;
@@ -2197,7 +2197,7 @@ class CollectorRequest {
         }
         // 2 - get the permissions with eventual preRequest
         const preRequest = this.permissionsExtra || [];
-        const permissions = (0, HDSModelInitAndSingleton_js_1.getModel)().authorizations.forItemKeys(itemKeys, { preRequest });
+        const permissions = (0, HDSModelInitAndSingleton_1.getModel)().authorizations.forItemKeys(itemKeys, { preRequest });
         // 3 - if no error araised - reset permissions
         this.resetPermissions();
         this.addPermissions(permissions);
@@ -2231,7 +2231,7 @@ class CollectorRequest {
 exports.CollectorRequest = CollectorRequest;
 function validateString(key, totest) {
     if (totest == null || typeof totest !== 'string')
-        throw new errors_js_1.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
+        throw new errors_1.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
     return totest;
 }
 const RequestSectionType = {
@@ -2255,7 +2255,7 @@ class CollectorRequestSection {
         keys.forEach((k) => this.addItemKey(k));
     }
     addItemKey(key) {
-        (0, HDSModelInitAndSingleton_js_1.getModel)().itemsDefs.forKey(key); // will throw error if not found
+        (0, HDSModelInitAndSingleton_1.getModel)().itemsDefs.forKey(key); // will throw error if not found
         if (this.#itemKeys.includes(key))
             return; // avoid double entries
         this.#itemKeys.push(key);
@@ -2288,7 +2288,7 @@ class CollectorRequestSection {
 function vo0ToV1(v0Data) {
     if (v0Data.app?.data?.forms) {
         if (v0Data.sections)
-            throw new errors_js_1.HDSLibError('Cannot mix data.forms & sections', v0Data);
+            throw new errors_1.HDSLibError('Cannot mix data.forms & sections', v0Data);
         v0Data.sections = [];
         for (const [key, value] of Object.entries(v0Data.app.data.forms)) {
             value.key = key;
@@ -23427,8 +23427,8 @@ const { pryv, createUserPermissions } = __webpack_require__(/*! ./test-utils/pry
 const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
 const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = HDSLib.appTemplates;
 const { HDSLibError } = __webpack_require__(/*! ../lib/errors */ "./lib/errors.js");
-const { initHDSModel } = __webpack_require__(/*! ../lib/index.js */ "./lib/index.js");
-const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
+const { initHDSModel } = __webpack_require__(/*! ../lib/index */ "./lib/index.js");
+const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate */ "./tests/test-utils/helpersAppTemplate.js");
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -23942,6 +23942,116 @@ describe('[APTX] appTemplates', function () {
 
 /***/ }),
 
+/***/ "./tests/apptemplatesRequest.test.js":
+/*!*******************************************!*\
+  !*** ./tests/apptemplatesRequest.test.js ***!
+  \*******************************************/
+/***/ ((__unused_webpack_module, __unused_webpack_exports, __webpack_require__) => {
+
+/* eslint-env mocha */
+
+const { initHDSModel } = __webpack_require__(/*! ../lib */ "./lib/index.js");
+const { helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate */ "./tests/test-utils/helpersAppTemplate.js");
+const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
+
+describe('[APRX] appTemplates Requests', function () {
+  before(async () => {
+    await initHDSModel();
+  });
+  it('[APRC] Compute a simple request', async () => {
+    const baseStreamId = 'aprc';
+    const { appManaging } = await helperNewAppManaging(baseStreamId, 'test-APRC');
+    const newCollector = await appManaging.createCollector('Invite test APCV');
+
+    const request = newCollector.request;
+    request.appId = 'dr-form';
+    request.appUrl = 'https://xxx.yyy';
+    request.title = { en: 'My title' };
+    request.requesterName = 'Username APRC';
+    request.description = { en: 'Short Description' };
+    request.consent = { en: 'Short Consent' };
+    request.addPermissionExtra({ streamId: 'profile' });
+    request.addPermissionExtra({ streamId: 'fertility' });
+
+    const sectionA = request.createSection('profile', 'permanent');
+    sectionA.setNameLocal('en', 'A');
+    sectionA.addItemKeys([
+      'profile-name',
+      'profile-surname',
+      'profile-sex',
+      'family-children-count',
+      'fertility-miscarriages-count'
+    ]);
+
+    const sectionB = request.createSection('history', 'recurring');
+    sectionB.setNameLocal('en', 'B');
+    sectionB.addItemKeys([
+      'fertility-ttc-tta',
+      'body-weight'
+    ]);
+    // build permissions needed
+    request.buildPermissions();
+    const requestContent = request.content;
+    assert.ok(requestContent.id.startsWith(baseStreamId), 'id should start with the basetreamid of the manager');
+
+    const expectedContent = {
+      version: 1,
+      title: { en: 'My title' },
+      consent: { en: 'Short Consent' },
+      description: { en: 'Short Description' },
+      requester: { name: 'Username APRC' },
+      permissionsExtra: [
+        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
+        {
+          streamId: 'fertility',
+          defaultName: 'Fertility',
+          level: 'read'
+        }
+      ],
+      permissions: [
+        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
+        { streamId: 'fertility', defaultName: 'Fertility', level: 'read' },
+        {
+          streamId: 'family-children',
+          defaultName: 'Children',
+          level: 'read'
+        },
+        {
+          streamId: 'body-weight',
+          defaultName: 'Body Weight',
+          level: 'read'
+        }
+      ],
+      app: { id: 'dr-form', url: 'https://xxx.yyy', data: {} },
+      sections: [
+        {
+          key: 'profile',
+          type: 'permanent',
+          name: { en: 'A' },
+          itemKeys: [
+            'profile-name',
+            'profile-surname',
+            'profile-sex',
+            'family-children-count',
+            'fertility-miscarriages-count'
+          ]
+        },
+        {
+          key: 'history',
+          type: 'recurring',
+          name: { en: 'B' },
+          itemKeys: ['fertility-ttc-tta', 'body-weight']
+        }
+      ],
+      id: requestContent.id
+    };
+    assert.deepEqual(requestContent, expectedContent);
+  });
+});
+
+
+/***/ }),
+
 /***/ "./tests/errors.test.js":
 /*!******************************!*\
   !*** ./tests/errors.test.js ***!
@@ -23993,7 +24103,7 @@ const HDSLib = __webpack_require__(/*! ../lib */ "./lib/index.js");
 const { waitUntilFalse } = __webpack_require__(/*! ../lib/utils */ "./lib/utils.js");
 const { resetModel } = __webpack_require__(/*! ../lib/HDSModel/HDSModelInitAndSingleton */ "./lib/HDSModel/HDSModelInitAndSingleton.js");
 
-describe('[HDLX] HDSLib.index.js', () => {
+describe('[HDLX] HDSLib.index', () => {
   before(async () => {
     await HDSLib.initHDSModel();
     resetModel();
@@ -25103,6 +25213,7 @@ var __webpack_exports__ = {};
  */
 __webpack_require__(/*! ./applicationClass.test */ "./tests/applicationClass.test.js");
 __webpack_require__(/*! ./apptemplates.test */ "./tests/apptemplates.test.js");
+__webpack_require__(/*! ./apptemplatesRequest.test */ "./tests/apptemplatesRequest.test.js");
 __webpack_require__(/*! ./errors.test */ "./tests/errors.test.js");
 __webpack_require__(/*! ./hdsLib.test */ "./tests/hdsLib.test.js");
 __webpack_require__(/*! ./hdsModel.test */ "./tests/hdsModel.test.js");

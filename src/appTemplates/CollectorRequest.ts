@@ -1,6 +1,6 @@
-import { HDSLibError } from '../errors.js';
-import { getModel } from '../HDSModel/HDSModelInitAndSingleton.js';
-import { validateLocalizableText } from '../localizeText.js';
+import { HDSLibError } from '../errors';
+import { getModel } from '../HDSModel/HDSModelInitAndSingleton';
+import { validateLocalizableText } from '../localizeText';
 import type { localizableText } from '../localizeText';
 
 type localizableTextLanguages = keyof localizableText;

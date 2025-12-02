@@ -7,7 +7,7 @@ const HDSLib = require('../lib');
 const { waitUntilFalse } = require('../lib/utils');
 const { resetModel } = require('../lib/HDSModel/HDSModelInitAndSingleton');
 
-describe('[HDLX] HDSLib.index.js', () => {
+describe('[HDLX] HDSLib.index', () => {
   before(async () => {
     await HDSLib.initHDSModel();
     resetModel();
