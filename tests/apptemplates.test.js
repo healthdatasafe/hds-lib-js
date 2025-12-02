@@ -4,8 +4,8 @@ const { pryv, createUserPermissions } = require('./test-utils/pryvService');
 const HDSLib = require('../lib');
 const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = HDSLib.appTemplates;
 const { HDSLibError } = require('../lib/errors');
-const { initHDSModel } = require('../lib/index.js');
-const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = require('./test-utils/helpersAppTemplate.js');
+const { initHDSModel } = require('../lib/index');
+const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = require('./test-utils/helpersAppTemplate');
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
