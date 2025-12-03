@@ -3,8 +3,8 @@ const { assert } = require('./test-utils/deps-node');
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
-const { HDSModel } = require('../lib/');
-const { resetPreferredLocales, setPreferredLocales } = require('../lib/localizeText');
+const { HDSModel } = require('../js/');
+const { resetPreferredLocales, setPreferredLocales } = require('../js/localizeText');
 
 describe('[MODX] Model', () => {
   let model;

@@ -1,7 +1,7 @@
 /* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 
-const HDSLib = require('../lib');
+const HDSLib = require('../js');
 const { createUserAndPermissions } = require('./test-utils/pryvService');
 
 describe('[TKSX] toolKit Stream Auto Create', function () {
