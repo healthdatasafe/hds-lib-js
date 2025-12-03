@@ -1,6 +1,6 @@
 /* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
-const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = require('../src/localizeText');
+const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = require('../js/localizeText');
 
 describe('[LOCX] Localization', () => {
   afterEach(() => {

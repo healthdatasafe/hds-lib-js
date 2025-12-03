@@ -4,6 +4,7 @@
  */
 require('./applicationClass.test');
 require('./apptemplates.test');
+require('./apptemplatesRequest.test');
 require('./errors.test');
 require('./hdsLib.test');
 require('./hdsModel.test');

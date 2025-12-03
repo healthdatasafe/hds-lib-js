@@ -1,13 +1,12 @@
 require('./debug');
-const pryv = require('../../src/patchedPryv');
-const HDSService = require('../../src/HDSService');
-const superagent = pryv.utils.superagent;
+const pryv = require('../../js/').pryv;
+const HDSService = require('../../js/').HDSService;
 
 const ShortUniqueId = require('short-unique-id');
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
 
 const config = require('./config');
-const { setServiceInfoURL } = require('../../src/settings');
+const { setServiceInfoURL } = require('../../js/settings');
 
 module.exports = {
   init,
@@ -150,7 +149,7 @@ async function createUserPermissions (user, permissions, initialStreams = [], ap
  */
 async function userExists (userId) {
   await init();
-  const userExists = (await superagent.get(infosSingleton.register + userId + '/check_username')).body;
+  const userExists = (await pryv.utils.superagent.get(infosSingleton.register + userId + '/check_username')).body;
   if (typeof userExists.reserved === 'undefined') throw Error('Pryv invalid user exists response ' + JSON.stringify(userExists));
   return userExists.reserved;
 }
@@ -162,7 +161,7 @@ async function userExists (userId) {
 async function getHost () {
   await init();
   // get available hosting
-  const hostings = (await superagent.get(infosSingleton.register + 'hostings').set('accept', 'json')).body;
+  const hostings = (await pryv.utils.superagent.get(infosSingleton.register + 'hostings').set('accept', 'json')).body;
   let hostingCandidate = null;
   findOneHostingKey(hostings, 'N');
   function findOneHostingKey (o, parentKey) {

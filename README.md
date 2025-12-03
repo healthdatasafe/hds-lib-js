@@ -30,12 +30,6 @@ Is an extension of `pryv.Service` which uses the default service set with `setti
 ### pryv
 Patched version of [pryv's javacript library](https://github.com/pryv/lib-js) including supports for [Socket.io](https://github.com/pryv/lib-js/tree/master/components/pryv-socket.io) and [Monitors](https://github.com/pryv/lib-js/tree/master/components/pryv-monitor)
 
-#### pryv.Connection.apiOne(method, params, expectedKey)
-One liner call to pryv api based on `connection.api()``
-
-#### pryv.Connection.revoke()
-Helper to revoke current connection
-
 ### localizeText (alias "l")
 Handles localization of text. The choice of locales can be set with `settings.setPreferredLocales()`
 
@@ -53,7 +47,7 @@ await model.load();
 **Per service auto loading.** (preferred way)
 0. (Optional) You may set the defaultService info of the lib with  `HDSLib.setServiceInfoURL()`.
 1. Initialize model singleton once with `await HDSLib.initHDSModel()`
-2. Use model from `HDSLib.model`
+2. Use model from `HDSLib.getHDSModel()`
 
 #### HDSModel.ItemDef
 
@@ -194,7 +188,7 @@ await connection.streamsAutoCreate.ensureExistsForItems(['body-weight', 'profile
       // init model in async code
       (async () => {
         await HDSLib.initHDSModel(); // need just one
-        // from now on an in all your code you use HDSLib.model 
+        // from now on an in all your code you use HDSLib.getHDSModel() 
 
         // you may create new HDSService with:
         const service = new HDSService();

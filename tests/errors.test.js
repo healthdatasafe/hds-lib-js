@@ -1,7 +1,7 @@
 /* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 
-const { HDSLibError } = require('../src/errors');
+const { HDSLibError } = require('../js/errors');
 
 describe('[ERRX] HDSLibError', () => {
   it('[ERRS] HDSLibError.toString() without inner message', async () => {

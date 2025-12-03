@@ -1,7 +1,7 @@
 /* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 
-const HDSLib = require('../src');
+const HDSLib = require('../js');
 
 describe('[LISX] Lib settings', () => {
   before(async () => {
