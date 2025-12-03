@@ -1,12 +1,12 @@
 require('./debug');
-const pryv = require('../../lib/').pryv;
-const HDSService = require('../../lib/').HDSService;
+const pryv = require('../../js/').pryv;
+const HDSService = require('../../js/').HDSService;
 
 const ShortUniqueId = require('short-unique-id');
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
 
 const config = require('./config');
-const { setServiceInfoURL } = require('../../lib/settings');
+const { setServiceInfoURL } = require('../../js/settings');
 
 module.exports = {
   init,

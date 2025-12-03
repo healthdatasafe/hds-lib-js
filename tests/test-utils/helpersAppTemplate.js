@@ -1,7 +1,7 @@
 const { assert } = require('./deps-node');
 const { createUserAndPermissions, pryv, createUser, createUserPermissions } = require('./pryvService');
-const AppManagingAccount = require('../../lib/').appTemplates.AppManagingAccount;
-const AppClientAccount = require('../../lib/').appTemplates.AppClientAccount;
+const AppManagingAccount = require('../../js/').appTemplates.AppManagingAccount;
+const AppClientAccount = require('../../js/').appTemplates.AppClientAccount;
 
 module.exports = {
   helperNewAppAndUsers,

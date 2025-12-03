@@ -1,5 +1,5 @@
 {
-  "include": ["src/**/*"],
+  "include": ["ts/**/*"],
   "compilerOptions": {
     "allowJs": true,
     "sourceMap": true,
@@ -19,8 +19,8 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "noEmitOnError": false,
-    "outDir": "./lib",
-    "rootDir": "./src"
+    "outDir": "js",
+    "rootDir": "ts"
   },
-  "exclude": ["node_modules", "dist", "lib", "tests", "coverage"]
+  "exclude": ["node_modules", "dist", "js", "tests", "coverage"]
 }
