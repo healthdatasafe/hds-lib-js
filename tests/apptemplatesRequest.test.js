@@ -1,6 +1,6 @@
 /* eslint-env mocha */
 
-const { initHDSModel } = require('../src');
+const { initHDSModel } = require('../js');
 const { helperNewAppManaging } = require('./test-utils/helpersAppTemplate');
 const { assert } = require('./test-utils/deps-node');
 
