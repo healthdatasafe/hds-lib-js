@@ -7566,7 +7566,7 @@ class HDSItemDef {
      */
     eventTemplate() {
         return {
-            streamId: this.#data.streamId,
+            streamIds: [this.#data.streamId],
             type: this.eventTypes[0]
         };
     }

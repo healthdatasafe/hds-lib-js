@@ -13,7 +13,7 @@ export declare class HDSItemDef {
      * // TODO handle variations
      */
     eventTemplate(): {
-        streamId: string;
+        streamIds: [string];
         type: string;
     };
 }
