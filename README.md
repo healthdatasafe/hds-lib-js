@@ -200,9 +200,11 @@ await connection.streamsAutoCreate.ensureExistsForItems(['body-weight', 'profile
 
 # Dev
 
+Source code is in TypeScript in `./ts` directory. 
+
 ## Build 
 
-`npm run build` publish the code in `./docs`
+`npm run build` remove ts anotations and put js code in `./js` and publish the code in `./docs`
 
 ## Tests 
 

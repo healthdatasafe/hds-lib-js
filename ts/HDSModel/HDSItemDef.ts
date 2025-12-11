@@ -37,11 +37,11 @@ export class HDSItemDef {
    * // TODO handle variations
    */
   eventTemplate (): {
-    streamId: string;
+    streamIds: [string];
     type: string;
     } {
     return {
-      streamId: this.#data.streamId,
+      streamIds: [this.#data.streamId],
       type: this.eventTypes[0]
     };
   }
