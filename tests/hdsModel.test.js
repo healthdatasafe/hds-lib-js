@@ -119,6 +119,29 @@ describe('[MODX] Model', () => {
     });
   });
 
+  // ----------- event types ----------- //
+  describe('[MOTX] eventTypes', function () {
+    it('[MOTA] event type definition', async () => {
+      const eventTypeDev = model.eventTypes.getEventTypeDefinition('temperature/c');
+      assert.deepEqual(eventTypeDev, { description: 'Celsius', type: 'number' });
+    });
+
+    it('[MOTB] extra definition', async () => {
+      const eventTypeExtra = model.eventTypes.getEventTypeExtra('temperature/c');
+      assert.deepEqual(eventTypeExtra, { name: { en: 'Degrees Celsius', fr: 'Degrés Celsius' }, symbol: '°C' });
+    });
+
+    it('[MOTC] symbol exists', async () => {
+      const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('temperature/c');
+      assert.deepEqual(eventTypeSymbol, '°C');
+    });
+
+    it('[MOTD] symbol not exists', async () => {
+      const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('audio/attached');
+      assert.deepEqual(eventTypeSymbol, null);
+    });
+  });
+
   // ---------- streams ------------ //
 
   describe('[MOSX] streams', function () {

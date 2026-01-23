@@ -3,6 +3,7 @@ import { deepFreeze } from '../utils';
 import { HDSModelStreams } from './HDSModel-Streams';
 import { HDSModelAuthorizations } from './HDSModel-Authorizations';
 import { HDSModelItemsDefs } from './HDSModel-ItemsDefs';
+import { HDSModelEventTypes } from './HDSModel-EventTypes';
 
 export class HDSModel {
   /**
@@ -79,6 +80,14 @@ export class HDSModel {
       this.laziliyLoadedMap.authorizations = new HDSModelAuthorizations(this);
     }
     return this.laziliyLoadedMap.authorizations;
+  }
+
+  get eventTypes (): HDSModelEventTypes {
+    if (!this.isLoaded) throwNotLoadedError();
+    if (!this.laziliyLoadedMap.eventTypes) {
+      this.laziliyLoadedMap.eventTypes = new HDSModelEventTypes(this);
+    }
+    return this.laziliyLoadedMap.eventTypes;
   }
 }
 
