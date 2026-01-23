@@ -1,0 +1,1 @@
+{"version":3,"file":"HDSModel-EventTypes.d.ts","sourceRoot":"","sources":["../../ts/HDSModel/HDSModel-EventTypes.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,QAAQ,EAAE,MAAM,YAAY,CAAC;AAEtC;;GAEG;AACH,qBAAa,kBAAkB;;gBAMhB,KAAK,EAAE,QAAQ;IAI5B,sBAAsB,CAAE,SAAS,EAAE,MAAM;IAIzC,iBAAiB,CAAE,SAAS,EAAE,MAAM;IAIpC,kBAAkB,CAAE,SAAS,EAAE,MAAM,GAAG,MAAM,GAAG,IAAI;CAGtD"}

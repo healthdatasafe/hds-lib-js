@@ -6,6 +6,7 @@ const utils_1 = require("../utils");
 const HDSModel_Streams_1 = require("./HDSModel-Streams");
 const HDSModel_Authorizations_1 = require("./HDSModel-Authorizations");
 const HDSModel_ItemsDefs_1 = require("./HDSModel-ItemsDefs");
+const HDSModel_EventTypes_1 = require("./HDSModel-EventTypes");
 class HDSModel {
     /**
      * JSON definition file URL.
@@ -76,6 +77,14 @@ class HDSModel {
             this.laziliyLoadedMap.authorizations = new HDSModel_Authorizations_1.HDSModelAuthorizations(this);
         }
         return this.laziliyLoadedMap.authorizations;
+    }
+    get eventTypes() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.eventTypes) {
+            this.laziliyLoadedMap.eventTypes = new HDSModel_EventTypes_1.HDSModelEventTypes(this);
+        }
+        return this.laziliyLoadedMap.eventTypes;
     }
 }
 exports.HDSModel = HDSModel;
