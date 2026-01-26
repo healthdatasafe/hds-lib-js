@@ -2,6 +2,7 @@ import { HDSLibError } from '../errors';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton';
 import { pryv } from '../patchedPryv';
 import { HDSItemDef } from '../HDSModel/HDSItemDef';
+import { allStreamsAndChildren } from './StreamsTools';
 
 export class StreamsAutoCreate {
   connection: WeakRef<pryv.Connection>;
@@ -83,20 +84,6 @@ export class StreamsAutoCreate {
   #addStream (stream: any): void {
     if (!this.knownStreams[stream.id]) {
       this.knownStreams[stream.id] = {};
-    }
-  }
-}
-
-/**
- * Iterate all streams and children
- */
-function * allStreamsAndChildren (streamStructure: any): Generator<any, void, unknown> {
-  for (const stream of streamStructure) {
-    yield stream;
-    if (stream.children && stream.children.length > 0) {
-      for (const child of allStreamsAndChildren(stream.children)) {
-        yield child;
-      }
     }
   }
 }

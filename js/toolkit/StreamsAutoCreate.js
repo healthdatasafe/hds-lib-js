@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.StreamsAutoCreate = void 0;
 const errors_1 = require("../errors");
 const HDSModelInitAndSingleton_1 = require("../HDSModel/HDSModelInitAndSingleton");
+const StreamsTools_1 = require("./StreamsTools");
 class StreamsAutoCreate {
     connection;
     knownStreams = {};
@@ -71,7 +72,7 @@ class StreamsAutoCreate {
     addStreamStructure(streamStructure) {
         if (streamStructure == null)
             return;
-        for (const stream of allStreamsAndChildren(streamStructure)) {
+        for (const stream of (0, StreamsTools_1.allStreamsAndChildren)(streamStructure)) {
             this.#addStream(stream);
         }
     }
@@ -82,17 +83,4 @@ class StreamsAutoCreate {
     }
 }
 exports.StreamsAutoCreate = StreamsAutoCreate;
-/**
- * Iterate all streams and children
- */
-function* allStreamsAndChildren(streamStructure) {
-    for (const stream of streamStructure) {
-        yield stream;
-        if (stream.children && stream.children.length > 0) {
-            for (const child of allStreamsAndChildren(stream.children)) {
-                yield child;
-            }
-        }
-    }
-}
 //# sourceMappingURL=StreamsAutoCreate.js.map
