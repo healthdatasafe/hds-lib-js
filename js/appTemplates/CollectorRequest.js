@@ -240,10 +240,6 @@ function validateString(key, totest) {
         throw new errors_1.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
     return totest;
 }
-const RequestSectionType = {
-    recurring: 'recurring',
-    permanent: 'permanent'
-};
 class CollectorRequestSection {
     #type;
     #name;

@@ -1,4 +1,5 @@
 import { CollectorRequest } from './CollectorRequest';
+import { CollectorSectionInterface } from './interfaces';
 /**
  * Client App in relation to an AppManagingAccount/Collector
  */
@@ -59,5 +60,6 @@ export declare class CollectorClient {
      * @param {PryvAccessInfo} accessInfo
      */
     static keyFromInfo(info: any): string;
+    getSections(): Array<CollectorSectionInterface>;
 }
 //# sourceMappingURL=CollectorClient.d.ts.map

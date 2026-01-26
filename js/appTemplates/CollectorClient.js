@@ -310,6 +310,10 @@ class CollectorClient {
     static keyFromInfo(info) {
         return info.user.username + ':' + info.name;
     }
+    // -------------------- sections and forms ------------- //
+    getSections() {
+        return this.request?.sections;
+    }
 }
 exports.CollectorClient = CollectorClient;
 _a = CollectorClient;

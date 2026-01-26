@@ -123,7 +123,7 @@ export class Application {
   }
 
   /**
-   * Get current settings previously set with setCustomSettings()
+   * Get all current settings previously set with setCustomSettings()
    */
   async getCustomSettings (forceRefresh: boolean = false): Promise<any> {
     if (forceRefresh || !this.cache.customSettingsEvent) {
@@ -134,6 +134,20 @@ export class Application {
       await this.#createCustomSettings({});
     }
     return this.cache.customSettingsEvent?.content;
+  }
+
+  /**
+   * Update value of a custom setting by its key
+   * @param {*} value if value is `null` key will be deleted
+   */
+  async setCustomSetting (key: string, value: any): Promise<any> {
+    const currentCustomSettings = await this.getCustomSettings();
+    if (value === null) {
+      delete currentCustomSettings[key];
+    } else {
+      currentCustomSettings[key] = value;
+    }
+    return this.setCustomSettings(currentCustomSettings);
   }
 
   /**
