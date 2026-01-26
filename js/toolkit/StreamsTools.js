@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.allStreamsAndChildren = allStreamsAndChildren;
+exports.getStreamIdAndChildrenIds = getStreamIdAndChildrenIds;
 /**
  * Iterate all streams and children
  */
@@ -13,5 +14,12 @@ function* allStreamsAndChildren(streamStructure) {
             }
         }
     }
+}
+function getStreamIdAndChildrenIds(stream) {
+    const streamIds = [];
+    for (const s of allStreamsAndChildren([stream])) {
+        streamIds.push(s.id);
+    }
+    return streamIds;
 }
 //# sourceMappingURL=StreamsTools.js.map
