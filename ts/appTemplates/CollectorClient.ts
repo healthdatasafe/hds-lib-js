@@ -2,6 +2,7 @@ import { CollectorRequest } from './CollectorRequest';
 import { pryv } from '../patchedPryv';
 import { HDSLibError } from '../errors';
 import * as logger from '../logger';
+import { CollectorSectionInterface } from './interfaces';
 
 /**
  * Client App in relation to an AppManagingAccount/Collector
@@ -288,5 +289,11 @@ export class CollectorClient {
    */
   static keyFromInfo (info) {
     return info.user.username + ':' + info.name;
+  }
+
+  // -------------------- sections and forms ------------- //
+
+  getSections (): Array<CollectorSectionInterface> {
+    return this.request?.sections;
   }
 }

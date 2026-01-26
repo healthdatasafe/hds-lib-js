@@ -102,7 +102,7 @@ class Application {
         this.cache.customSettingsEvent = createdEvent;
     }
     /**
-     * Get current settings previously set with setCustomSettings()
+     * Get all current settings previously set with setCustomSettings()
      */
     async getCustomSettings(forceRefresh = false) {
         if (forceRefresh || !this.cache.customSettingsEvent) {
@@ -113,6 +113,20 @@ class Application {
             await this.#createCustomSettings({});
         }
         return this.cache.customSettingsEvent?.content;
+    }
+    /**
+     * Update value of a custom setting by its key
+     * @param {*} value if value is `null` key will be deleted
+     */
+    async setCustomSetting(key, value) {
+        const currentCustomSettings = await this.getCustomSettings();
+        if (value === null) {
+            delete currentCustomSettings[key];
+        }
+        else {
+            currentCustomSettings[key] = value;
+        }
+        return this.setCustomSettings(currentCustomSettings);
     }
     /**
      * Force loading of streamData

@@ -52,9 +52,14 @@ export declare class Application {
      */
     setCustomSettings(content: any): Promise<any>;
     /**
-     * Get current settings previously set with setCustomSettings()
+     * Get all current settings previously set with setCustomSettings()
      */
     getCustomSettings(forceRefresh?: boolean): Promise<any>;
+    /**
+     * Update value of a custom setting by its key
+     * @param {*} value if value is `null` key will be deleted
+     */
+    setCustomSetting(key: string, value: any): Promise<any>;
     /**
      * Force loading of streamData
      */

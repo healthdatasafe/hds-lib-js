@@ -2,6 +2,7 @@ import { HDSLibError } from '../errors';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton';
 import { validateLocalizableText } from '../localizeText';
 import type { localizableText } from '../localizeText';
+import { CollectorSectionInterface, RequestSectionType } from './interfaces';
 
 type localizableTextLanguages = keyof localizableText;
 
@@ -269,13 +270,7 @@ function validateString (key, totest) {
   return totest;
 }
 
-const RequestSectionType = {
-  recurring: 'recurring',
-  permanent: 'permanent'
-};
-type RequestSectionType = (typeof RequestSectionType)[keyof typeof RequestSectionType ];
-
-class CollectorRequestSection {
+class CollectorRequestSection implements CollectorSectionInterface {
   #type: RequestSectionType;
   #name: localizableText;
   #key: string;

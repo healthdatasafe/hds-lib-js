@@ -1,4 +1,5 @@
 import type { localizableText } from '../localizeText';
+import { CollectorSectionInterface, RequestSectionType } from './interfaces';
 type localizableTextLanguages = keyof localizableText;
 declare type PermissionItem = {
     streamId: string;
@@ -101,12 +102,7 @@ export declare class CollectorRequest {
         sections: any[];
     };
 }
-declare const RequestSectionType: {
-    recurring: string;
-    permanent: string;
-};
-type RequestSectionType = (typeof RequestSectionType)[keyof typeof RequestSectionType];
-declare class CollectorRequestSection {
+declare class CollectorRequestSection implements CollectorSectionInterface {
     #private;
     constructor(key: string, type: RequestSectionType);
     addItemKeys(keys: Array<string>): void;
@@ -119,7 +115,7 @@ declare class CollectorRequestSection {
     get name(): localizableText;
     getData(): {
         key: string;
-        type: string;
+        type: RequestSectionType;
         name: localizableText;
         itemKeys: string[];
     };
