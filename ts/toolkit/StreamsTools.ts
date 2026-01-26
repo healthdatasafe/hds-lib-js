@@ -1,7 +1,9 @@
+import type { pryv as Pryv } from '../patchedPryv';
+
 /**
  * Iterate all streams and children
  */
-export function * allStreamsAndChildren (streamStructure: any): Generator<any, void, unknown> {
+export function * allStreamsAndChildren (streamStructure: Pryv.Stream[]): Generator<Pryv.Stream, void, unknown> {
   for (const stream of streamStructure) {
     yield stream;
     if (stream.children && stream.children.length > 0) {
@@ -10,4 +12,12 @@ export function * allStreamsAndChildren (streamStructure: any): Generator<any, v
       }
     }
   }
+}
+
+export function getStreamIdAndChildrenIds (stream: Pryv.Stream): Array<string> {
+  const streamIds = [];
+  for (const s of allStreamsAndChildren([stream])) {
+    streamIds.push(s.id);
+  }
+  return streamIds;
 }
