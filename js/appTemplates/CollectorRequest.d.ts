@@ -58,6 +58,11 @@ export declare class CollectorRequest {
     get appCustomData(): any;
     get permissions(): PermissionItem[];
     get permissionsExtra(): PermissionItemLight[];
+    get features(): {
+        chat?: {
+            type: "usernames" | "user";
+        };
+    };
     get sections(): Array<CollectorRequestSection>;
     get sectionsData(): any[];
     createSection(key: string, type: RequestSectionType): CollectorRequestSection;
@@ -81,6 +86,9 @@ export declare class CollectorRequest {
      * Rebuild permissions based on sections itemKeys and staticPermissions
      */
     buildPermissions(): void;
+    addChatFeature(settings?: {
+        type: 'usernames' | 'user';
+    }): void;
     /**
      * Return Content to comply with initial implementation as an object
      */
@@ -91,6 +99,11 @@ export declare class CollectorRequest {
         description: localizableText;
         requester: {
             name: string;
+        };
+        features: {
+            chat?: {
+                type: "usernames" | "user";
+            };
         };
         permissionsExtra: PermissionItemLight[];
         permissions: PermissionItem[];

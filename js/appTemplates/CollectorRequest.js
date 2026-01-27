@@ -25,6 +25,7 @@ class CollectorRequest {
     #permissionsExtra;
     #permissions;
     #sections;
+    #features;
     #extraContent;
     constructor(content) {
         this.#version = CURRENT_VERSION;
@@ -33,6 +34,7 @@ class CollectorRequest {
         this.#permissions = [];
         this.#permissionsExtra = [];
         this.#sections = [];
+        this.#features = {};
         this.setContent(content);
     }
     /**
@@ -127,6 +129,17 @@ class CollectorRequest {
             });
             delete futureContent.permissionsExtra;
         }
+        // -- features
+        if (futureContent.features) {
+            if (futureContent.features.chat) {
+                this.addChatFeature(futureContent.features.chat);
+                delete futureContent.features.chat;
+            }
+            if (Object.keys(futureContent.features).length > 0) {
+                throw new errors_1.HDSLibError('Found unkown features', futureContent.features);
+            }
+            delete futureContent.features;
+        }
         this.#extraContent = futureContent;
     }
     // ------------- getter and setters ------------ //
@@ -147,6 +160,7 @@ class CollectorRequest {
     get appCustomData() { return this.#app.data; }
     get permissions() { return this.#permissions; }
     get permissionsExtra() { return this.#permissionsExtra; }
+    get features() { return this.#features; }
     // --- section --- //
     get sections() {
         return this.#sections;
@@ -208,6 +222,12 @@ class CollectorRequest {
         this.resetPermissions();
         this.addPermissions(permissions);
     }
+    // ---------- features ------------- //
+    addChatFeature(settings = { type: 'user' }) {
+        if (!['user', 'usernames'].includes(settings.type))
+            throw new errors_1.HDSLibError('Invalid chat type', settings);
+        this.#features.chat = settings;
+    }
     // ---------- sections ------------- //
     /**
      * Return Content to comply with initial implementation as an object
@@ -221,6 +241,7 @@ class CollectorRequest {
             requester: {
                 name: this.requesterName
             },
+            features: this.features,
             permissionsExtra: this.permissionsExtra,
             permissions: this.permissions,
             app: {
