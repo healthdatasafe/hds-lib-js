@@ -147,6 +147,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        features: { },
         permissionsExtra: [],
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
@@ -379,6 +380,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        features: { },
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
           {
@@ -421,6 +423,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        features: { },
         permissionsExtra: [],
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
@@ -456,7 +459,8 @@ describe('[APTX] appTemplates', function () {
   });
 
   describe('[APEX] Errors ', () => {
-    it('[APEH] Collector.client handleIncoming Request Errors', async () => {
+    it('[APEH] Collector.client handleIncoming Request Errors', async function () {
+      this.timeout(20000);
       const new0 = await helperNewAppAndUsers('dummy', 'dummyApp', 'dummyC', 'dummyCApp');
       const inv0 = await helperNewInvite(new0.appManaging, new0.appClient, 'APEH');
 

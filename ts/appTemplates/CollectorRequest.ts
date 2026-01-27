@@ -31,6 +31,7 @@ export class CollectorRequest {
   #permissionsExtra: Array<PermissionItemLight>;
   #permissions: Array<PermissionItem>;
   #sections: Array<CollectorRequestSection>;
+  #features: { chat?: { type: 'usernames' | 'user' } };
 
   #extraContent: any;
   constructor (content: any) {
@@ -40,6 +41,7 @@ export class CollectorRequest {
     this.#permissions = [];
     this.#permissionsExtra = [];
     this.#sections = [];
+    this.#features = {};
     this.setContent(content);
   }
 
@@ -135,6 +137,17 @@ export class CollectorRequest {
       });
       delete futureContent.permissionsExtra;
     }
+    // -- features
+    if (futureContent.features) {
+      if (futureContent.features.chat) {
+        this.addChatFeature(futureContent.features.chat);
+        delete futureContent.features.chat;
+      }
+      if (Object.keys(futureContent.features).length > 0) {
+        throw new HDSLibError('Found unkown features', futureContent.features);
+      }
+      delete futureContent.features;
+    }
 
     this.#extraContent = futureContent;
   }
@@ -166,6 +179,8 @@ export class CollectorRequest {
 
   get permissions () { return this.#permissions; }
   get permissionsExtra () { return this.#permissionsExtra; }
+
+  get features () { return this.#features; }
 
   // --- section --- //
 
@@ -237,6 +252,12 @@ export class CollectorRequest {
     this.addPermissions(permissions);
   }
 
+  // ---------- features ------------- //
+  addChatFeature (settings: {type: 'usernames' | 'user'} = { type: 'user' }) {
+    if (!['user', 'usernames'].includes(settings.type)) throw new HDSLibError('Invalid chat type', settings);
+    this.#features.chat = settings;
+  }
+
   // ---------- sections ------------- //
 
   /**
@@ -251,6 +272,7 @@ export class CollectorRequest {
       requester: {
         name: this.requesterName
       },
+      features: this.features,
       permissionsExtra: this.permissionsExtra,
       permissions: this.permissions,
       app: {
