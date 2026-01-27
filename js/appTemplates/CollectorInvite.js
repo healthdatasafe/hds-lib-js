@@ -42,6 +42,12 @@ class CollectorInvite {
         }
         return this.#connection;
     }
+    get hasChat() {
+        return this.eventData.content.chat != null;
+    }
+    get chatSettings() {
+        return this.eventData.content.chat;
+    }
     /**
      * Check if connection is valid. (only if active)
      * If result is "forbidden" update and set as revoked

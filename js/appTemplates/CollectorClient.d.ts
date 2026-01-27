@@ -1,4 +1,5 @@
 import { CollectorRequest } from './CollectorRequest';
+import { pryv } from '../patchedPryv';
 import { CollectorSectionInterface } from './interfaces';
 /**
  * Client App in relation to an AppManagingAccount/Collector
@@ -21,8 +22,11 @@ export declare class CollectorClient {
     get requesterEventId(): string;
     /** @property {String}  */
     get requesterApiEndpoint(): string;
+    get requesterUsername(): string;
+    get requesterConnection(): pryv.Connection;
     /** @property {Object} - full content of the request */
     get requestData(): any;
+    get hasChatFeature(): boolean;
     /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
     get status(): string;
     constructor(app: any, eventData: any, accessData?: any);
@@ -43,13 +47,13 @@ export declare class CollectorClient {
      */
     accept(forceAndSkipAccessCreation?: boolean): Promise<{
         accessData: any;
-        requesterEvent: any;
+        requesterEvent: pryv.Event;
     }>;
     revoke(): Promise<{
-        requesterEvent: any;
+        requesterEvent: pryv.Event;
     }>;
     refuse(): Promise<{
-        requesterEvent: any;
+        requesterEvent: pryv.Event;
     }>;
     /**
      * Probable temporary internal to fix possible inconsenticies during lib early stages

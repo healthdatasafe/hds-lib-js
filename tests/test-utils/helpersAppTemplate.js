@@ -57,7 +57,7 @@ async function helperNewAppAndUsers (baseStreamIdManager, appName, baseStreamIdC
  * @param {AppManagingAccount} appManaging
  * @returns {Object}
  */
-async function helperNewInvite (appManaging, appClient, code) {
+async function helperNewInvite (appManaging, appClient, code, extraFeatures = { requestContent: {}, addChat: false }) {
   code = code || Math.floor(Math.random() * 1000);
   const collector = await appManaging.createCollector('Invite test ' + code);
 
@@ -71,7 +71,11 @@ async function helperNewInvite (appManaging, appClient, code) {
     permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
     app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
   };
+  Object.assign(requestContent, extraFeatures.extraContent || {});
   collector.request.setContent(requestContent);
+  if (extraFeatures.addChat) {
+    collector.request.addChatFeature();
+  }
 
   await collector.save();
   await collector.publish();

@@ -17,6 +17,12 @@ export declare class CollectorInvite {
     get errorType(): string | undefined;
     get dateCreation(): Date;
     get connection(): pryv.Connection;
+    get hasChat(): boolean;
+    get chatSettings(): {
+        type: 'user';
+        streamRead: string;
+        streamWrite: string;
+    };
     /**
      * Check if connection is valid. (only if active)
      * If result is "forbidden" update and set as revoked

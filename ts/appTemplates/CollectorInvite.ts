@@ -49,6 +49,14 @@ export class CollectorInvite {
     return this.#connection;
   }
 
+  get hasChat (): boolean {
+    return this.eventData.content.chat != null;
+  }
+
+  get chatSettings (): {type: 'user', streamRead: string, streamWrite: string } {
+    return this.eventData.content.chat;
+  }
+
   /**
    * Check if connection is valid. (only if active)
    * If result is "forbidden" update and set as revoked

@@ -216,7 +216,8 @@ export class Collector {
       switch (responseEvent.content.type) {
         case 'accept':
           (updateInvite as any).streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)];
-          Object.assign(updateInvite.content, { apiEndpoint: responseEvent.content.apiEndpoint });
+          updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
+          if (responseEvent.content.chat) updateInvite.content.chat = responseEvent.content.chat;
           break;
         case 'refuse':
           (updateInvite as any).streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)];
