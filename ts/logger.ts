@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Basic logger
  */
@@ -21,7 +22,7 @@ export function setLogger (newLogger: Logger): void {
 export function info (...args: any[]): void { logger.info(...args); }
 export function error (...args: any[]): void { logger.error(...args); }
 export function debug (...args: any[]): void {
-  logger.debug(...args);
+  // logger.debug(...args);
 }
 
 export function warn (...args: any[]): void {

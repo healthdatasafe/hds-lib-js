@@ -277,6 +277,20 @@ describe('[APTX] appTemplates', function () {
       await collectorClient.accept();
       await collector.checkInbox();
       assert.ok(invite.status, 'active');
+      assert.ok(!invite.hasChat);
+    });
+
+    it('[APIZ] Collector - with chat', async () => {
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APIZ', { addChat: true });
+      await collectorClient.accept();
+      await collector.checkInbox();
+      assert.ok(invite.hasChat);
+      const expectedChatSettings = {
+        type: 'user',
+        streamRead: `chat-${managingUser.username}`,
+        streamWrite: `chat-${managingUser.username}-in`
+      };
+      assert.deepEqual(invite.chatSettings, expectedChatSettings);
     });
 
     it('[APII] Collector invite internals', async () => {

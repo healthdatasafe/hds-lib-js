@@ -53,6 +53,7 @@ class CollectorClient {
     eventData;
     accessData;
     request;
+    #requesterConnection;
     /** @property {String} - identified within user's account - can be used to retrieve a Collector Client from an app */
     get key() {
         return _a.keyFromInfo(this.eventData.content.accessInfo);
@@ -65,9 +66,21 @@ class CollectorClient {
     get requesterApiEndpoint() {
         return this.eventData.content.apiEndpoint;
     }
+    get requesterUsername() {
+        return this.eventData.content.accessInfo.user.username;
+    }
+    get requesterConnection() {
+        if (!this.#requesterConnection) {
+            this.#requesterConnection = new patchedPryv_1.pryv.Connection(this.requesterApiEndpoint);
+        }
+        return this.#requesterConnection;
+    }
     /** @property {Object} - full content of the request */
     get requestData() {
         return this.eventData.content.requesterEventData.content;
+    }
+    get hasChatFeature() {
+        return this.requestData.features.chat != null;
     }
     /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
     get status() {
@@ -177,6 +190,7 @@ class CollectorClient {
      * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
      */
     async accept(forceAndSkipAccessCreation = false) {
+        const responseContent = {};
         if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
             forceAndSkipAccessCreation = true;
             logger.error('CollectorClient.accept TODO fix accept when access valid');
@@ -194,6 +208,35 @@ class CollectorClient {
                     return { streamId: p.streamId, level: p.level };
                 return p;
             });
+            // ------------- chat ------------------------ //
+            if (this.hasChatFeature) {
+                // user supported mode - might me moved to a lib
+                // 2. create streams
+                const chatStreamRead = `chat-${this.requesterUsername}`;
+                const chatStreamWrite = `${chatStreamRead}-in`;
+                const chatStreamsCreateApiCalls = [
+                    { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamRead } },
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: chatStreamRead, id: chatStreamWrite } }
+                ];
+                const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
+                streamCreateResults.forEach((r) => {
+                    if (r.stream?.id || r.error?.id === 'item-already-exists')
+                        return;
+                    throw new errors_1.HDSLibError('Failed creating chat stream', streamCreateResults);
+                });
+                // 3. add streams to permissions
+                cleanedPermissions.push(...[
+                    { streamId: chatStreamRead, level: 'read' },
+                    { streamId: chatStreamWrite, level: 'manage' }
+                ]);
+                responseContent.chat = {
+                    type: 'user',
+                    streamRead: chatStreamRead,
+                    streamWrite: chatStreamWrite
+                };
+                // ---------- end chat ---------- //
+            }
             const accessCreateData = {
                 name: this.key,
                 type: 'shared',
@@ -210,9 +253,7 @@ class CollectorClient {
             if (!this.accessData?.apiEndpoint)
                 throw new errors_1.HDSLibError('Failed creating request access', accessData);
         }
-        const responseContent = {
-            apiEndpoint: this.accessData.apiEndpoint
-        };
+        responseContent.apiEndpoint = this.accessData.apiEndpoint;
         const requesterEvent = await this.#updateRequester('accept', responseContent);
         if (requesterEvent != null) {
             await this.#updateStatus(_a.STATUSES.active);
@@ -258,7 +299,6 @@ class CollectorClient {
         // check content of accessInfo
         const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
         const requesterEventId = this.requesterEventId;
-        const requestrerApiEndpoint = this.eventData.content.apiEndpoint;
         // add eventId to content
         const content = Object.assign({ type, eventId: requesterEventId }, responseContent);
         // acceptEvent to be sent to requester
@@ -268,8 +308,7 @@ class CollectorClient {
             content
         };
         try {
-            const requesterConnection = new patchedPryv_1.pryv.Connection(requestrerApiEndpoint);
-            const requesterEvent = await requesterConnection.apiOne('events.create', responseEvent, 'event');
+            const requesterEvent = await this.requesterConnection.apiOne('events.create', responseEvent, 'event');
             return requesterEvent;
         }
         catch (e) {
