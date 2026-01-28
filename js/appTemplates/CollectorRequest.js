@@ -223,6 +223,9 @@ class CollectorRequest {
         this.addPermissions(permissions);
     }
     // ---------- features ------------- //
+    get hasChatFeature() {
+        return this.#features.chat != null;
+    }
     addChatFeature(settings = { type: 'user' }) {
         if (!['user', 'usernames'].includes(settings.type))
             throw new errors_1.HDSLibError('Invalid chat type', settings);

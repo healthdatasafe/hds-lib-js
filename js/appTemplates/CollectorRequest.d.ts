@@ -86,6 +86,7 @@ export declare class CollectorRequest {
      * Rebuild permissions based on sections itemKeys and staticPermissions
      */
     buildPermissions(): void;
+    get hasChatFeature(): boolean;
     addChatFeature(settings?: {
         type: 'usernames' | 'user';
     }): void;
