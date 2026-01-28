@@ -253,6 +253,11 @@ export class CollectorRequest {
   }
 
   // ---------- features ------------- //
+
+  get hasChatFeature (): boolean {
+    return this.#features.chat != null;
+  }
+
   addChatFeature (settings: {type: 'usernames' | 'user'} = { type: 'user' }) {
     if (!['user', 'usernames'].includes(settings.type)) throw new HDSLibError('Invalid chat type', settings);
     this.#features.chat = settings;
