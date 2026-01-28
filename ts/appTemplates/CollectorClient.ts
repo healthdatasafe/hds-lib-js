@@ -54,7 +54,7 @@ export class CollectorClient {
   }
 
   get hasChatFeature () {
-    return this.requestData.features.chat != null;
+    return this.requestData.features?.chat != null;
   }
 
   get chatSettings (): {chatStreamIncoming: string, chatStreamMain: string} {
