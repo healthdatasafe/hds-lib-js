@@ -82,6 +82,14 @@ class CollectorClient {
     get hasChatFeature() {
         return this.requestData.features.chat != null;
     }
+    get chatSettings() {
+        if (!this.hasChatFeature)
+            return null;
+        return {
+            chatStreamIncoming: `chat-${this.requesterUsername}-in`,
+            chatStreamMain: `chat-${this.requesterUsername}`
+        };
+    }
     /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
     get status() {
         const eventStatus = this.eventData.content.status;
@@ -212,12 +220,11 @@ class CollectorClient {
             if (this.hasChatFeature) {
                 // user supported mode - might me moved to a lib
                 // 2. create streams
-                const chatStreamRead = `chat-${this.requesterUsername}`;
-                const chatStreamWrite = `${chatStreamRead}-in`;
+                const { chatStreamIncoming, chatStreamMain } = this.chatSettings;
                 const chatStreamsCreateApiCalls = [
                     { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
-                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamRead } },
-                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: chatStreamRead, id: chatStreamWrite } }
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: chatStreamMain, id: chatStreamIncoming } }
                 ];
                 const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
                 streamCreateResults.forEach((r) => {
@@ -227,13 +234,13 @@ class CollectorClient {
                 });
                 // 3. add streams to permissions
                 cleanedPermissions.push(...[
-                    { streamId: chatStreamRead, level: 'read' },
-                    { streamId: chatStreamWrite, level: 'manage' }
+                    { streamId: chatStreamMain, level: 'read' },
+                    { streamId: chatStreamIncoming, level: 'manage' }
                 ]);
                 responseContent.chat = {
                     type: 'user',
-                    streamRead: chatStreamRead,
-                    streamWrite: chatStreamWrite
+                    streamRead: chatStreamMain,
+                    streamWrite: chatStreamIncoming
                 };
                 // ---------- end chat ---------- //
             }
@@ -352,6 +359,14 @@ class CollectorClient {
     // -------------------- sections and forms ------------- //
     getSections() {
         return this.request?.sections;
+    }
+    // -------------------- chat methods ----------------- //
+    chatEventInfos(event) {
+        if (event.streamIds.includes(this.chatSettings.chatStreamIncoming))
+            return { source: 'requester' };
+        if (event.streamIds.includes(this.chatSettings.chatStreamMain))
+            return { source: 'me' };
+        return { source: 'unkown' };
     }
 }
 exports.CollectorClient = CollectorClient;

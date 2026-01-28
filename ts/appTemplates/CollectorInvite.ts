@@ -57,6 +57,13 @@ export class CollectorInvite {
     return this.eventData.content.chat;
   }
 
+  // -------------------- chat methods ----------------- //
+  chatEventInfos (event: pryv.Event): {source: 'me' | 'user' | 'unkown' } {
+    if (event.streamIds.includes(this.chatSettings.streamWrite)) return { source: 'me' };
+    if (event.streamIds.includes(this.chatSettings.streamRead)) return { source: 'user' };
+    return { source: 'unkown' };
+  }
+
   /**
    * Check if connection is valid. (only if active)
    * If result is "forbidden" update and set as revoked
