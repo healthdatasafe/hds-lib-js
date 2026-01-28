@@ -4,7 +4,7 @@ const CopyPlugin = require('copy-webpack-plugin');
 
 module.exports = [
   addCommon({
-    entry: './lib/index.js',
+    entry: './js/index.js',
     mode: 'production',
     output: {
       path: path.resolve(__dirname, 'docs'),

@@ -179,6 +179,42 @@ function mixAuthorizationLevels(level1, level2) {
 
 /***/ }),
 
+/***/ "./js/HDSModel/HDSModel-EventTypes.js":
+/*!********************************************!*\
+  !*** ./js/HDSModel/HDSModel-EventTypes.js ***!
+  \********************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelEventTypes = void 0;
+/**
+ * Streams - Extension of HDSModel
+ */
+class HDSModelEventTypes {
+    /**
+     * Model instance
+     */
+    #model;
+    constructor(model) {
+        this.#model = model;
+    }
+    getEventTypeDefinition(eventType) {
+        return this.#model.modelData.eventTypes.types[eventType];
+    }
+    getEventTypeExtra(eventType) {
+        return this.#model.modelData.eventTypes.extras[eventType];
+    }
+    getEventTypeSymbol(eventType) {
+        return this.#model.modelData.eventTypes.extras[eventType]?.symbol || null;
+    }
+}
+exports.HDSModelEventTypes = HDSModelEventTypes;
+//# sourceMappingURL=HDSModel-EventTypes.js.map
+
+/***/ }),
+
 /***/ "./js/HDSModel/HDSModel-ItemsDefs.js":
 /*!*******************************************!*\
   !*** ./js/HDSModel/HDSModel-ItemsDefs.js ***!
@@ -412,6 +448,7 @@ const utils_1 = __webpack_require__(/*! ../utils */ "./js/utils.js");
 const HDSModel_Streams_1 = __webpack_require__(/*! ./HDSModel-Streams */ "./js/HDSModel/HDSModel-Streams.js");
 const HDSModel_Authorizations_1 = __webpack_require__(/*! ./HDSModel-Authorizations */ "./js/HDSModel/HDSModel-Authorizations.js");
 const HDSModel_ItemsDefs_1 = __webpack_require__(/*! ./HDSModel-ItemsDefs */ "./js/HDSModel/HDSModel-ItemsDefs.js");
+const HDSModel_EventTypes_1 = __webpack_require__(/*! ./HDSModel-EventTypes */ "./js/HDSModel/HDSModel-EventTypes.js");
 class HDSModel {
     /**
      * JSON definition file URL.
@@ -482,6 +519,14 @@ class HDSModel {
             this.laziliyLoadedMap.authorizations = new HDSModel_Authorizations_1.HDSModelAuthorizations(this);
         }
         return this.laziliyLoadedMap.authorizations;
+    }
+    get eventTypes() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.eventTypes) {
+            this.laziliyLoadedMap.eventTypes = new HDSModel_EventTypes_1.HDSModelEventTypes(this);
+        }
+        return this.laziliyLoadedMap.eventTypes;
     }
 }
 exports.HDSModel = HDSModel;
@@ -992,7 +1037,7 @@ class Application {
         this.cache.customSettingsEvent = createdEvent;
     }
     /**
-     * Get current settings previously set with setCustomSettings()
+     * Get all current settings previously set with setCustomSettings()
      */
     async getCustomSettings(forceRefresh = false) {
         if (forceRefresh || !this.cache.customSettingsEvent) {
@@ -1003,6 +1048,20 @@ class Application {
             await this.#createCustomSettings({});
         }
         return this.cache.customSettingsEvent?.content;
+    }
+    /**
+     * Update value of a custom setting by its key
+     * @param {*} value if value is `null` key will be deleted
+     */
+    async setCustomSetting(key, value) {
+        const currentCustomSettings = await this.getCustomSettings();
+        if (value === null) {
+            delete currentCustomSettings[key];
+        }
+        else {
+            currentCustomSettings[key] = value;
+        }
+        return this.setCustomSettings(currentCustomSettings);
     }
     /**
      * Force loading of streamData
@@ -1329,7 +1388,9 @@ class Collector {
             switch (responseEvent.content.type) {
                 case 'accept':
                     updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.active)];
-                    Object.assign(updateInvite.content, { apiEndpoint: responseEvent.content.apiEndpoint });
+                    updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
+                    if (responseEvent.content.chat)
+                        updateInvite.content.chat = responseEvent.content.chat;
                     break;
                 case 'refuse':
                     updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
@@ -1612,6 +1673,7 @@ class CollectorClient {
     eventData;
     accessData;
     request;
+    #requesterConnection;
     /** @property {String} - identified within user's account - can be used to retrieve a Collector Client from an app */
     get key() {
         return _a.keyFromInfo(this.eventData.content.accessInfo);
@@ -1624,9 +1686,29 @@ class CollectorClient {
     get requesterApiEndpoint() {
         return this.eventData.content.apiEndpoint;
     }
+    get requesterUsername() {
+        return this.eventData.content.accessInfo.user.username;
+    }
+    get requesterConnection() {
+        if (!this.#requesterConnection) {
+            this.#requesterConnection = new patchedPryv_1.pryv.Connection(this.requesterApiEndpoint);
+        }
+        return this.#requesterConnection;
+    }
     /** @property {Object} - full content of the request */
     get requestData() {
         return this.eventData.content.requesterEventData.content;
+    }
+    get hasChatFeature() {
+        return this.requestData.features.chat != null;
+    }
+    get chatSettings() {
+        if (!this.hasChatFeature)
+            return null;
+        return {
+            chatStreamIncoming: `chat-${this.requesterUsername}-in`,
+            chatStreamMain: `chat-${this.requesterUsername}`
+        };
     }
     /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
     get status() {
@@ -1736,6 +1818,7 @@ class CollectorClient {
      * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
      */
     async accept(forceAndSkipAccessCreation = false) {
+        const responseContent = {};
         if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
             forceAndSkipAccessCreation = true;
             logger.error('CollectorClient.accept TODO fix accept when access valid');
@@ -1753,6 +1836,34 @@ class CollectorClient {
                     return { streamId: p.streamId, level: p.level };
                 return p;
             });
+            // ------------- chat ------------------------ //
+            if (this.hasChatFeature) {
+                // user supported mode - might me moved to a lib
+                // 2. create streams
+                const { chatStreamIncoming, chatStreamMain } = this.chatSettings;
+                const chatStreamsCreateApiCalls = [
+                    { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
+                ];
+                const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
+                streamCreateResults.forEach((r) => {
+                    if (r.stream?.id || r.error?.id === 'item-already-exists')
+                        return;
+                    throw new errors_1.HDSLibError('Failed creating chat stream', streamCreateResults);
+                });
+                // 3. add streams to permissions
+                cleanedPermissions.push(...[
+                    { streamId: chatStreamMain, level: 'read' },
+                    { streamId: chatStreamIncoming, level: 'manage' }
+                ]);
+                responseContent.chat = {
+                    type: 'user',
+                    streamRead: chatStreamMain,
+                    streamWrite: chatStreamIncoming
+                };
+                // ---------- end chat ---------- //
+            }
             const accessCreateData = {
                 name: this.key,
                 type: 'shared',
@@ -1769,9 +1880,7 @@ class CollectorClient {
             if (!this.accessData?.apiEndpoint)
                 throw new errors_1.HDSLibError('Failed creating request access', accessData);
         }
-        const responseContent = {
-            apiEndpoint: this.accessData.apiEndpoint
-        };
+        responseContent.apiEndpoint = this.accessData.apiEndpoint;
         const requesterEvent = await this.#updateRequester('accept', responseContent);
         if (requesterEvent != null) {
             await this.#updateStatus(_a.STATUSES.active);
@@ -1817,7 +1926,6 @@ class CollectorClient {
         // check content of accessInfo
         const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
         const requesterEventId = this.requesterEventId;
-        const requestrerApiEndpoint = this.eventData.content.apiEndpoint;
         // add eventId to content
         const content = Object.assign({ type, eventId: requesterEventId }, responseContent);
         // acceptEvent to be sent to requester
@@ -1827,8 +1935,7 @@ class CollectorClient {
             content
         };
         try {
-            const requesterConnection = new patchedPryv_1.pryv.Connection(requestrerApiEndpoint);
-            const requesterEvent = await requesterConnection.apiOne('events.create', responseEvent, 'event');
+            const requesterEvent = await this.requesterConnection.apiOne('events.create', responseEvent, 'event');
             return requesterEvent;
         }
         catch (e) {
@@ -1868,6 +1975,28 @@ class CollectorClient {
      */
     static keyFromInfo(info) {
         return info.user.username + ':' + info.name;
+    }
+    // -------------------- sections and forms ------------- //
+    getSections() {
+        return this.request?.sections;
+    }
+    // -------------------- chat methods ----------------- //
+    chatEventInfos(event) {
+        if (event.streamIds.includes(this.chatSettings.chatStreamIncoming))
+            return { source: 'requester' };
+        if (event.streamIds.includes(this.chatSettings.chatStreamMain))
+            return { source: 'me' };
+        return { source: 'unkown' };
+    }
+    async chatPost(hdsConnection, content) {
+        if (!this.hasChatFeature)
+            throw new errors_1.HDSLibError('Cannot chat with this ColleectorClient');
+        const newEvent = {
+            type: 'message/hds-chat-v1',
+            streamIds: [this.chatSettings.chatStreamMain],
+            content
+        };
+        return await hdsConnection.apiOne('events.create', newEvent, 'event');
     }
 }
 exports.CollectorClient = CollectorClient;
@@ -1926,6 +2055,30 @@ class CollectorInvite {
             this.#connection = new patchedPryv_1.pryv.Connection(this.apiEndpoint);
         }
         return this.#connection;
+    }
+    get hasChat() {
+        return this.eventData.content.chat != null;
+    }
+    get chatSettings() {
+        return this.eventData.content.chat;
+    }
+    // -------------------- chat methods ----------------- //
+    chatEventInfos(event) {
+        if (event.streamIds.includes(this.chatSettings.streamWrite))
+            return { source: 'me' };
+        if (event.streamIds.includes(this.chatSettings.streamRead))
+            return { source: 'user' };
+        return { source: 'unkown' };
+    }
+    async chatPost(content) {
+        if (!this.hasChat)
+            throw new Error('Cannot chat with this contact');
+        const newEvent = {
+            type: 'message/hds-chat-v1',
+            streamIds: [this.chatSettings.streamWrite],
+            content
+        };
+        return await this.connection.apiOne('events.create', newEvent, 'event');
     }
     /**
      * Check if connection is valid. (only if active)
@@ -2019,6 +2172,7 @@ class CollectorRequest {
     #permissionsExtra;
     #permissions;
     #sections;
+    #features;
     #extraContent;
     constructor(content) {
         this.#version = CURRENT_VERSION;
@@ -2027,6 +2181,7 @@ class CollectorRequest {
         this.#permissions = [];
         this.#permissionsExtra = [];
         this.#sections = [];
+        this.#features = {};
         this.setContent(content);
     }
     /**
@@ -2121,6 +2276,17 @@ class CollectorRequest {
             });
             delete futureContent.permissionsExtra;
         }
+        // -- features
+        if (futureContent.features) {
+            if (futureContent.features.chat) {
+                this.addChatFeature(futureContent.features.chat);
+                delete futureContent.features.chat;
+            }
+            if (Object.keys(futureContent.features).length > 0) {
+                throw new errors_1.HDSLibError('Found unkown features', futureContent.features);
+            }
+            delete futureContent.features;
+        }
         this.#extraContent = futureContent;
     }
     // ------------- getter and setters ------------ //
@@ -2141,6 +2307,7 @@ class CollectorRequest {
     get appCustomData() { return this.#app.data; }
     get permissions() { return this.#permissions; }
     get permissionsExtra() { return this.#permissionsExtra; }
+    get features() { return this.#features; }
     // --- section --- //
     get sections() {
         return this.#sections;
@@ -2202,6 +2369,15 @@ class CollectorRequest {
         this.resetPermissions();
         this.addPermissions(permissions);
     }
+    // ---------- features ------------- //
+    get hasChatFeature() {
+        return this.#features.chat != null;
+    }
+    addChatFeature(settings = { type: 'user' }) {
+        if (!['user', 'usernames'].includes(settings.type))
+            throw new errors_1.HDSLibError('Invalid chat type', settings);
+        this.#features.chat = settings;
+    }
     // ---------- sections ------------- //
     /**
      * Return Content to comply with initial implementation as an object
@@ -2215,6 +2391,7 @@ class CollectorRequest {
             requester: {
                 name: this.requesterName
             },
+            features: this.features,
             permissionsExtra: this.permissionsExtra,
             permissions: this.permissions,
             app: {
@@ -2234,10 +2411,6 @@ function validateString(key, totest) {
         throw new errors_1.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
     return totest;
 }
-const RequestSectionType = {
-    recurring: 'recurring',
-    permanent: 'permanent'
-};
 class CollectorRequestSection {
     #type;
     #name;
@@ -2539,6 +2712,7 @@ function validateLocalizableText(key, toTest) {
 
 "use strict";
 
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Basic logger
  */
@@ -2559,7 +2733,7 @@ function setLogger(newLogger) {
 function info(...args) { logger.info(...args); }
 function error(...args) { logger.error(...args); }
 function debug(...args) {
-    logger.debug(...args);
+    // logger.debug(...args);
 }
 function warn(...args) {
     logger.info(...args); // Use info for warn for now
@@ -2677,6 +2851,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.StreamsAutoCreate = void 0;
 const errors_1 = __webpack_require__(/*! ../errors */ "./js/errors.js");
 const HDSModelInitAndSingleton_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton */ "./js/HDSModel/HDSModelInitAndSingleton.js");
+const StreamsTools_1 = __webpack_require__(/*! ./StreamsTools */ "./js/toolkit/StreamsTools.js");
 class StreamsAutoCreate {
     connection;
     knownStreams = {};
@@ -2745,7 +2920,7 @@ class StreamsAutoCreate {
     addStreamStructure(streamStructure) {
         if (streamStructure == null)
             return;
-        for (const stream of allStreamsAndChildren(streamStructure)) {
+        for (const stream of (0, StreamsTools_1.allStreamsAndChildren)(streamStructure)) {
             this.#addStream(stream);
         }
     }
@@ -2756,6 +2931,21 @@ class StreamsAutoCreate {
     }
 }
 exports.StreamsAutoCreate = StreamsAutoCreate;
+//# sourceMappingURL=StreamsAutoCreate.js.map
+
+/***/ }),
+
+/***/ "./js/toolkit/StreamsTools.js":
+/*!************************************!*\
+  !*** ./js/toolkit/StreamsTools.js ***!
+  \************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.allStreamsAndChildren = allStreamsAndChildren;
+exports.getStreamIdAndChildrenIds = getStreamIdAndChildrenIds;
 /**
  * Iterate all streams and children
  */
@@ -2769,7 +2959,14 @@ function* allStreamsAndChildren(streamStructure) {
         }
     }
 }
-//# sourceMappingURL=StreamsAutoCreate.js.map
+function getStreamIdAndChildrenIds(stream) {
+    const streamIds = [];
+    for (const s of allStreamsAndChildren([stream])) {
+        streamIds.push(s.id);
+    }
+    return streamIds;
+}
+//# sourceMappingURL=StreamsTools.js.map
 
 /***/ }),
 
@@ -2777,14 +2974,49 @@ function* allStreamsAndChildren(streamStructure) {
 /*!*****************************!*\
   !*** ./js/toolkit/index.js ***!
   \*****************************/
-/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.StreamsAutoCreate = void 0;
+exports.StreamTools = exports.StreamsAutoCreate = void 0;
 const StreamsAutoCreate_1 = __webpack_require__(/*! ./StreamsAutoCreate */ "./js/toolkit/StreamsAutoCreate.js");
 Object.defineProperty(exports, "StreamsAutoCreate", ({ enumerable: true, get: function () { return StreamsAutoCreate_1.StreamsAutoCreate; } }));
+const StreamTools = __importStar(__webpack_require__(/*! ./StreamsTools */ "./js/toolkit/StreamsTools.js"));
+exports.StreamTools = StreamTools;
 //# sourceMappingURL=index.js.map
 
 /***/ }),
@@ -23654,6 +23886,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        features: { },
         permissionsExtra: [],
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
@@ -23783,6 +24016,39 @@ describe('[APTX] appTemplates', function () {
       await collectorClient.accept();
       await collector.checkInbox();
       assert.ok(invite.status, 'active');
+      assert.ok(!invite.hasChat);
+    });
+
+    it('[APIZ] Collector - with chat', async () => {
+      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APIZ', { addChat: true });
+      await collectorClient.accept();
+      await collector.checkInbox();
+      assert.ok(invite.hasChat);
+      const expectedChatSettings = {
+        type: 'user',
+        streamRead: `chat-${managingUser.username}`,
+        streamWrite: `chat-${managingUser.username}-in`
+      };
+      assert.deepEqual(invite.chatSettings, expectedChatSettings);
+      // -- post Chat From Doctor
+      await invite.chatPost('Hello Patient');
+
+      // -- post Chat From Patient
+      await collectorClient.chatPost(appClient.connection, 'Hello Dr.');
+
+      // check events on patient side
+      const eventsOnPatient = await appClient.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
+      assert.equal(eventsOnPatient[0].content, 'Hello Dr.');
+      assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[0]), { source: 'me' });
+      assert.equal(eventsOnPatient[1].content, 'Hello Patient');
+      assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[1]), { source: 'requester' });
+
+      // check events on patient side
+      const eventsOnDr = await invite.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
+      assert.equal(eventsOnDr[0].content, 'Hello Dr.');
+      assert.deepEqual(invite.chatEventInfos(eventsOnDr[0]), { source: 'user' });
+      assert.equal(eventsOnDr[1].content, 'Hello Patient');
+      assert.deepEqual(invite.chatEventInfos(eventsOnDr[1]), { source: 'me' });
     });
 
     it('[APII] Collector invite internals', async () => {
@@ -23886,6 +24152,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        features: { },
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
           {
@@ -23928,6 +24195,7 @@ describe('[APTX] appTemplates', function () {
         consent: {
           en: 'This is a consent message'
         },
+        features: { },
         permissionsExtra: [],
         permissions: [
           { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
@@ -23963,7 +24231,8 @@ describe('[APTX] appTemplates', function () {
   });
 
   describe('[APEX] Errors ', () => {
-    it('[APEH] Collector.client handleIncoming Request Errors', async () => {
+    it('[APEH] Collector.client handleIncoming Request Errors', async function () {
+      this.timeout(20000);
       const new0 = await helperNewAppAndUsers('dummy', 'dummyApp', 'dummyC', 'dummyCApp');
       const inv0 = await helperNewInvite(new0.appManaging, new0.appClient, 'APEH');
 
@@ -24039,6 +24308,8 @@ const { helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersApp
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 
 describe('[APRX] appTemplates Requests', function () {
+  this.timeout(8000);
+
   before(async () => {
     await initHDSModel();
   });
@@ -24084,6 +24355,7 @@ describe('[APRX] appTemplates Requests', function () {
       consent: { en: 'Short Consent' },
       description: { en: 'Short Description' },
       requester: { name: 'Username APRC' },
+      features: {},
       permissionsExtra: [
         { streamId: 'profile', defaultName: 'Profile', level: 'read' },
         {
@@ -24125,6 +24397,58 @@ describe('[APRX] appTemplates Requests', function () {
           type: 'recurring',
           name: { en: 'B' },
           itemKeys: ['fertility-ttc-tta', 'body-weight']
+        }
+      ],
+      id: requestContent.id
+    };
+    assert.deepEqual(requestContent, expectedContent);
+  });
+
+  it('[APRD] A request with chat', async () => {
+    const baseStreamId = 'aprd';
+    const { appManaging } = await helperNewAppManaging(baseStreamId, 'test-APRD');
+    const newCollector = await appManaging.createCollector('Invite test APRD');
+
+    const request = newCollector.request;
+    request.appId = 'dr-form';
+    request.appUrl = 'https://xxx.yyy';
+    request.title = { en: 'My title' };
+    request.requesterName = 'Username APRD';
+    request.description = { en: 'Short Description' };
+    request.consent = { en: 'Short Consent' };
+    request.addPermissionExtra({ streamId: 'profile' });
+    request.addChatFeature();
+
+    const sectionA = request.createSection('profile', 'permanent');
+    sectionA.setNameLocal('en', 'A');
+    sectionA.addItemKeys([
+      'profile-name',
+      'profile-surname'
+    ]);
+
+    // build permissions needed
+    request.buildPermissions();
+
+    const requestContent = request.content;
+
+    assert.ok(requestContent.id.startsWith(baseStreamId), 'id should start with the basetreamid of the manager');
+
+    const expectedContent = {
+      version: 1,
+      title: { en: 'My title' },
+      consent: { en: 'Short Consent' },
+      description: { en: 'Short Description' },
+      requester: { name: 'Username APRD' },
+      features: { chat: { type: 'user' } },
+      permissionsExtra: [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }],
+      permissions: [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }],
+      app: { id: 'dr-form', url: 'https://xxx.yyy', data: {} },
+      sections: [
+        {
+          key: 'profile',
+          type: 'permanent',
+          name: { en: 'A' },
+          itemKeys: ['profile-name', 'profile-surname']
         }
       ],
       id: requestContent.id
@@ -24381,6 +24705,29 @@ describe('[MODX] Model', () => {
       } catch (e) {
         assert.equal(e.message, 'Found multiple matching definitions "body-vulva-wetness-feeling, body-vulva-mucus-stretch" for event: {"streamIds":["body-vulva-wetness-feeling","body-vulva-mucus-stretch"],"type":"ratio/generic"}');
       }
+    });
+  });
+
+  // ----------- event types ----------- //
+  describe('[MOTX] eventTypes', function () {
+    it('[MOTA] event type definition', async () => {
+      const eventTypeDev = model.eventTypes.getEventTypeDefinition('temperature/c');
+      assert.deepEqual(eventTypeDev, { description: 'Celsius', type: 'number' });
+    });
+
+    it('[MOTB] extra definition', async () => {
+      const eventTypeExtra = model.eventTypes.getEventTypeExtra('temperature/c');
+      assert.deepEqual(eventTypeExtra, { name: { en: 'Degrees Celsius', fr: 'Degrés Celsius' }, symbol: '°C' });
+    });
+
+    it('[MOTC] symbol exists', async () => {
+      const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('temperature/c');
+      assert.deepEqual(eventTypeSymbol, '°C');
+    });
+
+    it('[MOTD] symbol not exists', async () => {
+      const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('audio/attached');
+      assert.deepEqual(eventTypeSymbol, null);
     });
   });
 
@@ -24934,7 +25281,7 @@ async function helperNewAppAndUsers (baseStreamIdManager, appName, baseStreamIdC
  * @param {AppManagingAccount} appManaging
  * @returns {Object}
  */
-async function helperNewInvite (appManaging, appClient, code) {
+async function helperNewInvite (appManaging, appClient, code, extraFeatures = { requestContent: {}, addChat: false }) {
   code = code || Math.floor(Math.random() * 1000);
   const collector = await appManaging.createCollector('Invite test ' + code);
 
@@ -24948,7 +25295,11 @@ async function helperNewInvite (appManaging, appClient, code) {
     permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
     app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
   };
+  Object.assign(requestContent, extraFeatures.extraContent || {});
   collector.request.setContent(requestContent);
+  if (extraFeatures.addChat) {
+    collector.request.addChatFeature();
+  }
 
   await collector.save();
   await collector.publish();
