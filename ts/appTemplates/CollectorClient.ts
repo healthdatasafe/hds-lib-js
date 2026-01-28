@@ -203,7 +203,7 @@ export class CollectorClient {
         const chatStreamsCreateApiCalls = [
           { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
           { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
-          { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: chatStreamMain, id: chatStreamIncoming } }
+          { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
         ];
         const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
         streamCreateResults.forEach((r) => {
@@ -353,5 +353,15 @@ export class CollectorClient {
     if (event.streamIds.includes(this.chatSettings.chatStreamIncoming)) return { source: 'requester' };
     if (event.streamIds.includes(this.chatSettings.chatStreamMain)) return { source: 'me' };
     return { source: 'unkown' };
+  }
+
+  async chatPost (hdsConnection: pryv.Connection, content: string): Promise<pryv.Event> {
+    if (!this.hasChatFeature) throw new HDSLibError('Cannot chat with this ColleectorClient');
+    const newEvent = {
+      type: 'message/hds-chat-v1',
+      streamIds: [this.chatSettings.chatStreamMain],
+      content
+    };
+    return await hdsConnection.apiOne('events.create', newEvent, 'event');
   }
 }

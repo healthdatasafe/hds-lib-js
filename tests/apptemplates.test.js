@@ -291,6 +291,25 @@ describe('[APTX] appTemplates', function () {
         streamWrite: `chat-${managingUser.username}-in`
       };
       assert.deepEqual(invite.chatSettings, expectedChatSettings);
+      // -- post Chat From Doctor
+      await invite.chatPost('Hello Patient');
+
+      // -- post Chat From Patient
+      await collectorClient.chatPost(appClient.connection, 'Hello Dr.');
+
+      // check events on patient side
+      const eventsOnPatient = await appClient.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
+      assert.equal(eventsOnPatient[0].content, 'Hello Dr.');
+      assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[0]), { source: 'me' });
+      assert.equal(eventsOnPatient[1].content, 'Hello Patient');
+      assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[1]), { source: 'requester' });
+
+      // check events on patient side
+      const eventsOnDr = await invite.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
+      assert.equal(eventsOnDr[0].content, 'Hello Dr.');
+      assert.deepEqual(invite.chatEventInfos(eventsOnDr[0]), { source: 'user' });
+      assert.equal(eventsOnDr[1].content, 'Hello Patient');
+      assert.deepEqual(invite.chatEventInfos(eventsOnDr[1]), { source: 'me' });
     });
 
     it('[APII] Collector invite internals', async () => {

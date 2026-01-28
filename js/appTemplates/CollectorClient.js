@@ -224,7 +224,7 @@ class CollectorClient {
                 const chatStreamsCreateApiCalls = [
                     { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
                     { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
-                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: chatStreamMain, id: chatStreamIncoming } }
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
                 ];
                 const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
                 streamCreateResults.forEach((r) => {
@@ -367,6 +367,16 @@ class CollectorClient {
         if (event.streamIds.includes(this.chatSettings.chatStreamMain))
             return { source: 'me' };
         return { source: 'unkown' };
+    }
+    async chatPost(hdsConnection, content) {
+        if (!this.hasChatFeature)
+            throw new errors_1.HDSLibError('Cannot chat with this ColleectorClient');
+        const newEvent = {
+            type: 'message/hds-chat-v1',
+            streamIds: [this.chatSettings.chatStreamMain],
+            content
+        };
+        return await hdsConnection.apiOne('events.create', newEvent, 'event');
     }
 }
 exports.CollectorClient = CollectorClient;

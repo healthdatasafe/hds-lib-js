@@ -56,6 +56,16 @@ class CollectorInvite {
             return { source: 'user' };
         return { source: 'unkown' };
     }
+    async chatPost(content) {
+        if (!this.hasChat)
+            throw new Error('Cannot chat with this contact');
+        const newEvent = {
+            type: 'message/hds-chat-v1',
+            streamIds: [this.chatSettings.streamWrite],
+            content
+        };
+        return await this.connection.apiOne('events.create', newEvent, 'event');
+    }
     /**
      * Check if connection is valid. (only if active)
      * If result is "forbidden" update and set as revoked
