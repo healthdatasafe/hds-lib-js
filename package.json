@@ -5,7 +5,7 @@
   "scripts": {
     "test": "NODE_ENV=test mocha tests --test-reporter=spec",
     "test:coverage": "NODE_ENV=test c8 mocha tests --test-reporter=spec",
-    "build": "npm run build:ts && npm run build:webpack",
+    "build": "npm run build:ts; npm run build:webpack",
     "build:ts": "tsc",
     "build:webpack": "webpack",
     "lint": "eslint .",
