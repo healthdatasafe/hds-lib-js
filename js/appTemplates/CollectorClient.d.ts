@@ -27,6 +27,10 @@ export declare class CollectorClient {
     /** @property {Object} - full content of the request */
     get requestData(): any;
     get hasChatFeature(): boolean;
+    get chatSettings(): {
+        chatStreamIncoming: string;
+        chatStreamMain: string;
+    };
     /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
     get status(): string;
     constructor(app: any, eventData: any, accessData?: any);
@@ -65,5 +69,8 @@ export declare class CollectorClient {
      */
     static keyFromInfo(info: any): string;
     getSections(): Array<CollectorSectionInterface>;
+    chatEventInfos(event: pryv.Event): {
+        source: 'me' | 'requester' | 'unkown';
+    };
 }
 //# sourceMappingURL=CollectorClient.d.ts.map

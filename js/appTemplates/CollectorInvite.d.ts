@@ -23,6 +23,9 @@ export declare class CollectorInvite {
         streamRead: string;
         streamWrite: string;
     };
+    chatEventInfos(event: pryv.Event): {
+        source: 'me' | 'user' | 'unkown';
+    };
     /**
      * Check if connection is valid. (only if active)
      * If result is "forbidden" update and set as revoked
