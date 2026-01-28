@@ -274,6 +274,7 @@ describe('[APTX] appTemplates', function () {
     it('[APIA] Collector invite accept', async () => {
       const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APIA');
       assert.ok(invite.status, 'pending');
+      assert.ok(!collectorClient.hasChatFeature);
       await collectorClient.accept();
       await collector.checkInbox();
       assert.ok(invite.status, 'active');
@@ -282,6 +283,7 @@ describe('[APTX] appTemplates', function () {
 
     it('[APIZ] Collector - with chat', async () => {
       const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APIZ', { addChat: true });
+      assert.ok(collectorClient.hasChatFeature);
       await collectorClient.accept();
       await collector.checkInbox();
       assert.ok(invite.hasChat);

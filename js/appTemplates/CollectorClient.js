@@ -80,7 +80,7 @@ class CollectorClient {
         return this.eventData.content.requesterEventData.content;
     }
     get hasChatFeature() {
-        return this.requestData.features.chat != null;
+        return this.requestData.features?.chat != null;
     }
     get chatSettings() {
         if (!this.hasChatFeature)
