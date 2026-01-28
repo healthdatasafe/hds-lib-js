@@ -26,6 +26,7 @@ export declare class CollectorInvite {
     chatEventInfos(event: pryv.Event): {
         source: 'me' | 'user' | 'unkown';
     };
+    chatPost(content: string): Promise<pryv.Event>;
     /**
      * Check if connection is valid. (only if active)
      * If result is "forbidden" update and set as revoked

@@ -72,5 +72,6 @@ export declare class CollectorClient {
     chatEventInfos(event: pryv.Event): {
         source: 'me' | 'requester' | 'unkown';
     };
+    chatPost(hdsConnection: pryv.Connection, content: string): Promise<pryv.Event>;
 }
 //# sourceMappingURL=CollectorClient.d.ts.map
