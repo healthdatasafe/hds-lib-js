@@ -1,33 +1,33 @@
 import { HDSModel } from './HDSModel';
 import { HDSService } from '../HDSService';
 
-let model: HDSModel | null = null;
+let hdsModelInstance: HDSModel | null = null;
 
 export function getModel (): HDSModel {
-  if (model == null) {
-    model = new HDSModel('');
+  if (hdsModelInstance == null) {
+    hdsModelInstance = new HDSModel('');
   }
-  return model;
+  return hdsModelInstance;
 }
 
 /**
  * Mostly used during test to unload model
  */
 export function resetModel (): void {
-  model = null;
+  hdsModelInstance = null;
 }
 
 /**
  * Initialized model singleton
  */
 export async function initHDSModel (): Promise<HDSModel> {
-  if (!model) {
+  if (!hdsModelInstance) {
     getModel();
   }
-  if (!model!.isLoaded) {
+  if (!hdsModelInstance!.isLoaded) {
     const service = new HDSService();
     const serviceInfo = await service.info();
-    await model!.load(serviceInfo.assets['hds-model']);
+    await hdsModelInstance!.load(serviceInfo.assets['hds-model']);
   }
-  return model!;
+  return hdsModelInstance!;
 }

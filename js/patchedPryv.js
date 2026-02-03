@@ -1,8 +1,4 @@
 "use strict";
-/**
- * While developing this lib some functionalities should be
- * added to pryv js-lib in a second step
- */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -41,6 +37,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.pryv = void 0;
+/**
+ * While developing this lib some functionalities should be
+ * added to pryv js-lib in a second step
+ */
 const pryv = __importStar(require("pryv"));
 exports.pryv = pryv;
 const monitor_1 = __importDefault(require("@pryv/monitor"));

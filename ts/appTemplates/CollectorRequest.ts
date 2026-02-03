@@ -6,8 +6,8 @@ import { CollectorSectionInterface, RequestSectionType } from './interfaces';
 
 type localizableTextLanguages = keyof localizableText;
 
-declare type PermissionItem = {streamId: string, defaultName: string, level: string};
-declare type PermissionItemLight = {streamId: string, defaultName?: string, level?: string};
+declare type PermissionItem = { streamId: string, defaultName: string, level: string };
+declare type PermissionItemLight = { streamId: string, defaultName?: string, level?: string };
 
 const CURRENT_VERSION = 1;
 
@@ -26,8 +26,8 @@ export class CollectorRequest {
   #title: localizableText;
   #description: localizableText;
   #consent: localizableText;
-  #requester: {name: string};
-  #app: {id: string, url: string | null, data: any};
+  #requester: { name: string };
+  #app: { id: string, url: string | null, data: any };
   #permissionsExtra: Array<PermissionItemLight>;
   #permissions: Array<PermissionItem>;
   #sections: Array<CollectorRequestSection>;
@@ -209,7 +209,7 @@ export class CollectorRequest {
   }
 
   // ---------- permissions ---------- //
-  addPermissions (permissions: Array<{streamId: string, defaultName: string, level: string}>) {
+  addPermissions (permissions: Array<{ streamId: string, defaultName: string, level: string }>) {
     for (const permission of permissions) {
       this.addPermission(permission.streamId, permission.defaultName, permission.level);
     }
@@ -258,7 +258,7 @@ export class CollectorRequest {
     return this.#features.chat != null;
   }
 
-  addChatFeature (settings: {type: 'usernames' | 'user'} = { type: 'user' }) {
+  addChatFeature (settings: { type: 'usernames' | 'user' } = { type: 'user' }) {
     if (!['user', 'usernames'].includes(settings.type)) throw new HDSLibError('Invalid chat type', settings);
     this.#features.chat = settings;
   }

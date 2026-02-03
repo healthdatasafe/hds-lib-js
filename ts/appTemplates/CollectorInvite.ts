@@ -53,12 +53,12 @@ export class CollectorInvite {
     return this.eventData.content.chat != null;
   }
 
-  get chatSettings (): {type: 'user', streamRead: string, streamWrite: string } {
+  get chatSettings (): { type: 'user', streamRead: string, streamWrite: string } {
     return this.eventData.content.chat;
   }
 
   // -------------------- chat methods ----------------- //
-  chatEventInfos (event: pryv.Event): {source: 'me' | 'user' | 'unkown' } {
+  chatEventInfos (event: pryv.Event): { source: 'me' | 'user' | 'unkown' } {
     if (event.streamIds.includes(this.chatSettings.streamWrite)) return { source: 'me' };
     if (event.streamIds.includes(this.chatSettings.streamRead)) return { source: 'user' };
     return { source: 'unkown' };

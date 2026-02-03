@@ -5,31 +5,31 @@ exports.resetModel = resetModel;
 exports.initHDSModel = initHDSModel;
 const HDSModel_1 = require("./HDSModel");
 const HDSService_1 = require("../HDSService");
-let model = null;
+let hdsModelInstance = null;
 function getModel() {
-    if (model == null) {
-        model = new HDSModel_1.HDSModel('');
+    if (hdsModelInstance == null) {
+        hdsModelInstance = new HDSModel_1.HDSModel('');
     }
-    return model;
+    return hdsModelInstance;
 }
 /**
  * Mostly used during test to unload model
  */
 function resetModel() {
-    model = null;
+    hdsModelInstance = null;
 }
 /**
  * Initialized model singleton
  */
 async function initHDSModel() {
-    if (!model) {
+    if (!hdsModelInstance) {
         getModel();
     }
-    if (!model.isLoaded) {
+    if (!hdsModelInstance.isLoaded) {
         const service = new HDSService_1.HDSService();
         const serviceInfo = await service.info();
-        await model.load(serviceInfo.assets['hds-model']);
+        await hdsModelInstance.load(serviceInfo.assets['hds-model']);
     }
-    return model;
+    return hdsModelInstance;
 }
 //# sourceMappingURL=HDSModelInitAndSingleton.js.map

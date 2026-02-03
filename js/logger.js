@@ -1,5 +1,4 @@
 "use strict";
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Basic logger
  */
@@ -19,8 +18,8 @@ function setLogger(newLogger) {
 }
 function info(...args) { logger.info(...args); }
 function error(...args) { logger.error(...args); }
-function debug(...args) {
-    // logger.debug(...args);
+function debug(..._args) {
+    // logger.debug(..._args);
 }
 function warn(...args) {
     logger.info(...args); // Use info for warn for now

@@ -12,7 +12,13 @@ module.exports = [
       globalObject: 'this',
       library: 'HDSLib'
     },
-    devtool: 'source-map'
+    devtool: 'source-map',
+    resolve: {
+      fallback: {
+        fs: false,
+        path: false
+      }
+    }
   }), addCommon({ // browser test suite (ES6)
     mode: 'development',
     entry: {
@@ -37,6 +43,10 @@ module.exports = [
     resolve: {
       alias: {
         '*/deps-node': require.resolve('./tests/test-utils/deps-browser.js')
+      },
+      fallback: {
+        fs: false,
+        path: false
       }
     }
   })];

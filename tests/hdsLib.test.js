@@ -1,4 +1,3 @@
-/* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 /**
  * Tests related to HDSLib.index.js & utils
@@ -15,7 +14,6 @@ describe('[HDLX] HDSLib.index', () => {
 
   it('[HDME] HDSLib.getHDSModel() throws error if not initialized', () => {
     try {
-      // eslint-disable-next-line no-unused-expressions
       HDSLib.getHDSModel().modelData;
       throw new Error('Should throw an error');
     } catch (e) {
@@ -23,7 +21,6 @@ describe('[HDLX] HDSLib.index', () => {
     }
 
     try {
-      // eslint-disable-next-line no-unused-expressions
       HDSLib.getHDSModel().streams;
       throw new Error('Should throw an error');
     } catch (e) {

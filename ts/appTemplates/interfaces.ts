@@ -1,6 +1,6 @@
 import { localizableText } from '../localizeText';
 
-export type RequestSectionType = 'recurring' |'permanent';
+export type RequestSectionType = 'recurring' | 'permanent';
 
 export interface CollectorSectionInterface {
   key: string,

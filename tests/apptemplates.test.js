@@ -1,4 +1,3 @@
-/* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 const { pryv, createUserPermissions } = require('./test-utils/pryvService');
 const HDSLib = require('../js');
@@ -9,15 +8,15 @@ const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = require(
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
-  // eslint-disable-next-line no-unused-vars
-  let managingUser, appManaging, clientUser, clientUserResultPermissions, appClient;
+
+  let managingUser, appManaging, clientUser, _clientUserResultPermissions, appClient;
   const baseStreamIdManager = 'test-app-template-manager';
   const baseStreamIdClient = 'test-app-template-client';
   const appName = 'Test HDSLib.appTemplates';
   const appClientName = 'Test Client HDSLib.appTemplates';
 
   before(async () => {
-    ({ managingUser, appManaging, clientUser, clientUserResultPermissions, appClient } = await helperNewAppAndUsers(baseStreamIdManager, appName, baseStreamIdClient, appClientName));
+    ({ managingUser, appManaging, clientUser, clientUserResultPermissions: _clientUserResultPermissions, appClient } = await helperNewAppAndUsers(baseStreamIdManager, appName, baseStreamIdClient, appClientName));
     await initHDSModel();
   });
 
@@ -65,7 +64,6 @@ describe('[APTX] appTemplates', function () {
 
     // Should throw error as status is not yet set
     try {
-      // eslint-disable-next-line no-unused-expressions
       newCollector.statusCode;
       throw new Error('Should throw error');
     } catch (e) {
@@ -79,7 +77,6 @@ describe('[APTX] appTemplates', function () {
 
     // trying to get a sharing token in draft should throw an error
     try {
-      // eslint-disable-next-line no-unused-expressions
       await newCollector.sharingApiEndpoint();
       throw new Error('Should throw error');
     } catch (e) {
@@ -88,7 +85,6 @@ describe('[APTX] appTemplates', function () {
 
     // trying to create an invite in draft should throw an error
     try {
-      // eslint-disable-next-line no-unused-expressions
       await newCollector.createInvite({});
       throw new Error('Should throw error');
     } catch (e) {
@@ -322,7 +318,6 @@ describe('[APTX] appTemplates', function () {
 
       // apiEndpoint should throw Error
       try {
-        // eslint-disable-next-line no-unused-expressions
         invite.apiEndpoint;
         throw new HDSLibError('Should throw error');
       } catch (e) {
@@ -332,7 +327,6 @@ describe('[APTX] appTemplates', function () {
       await collectorClient.accept();
       await collector.checkInbox();
 
-      // eslint-disable-next-line no-unused-expressions
       invite.apiEndpoint; // should not throw error
 
       // connection is cached and valid
@@ -390,12 +384,9 @@ describe('[APTX] appTemplates', function () {
       assert.equal(invite.errorType, 'revoked');
 
       // check if authorization is revoked
-      try {
-        await invite.connection.accessInfo();
-        throw new Error('Should be forbidden');
-      } catch (e) {
-        assert(e.message === 'Forbidden');
-      }
+
+      const res = await invite.connection.accessInfo();
+      assert.equal(res.error.id, 'invalid-access-token');
     });
 
     it('[APCV] Collector convert v0 to v1 correctly', async () => {

@@ -1,4 +1,3 @@
-/* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 
 const modelURL = 'https://model.datasafe.dev/pack.json';

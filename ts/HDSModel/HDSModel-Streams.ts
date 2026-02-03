@@ -30,11 +30,11 @@ export class HDSModelStreams {
     nameProperty?: string;
     knowExistingStreamsIds?: Array<string>;
   } = {}): {
-    id: string;
-    name?: string;
-    defaultName?: string;
-    parentId?: string;
-  }[] {
+      id: string;
+      name?: string;
+      defaultName?: string;
+      parentId?: string;
+    }[] {
     const itemDefs = itemKeysOrDefsToDefs(this.#model, itemKeysOrDefs);
     const knowExistingStreamsIds = params.knowExistingStreamsIds || [];
     const nameProperty = params.nameProperty || 'name';
