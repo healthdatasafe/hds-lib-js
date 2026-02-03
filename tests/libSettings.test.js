@@ -1,4 +1,3 @@
-/* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 
 const HDSLib = require('../js');

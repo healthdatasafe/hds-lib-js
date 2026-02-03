@@ -57,7 +57,7 @@ export class CollectorClient {
     return this.requestData.features?.chat != null;
   }
 
-  get chatSettings (): {chatStreamIncoming: string, chatStreamMain: string} {
+  get chatSettings (): { chatStreamIncoming: string, chatStreamMain: string } {
     if (!this.hasChatFeature) return null;
     return {
       chatStreamIncoming: `chat-${this.requesterUsername}-in`,
@@ -179,7 +179,7 @@ export class CollectorClient {
    * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
    */
   async accept (forceAndSkipAccessCreation = false) {
-    const responseContent: { apiEndpoint?: string, chat?:any } = {};
+    const responseContent: { apiEndpoint?: string, chat?: any } = {};
     if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
       forceAndSkipAccessCreation = true;
       logger.error('CollectorClient.accept TODO fix accept when access valid');
@@ -349,7 +349,7 @@ export class CollectorClient {
   }
 
   // -------------------- chat methods ----------------- //
-  chatEventInfos (event: pryv.Event): {source: 'me' | 'requester' | 'unkown' } {
+  chatEventInfos (event: pryv.Event): { source: 'me' | 'requester' | 'unkown' } {
     if (event.streamIds.includes(this.chatSettings.chatStreamIncoming)) return { source: 'requester' };
     if (event.streamIds.includes(this.chatSettings.chatStreamMain)) return { source: 'me' };
     return { source: 'unkown' };

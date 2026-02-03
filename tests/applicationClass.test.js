@@ -1,4 +1,3 @@
-/* eslint-env mocha */
 const { assert } = require('./test-utils/deps-node');
 const { createUserAndPermissions } = require('./test-utils/pryvService');
 const HDSLib = require('../js');
@@ -96,7 +95,6 @@ describe('[APAX] Application class', function () {
       }
 
       try {
-      // eslint-disable-next-line no-new
         await Dummy.newFromApiEndpoint('uuuu', user.appApiEndpoint, appName);
         throw new Error('Should throw an error');
       } catch (e) {
@@ -112,7 +110,6 @@ describe('[APAX] Application class', function () {
       }
 
       try {
-      // eslint-disable-next-line no-new
         await Dummy.newFromApiEndpoint('uuuu', user.personalApiEndpoint, appName);
         throw new Error('Should throw an error');
       } catch (e) {
@@ -130,7 +127,6 @@ describe('[APAX] Application class', function () {
       }
 
       try {
-      // eslint-disable-next-line no-new
         await Dummy.newFromApiEndpoint('uuuu', user.appApiEndpoint, appName);
         throw new Error('Should throw an error');
       } catch (e) {

@@ -74,8 +74,10 @@ async function createUser (username, password, email) {
   email = email || username + '@hds.bogus';
   try {
     // create user
-    const res = await pryv.utils.superagent.post(host + 'users')
-      .send({
+    const res = await fetch(host + 'users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         appId: config.appId,
         username,
         password,
@@ -83,9 +85,11 @@ async function createUser (username, password, email) {
         invitationtoken: 'enjoy',
         languageCode: 'en',
         referer: 'none'
-      });
-    if (res.body.apiEndpoint == null) throw new Error('Cannot find apiEndpoint in response');
-    return { apiEndpoint: res.body.apiEndpoint, username: res.body.username, password };
+      })
+    });
+    const body = await res.json();
+    if (body.apiEndpoint == null) throw new Error('Cannot find apiEndpoint in response');
+    return { apiEndpoint: body.apiEndpoint, username: body.username, password };
   } catch (e) {
     throw new Error('Failed creating user ' + host + 'users');
   }
@@ -149,9 +153,10 @@ async function createUserPermissions (user, permissions, initialStreams = [], ap
  */
 async function userExists (userId) {
   await init();
-  const userExists = (await pryv.utils.superagent.get(infosSingleton.register + userId + '/check_username')).body;
-  if (typeof userExists.reserved === 'undefined') throw Error('Pryv invalid user exists response ' + JSON.stringify(userExists));
-  return userExists.reserved;
+  const userExistsRes = await fetch(infosSingleton.register + userId + '/check_username');
+  const userExistsBody = await userExistsRes.json();
+  if (typeof userExistsBody.reserved === 'undefined') throw Error('Pryv invalid user exists response ' + JSON.stringify(userExistsBody));
+  return userExistsBody.reserved;
 }
 
 /**
@@ -161,7 +166,10 @@ async function userExists (userId) {
 async function getHost () {
   await init();
   // get available hosting
-  const hostings = (await pryv.utils.superagent.get(infosSingleton.register + 'hostings').set('accept', 'json')).body;
+  const hostingsRes = await fetch(infosSingleton.register + 'hostings', {
+    headers: { Accept: 'application/json' }
+  });
+  const hostings = await hostingsRes.json();
   let hostingCandidate = null;
   findOneHostingKey(hostings, 'N');
   function findOneHostingKey (o, parentKey) {

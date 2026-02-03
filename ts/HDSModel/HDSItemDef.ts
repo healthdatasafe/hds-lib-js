@@ -39,7 +39,7 @@ export class HDSItemDef {
   eventTemplate (): {
     streamIds: [string];
     type: string;
-    } {
+  } {
     return {
       streamIds: [this.#data.streamId],
       type: this.eventTypes[0]
