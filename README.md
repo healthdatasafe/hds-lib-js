@@ -183,7 +183,7 @@ await connection.streamsAutoCreate.ensureExistsForItems(['body-weight', 'profile
 
 ```html
 <head>
-    <script src="../docs/hds-lib.js"></script>
+    <script src="../dist/hds-lib.js"></script>
     <script>
       HDSLib.settings.setServiceInfoURL('https://demo.datasafe.dev/reg/service/info');
       HDSLib.settings.setPreferredLocales(['fr', 'en']); // ordered
@@ -207,7 +207,7 @@ Source code is in TypeScript in `./ts` directory.
 
 ## Build 
 
-`npm run build` remove ts anotations and put js code in `./js` and publish the code in `./docs`
+`npm run build` remove ts anotations and put js code in `./js` and publish the code in `./dist`
 
 ## Tests 
 
@@ -217,8 +217,8 @@ Source code is in TypeScript in `./ts` directory.
 - coverage: `npm run test:coverage`
 
 ## Browser
-Test suite is accessible in `docs/` 
-run `npx backloop.dev ./docs` and open `https://whatever.backloop.dev:4443/tests.html`
+Test suite is accessible in `dist/` 
+run `npx backloop.dev ./dist` and open `https://whatever.backloop.dev:4443/tests.html`
 
 
 

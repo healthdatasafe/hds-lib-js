@@ -7,7 +7,7 @@ module.exports = [
     entry: './js/index.js',
     mode: 'production',
     output: {
-      path: path.resolve(__dirname, 'docs'),
+      path: path.resolve(__dirname, 'dist'),
       filename: 'hds-lib.js',
       globalObject: 'this',
       library: 'HDSLib'
@@ -26,7 +26,7 @@ module.exports = [
     },
     output: {
       filename: 'tests-browser.js',
-      path: path.resolve(__dirname, 'docs')
+      path: path.resolve(__dirname, 'dist')
     },
     plugins: [
       new CopyPlugin({

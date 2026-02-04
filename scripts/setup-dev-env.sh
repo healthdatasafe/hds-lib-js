@@ -17,6 +17,16 @@ if [[ -d .git && "$CI" != "true" ]]; then
 fi
 
 
+if [ ! -d dist ]
+then
+  echo "
+Setting up 'dist' folder for publishing to GitHub pages...
+"
+  git clone -b gh-pages git@github.com:healthdatasafe/hds-lib-js.git dist
+fi
+
+
+
 echo ""
 echo "Setup Dev env complete!"
 echo ""
