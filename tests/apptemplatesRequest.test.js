@@ -1,6 +1,7 @@
 const { initHDSModel } = require('../js');
 const { helperNewAppManaging } = require('./test-utils/helpersAppTemplate');
 const { assert } = require('./test-utils/deps-node');
+const { CollectorRequest } = require('../js/appTemplates/CollectorRequest');
 
 describe('[APRX] appTemplates Requests', function () {
   this.timeout(8000);
@@ -8,6 +9,70 @@ describe('[APRX] appTemplates Requests', function () {
   before(async () => {
     await initHDSModel();
   });
+
+  describe('[AREX] CollectorRequest error cases', function () {
+    it('[AREA] should throw error for unknown features', () => {
+      const request = new CollectorRequest({});
+      try {
+        request.setContent({
+          features: { unknownFeature: { setting: 'value' } }
+        });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Found unkown features');
+      }
+    });
+
+    it('[AREB] should throw error for invalid chat type', () => {
+      const request = new CollectorRequest({});
+      try {
+        request.addChatFeature({ type: 'invalid' });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Invalid chat type');
+      }
+    });
+
+    it('[AREC] should throw error for duplicate section key', () => {
+      const request = new CollectorRequest({});
+      request.createSection('test-section', 'permanent');
+      try {
+        request.createSection('test-section', 'recurring');
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Section with key: test-section already exists');
+      }
+    });
+
+    it('[ARED] should throw error for invalid version', () => {
+      const request = new CollectorRequest({});
+      try {
+        request.setContent({ version: 99 });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Invalid CollectorRequest content version: 99');
+      }
+    });
+
+    it('[AREE] should handle permissionsExtra in content', () => {
+      const request = new CollectorRequest({});
+      request.setContent({
+        permissionsExtra: [
+          { streamId: 'test-stream', level: 'read' }
+        ]
+      });
+      assert.equal(request.permissionsExtra.length, 1);
+      assert.equal(request.permissionsExtra[0].streamId, 'test-stream');
+    });
+
+    it('[AREF] addChatFeature with usernames type', () => {
+      const request = new CollectorRequest({});
+      request.addChatFeature({ type: 'usernames' });
+      assert.deepEqual(request.features.chat, { type: 'usernames' });
+      assert.equal(request.hasChatFeature, true);
+    });
+  });
+
   it('[APRC] Compute a simple request', async () => {
     const baseStreamId = 'aprc';
     const { appManaging } = await helperNewAppManaging(baseStreamId, 'test-APRC');

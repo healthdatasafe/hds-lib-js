@@ -2,6 +2,7 @@ const { assert } = require('./test-utils/deps-node');
 const { createUserAndPermissions } = require('./test-utils/pryvService');
 const HDSLib = require('../js');
 const Application = HDSLib.appTemplates.Application;
+const { helperNewAppManaging } = require('./test-utils/helpersAppTemplate');
 
 describe('[APAX] Application class', function () {
   this.timeout(5000);
@@ -9,6 +10,7 @@ describe('[APAX] Application class', function () {
   const appName = 'application-app';
   let user;
   before(async () => {
+    await HDSLib.initHDSModel();
     const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamId, name: appName, parentId: 'applications' }];
     const permissionsManager = [{ streamId: baseStreamId, level: 'manage' }];
     user = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
@@ -132,6 +134,70 @@ describe('[APAX] Application class', function () {
       } catch (e) {
         assert.equal(e.message, 'Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
       }
+    });
+  });
+
+  describe('[AMGX] AppManagingAccount tests', function () {
+    it('[AMGA] getCollectorById returns collector when exists', async () => {
+      const testBaseStreamId = 'amga-test';
+      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGA');
+      const collector = await appManaging.createCollector('Test Collector AMGA');
+
+      const foundCollector = await appManaging.getCollectorById(collector.id);
+      assert.ok(foundCollector);
+      assert.equal(foundCollector.id, collector.id);
+    });
+
+    it('[AMGB] getCollectorById returns undefined when not exists', async () => {
+      const testBaseStreamId = 'amgb-test';
+      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGB');
+
+      const foundCollector = await appManaging.getCollectorById('non-existent-id');
+      assert.equal(foundCollector, undefined);
+    });
+
+    it('[AMGC] getCollectors with forceRefresh reloads data', async () => {
+      const testBaseStreamId = 'amgc-test';
+      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGC');
+
+      const collectors1 = await appManaging.getCollectors();
+      assert.equal(collectors1.length, 0);
+
+      await appManaging.createCollector('Test Collector AMGC');
+      const collectors2 = await appManaging.getCollectors(true);
+      assert.equal(collectors2.length, 1);
+    });
+  });
+
+  describe('[ACSX] Application setCustomSetting tests', function () {
+    it('[ACSA] setCustomSetting adds a key', async () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return { };
+        }
+      }
+      const appDummy = await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+
+      await appDummy.setCustomSetting('newKey', 'newValue');
+      const settings = await appDummy.getCustomSettings();
+      assert.equal(settings.newKey, 'newValue');
+    });
+
+    it('[ACSB] setCustomSetting with null deletes key', async () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return { };
+        }
+      }
+      const appDummy = await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+
+      await appDummy.setCustomSetting('keyToDelete', 'value');
+      let settings = await appDummy.getCustomSettings();
+      assert.equal(settings.keyToDelete, 'value');
+
+      await appDummy.setCustomSetting('keyToDelete', null);
+      settings = await appDummy.getCustomSettings();
+      assert.equal(settings.keyToDelete, undefined);
     });
   });
 });
