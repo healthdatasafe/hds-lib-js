@@ -1,10 +1,54 @@
 const { assert } = require('./test-utils/deps-node');
-const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales } = require('../js/localizeText');
+const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales, validateLocalizableText } = require('../js/localizeText');
 
 describe('[LOCX] Localization', () => {
   afterEach(() => {
     // make sure locales are set back to default after each test
     resetPreferredLocales();
+  });
+
+  describe('[LOVX] validateLocalizableText', () => {
+    it('[LOVA] should validate correct localizable text', () => {
+      const text = { en: 'Hello', fr: 'Bonjour' };
+      const result = validateLocalizableText('testKey', text);
+      assert.deepEqual(result, text);
+    });
+
+    it('[LOVB] should throw error if en is missing', () => {
+      try {
+        validateLocalizableText('testKey', { fr: 'Bonjour' });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Missing or invalid localizable text for testKey');
+      }
+    });
+
+    it('[LOVC] should throw error if en is not a string', () => {
+      try {
+        validateLocalizableText('testKey', { en: 123 });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Missing or invalid localizable text for testKey');
+      }
+    });
+
+    it('[LOVD] should throw error if optional language is not a string', () => {
+      try {
+        validateLocalizableText('testKey', { en: 'Hello', fr: 123 });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Missing or invalid localizable text for testKey languagecode: fr');
+      }
+    });
+
+    it('[LOVE] should throw error if es is not a string', () => {
+      try {
+        validateLocalizableText('testKey', { en: 'Hello', es: { nested: 'object' } });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.equal(e.message, 'Missing or invalid localizable text for testKey languagecode: es');
+      }
+    });
   });
 
   describe('[LOSX] Localization settings', () => {

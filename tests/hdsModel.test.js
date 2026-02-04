@@ -38,6 +38,24 @@ describe('[MODX] Model', () => {
     }
   });
 
+  // ---------- itemDef ------------ //
+  describe('[MDVX] itemDef methods', function () {
+    it('[MDVA] eventTemplate() returns event template with streamId and type', async () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      const template = itemDef.eventTemplate();
+      assert.ok(template.streamIds);
+      assert.ok(template.type);
+      assert.deepEqual(template.streamIds, ['body-weight']);
+      assert.equal(template.type, 'mass/kg'); // first eventType
+    });
+
+    it('[MDVB] eventTemplate() returns correct streamId from data', async () => {
+      const itemDef = model.itemsDefs.forKey('profile-name');
+      const template = itemDef.eventTemplate();
+      assert.deepEqual(template.streamIds, ['profile-name']);
+    });
+  });
+
   // ---------- items ------------ //
   describe('[MOLX] items localization', function () {
     afterEach(() => {
