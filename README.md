@@ -1,5 +1,8 @@
 # HDS JAVASCRIPT LIBRARY
 
+[![CI](https://github.com/healthdatasafe/hds-lib-js/actions/workflows/ci.yml/badge.svg)](https://github.com/healthdatasafe/hds-lib-js/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/healthdatasafe/hds-lib-js/graph/badge.svg)](https://codecov.io/gh/healthdatasafe/hds-lib-js)
+
 Generic toolkit for server and web applications.
 
 1. Manages global settings for the lib (servers, localization, logger)

@@ -5,6 +5,7 @@
   "scripts": {
     "test": "NODE_ENV=test mocha tests --test-reporter=spec",
     "test:coverage": "NODE_ENV=test c8 mocha tests --test-reporter=spec",
+    "test:coverage:ci": "NODE_ENV=test c8 mocha tests --test-reporter=spec --timeout=20000",
     "build": "npm run build:ts; npm run build:webpack",
     "build:ts": "tsc",
     "build:webpack": "webpack",
@@ -32,6 +33,7 @@
   "homepage": "https://github.com/healthdatasafe/hds-lib-js#readme",
   "devDependencies": {
     "assert": "^2.1.0",
+    "c8": "^10.1.3",
     "copy-webpack-plugin": "^13.0.0",
     "eslint": "^9.18.0",
     "globals": "^15.14.0",
@@ -46,7 +48,6 @@
   "dependencies": {
     "@pryv/monitor": "3.0.1",
     "@pryv/socket.io": "3.0.1",
-    "c8": "^10.1.3",
     "events": "^3.3.0",
     "pryv": "3.0.1",
     "short-unique-id": "^5.3.2"
