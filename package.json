@@ -2,6 +2,9 @@
   "name": "hds-lib",
   "version": "0.1.14",
   "description": "Health Data Safe - Library",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "NODE_ENV=test mocha tests --test-reporter=spec",
     "test:coverage": "NODE_ENV=test c8 mocha tests --test-reporter=spec",
