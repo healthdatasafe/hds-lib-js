@@ -4,6 +4,7 @@ import { HDSModelStreams } from './HDSModel-Streams';
 import { HDSModelAuthorizations } from './HDSModel-Authorizations';
 import { HDSModelItemsDefs } from './HDSModel-ItemsDefs';
 import { HDSModelEventTypes } from './HDSModel-EventTypes';
+import { HDSModelDatasources } from './HDSModel-Datasources';
 
 export class HDSModel {
   /**
@@ -88,6 +89,14 @@ export class HDSModel {
       this.laziliyLoadedMap.eventTypes = new HDSModelEventTypes(this);
     }
     return this.laziliyLoadedMap.eventTypes;
+  }
+
+  get datasources (): HDSModelDatasources {
+    if (!this.isLoaded) throwNotLoadedError();
+    if (!this.laziliyLoadedMap.datasources) {
+      this.laziliyLoadedMap.datasources = new HDSModelDatasources(this);
+    }
+    return this.laziliyLoadedMap.datasources;
   }
 }
 

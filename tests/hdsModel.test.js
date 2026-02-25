@@ -159,6 +159,52 @@ describe('[MODX] Model', () => {
     });
   });
 
+  // ---------- datasources ------------ //
+
+  describe('[MODSX] datasources', function () {
+    let dsModel;
+    const dsModelURL = process.env.MODEL_URL || modelURL;
+    before(async () => {
+      dsModel = new HDSModel(dsModelURL);
+      await dsModel.load();
+    });
+
+    it('[MODSA] get all datasources', async () => {
+      const datasources = dsModel.datasources.getAll();
+      assert.ok(datasources.length > 0);
+      for (const ds of datasources) {
+        assert.ok(ds.key);
+        assert.ok(ds.endpoint);
+      }
+    });
+
+    it('[MODSB] forKey returns medication datasource', async () => {
+      const ds = dsModel.datasources.forKey('medication');
+      assert.ok(ds);
+      assert.equal(ds.key, 'medication');
+      assert.equal(ds.endpoint, 'https://datasets.datasafe.dev/medication');
+      assert.equal(ds.queryParam, 'search');
+      assert.equal(ds.minQueryLength, 3);
+      assert.equal(ds.resultKey, 'medications');
+      assert.ok(ds.displayFields);
+      assert.ok(ds.valueFields);
+    });
+
+    it('[MODSC] forKey throws on unknown key', async () => {
+      try {
+        dsModel.datasources.forKey('dummy');
+        throw new Error('Should throw Error');
+      } catch (e) {
+        assert.equal(e.message, 'Cannot find datasource definition with key: dummy');
+      }
+    });
+
+    it('[MODSD] forKey returns null with throwErrorIfNotFound = false', async () => {
+      const notFound = dsModel.datasources.forKey('dummy', false);
+      assert.equal(notFound, null);
+    });
+  });
+
   // ---------- streams ------------ //
 
   describe('[MOSX] streams', function () {

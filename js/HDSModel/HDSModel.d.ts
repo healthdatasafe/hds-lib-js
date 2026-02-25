@@ -2,6 +2,7 @@ import { HDSModelStreams } from './HDSModel-Streams';
 import { HDSModelAuthorizations } from './HDSModel-Authorizations';
 import { HDSModelItemsDefs } from './HDSModel-ItemsDefs';
 import { HDSModelEventTypes } from './HDSModel-EventTypes';
+import { HDSModelDatasources } from './HDSModel-Datasources';
 export declare class HDSModel {
     #private;
     /**
@@ -25,5 +26,6 @@ export declare class HDSModel {
     get streams(): HDSModelStreams;
     get authorizations(): HDSModelAuthorizations;
     get eventTypes(): HDSModelEventTypes;
+    get datasources(): HDSModelDatasources;
 }
 //# sourceMappingURL=HDSModel.d.ts.map
