@@ -15,6 +15,13 @@ export declare class HDSModel {
      * @param modelUrl - JSON definition file URL. Should come from service/info assets.hds-model
      */
     constructor(modelUrl: string);
+    /** Service-info assets used for resolving datasource endpoints */
+    get assets(): {
+        [key: string]: string;
+    };
+    set assets(value: {
+        [key: string]: string;
+    });
     get isLoaded(): boolean;
     /**
      * Load model definitions

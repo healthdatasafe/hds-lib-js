@@ -35,7 +35,7 @@ class HDSModelDatasources {
                 throw new Error('Cannot find datasource definition with key: ' + key);
             return null;
         }
-        this.#datasourceDefs[key] = new HDSDatasourceDef_1.HDSDatasourceDef(key, defData);
+        this.#datasourceDefs[key] = new HDSDatasourceDef_1.HDSDatasourceDef(key, defData, () => this.#model.assets);
         return this.#datasourceDefs[key];
     }
 }

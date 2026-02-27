@@ -27,6 +27,7 @@ export async function initHDSModel (): Promise<HDSModel> {
   if (!hdsModelInstance!.isLoaded) {
     const service = new HDSService();
     const serviceInfo = await service.info();
+    hdsModelInstance!.assets = serviceInfo.assets;
     await hdsModelInstance!.load(serviceInfo.assets['hds-model']);
   }
   return hdsModelInstance!;

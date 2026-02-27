@@ -16,6 +16,9 @@ export class HDSModel {
   /** RAW content of model definitions */
   #modelData: any;
 
+  /** Service-info assets map (e.g. { datasets: 'https://...', ... }) */
+  #assets: { [key: string]: string };
+
   /**
    * Map of properties loaded "on demand"
    */
@@ -28,6 +31,16 @@ export class HDSModel {
     this.#modelUrl = modelUrl;
     this.laziliyLoadedMap = {};
     this.#modelData = null;
+    this.#assets = {};
+  }
+
+  /** Service-info assets used for resolving datasource endpoints */
+  get assets (): { [key: string]: string } {
+    return this.#assets;
+  }
+
+  set assets (value: { [key: string]: string }) {
+    this.#assets = value || {};
   }
 
   get isLoaded (): boolean {
