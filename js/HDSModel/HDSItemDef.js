@@ -20,6 +20,9 @@ class HDSItemDef {
     get data() {
         return this.#data;
     }
+    get repeatable() {
+        return this.#data.repeatable || 'unlimited';
+    }
     /** label Localized */
     get label() {
         return (0, localizeText_1.localizeText)(this.#data.label);

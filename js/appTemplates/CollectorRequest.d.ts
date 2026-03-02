@@ -67,6 +67,8 @@ export declare class CollectorRequest {
     get sectionsData(): any[];
     createSection(key: string, type: RequestSectionType): CollectorRequestSection;
     getSectionByKey(key: string): CollectorRequestSection;
+    moveSection(key: string, toIndex: number): void;
+    removeSection(key: string): void;
     addPermissions(permissions: Array<{
         streamId: string;
         defaultName: string;
@@ -127,12 +129,12 @@ declare class CollectorRequestSection implements CollectorSectionInterface {
     get key(): string;
     get itemKeys(): string[];
     get name(): localizableText;
-    getData(): {
-        key: string;
-        type: RequestSectionType;
-        name: localizableText;
-        itemKeys: string[];
-    };
+    get itemCustomizations(): Record<string, Record<string, unknown>>;
+    moveItemKey(key: string, toIndex: number): void;
+    removeItemKey(key: string): void;
+    setItemCustomization(key: string, customizations: Record<string, unknown>): void;
+    getItemCustomization(key: string): Record<string, unknown> | undefined;
+    getData(): any;
 }
 export {};
 //# sourceMappingURL=CollectorRequest.d.ts.map

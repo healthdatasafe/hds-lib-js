@@ -110,6 +110,11 @@ class CollectorRequest {
                 const section = this.createSection(sectionData.key, sectionData.type);
                 section.setName(sectionData.name);
                 section.addItemKeys(sectionData.itemKeys);
+                if (sectionData.itemCustomizations) {
+                    for (const [itemKey, customization] of Object.entries(sectionData.itemCustomizations)) {
+                        section.setItemCustomization(itemKey, customization);
+                    }
+                }
             }
             delete futureContent.sections;
         }
@@ -182,6 +187,19 @@ class CollectorRequest {
     }
     getSectionByKey(key) {
         return this.#sections.find((s) => (s.key === key));
+    }
+    moveSection(key, toIndex) {
+        const idx = this.#sections.findIndex((s) => s.key === key);
+        if (idx === -1)
+            throw new errors_1.HDSLibError(`Section with key: ${key} not found`);
+        const [section] = this.#sections.splice(idx, 1);
+        this.#sections.splice(toIndex, 0, section);
+    }
+    removeSection(key) {
+        const idx = this.#sections.findIndex((s) => s.key === key);
+        if (idx === -1)
+            throw new errors_1.HDSLibError(`Section with key: ${key} not found`);
+        this.#sections.splice(idx, 1);
     }
     // ---------- permissions ---------- //
     addPermissions(permissions) {
@@ -269,10 +287,12 @@ class CollectorRequestSection {
     #name;
     #key;
     #itemKeys;
+    #itemCustomizations;
     constructor(key, type) {
         this.#key = key;
         this.#type = type;
         this.#itemKeys = [];
+        this.#itemCustomizations = {};
         this.#name = {
             en: ''
         };
@@ -298,13 +318,37 @@ class CollectorRequestSection {
     get key() { return this.#key; }
     get itemKeys() { return this.#itemKeys; }
     get name() { return this.#name; }
+    get itemCustomizations() { return this.#itemCustomizations; }
+    moveItemKey(key, toIndex) {
+        const idx = this.#itemKeys.indexOf(key);
+        if (idx === -1)
+            throw new errors_1.HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
+        this.#itemKeys.splice(idx, 1);
+        this.#itemKeys.splice(toIndex, 0, key);
+    }
+    removeItemKey(key) {
+        const idx = this.#itemKeys.indexOf(key);
+        if (idx === -1)
+            throw new errors_1.HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
+        this.#itemKeys.splice(idx, 1);
+    }
+    setItemCustomization(key, customizations) {
+        this.#itemCustomizations[key] = customizations;
+    }
+    getItemCustomization(key) {
+        return this.#itemCustomizations[key];
+    }
     getData() {
-        return {
+        const data = {
             key: this.key,
             type: this.#type,
             name: this.#name,
             itemKeys: this.#itemKeys
         };
+        if (Object.keys(this.#itemCustomizations).length > 0) {
+            data.itemCustomizations = this.#itemCustomizations;
+        }
+        return data;
     }
 }
 /**

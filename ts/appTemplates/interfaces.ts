@@ -9,5 +9,6 @@ export interface CollectorSectionInterface {
   /**
    * @property {Array<string>} itemKeys - a list of known HDSItemDef key
    */
-  itemKeys: Array<string>
+  itemKeys: Array<string>,
+  itemCustomizations?: Record<string, Record<string, unknown>>
 }

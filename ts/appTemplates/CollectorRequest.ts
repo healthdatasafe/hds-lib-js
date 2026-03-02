@@ -116,6 +116,11 @@ export class CollectorRequest {
         const section = this.createSection(sectionData.key, sectionData.type);
         section.setName(sectionData.name);
         section.addItemKeys(sectionData.itemKeys);
+        if (sectionData.itemCustomizations) {
+          for (const [itemKey, customization] of Object.entries(sectionData.itemCustomizations)) {
+            section.setItemCustomization(itemKey, customization as Record<string, unknown>);
+          }
+        }
       }
       delete futureContent.sections;
     }
@@ -206,6 +211,19 @@ export class CollectorRequest {
 
   getSectionByKey (key: string) {
     return this.#sections.find((s) => (s.key === key));
+  }
+
+  moveSection (key: string, toIndex: number) {
+    const idx = this.#sections.findIndex((s) => s.key === key);
+    if (idx === -1) throw new HDSLibError(`Section with key: ${key} not found`);
+    const [section] = this.#sections.splice(idx, 1);
+    this.#sections.splice(toIndex, 0, section);
+  }
+
+  removeSection (key: string) {
+    const idx = this.#sections.findIndex((s) => s.key === key);
+    if (idx === -1) throw new HDSLibError(`Section with key: ${key} not found`);
+    this.#sections.splice(idx, 1);
   }
 
   // ---------- permissions ---------- //
@@ -302,11 +320,13 @@ class CollectorRequestSection implements CollectorSectionInterface {
   #name: localizableText;
   #key: string;
   #itemKeys: Array<string>;
+  #itemCustomizations: Record<string, Record<string, unknown>>;
 
   constructor (key: string, type: RequestSectionType) {
     this.#key = key;
     this.#type = type;
     this.#itemKeys = [];
+    this.#itemCustomizations = {};
     this.#name = {
       en: ''
     };
@@ -336,14 +356,40 @@ class CollectorRequestSection implements CollectorSectionInterface {
   get key (): string { return this.#key; }
   get itemKeys () { return this.#itemKeys; }
   get name (): localizableText { return this.#name; }
+  get itemCustomizations (): Record<string, Record<string, unknown>> { return this.#itemCustomizations; }
+
+  moveItemKey (key: string, toIndex: number) {
+    const idx = this.#itemKeys.indexOf(key);
+    if (idx === -1) throw new HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
+    this.#itemKeys.splice(idx, 1);
+    this.#itemKeys.splice(toIndex, 0, key);
+  }
+
+  removeItemKey (key: string) {
+    const idx = this.#itemKeys.indexOf(key);
+    if (idx === -1) throw new HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
+    this.#itemKeys.splice(idx, 1);
+  }
+
+  setItemCustomization (key: string, customizations: Record<string, unknown>) {
+    this.#itemCustomizations[key] = customizations;
+  }
+
+  getItemCustomization (key: string): Record<string, unknown> | undefined {
+    return this.#itemCustomizations[key];
+  }
 
   getData () {
-    return {
+    const data: any = {
       key: this.key,
       type: this.#type,
       name: this.#name,
       itemKeys: this.#itemKeys
     };
+    if (Object.keys(this.#itemCustomizations).length > 0) {
+      data.itemCustomizations = this.#itemCustomizations;
+    }
+    return data;
   }
 }
 

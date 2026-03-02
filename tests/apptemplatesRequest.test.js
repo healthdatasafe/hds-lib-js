@@ -73,6 +73,95 @@ describe('[APRX] appTemplates Requests', function () {
     });
   });
 
+  describe('[ARSO] Section ordering and customizations', function () {
+    it('[ARSA] moveItemKey reorders items within a section', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
+      section.moveItemKey('profile-sex', 0);
+      assert.deepEqual(section.itemKeys, ['profile-sex', 'profile-name', 'profile-surname']);
+    });
+
+    it('[ARSB] removeItemKey removes item from section', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
+      section.removeItemKey('profile-surname');
+      assert.deepEqual(section.itemKeys, ['profile-name', 'profile-sex']);
+    });
+
+    it('[ARSC] moveSection reorders sections', () => {
+      const request = new CollectorRequest({});
+      request.createSection('a', 'permanent');
+      request.createSection('b', 'recurring');
+      request.createSection('c', 'permanent');
+      request.moveSection('c', 0);
+      assert.deepEqual(request.sections.map(s => s.key), ['c', 'a', 'b']);
+    });
+
+    it('[ARSD] removeSection removes a section', () => {
+      const request = new CollectorRequest({});
+      request.createSection('a', 'permanent');
+      request.createSection('b', 'recurring');
+      request.removeSection('a');
+      assert.equal(request.sections.length, 1);
+      assert.equal(request.sections[0].key, 'b');
+    });
+
+    it('[ARSE] itemCustomizations set/get', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname']);
+      section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
+      assert.deepEqual(section.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
+      assert.equal(section.getItemCustomization('profile-surname'), undefined);
+    });
+
+    it('[ARSF] itemCustomizations serialization round-trip', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname']);
+      section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
+
+      const content = request.content;
+      assert.deepEqual(content.sections[0].itemCustomizations, {
+        'profile-name': { placeholder: 'Enter name' }
+      });
+
+      // Round-trip: reload from serialized content
+      const request2 = new CollectorRequest(content);
+      const section2 = request2.getSectionByKey('test');
+      assert.deepEqual(section2.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
+    });
+
+    it('[ARSG] getData omits itemCustomizations when empty', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name']);
+      const data = section.getData();
+      assert.equal(data.itemCustomizations, undefined);
+    });
+
+    it('[ARSH] moveItemKey throws for unknown key', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name']);
+      assert.throws(() => section.moveItemKey('unknown', 0), /not found/);
+    });
+
+    it('[ARSI] moveSection throws for unknown key', () => {
+      const request = new CollectorRequest({});
+      request.createSection('a', 'permanent');
+      assert.throws(() => request.moveSection('unknown', 0), /not found/);
+    });
+
+    it('[ARSJ] removeSection throws for unknown key', () => {
+      const request = new CollectorRequest({});
+      request.createSection('a', 'permanent');
+      assert.throws(() => request.removeSection('unknown'), /not found/);
+    });
+  });
+
   it('[APRC] Compute a simple request', async () => {
     const baseStreamId = 'aprc';
     const { appManaging } = await helperNewAppManaging(baseStreamId, 'test-APRC');

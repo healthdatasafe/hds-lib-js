@@ -22,6 +22,10 @@ export class HDSItemDef {
     return this.#data;
   }
 
+  get repeatable (): string {
+    return this.#data.repeatable || 'unlimited';
+  }
+
   /** label Localized */
   get label (): string {
     return localizeText(this.#data.label);

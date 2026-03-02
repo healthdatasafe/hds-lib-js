@@ -4,6 +4,7 @@ export declare class HDSItemDef {
     get eventTypes(): string[];
     get key(): string;
     get data(): any;
+    get repeatable(): string;
     /** label Localized */
     get label(): string;
     /** description Localized */
