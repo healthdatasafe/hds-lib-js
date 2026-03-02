@@ -2,7 +2,7 @@ const { assert } = require('./test-utils/deps-node');
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
-const { HDSModel } = require('../js/');
+const { HDSModel, initHDSModel } = require('../js/');
 const { resetPreferredLocales, setPreferredLocales } = require('../js/localizeText');
 
 describe('[MODX] Model', () => {
@@ -163,10 +163,8 @@ describe('[MODX] Model', () => {
 
   describe('[MODSX] datasources', function () {
     let dsModel;
-    const dsModelURL = process.env.MODEL_URL || modelURL;
     before(async () => {
-      dsModel = new HDSModel(dsModelURL);
-      await dsModel.load();
+      dsModel = await initHDSModel();
     });
 
     it('[MODSA] get all datasources', async () => {
