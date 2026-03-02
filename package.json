@@ -10,6 +10,7 @@
     "test:coverage": "NODE_ENV=test c8 mocha tests --test-reporter=spec",
     "test:coverage:ci": "NODE_ENV=test c8 mocha tests --test-reporter=spec --timeout=20000",
     "build": "npm run build:ts; npm run build:webpack",
+    "setup": "sh scripts/setup.sh",
     "deploy": "bash scripts/deploy.sh",
     "build:ts": "tsc",
     "build:webpack": "webpack",
