@@ -1,6 +1,85 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ "./js/HDSModel/HDSDatasourceDef.js"
+/*!*****************************************!*\
+  !*** ./js/HDSModel/HDSDatasourceDef.js ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSDatasourceDef = void 0;
+const localizeText_1 = __webpack_require__(/*! ../localizeText */ "./js/localizeText.js");
+class HDSDatasourceDef {
+    #data;
+    #key;
+    #getAssets;
+    constructor(key, definitionData, getAssets) {
+        this.#key = key;
+        this.#data = definitionData;
+        this.#getAssets = getAssets;
+    }
+    get key() {
+        return this.#key;
+    }
+    get data() {
+        return this.#data;
+    }
+    /** label Localized */
+    get label() {
+        return (0, localizeText_1.localizeText)(this.#data.label);
+    }
+    /** description Localized */
+    get description() {
+        return (0, localizeText_1.localizeText)(this.#data.description);
+    }
+    /**
+     * Resolved endpoint URL.
+     * If the raw endpoint starts with `http`, it is used as-is.
+     * Otherwise it is treated as `<assetKey>://<path>` and resolved
+     * against the service-info assets map.
+     * e.g. `datasets://medication` → `assets.datasets` + `medication`
+     */
+    get endpoint() {
+        const raw = this.#data.endpoint;
+        if (raw.startsWith('http'))
+            return raw;
+        const sep = raw.indexOf('://');
+        if (sep === -1)
+            return raw;
+        const assetKey = raw.substring(0, sep);
+        const path = raw.substring(sep + 3);
+        const assets = this.#getAssets();
+        const baseUrl = assets[assetKey];
+        if (!baseUrl) {
+            throw new Error(`Cannot resolve datasource endpoint "${raw}": no asset "${assetKey}" in service-info`);
+        }
+        // Ensure proper URL joining (handle trailing slash on baseUrl)
+        return baseUrl.endsWith('/') ? baseUrl + path : baseUrl + '/' + path;
+    }
+    get queryParam() {
+        return this.#data.queryParam;
+    }
+    get minQueryLength() {
+        return this.#data.minQueryLength;
+    }
+    get resultKey() {
+        return this.#data.resultKey;
+    }
+    get displayFields() {
+        return this.#data.displayFields;
+    }
+    get valueFields() {
+        return this.#data.valueFields;
+    }
+}
+exports.HDSDatasourceDef = HDSDatasourceDef;
+//# sourceMappingURL=HDSDatasourceDef.js.map
+
+/***/ },
+
 /***/ "./js/HDSModel/HDSItemDef.js"
 /*!***********************************!*\
   !*** ./js/HDSModel/HDSItemDef.js ***!
@@ -176,6 +255,59 @@ function mixAuthorizationLevels(level1, level2) {
     throw new Error(`Invalid level found level1: ${level1}, level2 ${level2}`);
 }
 //# sourceMappingURL=HDSModel-Authorizations.js.map
+
+/***/ },
+
+/***/ "./js/HDSModel/HDSModel-Datasources.js"
+/*!*********************************************!*\
+  !*** ./js/HDSModel/HDSModel-Datasources.js ***!
+  \*********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelDatasources = void 0;
+const HDSDatasourceDef_1 = __webpack_require__(/*! ./HDSDatasourceDef */ "./js/HDSModel/HDSDatasourceDef.js");
+/**
+ * Datasources - Extension of HDSModel
+ */
+class HDSModelDatasources {
+    #model;
+    #datasourceDefs;
+    constructor(model) {
+        this.#model = model;
+        this.#datasourceDefs = {};
+    }
+    /**
+     * get all datasource definitions
+     */
+    getAll() {
+        const res = [];
+        for (const key of Object.keys(this.#model.modelData.datasources || {})) {
+            res.push(this.forKey(key));
+        }
+        return res;
+    }
+    /**
+     * get datasource definition for a key
+     */
+    forKey(key, throwErrorIfNotFound = true) {
+        if (this.#datasourceDefs[key])
+            return this.#datasourceDefs[key];
+        const datasources = this.#model.modelData.datasources || {};
+        const defData = datasources[key];
+        if (!defData) {
+            if (throwErrorIfNotFound)
+                throw new Error('Cannot find datasource definition with key: ' + key);
+            return null;
+        }
+        this.#datasourceDefs[key] = new HDSDatasourceDef_1.HDSDatasourceDef(key, defData, () => this.#model.assets);
+        return this.#datasourceDefs[key];
+    }
+}
+exports.HDSModelDatasources = HDSModelDatasources;
+//# sourceMappingURL=HDSModel-Datasources.js.map
 
 /***/ },
 
@@ -449,6 +581,7 @@ const HDSModel_Streams_1 = __webpack_require__(/*! ./HDSModel-Streams */ "./js/H
 const HDSModel_Authorizations_1 = __webpack_require__(/*! ./HDSModel-Authorizations */ "./js/HDSModel/HDSModel-Authorizations.js");
 const HDSModel_ItemsDefs_1 = __webpack_require__(/*! ./HDSModel-ItemsDefs */ "./js/HDSModel/HDSModel-ItemsDefs.js");
 const HDSModel_EventTypes_1 = __webpack_require__(/*! ./HDSModel-EventTypes */ "./js/HDSModel/HDSModel-EventTypes.js");
+const HDSModel_Datasources_1 = __webpack_require__(/*! ./HDSModel-Datasources */ "./js/HDSModel/HDSModel-Datasources.js");
 class HDSModel {
     /**
      * JSON definition file URL.
@@ -457,6 +590,8 @@ class HDSModel {
     #modelUrl;
     /** RAW content of model definitions */
     #modelData;
+    /** Service-info assets map (e.g. { datasets: 'https://...', ... }) */
+    #assets;
     /**
      * Map of properties loaded "on demand"
      */
@@ -468,6 +603,14 @@ class HDSModel {
         this.#modelUrl = modelUrl;
         this.laziliyLoadedMap = {};
         this.#modelData = null;
+        this.#assets = {};
+    }
+    /** Service-info assets used for resolving datasource endpoints */
+    get assets() {
+        return this.#assets;
+    }
+    set assets(value) {
+        this.#assets = value || {};
     }
     get isLoaded() {
         return !!this.#modelData;
@@ -528,6 +671,14 @@ class HDSModel {
         }
         return this.laziliyLoadedMap.eventTypes;
     }
+    get datasources() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.datasources) {
+            this.laziliyLoadedMap.datasources = new HDSModel_Datasources_1.HDSModelDatasources(this);
+        }
+        return this.laziliyLoadedMap.datasources;
+    }
 }
 exports.HDSModel = HDSModel;
 function throwNotLoadedError() {
@@ -574,6 +725,7 @@ async function initHDSModel() {
     if (!hdsModelInstance.isLoaded) {
         const service = new HDSService_1.HDSService();
         const serviceInfo = await service.info();
+        hdsModelInstance.assets = serviceInfo.assets;
         await hdsModelInstance.load(serviceInfo.assets['hds-model']);
     }
     return hdsModelInstance;
@@ -14603,6 +14755,7 @@ describe('[HDLX] HDSLib.index', () => {
   \********************************/
 (__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
 
+/* provided dependency */ var process = __webpack_require__(/*! process/browser */ "./node_modules/process/browser.js");
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
@@ -14761,6 +14914,52 @@ describe('[MODX] Model', () => {
     it('[MOTD] symbol not exists', async () => {
       const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('audio/attached');
       assert.deepEqual(eventTypeSymbol, null);
+    });
+  });
+
+  // ---------- datasources ------------ //
+
+  describe('[MODSX] datasources', function () {
+    let dsModel;
+    const dsModelURL = process.env.MODEL_URL || modelURL;
+    before(async () => {
+      dsModel = new HDSModel(dsModelURL);
+      await dsModel.load();
+    });
+
+    it('[MODSA] get all datasources', async () => {
+      const datasources = dsModel.datasources.getAll();
+      assert.ok(datasources.length > 0);
+      for (const ds of datasources) {
+        assert.ok(ds.key);
+        assert.ok(ds.endpoint);
+      }
+    });
+
+    it('[MODSB] forKey returns medication datasource', async () => {
+      const ds = dsModel.datasources.forKey('medication');
+      assert.ok(ds);
+      assert.equal(ds.key, 'medication');
+      assert.equal(ds.endpoint, 'https://datasets.datasafe.dev/medication');
+      assert.equal(ds.queryParam, 'search');
+      assert.equal(ds.minQueryLength, 3);
+      assert.equal(ds.resultKey, 'medications');
+      assert.ok(ds.displayFields);
+      assert.ok(ds.valueFields);
+    });
+
+    it('[MODSC] forKey throws on unknown key', async () => {
+      try {
+        dsModel.datasources.forKey('dummy');
+        throw new Error('Should throw Error');
+      } catch (e) {
+        assert.equal(e.message, 'Cannot find datasource definition with key: dummy');
+      }
+    });
+
+    it('[MODSD] forKey returns null with throwErrorIfNotFound = false', async () => {
+      const notFound = dsModel.datasources.forKey('dummy', false);
+      assert.equal(notFound, null);
     });
   });
 
