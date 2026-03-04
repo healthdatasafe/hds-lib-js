@@ -24,6 +24,15 @@
   },
   "main": "js/index.js",
   "types": "js/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./ts/index.ts",
+      "require": "./js/index.js",
+      "default": "./js/index.js"
+    },
+    "./js/*": "./js/*",
+    "./ts/*": "./ts/*"
+  },
   "keywords": [
     "HDS",
     "Health",
