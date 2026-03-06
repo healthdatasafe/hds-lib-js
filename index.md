@@ -58,7 +58,7 @@ HDSLib.computeReminders()  // Reminder status computation
 
 ### Browser
 
-- [Browser Test Suite]({{ site.baseurl }}/tests.html) (requires `backloop.dev`)
+- [Browser Test Suite](tests.html) (requires `backloop.dev`)
 
 ---
 

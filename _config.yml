@@ -19,6 +19,6 @@ include:
   - tests.html
 
 exclude:
-  - docs/MAINTAIN-DOC.md
+  - MAINTAIN-DOC.md
   - Gemfile
   - Gemfile.lock

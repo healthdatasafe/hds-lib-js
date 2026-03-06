@@ -5,19 +5,24 @@ This file describes when and how to update the hds-lib-js documentation in `docs
 ## Structure
 
 ```
-docs/
-├── _config.yml          # Jekyll configuration for gh-pages
-├── index.md             # Library overview, architecture diagram, export list
-├── getting-started.md   # Installation, setup, browser/Node usage
-├── settings.md          # Settings module reference
-├── hds-model.md         # HDSModel, items, streams, authorizations, event types, datasources
-├── app-templates.md     # Detailed App Templates guide (Manager, Collector, Invite, Client)
-├── localization.md      # Localization utilities
-├── toolkit.md           # StreamsAutoCreate, StreamTools
-├── utilities.md         # Duration, reminders, errors, logger
-├── assets/              # Images, SVG diagrams (if extracted from inline)
-└── MAINTAIN-DOC.md      # This file (excluded from Jekyll build)
+docs/                          (source, in repo)
+├── _config.yml                # Jekyll configuration for gh-pages
+├── _layouts/
+│   └── default.html           # Custom layout (nav bar, mermaid support)
+├── index.md                   # Home: overview, architecture, export list
+├── getting-started.md         # Installation, setup, browser/Node usage
+├── settings.md                # Settings module reference
+├── hds-model.md               # HDSModel, items, streams, authorizations, event types, datasources
+├── app-templates.md           # Detailed App Templates guide (Manager, Collector, Invite, Client)
+├── localization.md            # Localization utilities
+├── toolkit.md                 # StreamsAutoCreate, StreamTools
+├── utilities.md               # Duration, reminders, errors, logger
+└── MAINTAIN-DOC.md            # This file (excluded from Jekyll build)
 ```
+
+On build (`npm run build`), webpack copies docs flat into `dist/` alongside
+the JS bundles and test files. `dist/` is the gh-pages branch root — Jekyll
+processes it as a single flat site.
 
 ## When to update
 
@@ -80,28 +85,23 @@ docs/
 
 ### Adding a new page
 
-1. Create `docs/new-page.md` with Jekyll front matter
-2. Add entry to `nav:` in `docs/_config.yml`
+1. Create `docs/new-page.md` with Jekyll front matter (`layout: default`, `title: ...`)
+2. Add a nav link in `docs/_layouts/default.html`
 3. Add link to the table in `docs/index.md`
 
 ## Publishing (gh-pages)
 
-The docs are designed for GitHub Pages with Jekyll. To publish:
+The `dist/` directory is a separate git checkout on the `gh-pages` branch.
+Docs are copied flat into `dist/` by the webpack build alongside JS bundles.
 
-1. Enable GitHub Pages on the repo (Settings > Pages > Source: branch `main`, folder `/docs`)
-2. Jekyll will build automatically using the `_config.yml` configuration
-3. The Cayman theme is used via `remote_theme`
+**Deploy workflow:**
+1. `npm run build` — compiles TS, bundles JS, copies docs to `dist/`
+2. `npm run deploy` — commits and pushes `dist/` to gh-pages
 
-For local preview:
+Jekyll processes the gh-pages branch root. Our custom `_layouts/default.html`
+provides the nav bar and mermaid rendering (no remote theme dependency).
 
-```bash
-cd docs
-gem install bundler jekyll
-bundle init
-# Add to Gemfile: gem "github-pages", group: :jekyll_plugins
-bundle install
-bundle exec jekyll serve
-```
+**URL structure:** `https://healthdatasafe.github.io/hds-lib-js/{page}`
 
 ## Versioning
 
@@ -112,7 +112,6 @@ When the library version changes significantly, consider noting breaking changes
 - [ ] Updated all affected pages
 - [ ] Code examples are correct and tested
 - [ ] Mermaid diagrams render (check on GitHub preview)
-- [ ] SVG diagrams are well-formed
-- [ ] `_config.yml` nav is up to date
+- [ ] Nav links in `_layouts/default.html` are up to date
 - [ ] `index.md` exports table is up to date
 - [ ] No broken internal links
