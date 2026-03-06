@@ -1,0 +1,24 @@
+title: HDS JavaScript Library
+description: Generic toolkit for server and web applications — Health Data Safe
+baseurl: /hds-lib-js
+
+# Markdown rendering
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+# Force-include build artifacts (Jekyll passes them through as-is)
+include:
+  - hds-lib.js
+  - hds-lib.js.map
+  - hds-lib.js.LICENSE.txt
+  - tests-browser.js
+  - tests-browser.js.map
+  - version.json
+  - tests.html
+
+exclude:
+  - MAINTAIN-DOC.md
+  - Gemfile
+  - Gemfile.lock
