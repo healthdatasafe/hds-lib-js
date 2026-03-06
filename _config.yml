@@ -30,14 +30,17 @@ nav:
   - title: Utilities
     url: /docs/utilities
 
-# Keep Jekyll from processing build artifacts
-exclude:
+# Force-include build artifacts (Jekyll passes them through as-is)
+include:
   - hds-lib.js
   - hds-lib.js.map
   - hds-lib.js.LICENSE.txt
   - tests-browser.js
   - tests-browser.js.map
   - version.json
+  - tests.html
+
+exclude:
   - docs/MAINTAIN-DOC.md
   - Gemfile
   - Gemfile.lock
