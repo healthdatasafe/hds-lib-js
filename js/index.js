@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
+exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
 const localizeText_1 = require("./localizeText");
 Object.defineProperty(exports, "localizeText", { enumerable: true, get: function () { return localizeText_1.localizeText; } });
 Object.defineProperty(exports, "l", { enumerable: true, get: function () { return localizeText_1.localizeText; } });
@@ -57,6 +57,9 @@ Object.defineProperty(exports, "durationToSeconds", { enumerable: true, get: fun
 Object.defineProperty(exports, "durationToLabel", { enumerable: true, get: function () { return duration_1.durationToLabel; } });
 const reminders_1 = require("./HDSModel/reminders");
 Object.defineProperty(exports, "computeReminders", { enumerable: true, get: function () { return reminders_1.computeReminders; } });
+const eventToShortText_1 = require("./HDSModel/eventToShortText");
+Object.defineProperty(exports, "eventToShortText", { enumerable: true, get: function () { return eventToShortText_1.eventToShortText; } });
+Object.defineProperty(exports, "formatEventDate", { enumerable: true, get: function () { return eventToShortText_1.formatEventDate; } });
 exports.model = (() => {
     console.warn('HDSLib.model is deprecated use getHDSModel() instead');
     return HDSModelInitAndSingleton.getModel();
@@ -78,7 +81,9 @@ const HDSLib = {
     logger,
     durationToSeconds: duration_1.durationToSeconds,
     durationToLabel: duration_1.durationToLabel,
-    computeReminders: reminders_1.computeReminders
+    computeReminders: reminders_1.computeReminders,
+    eventToShortText: eventToShortText_1.eventToShortText,
+    formatEventDate: eventToShortText_1.formatEventDate
 };
 exports.default = HDSLib;
 //# sourceMappingURL=index.js.map

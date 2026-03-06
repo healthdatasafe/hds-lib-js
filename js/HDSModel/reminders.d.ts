@@ -10,6 +10,7 @@ export interface ReminderStatus {
     importance: 'may' | 'should' | 'must';
     lastEntry?: number;
     lastEventContent?: any;
+    lastEvent?: any;
     dueDate?: number;
     sources: ReminderSource[];
 }

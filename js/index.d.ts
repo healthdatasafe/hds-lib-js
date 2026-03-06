@@ -9,12 +9,13 @@ import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton';
 import * as toolkit from './toolkit';
 import { durationToSeconds, durationToLabel } from './utils/duration';
 import { computeReminders } from './HDSModel/reminders';
+import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText';
 export type { ReminderConfig } from './HDSModel/HDSItemDef';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders';
 export declare const model: HDSModel;
 export declare const getHDSModel: typeof HDSModelInitAndSingleton.getModel;
 export declare const initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate };
 declare const HDSLib: {
     getHDSModel: typeof HDSModelInitAndSingleton.getModel;
     initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
@@ -30,6 +31,8 @@ declare const HDSLib: {
     durationToSeconds: typeof durationToSeconds;
     durationToLabel: typeof durationToLabel;
     computeReminders: typeof computeReminders;
+    eventToShortText: typeof eventToShortText;
+    formatEventDate: typeof formatEventDate;
 };
 export default HDSLib;
 //# sourceMappingURL=index.d.ts.map

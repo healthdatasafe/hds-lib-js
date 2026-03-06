@@ -179,6 +179,7 @@ function computeReminders(itemDefs, events, overrides, now) {
             importance,
             lastEntry,
             lastEventContent: lastEvent?.content,
+            lastEvent,
             dueDate,
             sources
         });
