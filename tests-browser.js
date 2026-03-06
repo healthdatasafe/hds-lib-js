@@ -109,6 +109,12 @@ class HDSItemDef {
     get data() {
         return this.#data;
     }
+    get repeatable() {
+        return this.#data.repeatable || 'unlimited';
+    }
+    get reminder() {
+        return this.#data.reminder || null;
+    }
     /** label Localized */
     get label() {
         return (0, localizeText_1.localizeText)(this.#data.label);
@@ -767,6 +773,213 @@ function itemKeyOrDefToDef(model, keyOrDef) {
     return model.itemsDefs.forKey(keyOrDef);
 }
 //# sourceMappingURL=internalModelUtils.js.map
+
+/***/ },
+
+/***/ "./js/HDSModel/reminders.js"
+/*!**********************************!*\
+  !*** ./js/HDSModel/reminders.js ***!
+  \**********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.computeReminders = computeReminders;
+const duration_1 = __webpack_require__(/*! ../utils/duration */ "./js/utils/duration.js");
+const IMPORTANCE_ORDER = { may: 0, should: 1, must: 2 };
+function maxImportance(a, b) {
+    const va = IMPORTANCE_ORDER[a || 'may'] || 0;
+    const vb = IMPORTANCE_ORDER[b || 'may'] || 0;
+    return va >= vb ? (a || 'may') : (b || 'may');
+}
+/**
+ * Merge reminder configs from multiple sources. Later sources override per-field.
+ * Returns merged config + importance (highest across all sources).
+ */
+function mergeReminders(sources) {
+    let merged = {};
+    let importance = 'may';
+    for (const source of sources) {
+        const r = source.reminder;
+        if (r.cooldown !== undefined)
+            merged.cooldown = r.cooldown;
+        if (r.expectedInterval !== undefined)
+            merged.expectedInterval = r.expectedInterval;
+        if (r.relativeTo !== undefined)
+            merged.relativeTo = r.relativeTo;
+        if (r.relativeDays !== undefined)
+            merged.relativeDays = r.relativeDays;
+        if (r.importance !== undefined)
+            merged.importance = r.importance;
+        importance = maxImportance(importance, r.importance);
+    }
+    return { config: merged, importance };
+}
+/**
+ * Find the most recent event matching an itemDef (by streamId + eventType).
+ */
+function findLastEvent(itemDef, events) {
+    const streamId = itemDef.data.streamId;
+    const types = new Set(itemDef.eventTypes);
+    let latest;
+    for (const e of events) {
+        if (!types.has(e.type))
+            continue;
+        const eStreamId = e.streamId || (e.streamIds && e.streamIds[0]);
+        if (eStreamId !== streamId)
+            continue;
+        if (!latest || e.time > latest.time)
+            latest = e;
+    }
+    return latest;
+}
+/**
+ * Compute reminder statuses for a set of items given their events and optional overrides.
+ *
+ * @param itemDefs - array of item definitions (must have .key, .eventTypes, .reminder, .data.streamId)
+ * @param events - all events to search for last entries
+ * @param overrides - optional collector/user overrides (matched by itemKey in the ReminderSource)
+ * @param now - current time in unix seconds (defaults to Date.now()/1000)
+ */
+function computeReminders(itemDefs, events, overrides, now) {
+    const nowSec = now ?? Math.floor(Date.now() / 1000);
+    const results = [];
+    // Pre-compute last events for relative lookups
+    const lastEventCache = new Map();
+    for (const itemDef of itemDefs) {
+        lastEventCache.set(itemDef.key, findLastEvent(itemDef, events));
+    }
+    for (const itemDef of itemDefs) {
+        // Build sources: default + overrides
+        const sources = [];
+        if (itemDef.reminder) {
+            sources.push({ origin: 'default', reminder: itemDef.reminder });
+        }
+        const itemOverrides = overrides?.[itemDef.key];
+        if (itemOverrides)
+            sources.push(...itemOverrides);
+        // No reminder config at all → skip
+        if (sources.length === 0)
+            continue;
+        const { config, importance } = mergeReminders(sources);
+        const lastEvent = lastEventCache.get(itemDef.key);
+        const lastEntry = lastEvent?.time;
+        const timeSinceLast = lastEntry != null ? (nowSec - lastEntry) : Infinity;
+        let status;
+        let dueDate;
+        // --- relativeTo logic ---
+        if (config.relativeTo && config.relativeDays) {
+            const refItemDef = itemDefs.find(d => d.key === config.relativeTo);
+            const refEvent = refItemDef ? lastEventCache.get(refItemDef.key) : undefined;
+            if (!refEvent) {
+                // No reference event → can't compute relative timing
+                status = 'ok';
+            }
+            else {
+                // Compute cycle day (day 1 = day of reference event)
+                const daysSinceRef = Math.floor((nowSec - refEvent.time) / 86400);
+                const cycleDay = daysSinceRef + 1;
+                const days = config.relativeDays;
+                const minDay = Math.min(...days);
+                const maxDay = Math.max(...days);
+                if (days.includes(cycleDay)) {
+                    // Check cooldown: if already entered today, suppress
+                    if (lastEntry != null && timeSinceLast < 86400) {
+                        status = 'cooldown';
+                    }
+                    else {
+                        status = 'due';
+                        dueDate = refEvent.time + (cycleDay - 1) * 86400;
+                    }
+                }
+                else if (cycleDay === minDay - 1) {
+                    status = 'upcoming';
+                    dueDate = refEvent.time + (minDay - 1) * 86400;
+                }
+                else if (cycleDay > maxDay) {
+                    // Past the target window — if never entered this cycle, overdue
+                    if (!lastEntry || lastEntry < refEvent.time) {
+                        status = 'overdue';
+                    }
+                    else {
+                        status = 'ok';
+                    }
+                }
+                else {
+                    status = 'ok';
+                }
+            }
+            // --- expectedInterval logic ---
+        }
+        else if (config.expectedInterval) {
+            const interval = config.expectedInterval;
+            const cooldownSec = config.cooldown ? (0, duration_1.durationToSeconds)(config.cooldown) : 0;
+            if (lastEntry == null) {
+                // Never entered → due
+                status = 'due';
+            }
+            else if (cooldownSec > 0 && timeSinceLast < cooldownSec) {
+                status = 'cooldown';
+            }
+            else {
+                const minSec = interval.min ? (0, duration_1.durationToSeconds)(interval.min) : 0;
+                const maxSec = interval.max ? (0, duration_1.durationToSeconds)(interval.max) : Infinity;
+                const thresholdUpcoming = maxSec * 0.9;
+                if (timeSinceLast < minSec) {
+                    status = 'ok';
+                }
+                else if (timeSinceLast < thresholdUpcoming) {
+                    status = 'upcoming';
+                    dueDate = lastEntry + (interval.max ? (0, duration_1.durationToSeconds)(interval.max) : 0);
+                }
+                else if (timeSinceLast <= maxSec) {
+                    status = 'due';
+                    dueDate = lastEntry + (interval.max ? (0, duration_1.durationToSeconds)(interval.max) : 0);
+                }
+                else {
+                    status = 'overdue';
+                    dueDate = lastEntry + (interval.max ? (0, duration_1.durationToSeconds)(interval.max) : 0);
+                }
+            }
+            // --- cooldown-only logic ---
+        }
+        else if (config.cooldown) {
+            const cooldownSec = (0, duration_1.durationToSeconds)(config.cooldown);
+            if (lastEntry != null && timeSinceLast < cooldownSec) {
+                status = 'cooldown';
+            }
+            else {
+                status = 'due';
+                dueDate = lastEntry != null ? lastEntry + cooldownSec : undefined;
+            }
+        }
+        else {
+            // Config has importance but no timing → always due
+            status = 'due';
+        }
+        results.push({
+            itemKey: itemDef.key,
+            status,
+            importance,
+            lastEntry,
+            dueDate,
+            sources
+        });
+    }
+    // Sort: overdue first, then due, then upcoming, then ok, then cooldown
+    // Within same status: higher importance first
+    const STATUS_ORDER = { overdue: 0, due: 1, upcoming: 2, ok: 3, cooldown: 4 };
+    results.sort((a, b) => {
+        const sa = STATUS_ORDER[a.status] ?? 5;
+        const sb = STATUS_ORDER[b.status] ?? 5;
+        if (sa !== sb)
+            return sa - sb;
+        return (IMPORTANCE_ORDER[b.importance] || 0) - (IMPORTANCE_ORDER[a.importance] || 0);
+    });
+    return results;
+}
+//# sourceMappingURL=reminders.js.map
 
 /***/ },
 
@@ -2409,6 +2622,11 @@ class CollectorRequest {
                 const section = this.createSection(sectionData.key, sectionData.type);
                 section.setName(sectionData.name);
                 section.addItemKeys(sectionData.itemKeys);
+                if (sectionData.itemCustomizations) {
+                    for (const [itemKey, customization] of Object.entries(sectionData.itemCustomizations)) {
+                        section.setItemCustomization(itemKey, customization);
+                    }
+                }
             }
             delete futureContent.sections;
         }
@@ -2481,6 +2699,19 @@ class CollectorRequest {
     }
     getSectionByKey(key) {
         return this.#sections.find((s) => (s.key === key));
+    }
+    moveSection(key, toIndex) {
+        const idx = this.#sections.findIndex((s) => s.key === key);
+        if (idx === -1)
+            throw new errors_1.HDSLibError(`Section with key: ${key} not found`);
+        const [section] = this.#sections.splice(idx, 1);
+        this.#sections.splice(toIndex, 0, section);
+    }
+    removeSection(key) {
+        const idx = this.#sections.findIndex((s) => s.key === key);
+        if (idx === -1)
+            throw new errors_1.HDSLibError(`Section with key: ${key} not found`);
+        this.#sections.splice(idx, 1);
     }
     // ---------- permissions ---------- //
     addPermissions(permissions) {
@@ -2568,10 +2799,12 @@ class CollectorRequestSection {
     #name;
     #key;
     #itemKeys;
+    #itemCustomizations;
     constructor(key, type) {
         this.#key = key;
         this.#type = type;
         this.#itemKeys = [];
+        this.#itemCustomizations = {};
         this.#name = {
             en: ''
         };
@@ -2597,13 +2830,37 @@ class CollectorRequestSection {
     get key() { return this.#key; }
     get itemKeys() { return this.#itemKeys; }
     get name() { return this.#name; }
+    get itemCustomizations() { return this.#itemCustomizations; }
+    moveItemKey(key, toIndex) {
+        const idx = this.#itemKeys.indexOf(key);
+        if (idx === -1)
+            throw new errors_1.HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
+        this.#itemKeys.splice(idx, 1);
+        this.#itemKeys.splice(toIndex, 0, key);
+    }
+    removeItemKey(key) {
+        const idx = this.#itemKeys.indexOf(key);
+        if (idx === -1)
+            throw new errors_1.HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
+        this.#itemKeys.splice(idx, 1);
+    }
+    setItemCustomization(key, customizations) {
+        this.#itemCustomizations[key] = customizations;
+    }
+    getItemCustomization(key) {
+        return this.#itemCustomizations[key];
+    }
     getData() {
-        return {
+        const data = {
             key: this.key,
             type: this.#type,
             name: this.#name,
             itemKeys: this.#itemKeys
         };
+        if (Object.keys(this.#itemCustomizations).length > 0) {
+            data.itemCustomizations = this.#itemCustomizations;
+        }
+        return data;
     }
 }
 /**
@@ -2727,7 +2984,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
+exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
 const localizeText_1 = __webpack_require__(/*! ./localizeText */ "./js/localizeText.js");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
@@ -2746,6 +3003,11 @@ Object.defineProperty(exports, "HDSService", ({ enumerable: true, get: function 
 const HDSModelInitAndSingleton = __importStar(__webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton */ "./js/HDSModel/HDSModelInitAndSingleton.js"));
 const toolkit = __importStar(__webpack_require__(/*! ./toolkit */ "./js/toolkit/index.js"));
 exports.toolkit = toolkit;
+const duration_1 = __webpack_require__(/*! ./utils/duration */ "./js/utils/duration.js");
+Object.defineProperty(exports, "durationToSeconds", ({ enumerable: true, get: function () { return duration_1.durationToSeconds; } }));
+Object.defineProperty(exports, "durationToLabel", ({ enumerable: true, get: function () { return duration_1.durationToLabel; } }));
+const reminders_1 = __webpack_require__(/*! ./HDSModel/reminders */ "./js/HDSModel/reminders.js");
+Object.defineProperty(exports, "computeReminders", ({ enumerable: true, get: function () { return reminders_1.computeReminders; } }));
 exports.model = (() => {
     console.warn('HDSLib.model is deprecated use getHDSModel() instead');
     return HDSModelInitAndSingleton.getModel();
@@ -2764,7 +3026,10 @@ const HDSLib = {
     localizeText: localizeText_1.localizeText,
     l: localizeText_1.localizeText,
     toolkit,
-    logger
+    logger,
+    durationToSeconds: duration_1.durationToSeconds,
+    durationToLabel: duration_1.durationToLabel,
+    computeReminders: reminders_1.computeReminders
 };
 exports["default"] = HDSLib;
 //# sourceMappingURL=index.js.map
@@ -3213,6 +3478,85 @@ function deepFreeze(object) {
     return Object.freeze(object);
 }
 //# sourceMappingURL=utils.js.map
+
+/***/ },
+
+/***/ "./js/utils/duration.js"
+/*!******************************!*\
+  !*** ./js/utils/duration.js ***!
+  \******************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * ISO 8601 duration parser and formatter.
+ * Supports: P{n}D, P{n}W, P{n}M, P{n}Y, and combinations like P1Y6M.
+ * Month = 30 days, Year = 365 days (approximation sufficient for reminder logic).
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.durationToSeconds = durationToSeconds;
+exports.durationToLabel = durationToLabel;
+const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_DAY = 86400;
+const SECONDS_PER_WEEK = 604800;
+const SECONDS_PER_MONTH = 2592000; // 30 days
+const SECONDS_PER_YEAR = 31536000; // 365 days
+const durationRegex = /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/;
+/**
+ * Parse an ISO 8601 duration string to seconds.
+ * @throws if the string is not a valid duration
+ */
+function durationToSeconds(iso) {
+    const m = durationRegex.exec(iso);
+    if (!m)
+        throw new Error(`Invalid ISO 8601 duration: "${iso}"`);
+    const [, years, months, weeks, days, hours, minutes] = m;
+    let total = 0;
+    if (years)
+        total += parseInt(years) * SECONDS_PER_YEAR;
+    if (months)
+        total += parseInt(months) * SECONDS_PER_MONTH;
+    if (weeks)
+        total += parseInt(weeks) * SECONDS_PER_WEEK;
+    if (days)
+        total += parseInt(days) * SECONDS_PER_DAY;
+    if (hours)
+        total += parseInt(hours) * SECONDS_PER_HOUR;
+    if (minutes)
+        total += parseInt(minutes) * 60;
+    if (total === 0)
+        throw new Error(`Duration is zero: "${iso}"`);
+    return total;
+}
+/**
+ * Format seconds as a human-readable duration label.
+ */
+function durationToLabel(seconds) {
+    if (seconds >= SECONDS_PER_YEAR) {
+        const n = Math.round(seconds / SECONDS_PER_YEAR);
+        return n === 1 ? '1 year' : `${n} years`;
+    }
+    if (seconds >= SECONDS_PER_MONTH) {
+        const n = Math.round(seconds / SECONDS_PER_MONTH);
+        return n === 1 ? '1 month' : `${n} months`;
+    }
+    if (seconds >= SECONDS_PER_WEEK) {
+        const n = Math.round(seconds / SECONDS_PER_WEEK);
+        return n === 1 ? '1 week' : `${n} weeks`;
+    }
+    if (seconds >= SECONDS_PER_DAY) {
+        const n = Math.round(seconds / SECONDS_PER_DAY);
+        return n === 1 ? '1 day' : `${n} days`;
+    }
+    if (seconds >= SECONDS_PER_HOUR) {
+        const n = Math.round(seconds / SECONDS_PER_HOUR);
+        return n === 1 ? '1 hour' : `${n} hours`;
+    }
+    const n = Math.round(seconds / 60);
+    return n === 1 ? '1 minute' : `${n} minutes`;
+}
+//# sourceMappingURL=duration.js.map
 
 /***/ },
 
@@ -14485,6 +14829,95 @@ describe('[APRX] appTemplates Requests', function () {
     });
   });
 
+  describe('[ARSO] Section ordering and customizations', function () {
+    it('[ARSA] moveItemKey reorders items within a section', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
+      section.moveItemKey('profile-sex', 0);
+      assert.deepEqual(section.itemKeys, ['profile-sex', 'profile-name', 'profile-surname']);
+    });
+
+    it('[ARSB] removeItemKey removes item from section', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
+      section.removeItemKey('profile-surname');
+      assert.deepEqual(section.itemKeys, ['profile-name', 'profile-sex']);
+    });
+
+    it('[ARSC] moveSection reorders sections', () => {
+      const request = new CollectorRequest({});
+      request.createSection('a', 'permanent');
+      request.createSection('b', 'recurring');
+      request.createSection('c', 'permanent');
+      request.moveSection('c', 0);
+      assert.deepEqual(request.sections.map(s => s.key), ['c', 'a', 'b']);
+    });
+
+    it('[ARSD] removeSection removes a section', () => {
+      const request = new CollectorRequest({});
+      request.createSection('a', 'permanent');
+      request.createSection('b', 'recurring');
+      request.removeSection('a');
+      assert.equal(request.sections.length, 1);
+      assert.equal(request.sections[0].key, 'b');
+    });
+
+    it('[ARSE] itemCustomizations set/get', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname']);
+      section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
+      assert.deepEqual(section.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
+      assert.equal(section.getItemCustomization('profile-surname'), undefined);
+    });
+
+    it('[ARSF] itemCustomizations serialization round-trip', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname']);
+      section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
+
+      const content = request.content;
+      assert.deepEqual(content.sections[0].itemCustomizations, {
+        'profile-name': { placeholder: 'Enter name' }
+      });
+
+      // Round-trip: reload from serialized content
+      const request2 = new CollectorRequest(content);
+      const section2 = request2.getSectionByKey('test');
+      assert.deepEqual(section2.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
+    });
+
+    it('[ARSG] getData omits itemCustomizations when empty', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name']);
+      const data = section.getData();
+      assert.equal(data.itemCustomizations, undefined);
+    });
+
+    it('[ARSH] moveItemKey throws for unknown key', () => {
+      const request = new CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name']);
+      assert.throws(() => section.moveItemKey('unknown', 0), /not found/);
+    });
+
+    it('[ARSI] moveSection throws for unknown key', () => {
+      const request = new CollectorRequest({});
+      request.createSection('a', 'permanent');
+      assert.throws(() => request.moveSection('unknown', 0), /not found/);
+    });
+
+    it('[ARSJ] removeSection throws for unknown key', () => {
+      const request = new CollectorRequest({});
+      request.createSection('a', 'permanent');
+      assert.throws(() => request.removeSection('unknown'), /not found/);
+    });
+  });
+
   it('[APRC] Compute a simple request', async () => {
     const baseStreamId = 'aprc';
     const { appManaging } = await helperNewAppManaging(baseStreamId, 'test-APRC');
@@ -14755,12 +15188,11 @@ describe('[HDLX] HDSLib.index', () => {
   \********************************/
 (__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
 
-/* provided dependency */ var process = __webpack_require__(/*! process/browser */ "./node_modules/process/browser.js");
 const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
-const { HDSModel } = __webpack_require__(/*! ../js/ */ "./js/index.js");
+const { HDSModel, initHDSModel } = __webpack_require__(/*! ../js/ */ "./js/index.js");
 const { resetPreferredLocales, setPreferredLocales } = __webpack_require__(/*! ../js/localizeText */ "./js/localizeText.js");
 
 describe('[MODX] Model', () => {
@@ -14921,10 +15353,8 @@ describe('[MODX] Model', () => {
 
   describe('[MODSX] datasources', function () {
     let dsModel;
-    const dsModelURL = process.env.MODEL_URL || modelURL;
     before(async () => {
-      dsModel = new HDSModel(dsModelURL);
-      await dsModel.load();
+      dsModel = await initHDSModel();
     });
 
     it('[MODSA] get all datasources', async () => {

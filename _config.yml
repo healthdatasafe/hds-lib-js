@@ -1,0 +1,43 @@
+title: HDS JavaScript Library
+description: Generic toolkit for server and web applications — Health Data Safe
+baseurl: /hds-lib-js
+remote_theme: pages-themes/cayman@v0.2.0
+plugins:
+  - jekyll-remote-theme
+
+# Markdown rendering
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+# Navigation order (used by layouts/templates)
+nav:
+  - title: Home
+    url: /docs/
+  - title: Getting Started
+    url: /docs/getting-started
+  - title: Settings
+    url: /docs/settings
+  - title: HDS Model
+    url: /docs/hds-model
+  - title: App Templates
+    url: /docs/app-templates
+  - title: Localization
+    url: /docs/localization
+  - title: Toolkit
+    url: /docs/toolkit
+  - title: Utilities
+    url: /docs/utilities
+
+# Keep Jekyll from processing build artifacts
+exclude:
+  - hds-lib.js
+  - hds-lib.js.map
+  - hds-lib.js.LICENSE.txt
+  - tests-browser.js
+  - tests-browser.js.map
+  - version.json
+  - docs/MAINTAIN-DOC.md
+  - Gemfile
+  - Gemfile.lock
