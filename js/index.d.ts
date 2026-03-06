@@ -7,10 +7,14 @@ import * as logger from './logger';
 import { HDSService } from './HDSService';
 import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton';
 import * as toolkit from './toolkit';
+import { durationToSeconds, durationToLabel } from './utils/duration';
+import { computeReminders } from './HDSModel/reminders';
+export type { ReminderConfig } from './HDSModel/HDSItemDef';
+export type { ReminderSource, ReminderStatus } from './HDSModel/reminders';
 export declare const model: HDSModel;
 export declare const getHDSModel: typeof HDSModelInitAndSingleton.getModel;
 export declare const initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders };
 declare const HDSLib: {
     getHDSModel: typeof HDSModelInitAndSingleton.getModel;
     initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
@@ -23,6 +27,9 @@ declare const HDSLib: {
     l: typeof localizeText;
     toolkit: typeof toolkit;
     logger: typeof logger;
+    durationToSeconds: typeof durationToSeconds;
+    durationToLabel: typeof durationToLabel;
+    computeReminders: typeof computeReminders;
 };
 export default HDSLib;
 //# sourceMappingURL=index.d.ts.map

@@ -7,6 +7,10 @@ import * as logger from './logger';
 import { HDSService } from './HDSService';
 import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton';
 import * as toolkit from './toolkit';
+import { durationToSeconds, durationToLabel } from './utils/duration';
+import { computeReminders } from './HDSModel/reminders';
+export type { ReminderConfig } from './HDSModel/HDSItemDef';
+export type { ReminderSource, ReminderStatus } from './HDSModel/reminders';
 
 export const model = (() => {
   console.warn('HDSLib.model is deprecated use getHDSModel() instead');
@@ -15,7 +19,7 @@ export const model = (() => {
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders };
 
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
 const HDSLib = {
@@ -29,6 +33,9 @@ const HDSLib = {
   localizeText,
   l: localizeText,
   toolkit,
-  logger
+  logger,
+  durationToSeconds,
+  durationToLabel,
+  computeReminders
 };
 export default HDSLib;

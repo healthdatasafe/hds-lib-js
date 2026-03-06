@@ -1,5 +1,13 @@
 import { localizeText } from '../localizeText';
 
+export interface ReminderConfig {
+  cooldown?: string;
+  expectedInterval?: { min?: string; max?: string };
+  relativeTo?: string;
+  relativeDays?: number[];
+  importance?: 'may' | 'should' | 'must';
+}
+
 export class HDSItemDef {
   #data: any;
   #key: string;
@@ -24,6 +32,10 @@ export class HDSItemDef {
 
   get repeatable (): string {
     return this.#data.repeatable || 'unlimited';
+  }
+
+  get reminder (): ReminderConfig | null {
+    return this.#data.reminder || null;
   }
 
   /** label Localized */

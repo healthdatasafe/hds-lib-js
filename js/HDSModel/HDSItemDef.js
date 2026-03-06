@@ -23,6 +23,9 @@ class HDSItemDef {
     get repeatable() {
         return this.#data.repeatable || 'unlimited';
     }
+    get reminder() {
+        return this.#data.reminder || null;
+    }
     /** label Localized */
     get label() {
         return (0, localizeText_1.localizeText)(this.#data.label);

@@ -1,3 +1,13 @@
+export interface ReminderConfig {
+    cooldown?: string;
+    expectedInterval?: {
+        min?: string;
+        max?: string;
+    };
+    relativeTo?: string;
+    relativeDays?: number[];
+    importance?: 'may' | 'should' | 'must';
+}
 export declare class HDSItemDef {
     #private;
     constructor(key: string, definitionData: any);
@@ -5,6 +15,7 @@ export declare class HDSItemDef {
     get key(): string;
     get data(): any;
     get repeatable(): string;
+    get reminder(): ReminderConfig | null;
     /** label Localized */
     get label(): string;
     /** description Localized */

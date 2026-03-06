@@ -31,7 +31,10 @@ module.exports = [
     plugins: [
       new CopyPlugin({
         patterns: [
-          { from: path.resolve(__dirname, './tests/browser-tests.html'), to: 'tests.html' }
+          { from: path.resolve(__dirname, './tests/browser-tests.html'), to: 'tests.html' },
+          { from: path.resolve(__dirname, './docs/*.md'), to: '[name][ext]' },
+          { from: path.resolve(__dirname, './docs/_config.yml'), to: '_config.yml' },
+          { from: path.resolve(__dirname, './docs/_layouts/'), to: '_layouts/' }
         ]
       }),
       new webpack.ProvidePlugin({

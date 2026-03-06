@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
+exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
 const localizeText_1 = require("./localizeText");
 Object.defineProperty(exports, "localizeText", { enumerable: true, get: function () { return localizeText_1.localizeText; } });
 Object.defineProperty(exports, "l", { enumerable: true, get: function () { return localizeText_1.localizeText; } });
@@ -52,6 +52,11 @@ Object.defineProperty(exports, "HDSService", { enumerable: true, get: function (
 const HDSModelInitAndSingleton = __importStar(require("./HDSModel/HDSModelInitAndSingleton"));
 const toolkit = __importStar(require("./toolkit"));
 exports.toolkit = toolkit;
+const duration_1 = require("./utils/duration");
+Object.defineProperty(exports, "durationToSeconds", { enumerable: true, get: function () { return duration_1.durationToSeconds; } });
+Object.defineProperty(exports, "durationToLabel", { enumerable: true, get: function () { return duration_1.durationToLabel; } });
+const reminders_1 = require("./HDSModel/reminders");
+Object.defineProperty(exports, "computeReminders", { enumerable: true, get: function () { return reminders_1.computeReminders; } });
 exports.model = (() => {
     console.warn('HDSLib.model is deprecated use getHDSModel() instead');
     return HDSModelInitAndSingleton.getModel();
@@ -70,7 +75,10 @@ const HDSLib = {
     localizeText: localizeText_1.localizeText,
     l: localizeText_1.localizeText,
     toolkit,
-    logger
+    logger,
+    durationToSeconds: duration_1.durationToSeconds,
+    durationToLabel: duration_1.durationToLabel,
+    computeReminders: reminders_1.computeReminders
 };
 exports.default = HDSLib;
 //# sourceMappingURL=index.js.map
