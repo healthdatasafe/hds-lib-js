@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ page.title }} — {{ site.title }}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      color: #24292f;
+      line-height: 1.6;
+      margin: 0;
+      padding: 0;
+    }
+    nav {
+      background: #24292f;
+      padding: 10px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 16px;
+    }
+    nav a {
+      color: #c9d1d9;
+      text-decoration: none;
+      font-size: 0.9em;
+    }
+    nav a:hover { color: #fff; }
+    nav .nav-title {
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.95em;
+      margin-right: 12px;
+    }
+    nav .nav-sep { color: #484f58; }
+    .content {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 24px 24px 60px;
+    }
+    h1 { border-bottom: 1px solid #d0d7de; padding-bottom: 10px; }
+    h2 { margin-top: 32px; }
+    h3 { margin-top: 24px; }
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      background: #f6f8fa;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    pre {
+      background: #f6f8fa;
+      padding: 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      line-height: 1.45;
+    }
+    pre code { background: none; padding: 0; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 16px 0;
+    }
+    th, td {
+      border: 1px solid #d0d7de;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    th { background: #f6f8fa; }
+    blockquote {
+      border-left: 4px solid #d0d7de;
+      margin: 16px 0;
+      padding: 4px 16px;
+      color: #656d76;
+    }
+    .mermaid { margin: 16px 0; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a class="nav-title" href="{{ site.baseurl }}/">HDS Lib</a>
+    <a href="{{ site.baseurl }}/docs/">Overview</a>
+    <span class="nav-sep">|</span>
+    <a href="{{ site.baseurl }}/docs/getting-started">Getting Started</a>
+    <span class="nav-sep">|</span>
+    <a href="{{ site.baseurl }}/docs/hds-model">Model</a>
+    <span class="nav-sep">|</span>
+    <a href="{{ site.baseurl }}/docs/app-templates">App Templates</a>
+    <span class="nav-sep">|</span>
+    <a href="{{ site.baseurl }}/docs/settings">Settings</a>
+    <span class="nav-sep">|</span>
+    <a href="{{ site.baseurl }}/docs/localization">Localization</a>
+    <span class="nav-sep">|</span>
+    <a href="{{ site.baseurl }}/docs/toolkit">Toolkit</a>
+    <span class="nav-sep">|</span>
+    <a href="{{ site.baseurl }}/docs/utilities">Utilities</a>
+    <span class="nav-sep">|</span>
+    <a href="{{ site.baseurl }}/tests.html">Tests</a>
+  </nav>
+  <div class="content">
+    {{ content }}
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+    // Convert ```mermaid code blocks to mermaid divs
+    document.querySelectorAll('pre code.language-mermaid').forEach(el => {
+      const div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = el.textContent;
+      el.parentElement.replaceWith(div);
+    });
+    mermaid.run();
+  </script>
+</body>
+</html>
