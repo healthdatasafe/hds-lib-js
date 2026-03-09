@@ -10,6 +10,8 @@ import * as toolkit from './toolkit';
 import { durationToSeconds, durationToLabel } from './utils/duration';
 import { computeReminders } from './HDSModel/reminders';
 import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText';
+import { MonitorScope } from './MonitorScope';
+export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope';
 export type { ReminderConfig } from './HDSModel/HDSItemDef';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders';
 
@@ -20,7 +22,7 @@ export const model = (() => {
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope };
 
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
 const HDSLib = {
@@ -39,6 +41,7 @@ const HDSLib = {
   durationToLabel,
   computeReminders,
   eventToShortText,
-  formatEventDate
+  formatEventDate,
+  MonitorScope
 };
 export default HDSLib;
