@@ -180,7 +180,7 @@ describe('[MODX] Model', () => {
       const ds = dsModel.datasources.forKey('medication');
       assert.ok(ds);
       assert.equal(ds.key, 'medication');
-      assert.equal(ds.endpoint, 'https://datasets.datasafe.dev/medication');
+      assert.equal(ds.endpoint, 'https://demo-datasets.datasafe.dev/medication');
       assert.equal(ds.queryParam, 'search');
       assert.equal(ds.minQueryLength, 3);
       assert.equal(ds.resultKey, 'medications');
