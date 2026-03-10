@@ -12,6 +12,7 @@ import { computeReminders } from './HDSModel/reminders';
 import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText';
 import { MonitorScope } from './MonitorScope';
 import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings';
+import { HDSModelConversions } from './HDSModel/HDSModel-Conversions';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope';
 export type { ReminderConfig } from './HDSModel/HDSItemDef';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders';
@@ -19,7 +20,7 @@ export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from '
 export declare const model: HDSModel;
 export declare const getHDSModel: typeof HDSModelInitAndSingleton.getModel;
 export declare const initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSModelConversions };
 declare const HDSLib: {
     getHDSModel: typeof HDSModelInitAndSingleton.getModel;
     initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
@@ -54,7 +55,9 @@ declare const HDSLib: {
         readonly timezone: "settings/timezone";
         readonly dateFormat: "settings/dateFormat";
         readonly unitSystem: "settings/unitSystem";
+        readonly displayName: "settings/displayName";
     };
+    HDSModelConversions: typeof HDSModelConversions;
 };
 export default HDSLib;
 //# sourceMappingURL=index.d.ts.map

@@ -9,6 +9,7 @@ export declare const SETTING_TYPES: {
     readonly timezone: "settings/timezone";
     readonly dateFormat: "settings/dateFormat";
     readonly unitSystem: "settings/unitSystem";
+    readonly displayName: "settings/displayName";
 };
 export type SettingKey = keyof typeof SETTING_TYPES;
 export type DateFormat = 'DD.MM.YYYY' | 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'YYYY-MM-DD';
@@ -20,6 +21,7 @@ export interface SettingsValues {
     timezone: string;
     dateFormat: DateFormat;
     unitSystem: UnitSystem;
+    displayName: string | null;
 }
 /**
  * HDSSettings — singleton managing user settings as individual Pryv events.

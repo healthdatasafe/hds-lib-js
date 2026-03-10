@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
+exports.HDSModelConversions = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
 const localizeText_1 = require("./localizeText");
 Object.defineProperty(exports, "localizeText", { enumerable: true, get: function () { return localizeText_1.localizeText; } });
 Object.defineProperty(exports, "l", { enumerable: true, get: function () { return localizeText_1.localizeText; } });
@@ -65,6 +65,8 @@ Object.defineProperty(exports, "MonitorScope", { enumerable: true, get: function
 const HDSSettings_1 = require("./settings/HDSSettings");
 Object.defineProperty(exports, "HDSSettings", { enumerable: true, get: function () { return HDSSettings_1.HDSSettings; } });
 Object.defineProperty(exports, "SETTING_TYPES", { enumerable: true, get: function () { return HDSSettings_1.SETTING_TYPES; } });
+const HDSModel_Conversions_1 = require("./HDSModel/HDSModel-Conversions");
+Object.defineProperty(exports, "HDSModelConversions", { enumerable: true, get: function () { return HDSModel_Conversions_1.HDSModelConversions; } });
 exports.model = (() => {
     console.warn('HDSLib.model is deprecated use getHDSModel() instead');
     return HDSModelInitAndSingleton.getModel();
@@ -91,7 +93,8 @@ const HDSLib = {
     formatEventDate: eventToShortText_1.formatEventDate,
     MonitorScope: MonitorScope_1.MonitorScope,
     HDSSettings: HDSSettings_1.HDSSettings,
-    SETTING_TYPES: HDSSettings_1.SETTING_TYPES
+    SETTING_TYPES: HDSSettings_1.SETTING_TYPES,
+    HDSModelConversions: HDSModel_Conversions_1.HDSModelConversions
 };
 exports.default = HDSLib;
 //# sourceMappingURL=index.js.map

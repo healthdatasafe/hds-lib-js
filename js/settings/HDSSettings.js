@@ -11,6 +11,7 @@ exports.SETTING_TYPES = {
     timezone: 'settings/timezone',
     dateFormat: 'settings/dateFormat',
     unitSystem: 'settings/unitSystem',
+    displayName: 'settings/displayName',
 };
 const DEFAULTS = {
     preferredLocales: ['en'],
@@ -18,6 +19,7 @@ const DEFAULTS = {
     timezone: 'Europe/Zurich',
     dateFormat: 'DD.MM.YYYY',
     unitSystem: 'metric',
+    displayName: null,
 };
 /**
  * Detect browser defaults for settings that can be inferred.
@@ -71,9 +73,8 @@ async function load() {
     const browser = browserDefaults();
     _values = { ...DEFAULTS, ...browser };
     _cache = {};
-    const settingTypes = Object.values(exports.SETTING_TYPES);
-    const events = await _connection.apiOne('events.get', { streams: [_streamId], types: settingTypes, limit: 100 }, 'events');
-    for (const event of events) {
+    const settingsEvents = await _connection.apiOne('events.get', { streams: [_streamId], types: Object.values(exports.SETTING_TYPES), limit: 100 }, 'events');
+    for (const event of settingsEvents) {
         const key = keyForType(event.type);
         if (key && !_cache[key]) {
             _cache[key] = event;

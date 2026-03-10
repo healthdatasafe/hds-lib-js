@@ -12,6 +12,7 @@ import { computeReminders } from './HDSModel/reminders';
 import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText';
 import { MonitorScope } from './MonitorScope';
 import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings';
+import { HDSModelConversions } from './HDSModel/HDSModel-Conversions';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope';
 export type { ReminderConfig } from './HDSModel/HDSItemDef';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders';
@@ -24,7 +25,7 @@ export const model = (() => {
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSModelConversions };
 
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
 const HDSLib = {
@@ -46,6 +47,7 @@ const HDSLib = {
   formatEventDate,
   MonitorScope,
   HDSSettings,
-  SETTING_TYPES
+  SETTING_TYPES,
+  HDSModelConversions
 };
 export default HDSLib;

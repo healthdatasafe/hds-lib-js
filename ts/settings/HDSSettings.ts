@@ -11,6 +11,7 @@ export const SETTING_TYPES = {
   timezone: 'settings/timezone',
   dateFormat: 'settings/dateFormat',
   unitSystem: 'settings/unitSystem',
+  displayName: 'settings/displayName',
 } as const;
 
 export type SettingKey = keyof typeof SETTING_TYPES;
@@ -25,6 +26,7 @@ export interface SettingsValues {
   timezone: string;
   dateFormat: DateFormat;
   unitSystem: UnitSystem;
+  displayName: string | null;
 }
 
 const DEFAULTS: SettingsValues = {
@@ -33,6 +35,7 @@ const DEFAULTS: SettingsValues = {
   timezone: 'Europe/Zurich',
   dateFormat: 'DD.MM.YYYY',
   unitSystem: 'metric',
+  displayName: null,
 };
 
 /**
@@ -85,14 +88,13 @@ async function load (): Promise<void> {
   _values = { ...DEFAULTS, ...browser };
   _cache = {};
 
-  const settingTypes = Object.values(SETTING_TYPES);
-  const events: any[] = await _connection.apiOne(
+  const settingsEvents: any[] = await _connection.apiOne(
     'events.get',
-    { streams: [_streamId], types: settingTypes, limit: 100 },
+    { streams: [_streamId], types: Object.values(SETTING_TYPES), limit: 100 },
     'events'
   );
 
-  for (const event of events) {
+  for (const event of settingsEvents) {
     const key = keyForType(event.type);
     if (key && !_cache[key]) {
       _cache[key] = event;
