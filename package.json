@@ -3,7 +3,7 @@
   "version": "0.1.14",
   "description": "Health Data Safe - Library",
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "test": "NODE_ENV=test mocha tests --test-reporter=spec",
