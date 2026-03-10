@@ -5,6 +5,7 @@ import { HDSModelAuthorizations } from './HDSModel-Authorizations';
 import { HDSModelItemsDefs } from './HDSModel-ItemsDefs';
 import { HDSModelEventTypes } from './HDSModel-EventTypes';
 import { HDSModelDatasources } from './HDSModel-Datasources';
+import { HDSModelConversions } from './HDSModel-Conversions';
 
 export class HDSModel {
   /**
@@ -110,6 +111,14 @@ export class HDSModel {
       this.laziliyLoadedMap.datasources = new HDSModelDatasources(this);
     }
     return this.laziliyLoadedMap.datasources;
+  }
+
+  get conversions (): HDSModelConversions {
+    if (!this.isLoaded) throwNotLoadedError();
+    if (!this.laziliyLoadedMap.conversions) {
+      this.laziliyLoadedMap.conversions = new HDSModelConversions(this);
+    }
+    return this.laziliyLoadedMap.conversions;
   }
 }
 

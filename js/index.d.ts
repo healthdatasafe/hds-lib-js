@@ -11,13 +11,15 @@ import { durationToSeconds, durationToLabel } from './utils/duration';
 import { computeReminders } from './HDSModel/reminders';
 import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText';
 import { MonitorScope } from './MonitorScope';
+import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope';
 export type { ReminderConfig } from './HDSModel/HDSItemDef';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders';
+export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from './settings/HDSSettings';
 export declare const model: HDSModel;
 export declare const getHDSModel: typeof HDSModelInitAndSingleton.getModel;
 export declare const initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES };
 declare const HDSLib: {
     getHDSModel: typeof HDSModelInitAndSingleton.getModel;
     initHDSModel: typeof HDSModelInitAndSingleton.initHDSModel;
@@ -36,6 +38,23 @@ declare const HDSLib: {
     eventToShortText: typeof eventToShortText;
     formatEventDate: typeof formatEventDate;
     MonitorScope: typeof MonitorScope;
+    HDSSettings: {
+        hookToApplication(app: appTemplates.Application): Promise<void>;
+        hookToConnection(connection: pryv.Connection, streamId: string): Promise<void>;
+        get<K extends import("./settings/HDSSettings").SettingKey>(key: K): import("./settings/HDSSettings").SettingsValues[K];
+        getAll(): Readonly<import("./settings/HDSSettings").SettingsValues>;
+        set<K extends import("./settings/HDSSettings").SettingKey>(key: K, value: import("./settings/HDSSettings").SettingsValues[K]): Promise<void>;
+        readonly isHooked: boolean;
+        reload(): Promise<void>;
+        unhook(): void;
+    };
+    SETTING_TYPES: {
+        readonly preferredLocales: "settings/preferredLocales";
+        readonly theme: "settings/theme";
+        readonly timezone: "settings/timezone";
+        readonly dateFormat: "settings/dateFormat";
+        readonly unitSystem: "settings/unitSystem";
+    };
 };
 export default HDSLib;
 //# sourceMappingURL=index.d.ts.map

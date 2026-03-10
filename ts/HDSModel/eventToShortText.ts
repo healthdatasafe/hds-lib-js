@@ -1,12 +1,29 @@
 import { localizeText } from '../localizeText';
 import { getModel } from './HDSModelInitAndSingleton';
+import HDSSettings from '../settings/HDSSettings';
+import type { DateFormat } from '../settings/HDSSettings';
+
+const DATE_SEPARATORS: Record<DateFormat, (d: Date) => string> = {
+  'DD.MM.YYYY': (d) => pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
+  'DD/MM/YYYY': (d) => pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(),
+  'MM/DD/YYYY': (d) => pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear(),
+  'YYYY-MM-DD': (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()),
+};
+
+function pad (n: number): string { return n < 10 ? '0' + n : String(n); }
 
 /**
  * Format a Unix timestamp (seconds) as a date string.
- * Centralized here so we can later hook into user locale/format preferences.
+ * Uses HDSSettings dateFormat + timezone when available, otherwise ISO date.
  */
 export function formatEventDate (timeSec: number): string {
-  return new Date(timeSec * 1000).toISOString().split('T')[0];
+  const d = new Date(timeSec * 1000);
+  if (HDSSettings.isHooked) {
+    const fmt = HDSSettings.get('dateFormat');
+    const formatter = DATE_SEPARATORS[fmt];
+    if (formatter) return formatter(d);
+  }
+  return d.toISOString().split('T')[0];
 }
 
 /**
@@ -64,8 +81,7 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
 
   // number, text, composite, etc.
   if (typeof content === 'number') {
-    const symbol = getSymbol(event.type, model);
-    return symbol ? `${content} ${symbol}` : String(content);
+    return formatNumber(event.type, content, model);
   }
 
   if (typeof content === 'string') {
@@ -82,8 +98,7 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
 
 function formatFallback (event: any, content: any, model: any): string | null {
   if (typeof content === 'number') {
-    const symbol = getSymbol(event.type, model);
-    return symbol ? `${content} ${symbol}` : String(content);
+    return formatNumber(event.type, content, model);
   }
 
   if (typeof content === 'string') {
@@ -99,6 +114,19 @@ function formatFallback (event: any, content: any, model: any): string | null {
   }
 
   return String(content);
+}
+
+function formatNumber (eventType: string, content: number, model: any): string {
+  if (HDSSettings.isHooked) {
+    const system = HDSSettings.get('unitSystem');
+    const result = model.conversions.convert(eventType, content, system);
+    if (result) {
+      const symbol = getSymbol(result.targetEventType, model);
+      return symbol ? `${result.value} ${symbol}` : String(result.value);
+    }
+  }
+  const symbol = getSymbol(eventType, model);
+  return symbol ? `${content} ${symbol}` : String(content);
 }
 
 function formatSelect (event: any, content: any, itemDef: any): string {

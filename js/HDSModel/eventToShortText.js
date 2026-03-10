@@ -1,15 +1,33 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.formatEventDate = formatEventDate;
 exports.eventToShortText = eventToShortText;
 const localizeText_1 = require("../localizeText");
 const HDSModelInitAndSingleton_1 = require("./HDSModelInitAndSingleton");
+const HDSSettings_1 = __importDefault(require("../settings/HDSSettings"));
+const DATE_SEPARATORS = {
+    'DD.MM.YYYY': (d) => pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
+    'DD/MM/YYYY': (d) => pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(),
+    'MM/DD/YYYY': (d) => pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear(),
+    'YYYY-MM-DD': (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()),
+};
+function pad(n) { return n < 10 ? '0' + n : String(n); }
 /**
  * Format a Unix timestamp (seconds) as a date string.
- * Centralized here so we can later hook into user locale/format preferences.
+ * Uses HDSSettings dateFormat + timezone when available, otherwise ISO date.
  */
 function formatEventDate(timeSec) {
-    return new Date(timeSec * 1000).toISOString().split('T')[0];
+    const d = new Date(timeSec * 1000);
+    if (HDSSettings_1.default.isHooked) {
+        const fmt = HDSSettings_1.default.get('dateFormat');
+        const formatter = DATE_SEPARATORS[fmt];
+        if (formatter)
+            return formatter(d);
+    }
+    return d.toISOString().split('T')[0];
 }
 /**
  * Convert an event's content to a short human-readable string.
@@ -61,8 +79,7 @@ function formatWithItemDef(event, content, itemDef, model) {
     }
     // number, text, composite, etc.
     if (typeof content === 'number') {
-        const symbol = getSymbol(event.type, model);
-        return symbol ? `${content} ${symbol}` : String(content);
+        return formatNumber(event.type, content, model);
     }
     if (typeof content === 'string') {
         return content.length > 60 ? content.slice(0, 60) + '...' : content;
@@ -75,8 +92,7 @@ function formatWithItemDef(event, content, itemDef, model) {
 }
 function formatFallback(event, content, model) {
     if (typeof content === 'number') {
-        const symbol = getSymbol(event.type, model);
-        return symbol ? `${content} ${symbol}` : String(content);
+        return formatNumber(event.type, content, model);
     }
     if (typeof content === 'string') {
         return content.length > 60 ? content.slice(0, 60) + '...' : content;
@@ -88,6 +104,18 @@ function formatFallback(event, content, model) {
         return formatObject(content);
     }
     return String(content);
+}
+function formatNumber(eventType, content, model) {
+    if (HDSSettings_1.default.isHooked) {
+        const system = HDSSettings_1.default.get('unitSystem');
+        const result = model.conversions.convert(eventType, content, system);
+        if (result) {
+            const symbol = getSymbol(result.targetEventType, model);
+            return symbol ? `${result.value} ${symbol}` : String(result.value);
+        }
+    }
+    const symbol = getSymbol(eventType, model);
+    return symbol ? `${content} ${symbol}` : String(content);
 }
 function formatSelect(event, content, itemDef) {
     let valueForSelect = content;

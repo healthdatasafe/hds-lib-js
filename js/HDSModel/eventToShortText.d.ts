@@ -1,6 +1,6 @@
 /**
  * Format a Unix timestamp (seconds) as a date string.
- * Centralized here so we can later hook into user locale/format preferences.
+ * Uses HDSSettings dateFormat + timezone when available, otherwise ISO date.
  */
 export declare function formatEventDate(timeSec: number): string;
 /**
