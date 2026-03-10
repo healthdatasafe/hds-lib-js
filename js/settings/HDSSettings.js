@@ -6,12 +6,12 @@ const localizeText_1 = require("../localizeText");
  * Known setting event types — each stored as a separate Pryv event.
  */
 exports.SETTING_TYPES = {
-    preferredLocales: 'settings/preferredLocales',
+    preferredLocales: 'settings/preferred-locales',
     theme: 'settings/theme',
     timezone: 'settings/timezone',
-    dateFormat: 'settings/dateFormat',
-    unitSystem: 'settings/unitSystem',
-    displayName: 'settings/displayName',
+    dateFormat: 'settings/date-format',
+    unitSystem: 'settings/unit-system',
+    displayName: 'contact/display-name',
 };
 const DEFAULTS = {
     preferredLocales: ['en'],

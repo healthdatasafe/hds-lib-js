@@ -6,12 +6,12 @@ import type { Application } from '../appTemplates/Application';
  * Known setting event types — each stored as a separate Pryv event.
  */
 export const SETTING_TYPES = {
-  preferredLocales: 'settings/preferredLocales',
+  preferredLocales: 'settings/preferred-locales',
   theme: 'settings/theme',
   timezone: 'settings/timezone',
-  dateFormat: 'settings/dateFormat',
-  unitSystem: 'settings/unitSystem',
-  displayName: 'settings/displayName',
+  dateFormat: 'settings/date-format',
+  unitSystem: 'settings/unit-system',
+  displayName: 'contact/display-name',
 } as const;
 
 export type SettingKey = keyof typeof SETTING_TYPES;

@@ -69,9 +69,9 @@ describe('[HDSS] HDSSettings', function () {
         'events.get': (params) => ({
           events: [
             { id: 'ev1', type: 'settings/theme', content: 'dark' },
-            { id: 'ev2', type: 'settings/preferredLocales', content: ['fr'] },
-            { id: 'ev3', type: 'settings/unitSystem', content: 'imperial' },
-            { id: 'ev4', type: 'settings/displayName', content: 'Dr. Smith' }
+            { id: 'ev2', type: 'settings/preferred-locales', content: ['fr'] },
+            { id: 'ev3', type: 'settings/unit-system', content: 'imperial' },
+            { id: 'ev4', type: 'contact/display-name', content: 'Dr. Smith' }
           ]
         })
       });
@@ -145,7 +145,7 @@ describe('[HDSS] HDSSettings', function () {
       assert.strictEqual(HDSSettings.get('displayName'), 'Alice');
 
       const createCall = conn.apiCalls.find(c =>
-        c.method === 'events.create' && c.params.type === 'settings/displayName'
+        c.method === 'events.create' && c.params.type === 'contact/display-name'
       );
       assert.ok(createCall, 'Should have created a settings/displayName event');
       assert.strictEqual(createCall.params.content, 'Alice');
@@ -154,7 +154,7 @@ describe('[HDSS] HDSSettings', function () {
     it('[HDSS-S5] displayName updates existing event', async () => {
       const conn = createMockConnection({
         'events.get': (params) => ({
-          events: [{ id: 'ev-dn', type: 'settings/displayName', content: 'Old Name' }]
+          events: [{ id: 'ev-dn', type: 'contact/display-name', content: 'Old Name' }]
         })
       });
 
@@ -194,11 +194,11 @@ describe('[HDSS] HDSSettings', function () {
 
 describe('[STPS] SETTING_TYPES', () => {
   it('[STPS1] has expected keys', () => {
-    assert.strictEqual(SETTING_TYPES.preferredLocales, 'settings/preferredLocales');
+    assert.strictEqual(SETTING_TYPES.preferredLocales, 'settings/preferred-locales');
     assert.strictEqual(SETTING_TYPES.theme, 'settings/theme');
     assert.strictEqual(SETTING_TYPES.timezone, 'settings/timezone');
-    assert.strictEqual(SETTING_TYPES.dateFormat, 'settings/dateFormat');
-    assert.strictEqual(SETTING_TYPES.unitSystem, 'settings/unitSystem');
-    assert.strictEqual(SETTING_TYPES.displayName, 'settings/displayName');
+    assert.strictEqual(SETTING_TYPES.dateFormat, 'settings/date-format');
+    assert.strictEqual(SETTING_TYPES.unitSystem, 'settings/unit-system');
+    assert.strictEqual(SETTING_TYPES.displayName, 'contact/display-name');
   });
 });

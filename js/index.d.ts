@@ -50,12 +50,12 @@ declare const HDSLib: {
         unhook(): void;
     };
     SETTING_TYPES: {
-        readonly preferredLocales: "settings/preferredLocales";
+        readonly preferredLocales: "settings/preferred-locales";
         readonly theme: "settings/theme";
         readonly timezone: "settings/timezone";
-        readonly dateFormat: "settings/dateFormat";
-        readonly unitSystem: "settings/unitSystem";
-        readonly displayName: "settings/displayName";
+        readonly dateFormat: "settings/date-format";
+        readonly unitSystem: "settings/unit-system";
+        readonly displayName: "contact/display-name";
     };
     HDSModelConversions: typeof HDSModelConversions;
 };

@@ -4,12 +4,12 @@ import type { Application } from '../appTemplates/Application';
  * Known setting event types — each stored as a separate Pryv event.
  */
 export declare const SETTING_TYPES: {
-    readonly preferredLocales: "settings/preferredLocales";
+    readonly preferredLocales: "settings/preferred-locales";
     readonly theme: "settings/theme";
     readonly timezone: "settings/timezone";
-    readonly dateFormat: "settings/dateFormat";
-    readonly unitSystem: "settings/unitSystem";
-    readonly displayName: "settings/displayName";
+    readonly dateFormat: "settings/date-format";
+    readonly unitSystem: "settings/unit-system";
+    readonly displayName: "contact/display-name";
 };
 export type SettingKey = keyof typeof SETTING_TYPES;
 export type DateFormat = 'DD.MM.YYYY' | 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'YYYY-MM-DD';
