@@ -8,7 +8,7 @@ function createMockConnection (responses = {}) {
     async api (calls) {
       this.apiCalls.push(calls);
       return calls.map(call => {
-        const key = call.method + ':' + JSON.stringify(call.params);
+        const _key = call.method + ':' + JSON.stringify(call.params);
         // Check for specific response handlers
         if (responses[call.method]) {
           return responses[call.method](call.params);
@@ -127,17 +127,21 @@ describe('[MSC] MonitorScope', () => {
           callCount++;
           if (callCount === 1) {
             // First page: 3 events (full page)
-            return { events: [
-              { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
-              { id: 'e2', time: now - 200, modified: now - 200, streamIds: ['s1'], type: 'note/txt' },
-              { id: 'e3', time: now - 300, modified: now - 300, streamIds: ['s1'], type: 'note/txt' },
-            ] };
+            return {
+              events: [
+                { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
+                { id: 'e2', time: now - 200, modified: now - 200, streamIds: ['s1'], type: 'note/txt' },
+                { id: 'e3', time: now - 300, modified: now - 300, streamIds: ['s1'], type: 'note/txt' },
+              ]
+            };
           }
           if (callCount === 2) {
             // Second page: older events (partial = last page)
-            return { events: [
-              { id: 'e4', time: now - 400, modified: now - 400, streamIds: ['s1'], type: 'note/txt' },
-            ] };
+            return {
+              events: [
+                { id: 'e4', time: now - 400, modified: now - 400, streamIds: ['s1'], type: 'note/txt' },
+              ]
+            };
           }
           return { events: [] };
         },
@@ -249,16 +253,20 @@ describe('[MSC] MonitorScope', () => {
           callCount++;
           if (callCount === 1) {
             // First page: 2 events (full page)
-            return { events: [
-              { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
-              { id: 'e2', time: now - 200, modified: now - 200, streamIds: ['s1'], type: 'note/txt' },
-            ] };
+            return {
+              events: [
+                { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
+                { id: 'e2', time: now - 200, modified: now - 200, streamIds: ['s1'], type: 'note/txt' },
+              ]
+            };
           }
           if (callCount === 2) {
             // Second page: 1 event (partial = last page)
-            return { events: [
-              { id: 'e3', time: now - 300, modified: now - 300, streamIds: ['s1'], type: 'note/txt' },
-            ] };
+            return {
+              events: [
+                { id: 'e3', time: now - 300, modified: now - 300, streamIds: ['s1'], type: 'note/txt' },
+              ]
+            };
           }
           return { events: [] };
         },

@@ -13,7 +13,7 @@ function maxImportance(a, b) {
  * Returns merged config + importance (highest across all sources).
  */
 function mergeReminders(sources) {
-    let merged = {};
+    const merged = {};
     let importance = 'may';
     for (const source of sources) {
         const r = source.reminder;

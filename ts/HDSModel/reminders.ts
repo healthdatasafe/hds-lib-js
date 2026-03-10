@@ -46,7 +46,7 @@ function maxImportance (a: ReminderConfig['importance'], b: ReminderConfig['impo
  * Returns merged config + importance (highest across all sources).
  */
 function mergeReminders (sources: ReminderSource[]): { config: ReminderConfig; importance: 'may' | 'should' | 'must' } {
-  let merged: ReminderConfig = {};
+  const merged: ReminderConfig = {};
   let importance: 'may' | 'should' | 'must' = 'may';
   for (const source of sources) {
     const r = source.reminder;

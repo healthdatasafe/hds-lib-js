@@ -37,7 +37,7 @@ describe('[FED] formatEventDate', function () {
 
   it('[FED2] uses DD.MM.YYYY format', async () => {
     const conn = createMockConnection([
-      { id: 'ev1', type: 'settings/dateFormat', content: 'DD.MM.YYYY' }
+      { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }
     ]);
     await HDSSettings.hookToConnection(conn, 'test-stream');
     const result = formatEventDate(timestamp);
@@ -46,7 +46,7 @@ describe('[FED] formatEventDate', function () {
 
   it('[FED3] uses DD/MM/YYYY format', async () => {
     const conn = createMockConnection([
-      { id: 'ev1', type: 'settings/dateFormat', content: 'DD/MM/YYYY' }
+      { id: 'ev1', type: 'settings/date-format', content: 'DD/MM/YYYY' }
     ]);
     await HDSSettings.hookToConnection(conn, 'test-stream');
     const result = formatEventDate(timestamp);
@@ -55,7 +55,7 @@ describe('[FED] formatEventDate', function () {
 
   it('[FED4] uses MM/DD/YYYY format', async () => {
     const conn = createMockConnection([
-      { id: 'ev1', type: 'settings/dateFormat', content: 'MM/DD/YYYY' }
+      { id: 'ev1', type: 'settings/date-format', content: 'MM/DD/YYYY' }
     ]);
     await HDSSettings.hookToConnection(conn, 'test-stream');
     const result = formatEventDate(timestamp);
@@ -64,7 +64,7 @@ describe('[FED] formatEventDate', function () {
 
   it('[FED5] uses YYYY-MM-DD format', async () => {
     const conn = createMockConnection([
-      { id: 'ev1', type: 'settings/dateFormat', content: 'YYYY-MM-DD' }
+      { id: 'ev1', type: 'settings/date-format', content: 'YYYY-MM-DD' }
     ]);
     await HDSSettings.hookToConnection(conn, 'test-stream');
     const result = formatEventDate(timestamp);

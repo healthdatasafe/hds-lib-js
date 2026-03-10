@@ -1,5 +1,4 @@
 import { pryv } from './patchedPryv';
-import { allStreamsAndChildren } from './toolkit/StreamsTools';
 
 /**
  * MonitorScope — Progressive event loading with Monitor integration.
