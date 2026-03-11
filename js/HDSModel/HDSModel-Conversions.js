@@ -72,4 +72,3 @@ function applyReverseFactor(value, factor) {
         return Math.round((value / factor) * 100) / 100;
     return Math.round(((value - factor[1]) / factor[0]) * 100) / 100;
 }
-//# sourceMappingURL=HDSModel-Conversions.js.map

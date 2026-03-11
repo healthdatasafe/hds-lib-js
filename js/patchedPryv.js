@@ -47,4 +47,3 @@ const monitor_1 = __importDefault(require("@pryv/monitor"));
 const socket_io_1 = __importDefault(require("@pryv/socket.io"));
 (0, monitor_1.default)(pryv);
 (0, socket_io_1.default)(pryv);
-//# sourceMappingURL=patchedPryv.js.map

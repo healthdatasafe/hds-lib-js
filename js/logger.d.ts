@@ -12,4 +12,3 @@ export declare function error(...args: any[]): void;
 export declare function debug(..._args: any[]): void;
 export declare function warn(...args: any[]): void;
 export {};
-//# sourceMappingURL=logger.d.ts.map

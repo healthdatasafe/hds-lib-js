@@ -14,4 +14,3 @@ class HDSLibError extends Error {
     }
 }
 exports.HDSLibError = HDSLibError;
-//# sourceMappingURL=errors.js.map

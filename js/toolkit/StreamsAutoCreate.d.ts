@@ -22,4 +22,3 @@ export declare class StreamsAutoCreate {
     knowStreamIds(): string[];
     addStreamStructure(streamStructure: any): void;
 }
-//# sourceMappingURL=StreamsAutoCreate.d.ts.map

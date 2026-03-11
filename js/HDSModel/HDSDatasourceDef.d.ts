@@ -28,4 +28,3 @@ export declare class HDSDatasourceDef {
     get valueFields(): string[];
 }
 export {};
-//# sourceMappingURL=HDSDatasourceDef.d.ts.map

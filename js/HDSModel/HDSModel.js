@@ -119,4 +119,3 @@ exports.HDSModel = HDSModel;
 function throwNotLoadedError() {
     throw new errors_1.HDSLibError('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
 }
-//# sourceMappingURL=HDSModel.js.map

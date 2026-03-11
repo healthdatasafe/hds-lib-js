@@ -137,4 +137,3 @@ declare class CollectorRequestSection implements CollectorSectionInterface {
     getData(): any;
 }
 export {};
-//# sourceMappingURL=CollectorRequest.d.ts.map

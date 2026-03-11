@@ -48,4 +48,3 @@ export declare class CollectorInvite {
         eventId: string;
     }>;
 }
-//# sourceMappingURL=CollectorInvite.d.ts.map

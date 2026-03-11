@@ -112,4 +112,3 @@ function mixAuthorizationLevels(level1, level2) {
     /* c8 ignore next */ // error if there .. 'read' & 'read' should have already be found
     throw new Error(`Invalid level found level1: ${level1}, level2 ${level2}`);
 }
-//# sourceMappingURL=HDSModel-Authorizations.js.map

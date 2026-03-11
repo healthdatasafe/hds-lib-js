@@ -27,4 +27,3 @@ export declare class HDSModelStreams {
      */
     getParentsIds(streamId: string, throwErrorIfNotFound?: boolean, initialArray?: string[]): string[];
 }
-//# sourceMappingURL=HDSModel-Streams.d.ts.map

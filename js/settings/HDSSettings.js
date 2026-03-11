@@ -170,4 +170,3 @@ const HDSSettings = {
 };
 exports.HDSSettings = HDSSettings;
 exports.default = HDSSettings;
-//# sourceMappingURL=HDSSettings.js.map

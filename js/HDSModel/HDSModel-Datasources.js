@@ -40,4 +40,3 @@ class HDSModelDatasources {
     }
 }
 exports.HDSModelDatasources = HDSModelDatasources;
-//# sourceMappingURL=HDSModel-Datasources.js.map

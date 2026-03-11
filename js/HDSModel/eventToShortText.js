@@ -199,4 +199,3 @@ function getSymbol(eventType, model) {
         return null;
     }
 }
-//# sourceMappingURL=eventToShortText.js.map

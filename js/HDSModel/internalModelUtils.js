@@ -23,4 +23,3 @@ function itemKeyOrDefToDef(model, keyOrDef) {
         return keyOrDef;
     return model.itemsDefs.forKey(keyOrDef);
 }
-//# sourceMappingURL=internalModelUtils.js.map

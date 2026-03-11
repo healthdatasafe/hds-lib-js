@@ -44,4 +44,3 @@ class HDSService extends patchedPryv_1.pryv.Service {
     }
 }
 exports.HDSService = HDSService;
-//# sourceMappingURL=HDSService.js.map

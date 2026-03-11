@@ -10,4 +10,3 @@ export interface CollectorSectionInterface {
     itemKeys: Array<string>;
     itemCustomizations?: Record<string, Record<string, unknown>>;
 }
-//# sourceMappingURL=interfaces.d.ts.map

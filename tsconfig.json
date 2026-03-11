@@ -2,7 +2,7 @@
   "include": ["ts/**/*"],
   "compilerOptions": {
     "allowJs": true,
-    "sourceMap": true,
+    "sourceMap": false,
     "target": "es2022",
     "module": "commonjs",
     "moduleResolution": "node",
@@ -13,7 +13,7 @@
     "noImplicitReturns": false,
     "noImplicitThis": true,
     "noUnusedLocals": false,
-    "declarationMap": true,
+    "declarationMap": false,
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,

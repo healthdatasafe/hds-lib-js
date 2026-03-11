@@ -65,4 +65,3 @@ export declare class Application {
      */
     loadStreamData(): Promise<any>;
 }
-//# sourceMappingURL=Application.d.ts.map

@@ -29,4 +29,3 @@ export declare class HDSItemDef {
         type: string;
     };
 }
-//# sourceMappingURL=HDSItemDef.d.ts.map

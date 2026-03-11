@@ -25,4 +25,3 @@ export declare class HDSModelConversions {
      */
     convert(eventType: string, value: number, targetSystem: UnitSystem): ConversionResult | null;
 }
-//# sourceMappingURL=HDSModel-Conversions.d.ts.map

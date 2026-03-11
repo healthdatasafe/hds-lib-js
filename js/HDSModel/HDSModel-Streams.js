@@ -95,4 +95,3 @@ function loadModelStreamsById(streams, map) {
         loadModelStreamsById(stream.children, map);
     }
 }
-//# sourceMappingURL=HDSModel-Streams.js.map

@@ -8,4 +8,3 @@ export declare function setServiceInfoURL(url: string): void;
  */
 export declare function getServiceInfoURL(): string;
 export { setPreferredLocales };
-//# sourceMappingURL=settings.d.ts.map

@@ -33,4 +33,3 @@ export declare class AppManagingAccount extends Application {
      */
     createCollectorUnitialized(name: string): Promise<Collector>;
 }
-//# sourceMappingURL=AppManagingAccount.d.ts.map

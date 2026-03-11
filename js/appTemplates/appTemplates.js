@@ -15,4 +15,3 @@ const CollectorInvite_1 = require("./CollectorInvite");
 Object.defineProperty(exports, "CollectorInvite", { enumerable: true, get: function () { return CollectorInvite_1.CollectorInvite; } });
 const CollectorRequest_1 = require("./CollectorRequest");
 Object.defineProperty(exports, "CollectorRequest", { enumerable: true, get: function () { return CollectorRequest_1.CollectorRequest; } });
-//# sourceMappingURL=appTemplates.js.map

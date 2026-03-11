@@ -22,4 +22,3 @@ function getStreamIdAndChildrenIds(stream) {
     }
     return streamIds;
 }
-//# sourceMappingURL=StreamsTools.js.map

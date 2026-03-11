@@ -102,4 +102,3 @@ export declare class Collector {
  * @property {String} app.url
  * @property {Object} app.data - to be finalized
  */
-//# sourceMappingURL=Collector.d.ts.map

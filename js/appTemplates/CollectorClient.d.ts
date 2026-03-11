@@ -74,4 +74,3 @@ export declare class CollectorClient {
     };
     chatPost(hdsConnection: pryv.Connection, content: string): Promise<pryv.Event>;
 }
-//# sourceMappingURL=CollectorClient.d.ts.map

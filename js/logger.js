@@ -29,4 +29,3 @@ function log(type) {
         console.log(`Logger: [${type}]`, ...args);
     };
 }
-//# sourceMappingURL=logger.js.map

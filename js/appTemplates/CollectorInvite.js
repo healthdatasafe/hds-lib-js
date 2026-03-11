@@ -120,4 +120,3 @@ class CollectorInvite {
     }
 }
 exports.CollectorInvite = CollectorInvite;
-//# sourceMappingURL=CollectorInvite.js.map

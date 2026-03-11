@@ -71,4 +71,3 @@ declare const HDSSettings: {
 };
 export { HDSSettings };
 export default HDSSettings;
-//# sourceMappingURL=HDSSettings.d.ts.map

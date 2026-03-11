@@ -451,4 +451,3 @@ _a = Collector;
  * @property {String} app.url
  * @property {Object} app.data - to be finalized
  */
-//# sourceMappingURL=Collector.js.map

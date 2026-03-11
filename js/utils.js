@@ -31,4 +31,3 @@ function deepFreeze(object) {
     }
     return Object.freeze(object);
 }
-//# sourceMappingURL=utils.js.map

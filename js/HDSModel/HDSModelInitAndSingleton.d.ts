@@ -8,4 +8,3 @@ export declare function resetModel(): void;
  * Initialized model singleton
  */
 export declare function initHDSModel(): Promise<HDSModel>;
-//# sourceMappingURL=HDSModelInitAndSingleton.d.ts.map

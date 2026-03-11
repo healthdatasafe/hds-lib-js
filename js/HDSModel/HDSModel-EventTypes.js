@@ -23,4 +23,3 @@ class HDSModelEventTypes {
     }
 }
 exports.HDSModelEventTypes = HDSModelEventTypes;
-//# sourceMappingURL=HDSModel-EventTypes.js.map

@@ -90,4 +90,3 @@ class AppManagingAccount extends Application_1.Application {
     }
 }
 exports.AppManagingAccount = AppManagingAccount;
-//# sourceMappingURL=AppManagingAccount.js.map

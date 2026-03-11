@@ -33,4 +33,3 @@ async function initHDSModel() {
     }
     return hdsModelInstance;
 }
-//# sourceMappingURL=HDSModelInitAndSingleton.js.map

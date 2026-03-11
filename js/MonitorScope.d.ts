@@ -70,4 +70,3 @@ export declare class MonitorScope {
     private trackEvent;
 }
 export {};
-//# sourceMappingURL=MonitorScope.d.ts.map

@@ -19,4 +19,3 @@ export declare class HDSModelItemsDefs {
      */
     forEvent(event: any, throwErrorIfNotFound?: boolean): HDSItemDef | null;
 }
-//# sourceMappingURL=HDSModel-ItemsDefs.d.ts.map

@@ -66,4 +66,3 @@ function durationToLabel(seconds) {
     const n = Math.round(seconds / 60);
     return n === 1 ? '1 minute' : `${n} minutes`;
 }
-//# sourceMappingURL=duration.js.map

@@ -183,4 +183,3 @@ class MonitorScope {
     }
 }
 exports.MonitorScope = MonitorScope;
-//# sourceMappingURL=MonitorScope.js.map

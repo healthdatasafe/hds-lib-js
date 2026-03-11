@@ -9,4 +9,3 @@ export declare class HDSModelEventTypes {
     getEventTypeExtra(eventType: string): any;
     getEventTypeSymbol(eventType: string): string | null;
 }
-//# sourceMappingURL=HDSModel-EventTypes.d.ts.map

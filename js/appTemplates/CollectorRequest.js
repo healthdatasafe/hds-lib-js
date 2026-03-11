@@ -371,4 +371,3 @@ function vo0ToV1(v0Data) {
     }
     v0Data.version = 1;
 }
-//# sourceMappingURL=CollectorRequest.js.map

@@ -97,4 +97,3 @@ const HDSLib = {
     HDSModelConversions: HDSModel_Conversions_1.HDSModelConversions
 };
 exports.default = HDSLib;
-//# sourceMappingURL=index.js.map

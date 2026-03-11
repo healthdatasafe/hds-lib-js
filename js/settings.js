@@ -19,4 +19,3 @@ function setServiceInfoURL(url) {
 function getServiceInfoURL() {
     return serviceInfoUrl;
 }
-//# sourceMappingURL=settings.js.map

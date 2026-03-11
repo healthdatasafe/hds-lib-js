@@ -6,4 +6,3 @@ import { CollectorClient } from './CollectorClient';
 import { CollectorInvite } from './CollectorInvite';
 import { CollectorRequest } from './CollectorRequest';
 export { AppManagingAccount, AppClientAccount, Application, Collector, CollectorClient, CollectorInvite, CollectorRequest };
-//# sourceMappingURL=appTemplates.d.ts.map

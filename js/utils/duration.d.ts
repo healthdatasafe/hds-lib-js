@@ -12,4 +12,3 @@ export declare function durationToSeconds(iso: string): number;
  * Format seconds as a human-readable duration label.
  */
 export declare function durationToLabel(seconds: number): string;
-//# sourceMappingURL=duration.d.ts.map

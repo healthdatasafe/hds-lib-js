@@ -46,4 +46,3 @@ class HDSItemDef {
     }
 }
 exports.HDSItemDef = HDSItemDef;
-//# sourceMappingURL=HDSItemDef.js.map

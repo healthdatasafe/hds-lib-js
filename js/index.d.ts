@@ -60,4 +60,3 @@ declare const HDSLib: {
     HDSModelConversions: typeof HDSModelConversions;
 };
 export default HDSLib;
-//# sourceMappingURL=index.d.ts.map

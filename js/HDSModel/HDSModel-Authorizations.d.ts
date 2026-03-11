@@ -25,4 +25,3 @@ export declare class HDSModelAuthorizations {
         preRequest?: Array<AuthorizationPreRequestItem>;
     }): Array<AuthorizationRequestItem>;
 }
-//# sourceMappingURL=HDSModel-Authorizations.d.ts.map

@@ -38,4 +38,3 @@ const StreamsAutoCreate_1 = require("./StreamsAutoCreate");
 Object.defineProperty(exports, "StreamsAutoCreate", { enumerable: true, get: function () { return StreamsAutoCreate_1.StreamsAutoCreate; } });
 const StreamTools = __importStar(require("./StreamsTools"));
 exports.StreamTools = StreamTools;
-//# sourceMappingURL=index.js.map

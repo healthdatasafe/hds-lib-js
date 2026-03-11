@@ -381,4 +381,3 @@ class CollectorClient {
 }
 exports.CollectorClient = CollectorClient;
 _a = CollectorClient;
-//# sourceMappingURL=CollectorClient.js.map

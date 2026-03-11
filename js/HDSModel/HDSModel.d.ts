@@ -37,4 +37,3 @@ export declare class HDSModel {
     get datasources(): HDSModelDatasources;
     get conversions(): HDSModelConversions;
 }
-//# sourceMappingURL=HDSModel.d.ts.map

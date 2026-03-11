@@ -30,4 +30,3 @@ export declare function setPreferredLocales(arrayOfLocals: string[]): void;
  * throw errors if an item is not of type localizableText
  */
 export declare function validateLocalizableText(key: string, toTest: any): localizableText;
-//# sourceMappingURL=localizeText.d.ts.map

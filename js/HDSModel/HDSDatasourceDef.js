@@ -66,4 +66,3 @@ class HDSDatasourceDef {
     }
 }
 exports.HDSDatasourceDef = HDSDatasourceDef;
-//# sourceMappingURL=HDSDatasourceDef.js.map

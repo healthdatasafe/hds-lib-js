@@ -15,4 +15,3 @@ export declare function formatEventDate(timeSec: number): string;
  * for object content produces short textual representation.
  */
 export declare function eventToShortText(event: any): string | null;
-//# sourceMappingURL=eventToShortText.d.ts.map

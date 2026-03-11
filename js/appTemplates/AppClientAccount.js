@@ -135,4 +135,3 @@ class AppClientAccount extends Application_1.Application {
     }
 }
 exports.AppClientAccount = AppClientAccount;
-//# sourceMappingURL=AppClientAccount.js.map

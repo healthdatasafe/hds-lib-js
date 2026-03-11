@@ -15,4 +15,3 @@ export declare class HDSModelDatasources {
      */
     forKey(key: string, throwErrorIfNotFound?: boolean): HDSDatasourceDef | null;
 }
-//# sourceMappingURL=HDSModel-Datasources.d.ts.map

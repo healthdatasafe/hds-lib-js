@@ -16,4 +16,3 @@ export declare class AppClientAccount extends Application {
      */
     init(): Promise<this>;
 }
-//# sourceMappingURL=AppClientAccount.d.ts.map

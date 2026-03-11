@@ -208,4 +208,3 @@ async function createAppStreams(app) {
         app.cache.streamData = stream;
     }
 }
-//# sourceMappingURL=Application.js.map

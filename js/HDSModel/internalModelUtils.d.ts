@@ -10,4 +10,3 @@ export declare function itemKeysOrDefsToDefs(model: HDSModel, keysOrDefs: Array<
  * test if string or itemDef and returns an itemDef
  */
 export declare function itemKeyOrDefToDef(model: HDSModel, keyOrDef: string | HDSItemDef): HDSItemDef;
-//# sourceMappingURL=internalModelUtils.d.ts.map

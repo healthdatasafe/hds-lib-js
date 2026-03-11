@@ -39,4 +39,3 @@ interface EventLike {
  */
 export declare function computeReminders(itemDefs: ItemDefLike[], events: EventLike[], overrides?: Record<string, ReminderSource[]>, now?: number): ReminderStatus[];
 export {};
-//# sourceMappingURL=reminders.d.ts.map
