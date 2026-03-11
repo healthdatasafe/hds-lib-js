@@ -1,4 +1,4 @@
-import { localizeText } from '../localizeText';
+import { localizeText } from '../localizeText.js';
 
 type AssetsProvider = () => { [key: string]: string };
 

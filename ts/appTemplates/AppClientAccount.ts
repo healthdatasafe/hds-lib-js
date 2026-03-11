@@ -1,8 +1,8 @@
-import { HDSLibError } from '../errors';
-import { pryv } from '../patchedPryv';
-import { Application } from './Application';
-import { CollectorClient } from './CollectorClient';
-import * as logger from '../logger';
+import { HDSLibError } from '../errors.js';
+import { pryv } from '../patchedPryv.js';
+import { Application } from './Application.js';
+import { CollectorClient } from './CollectorClient.js';
+import * as logger from '../logger.js';
 
 /**
  * - applications

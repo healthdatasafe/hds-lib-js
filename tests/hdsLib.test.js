@@ -1,10 +1,10 @@
-const { assert } = require('./test-utils/deps-node');
+import { assert } from './test-utils/deps-node.js';
 /**
  * Tests related to HDSLib.index.js & utils
  */
-const HDSLib = require('../js');
-const { waitUntilFalse } = require('../js/utils');
-const { resetModel } = require('../js/HDSModel/HDSModelInitAndSingleton');
+import HDSLib from '../js/index.js';
+import { waitUntilFalse } from '../js/utils.js';
+import { resetModel } from '../js/HDSModel/HDSModelInitAndSingleton.js';
 
 describe('[HDLX] HDSLib.index', () => {
   before(async () => {

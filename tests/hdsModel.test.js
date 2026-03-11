@@ -1,9 +1,9 @@
-const { assert } = require('./test-utils/deps-node');
+import { assert } from './test-utils/deps-node.js';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
-const { HDSModel, initHDSModel } = require('../js/');
-const { resetPreferredLocales, setPreferredLocales } = require('../js/localizeText');
+import { HDSModel, initHDSModel } from '../js/index.js';
+import { resetPreferredLocales, setPreferredLocales } from '../js/localizeText.js';
 
 describe('[MODX] Model', () => {
   let model;

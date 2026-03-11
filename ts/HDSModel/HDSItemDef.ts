@@ -1,4 +1,4 @@
-import { localizeText } from '../localizeText';
+import { localizeText } from '../localizeText.js';
 
 export interface ReminderConfig {
   cooldown?: string;

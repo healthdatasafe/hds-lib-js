@@ -1,5 +1,5 @@
-import { HDSModel } from './HDSModel';
-import { HDSService } from '../HDSService';
+import { HDSModel } from './HDSModel.js';
+import { HDSService } from '../HDSService.js';
 
 let hdsModelInstance: HDSModel | null = null;
 

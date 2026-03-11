@@ -1,4 +1,4 @@
-import { pryv } from './patchedPryv';
+import { pryv } from './patchedPryv.js';
 
 /**
  * MonitorScope — Progressive event loading with Monitor integration.
@@ -137,7 +137,7 @@ export class MonitorScope {
       modifiedSince: this.maxModified,
     };
 
-    this.monitor = new pryv.Monitor(this.connection, eventsGetScope)
+    this.monitor = new (pryv as any).Monitor(this.connection, eventsGetScope)
       .on('event', (event: Event) => {
         this.trackEvent(event);
         // Real-time updates: use onEvent for individual events
@@ -159,7 +159,7 @@ export class MonitorScope {
 
     // Start before adding Socket to avoid race condition
     await this.monitor.start();
-    this.monitor.addUpdateMethod(new pryv.Monitor.UpdateMethod.Socket());
+    this.monitor.addUpdateMethod(new (pryv as any).Monitor.UpdateMethod.Socket());
   }
 
   /**

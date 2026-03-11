@@ -1,6 +1,6 @@
-const { assert } = require('./test-utils/deps-node');
+import { assert } from './test-utils/deps-node.js';
 
-const { allStreamsAndChildren, getStreamIdAndChildrenIds } = require('../js/toolkit/StreamsTools');
+import { allStreamsAndChildren, getStreamIdAndChildrenIds } from '../js/toolkit/StreamsTools.js';
 
 describe('[TKTX] toolKit Streams Tools', function () {
   describe('[TKAX] allStreamsAndChildren', function () {

@@ -1,5 +1,5 @@
-const { assert } = require('./test-utils/deps-node');
-const { formatEventDate, HDSSettings } = require('../js/');
+import { assert } from './test-utils/deps-node.js';
+import { formatEventDate, HDSSettings } from '../js/index.js';
 
 // Mock connection
 function createMockConnection (settingsEvents = []) {

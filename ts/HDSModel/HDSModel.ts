@@ -1,11 +1,11 @@
-import { HDSLibError } from '../errors';
-import { deepFreeze } from '../utils';
-import { HDSModelStreams } from './HDSModel-Streams';
-import { HDSModelAuthorizations } from './HDSModel-Authorizations';
-import { HDSModelItemsDefs } from './HDSModel-ItemsDefs';
-import { HDSModelEventTypes } from './HDSModel-EventTypes';
-import { HDSModelDatasources } from './HDSModel-Datasources';
-import { HDSModelConversions } from './HDSModel-Conversions';
+import { HDSLibError } from '../errors.js';
+import { deepFreeze } from '../utils.js';
+import { HDSModelStreams } from './HDSModel-Streams.js';
+import { HDSModelAuthorizations } from './HDSModel-Authorizations.js';
+import { HDSModelItemsDefs } from './HDSModel-ItemsDefs.js';
+import { HDSModelEventTypes } from './HDSModel-EventTypes.js';
+import { HDSModelDatasources } from './HDSModel-Datasources.js';
+import { HDSModelConversions } from './HDSModel-Conversions.js';
 
 export class HDSModel {
   /**

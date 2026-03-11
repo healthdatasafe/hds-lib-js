@@ -1,7 +1,7 @@
-import { localizeText } from '../localizeText';
-import { getModel } from './HDSModelInitAndSingleton';
-import HDSSettings from '../settings/HDSSettings';
-import type { DateFormat } from '../settings/HDSSettings';
+import { localizeText } from '../localizeText.js';
+import { getModel } from './HDSModelInitAndSingleton.js';
+import HDSSettings from '../settings/HDSSettings.js';
+import type { DateFormat } from '../settings/HDSSettings.js';
 
 const DATE_SEPARATORS: Record<DateFormat, (d: Date) => string> = {
   'DD.MM.YYYY': (d) => pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),

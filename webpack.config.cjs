@@ -45,7 +45,8 @@ module.exports = [
     devtool: 'source-map',
     resolve: {
       alias: {
-        '*/deps-node': require.resolve('./tests/test-utils/deps-browser.js')
+        '*/deps-node': require.resolve('./tests/test-utils/deps-browser.js'),
+        '*/deps-node.js': require.resolve('./tests/test-utils/deps-browser.js')
       },
       fallback: {
         fs: false,

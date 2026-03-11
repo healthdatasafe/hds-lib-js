@@ -1,4 +1,4 @@
-const util = require('util');
+import util from 'util';
 
 function log () {
   for (let i = 0; i < arguments.length; i++) {
@@ -15,7 +15,7 @@ function logstack () {
   log(...arguments, stack(2, 4));
 }
 
-module.exports = {
+export {
   logstack,
   log,
   stack

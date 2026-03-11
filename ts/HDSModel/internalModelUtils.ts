@@ -1,5 +1,5 @@
-import { HDSItemDef } from './HDSItemDef';
-import { HDSModel } from './HDSModel';
+import { HDSItemDef } from './HDSItemDef.js';
+import { HDSModel } from './HDSModel.js';
 
 /**
  * Some call support either arrays of itemKeys or itemDefs

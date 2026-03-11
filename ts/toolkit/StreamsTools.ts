@@ -1,4 +1,4 @@
-import type { pryv as Pryv } from '../patchedPryv';
+import type { pryv as Pryv } from '../patchedPryv.js';
 
 /**
  * Iterate all streams and children

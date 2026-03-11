@@ -1,5 +1,5 @@
-const { assert } = require('./test-utils/deps-node');
-const { HDSSettings, SETTING_TYPES } = require('../js/');
+import { assert } from './test-utils/deps-node.js';
+import { HDSSettings, SETTING_TYPES } from '../js/index.js';
 
 // Mock connection that captures API calls
 function createMockConnection (responses = {}) {

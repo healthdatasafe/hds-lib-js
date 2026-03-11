@@ -1,14 +1,14 @@
-require('./debug');
-const pryv = require('../../js/').pryv;
-const HDSService = require('../../js/').HDSService;
+import './debug.js';
+import HDSLib from '../../js/index.js';
+const { pryv, HDSService } = HDSLib;
 
-const ShortUniqueId = require('short-unique-id');
+import ShortUniqueId from 'short-unique-id';
 const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
 
-const config = require('./config');
-const { setServiceInfoURL } = require('../../js/settings');
+import config from './config.js';
+import { setServiceInfoURL } from '../../js/settings.js';
 
-module.exports = {
+export {
   init,
   userExists,
   createUser,

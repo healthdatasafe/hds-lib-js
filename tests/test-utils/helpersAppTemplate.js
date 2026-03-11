@@ -1,9 +1,9 @@
-const { assert } = require('./deps-node');
-const { createUserAndPermissions, pryv, createUser, createUserPermissions } = require('./pryvService');
-const AppManagingAccount = require('../../js/').appTemplates.AppManagingAccount;
-const AppClientAccount = require('../../js/').appTemplates.AppClientAccount;
+import { assert } from './deps-node.js';
+import { createUserAndPermissions, pryv, createUser, createUserPermissions } from './pryvService.js';
+import HDSLib from '../../js/index.js';
+const { AppManagingAccount, AppClientAccount } = HDSLib.appTemplates;
 
-module.exports = {
+export {
   helperNewAppAndUsers,
   helperNewAppClient,
   helperNewAppManaging,

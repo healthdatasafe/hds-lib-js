@@ -1,6 +1,6 @@
-const { assert } = require('./test-utils/deps-node');
+import { assert } from './test-utils/deps-node.js';
 
-const logger = require('../js/logger');
+import * as logger from '../js/logger.js';
 
 describe('[LOGX] Logger', function () {
   describe('[LGFX] Logger functions', function () {

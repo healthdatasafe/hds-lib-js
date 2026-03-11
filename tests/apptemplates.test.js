@@ -1,10 +1,10 @@
-const { assert } = require('./test-utils/deps-node');
-const { pryv, createUserPermissions } = require('./test-utils/pryvService');
-const HDSLib = require('../js');
+import { assert } from './test-utils/deps-node.js';
+import { pryv, createUserPermissions } from './test-utils/pryvService.js';
+import HDSLib from '../js/index.js';
 const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = HDSLib.appTemplates;
-const { HDSLibError } = require('../js/errors');
-const { initHDSModel } = require('../js/index');
-const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = require('./test-utils/helpersAppTemplate');
+import { HDSLibError } from '../js/errors.js';
+import { initHDSModel } from '../js/index.js';
+import { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } from './test-utils/helpersAppTemplate.js';
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);
@@ -311,10 +311,10 @@ describe('[APTX] appTemplates', function () {
     });
 
     it('[APII] Collector invite internals', async () => {
-      const beforeCreation = new Date();
+      const beforeCreation = Date.now() - 5000; // 5s tolerance for server clock drift
       const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APII');
-      const afterCreation = new Date();
-      assert.ok(invite.dateCreation > beforeCreation && invite.dateCreation < afterCreation);
+      const afterCreation = Date.now() + 5000;
+      assert.ok(invite.dateCreation.getTime() > beforeCreation && invite.dateCreation.getTime() < afterCreation);
 
       // apiEndpoint should throw Error
       try {

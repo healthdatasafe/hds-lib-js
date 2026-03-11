@@ -2,7 +2,7 @@
  * basic localization functions
  */
 
-import { HDSLibError } from './errors';
+import { HDSLibError } from './errors.js';
 
 export type localizableText = {
   en: string;

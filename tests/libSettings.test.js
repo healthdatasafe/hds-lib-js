@@ -1,6 +1,6 @@
-const { assert } = require('./test-utils/deps-node');
+import { assert } from './test-utils/deps-node.js';
 
-const HDSLib = require('../js');
+import HDSLib from '../js/index.js';
 
 describe('[LISX] Lib settings', () => {
   before(async () => {

@@ -2,18 +2,20 @@
   "name": "hds-lib",
   "version": "0.1.14",
   "description": "Health Data Safe - Library",
+  "type": "module",
   "engines": {
     "node": ">=24"
   },
   "scripts": {
+    "prepare": "tsc",
     "test": "NODE_ENV=test mocha tests --test-reporter=spec",
     "test:coverage": "NODE_ENV=test c8 mocha tests --test-reporter=spec",
     "test:coverage:ci": "NODE_ENV=test c8 mocha tests --test-reporter=spec --timeout=20000",
-    "build": "npm run build:ts; npm run build:webpack",
+    "build": "tsc; webpack --config webpack.config.cjs",
     "setup": "sh scripts/setup.sh",
     "deploy": "bash scripts/deploy.sh",
     "build:ts": "tsc",
-    "build:webpack": "webpack",
+    "build:webpack": "webpack --config webpack.config.cjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:change": "eslint $(git diff --name-only HEAD | grep -E '\\.(js|jsx|ts|tsx)$' | xargs)"
@@ -23,14 +25,13 @@
     "url": "git+https://github.com/healthdatasafe/hds-lib-js.git"
   },
   "main": "js/index.js",
-  "types": "js/index.d.ts",
+  "types": "ts/index.ts",
   "exports": {
     ".": {
+      "types": "./ts/index.ts",
       "import": "./js/index.js",
-      "require": "./js/index.js",
       "default": "./js/index.js"
     },
-    "./js/*": "./js/*",
     "./ts/*": "./ts/*"
   },
   "keywords": [

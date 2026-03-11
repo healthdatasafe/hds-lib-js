@@ -1,10 +1,10 @@
-const { assert } = require('./test-utils/deps-node');
+import { assert } from './test-utils/deps-node.js';
 
 // We test conversions with a mock model object since the published
 // model at model.datasafe.dev doesn't have conversions yet.
 // HDSModelConversions reads from model.modelData.conversions.
 
-const HDSLib = require('../js/');
+import HDSLib from '../js/index.js';
 
 // Create a minimal mock model with conversions data
 function createMockModelWithConversions () {

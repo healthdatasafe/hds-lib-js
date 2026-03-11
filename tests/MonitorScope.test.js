@@ -1,5 +1,5 @@
-const { assert } = require('./test-utils/deps-node');
-const { MonitorScope } = require('../js/');
+import { assert } from './test-utils/deps-node.js';
+import { MonitorScope } from '../js/index.js';
 
 // Mock connection that simulates Pryv API responses
 function createMockConnection (responses = {}) {

@@ -1,5 +1,5 @@
-const { assert } = require('./test-utils/deps-node');
-const { durationToSeconds, durationToLabel, computeReminders } = require('../js/');
+import { assert } from './test-utils/deps-node.js';
+import { durationToSeconds, durationToLabel, computeReminders } from '../js/index.js';
 
 describe('[REMX] Reminders', () => {
   // ============ Duration parser ============

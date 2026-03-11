@@ -1,5 +1,5 @@
-import * as settings from './settings';
-import { pryv } from './patchedPryv';
+import * as settings from './settings.js';
+import { pryv } from './patchedPryv.js';
 
 // makes Pryv service aware of default serviceUrl
 export class HDSService extends pryv.Service {

@@ -1,8 +1,8 @@
-import { CollectorRequest } from './CollectorRequest';
-import { pryv } from '../patchedPryv';
-import { HDSLibError } from '../errors';
-import * as logger from '../logger';
-import { CollectorSectionInterface } from './interfaces';
+import { CollectorRequest } from './CollectorRequest.js';
+import { pryv } from '../patchedPryv.js';
+import { HDSLibError } from '../errors.js';
+import * as logger from '../logger.js';
+import { CollectorSectionInterface } from './interfaces.js';
 
 /**
  * Client App in relation to an AppManagingAccount/Collector

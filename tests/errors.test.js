@@ -1,6 +1,6 @@
-const { assert } = require('./test-utils/deps-node');
+import { assert } from './test-utils/deps-node.js';
 
-const { HDSLibError } = require('../js/errors');
+import { HDSLibError } from '../js/errors.js';
 
 describe('[ERRX] HDSLibError', () => {
   it('[ERRS] HDSLibError.toString() without inner message', async () => {

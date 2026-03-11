@@ -1,7 +1,7 @@
-const { assert } = require('./test-utils/deps-node');
+import { assert } from './test-utils/deps-node.js';
 
-const HDSLib = require('../js');
-const { createUserAndPermissions } = require('./test-utils/pryvService');
+import HDSLib from '../js/index.js';
+import { createUserAndPermissions } from './test-utils/pryvService.js';
 
 describe('[TKSX] toolKit Stream Auto Create', function () {
   this.timeout(10000);

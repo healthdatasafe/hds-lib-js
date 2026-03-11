@@ -1,5 +1,5 @@
-import { HDSItemDef } from './HDSItemDef';
-import { HDSModel } from './HDSModel';
+import { HDSItemDef } from './HDSItemDef.js';
+import { HDSModel } from './HDSModel.js';
 
 /**
  * ItemsDefs - Extension of HDSModel

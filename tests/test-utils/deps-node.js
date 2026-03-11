@@ -1,3 +1,2 @@
-module.exports = {
-  assert: require('node:assert/strict')
-};
+import assert from 'node:assert/strict';
+export { assert };

@@ -1,3 +1,2 @@
-module.exports = {
-  assert: require('assert')
-};
+import assert from 'assert';
+export { assert };
