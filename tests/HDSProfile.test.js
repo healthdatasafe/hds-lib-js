@@ -217,8 +217,7 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       const avatarUrl = HDSProfile.getAvatarUrl();
       assert.ok(avatarUrl, 'Should have avatar URL');
       assert.ok(avatarUrl.includes('/events/'), 'Should be an attachment URL');
-      assert.ok(avatarUrl.includes('red-pixel.png'), 'Should contain filename');
-      assert.ok(avatarUrl.includes('auth='), 'Should contain auth token');
+      assert.ok(avatarUrl.includes('readToken='), 'Should contain readToken');
 
       // Verify persistence
       await HDSProfile.reload();
@@ -237,7 +236,7 @@ describe('[HDSP] HDSProfile (dev API)', function () {
 
       const newUrl = HDSProfile.getAvatarUrl();
       assert.ok(newUrl, 'Should have new avatar URL');
-      assert.ok(newUrl.includes('new-avatar.png'), 'Should contain new filename');
+      assert.ok(newUrl.includes('readToken='), 'Should contain readToken');
       assert.notStrictEqual(newUrl, previousUrl, 'URL should differ from previous');
     });
   });
@@ -293,7 +292,7 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       const profile = await HDSProfile.readFromConnection(sharedConnection);
       assert.ok(profile.avatar, 'Should have avatar URL');
       assert.ok(profile.avatar.includes('/events/'), 'Avatar should be an attachment URL');
-      assert.ok(profile.avatar.includes('auth='), 'Avatar URL should contain auth token');
+      assert.ok(profile.avatar.includes('readToken='), 'Avatar URL should contain readToken');
     });
 
     it('[HDSP-X3] does not affect singleton state', async () => {

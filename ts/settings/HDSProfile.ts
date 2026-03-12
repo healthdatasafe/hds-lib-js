@@ -1,4 +1,5 @@
 import { pryv } from '../patchedPryv.ts';
+import { getAttachmentUrl } from '../toolkit/getAttachmentUrl.ts';
 
 type Connection = InstanceType<typeof pryv.Connection>;
 
@@ -46,6 +47,8 @@ let _cache: Partial<Record<ProfileKey, any>> = {};
 let _values: ProfileValues = { ...DEFAULTS };
 /** @internal */
 let _hooked = false;
+/** @internal — tracks which streams have been verified/created */
+let _ensuredStreams: Set<string> = new Set();
 
 /**
  * Check if event type matches a field's eventType (supports `picture/*` wildcard).
@@ -75,13 +78,9 @@ function matchField (event: any): ProfileKey | null {
  * Handles: attachment (construct API URL), data URL in content, plain URL in content.
  */
 function resolveAvatarUrl (event: any, conn: Connection | null = _connection): string | null {
-  // Attachment — construct URL from connection endpoint
+  // Attachment — use shared getAttachmentUrl utility
   if (event.attachments?.length > 0 && conn) {
-    const att = event.attachments[0];
-    const endpoint = (conn as any).apiEndpoint || '';
-    const token = (conn as any).token || '';
-    const fileName = att.fileName || att.id;
-    return `${endpoint}events/${event.id}/${fileName}?auth=${token}`;
+    return getAttachmentUrl(conn, event);
   }
   // Content is a string (data URL or plain URL)
   if (typeof event.content === 'string' && event.content.length > 0) {
@@ -132,6 +131,30 @@ async function trashExistingAvatar (): Promise<void> {
     );
     delete _cache.avatar;
     _values.avatar = null;
+  }
+}
+
+/**
+ * Ensure a profile child stream exists, creating the parent `profile` stream and the child if needed.
+ */
+async function ensureStream (streamId: string): Promise<void> {
+  if (_ensuredStreams.has(streamId) || !_connection) return;
+  try {
+    // Create parent 'profile' stream (idempotent — ignores "already exists" error)
+    await _connection.apiOne(
+      'streams.create',
+      { id: 'profile', name: 'Profile' },
+      'stream'
+    ).catch(() => { /* already exists — ok */ });
+    // Create child stream
+    await _connection.apiOne(
+      'streams.create',
+      { id: streamId, name: streamId, parentId: 'profile' },
+      'stream'
+    ).catch(() => { /* already exists — ok */ });
+    _ensuredStreams.add(streamId);
+  } catch {
+    // best effort — the subsequent events.create will fail with a clear error if stream is truly missing
   }
 }
 
@@ -231,6 +254,7 @@ const HDSProfile = {
       );
       _cache[key] = updated;
     } else {
+      await ensureStream(field.streamId);
       const created = await _connection.apiOne(
         'events.create',
         { streamIds: [field.streamId], type: field.eventType, content: value },
@@ -264,6 +288,7 @@ const HDSProfile = {
       throw new Error('HDSProfile: call hookToConnection() first');
     }
     await trashExistingAvatar();
+    await ensureStream(PROFILE_FIELDS.avatar.streamId);
     const result = await (_connection as any).createEventWithFileFromBuffer(
       { type: 'picture/attached', streamIds: [PROFILE_FIELDS.avatar.streamId] },
       fileData,
@@ -284,6 +309,7 @@ const HDSProfile = {
       throw new Error('HDSProfile: call hookToConnection() first');
     }
     await trashExistingAvatar();
+    await ensureStream(PROFILE_FIELDS.avatar.streamId);
     const created = await _connection.apiOne(
       'events.create',
       { streamIds: [PROFILE_FIELDS.avatar.streamId], type: 'picture/base64', content: dataUrl },
@@ -315,6 +341,7 @@ const HDSProfile = {
     _cache = {};
     _values = { ...DEFAULTS };
     _hooked = false;
+    _ensuredStreams = new Set();
   },
 };
 
