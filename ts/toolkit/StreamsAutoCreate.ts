@@ -1,8 +1,8 @@
-import { HDSLibError } from '../errors.js';
-import { getModel } from '../HDSModel/HDSModelInitAndSingleton.js';
-import { pryv } from '../patchedPryv.js';
-import { HDSItemDef } from '../HDSModel/HDSItemDef.js';
-import { allStreamsAndChildren } from './StreamsTools.js';
+import { HDSLibError } from '../errors.ts';
+import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
+import { pryv } from '../patchedPryv.ts';
+import { HDSItemDef } from '../HDSModel/HDSItemDef.ts';
+import { allStreamsAndChildren } from './StreamsTools.ts';
 
 export class StreamsAutoCreate {
   connection: WeakRef<pryv.Connection>;

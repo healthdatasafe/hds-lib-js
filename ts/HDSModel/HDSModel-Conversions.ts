@@ -1,5 +1,5 @@
-import { HDSModel } from './HDSModel.js';
-import type { UnitSystem } from '../settings/HDSSettings.js';
+import { HDSModel } from './HDSModel.ts';
+import type { UnitSystem } from '../settings/HDSSettings.ts';
 
 export interface ConversionResult {
   value: number;

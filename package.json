@@ -11,7 +11,7 @@
     "test": "NODE_ENV=test mocha tests --test-reporter=spec",
     "test:coverage": "NODE_ENV=test c8 mocha tests --test-reporter=spec",
     "test:coverage:ci": "NODE_ENV=test c8 mocha tests --test-reporter=spec --timeout=20000",
-    "build": "tsc; webpack --config webpack.config.cjs",
+    "build": "webpack --config webpack.config.cjs",
     "setup": "sh scripts/setup.sh",
     "deploy": "bash scripts/deploy.sh",
     "build:ts": "tsc",

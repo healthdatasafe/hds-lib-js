@@ -1,8 +1,8 @@
-import { CollectorRequest } from './CollectorRequest.js';
-import { HDSLibError } from '../errors.js';
-import { waitUntilFalse } from '../utils.js';
-import { CollectorInvite } from './CollectorInvite.js';
-import * as logger from '../logger.js';
+import { CollectorRequest } from './CollectorRequest.ts';
+import { HDSLibError } from '../errors.ts';
+import { waitUntilFalse } from '../utils.ts';
+import { CollectorInvite } from './CollectorInvite.ts';
+import * as logger from '../logger.ts';
 
 const COLLECTOR_STREAMID_SUFFIXES = {
   archive: 'archive',

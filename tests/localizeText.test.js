@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales, validateLocalizableText } from '../js/localizeText.js';
+import { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales, validateLocalizableText } from '../ts/localizeText.ts';
 
 describe('[LOCX] Localization', () => {
   afterEach(() => {

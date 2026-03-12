@@ -1,5 +1,5 @@
-import { pryv } from '../patchedPryv.js';
-import { HDSLibError } from '../errors.js';
+import { pryv } from '../patchedPryv.ts';
+import { HDSLibError } from '../errors.ts';
 
 /**
  * Collector Invite

@@ -4,7 +4,7 @@ const CopyPlugin = require('copy-webpack-plugin');
 
 module.exports = [
   addCommon({
-    entry: './js/index.js',
+    entry: './ts/index.ts',
     mode: 'production',
     output: {
       path: path.resolve(__dirname, 'dist'),
@@ -46,7 +46,8 @@ module.exports = [
     resolve: {
       alias: {
         '*/deps-node': require.resolve('./tests/test-utils/deps-browser.js'),
-        '*/deps-node.js': require.resolve('./tests/test-utils/deps-browser.js')
+        '*/deps-node.js': require.resolve('./tests/test-utils/deps-browser.js'),
+        '*/deps-node.ts': require.resolve('./tests/test-utils/deps-browser.js')
       },
       fallback: {
         fs: false,
@@ -70,7 +71,7 @@ function addCommon (config) {
     module: {
       rules: [
       // all files with a `.ts`, `.cts`, `.mts` or `.tsx` extension will be handled by `ts-loader`
-        { test: /\.([cm]?ts|tsx)$/, loader: 'ts-loader' }
+        { test: /\.([cm]?ts|tsx)$/, loader: 'ts-loader', options: { transpileOnly: true } }
       ]
     }
   };

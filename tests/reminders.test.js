@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { durationToSeconds, durationToLabel, computeReminders } from '../js/index.js';
+import { durationToSeconds, durationToLabel, computeReminders } from '../ts/index.ts';
 
 describe('[REMX] Reminders', () => {
   // ============ Duration parser ============

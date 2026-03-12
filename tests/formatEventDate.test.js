@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { formatEventDate, HDSSettings } from '../js/index.js';
+import { formatEventDate, HDSSettings } from '../ts/index.ts';
 
 // Mock connection
 function createMockConnection (settingsEvents = []) {

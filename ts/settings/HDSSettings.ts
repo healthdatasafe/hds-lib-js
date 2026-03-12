@@ -1,6 +1,6 @@
-import { pryv } from '../patchedPryv.js';
-import { setPreferredLocales } from '../localizeText.js';
-import type { Application } from '../appTemplates/Application.js';
+import { pryv } from '../patchedPryv.ts';
+import { setPreferredLocales } from '../localizeText.ts';
+import type { Application } from '../appTemplates/Application.ts';
 
 /**
  * Known setting event types — each stored as a separate Pryv event.

@@ -1,6 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
 
-import * as logger from '../js/logger.js';
+import * as logger from '../ts/logger.ts';
 
 describe('[LOGX] Logger', function () {
   describe('[LGFX] Logger functions', function () {

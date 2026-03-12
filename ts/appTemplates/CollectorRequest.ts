@@ -1,8 +1,8 @@
-import { HDSLibError } from '../errors.js';
-import { getModel } from '../HDSModel/HDSModelInitAndSingleton.js';
-import { validateLocalizableText } from '../localizeText.js';
-import type { localizableText } from '../localizeText.js';
-import { CollectorSectionInterface, RequestSectionType } from './interfaces.js';
+import { HDSLibError } from '../errors.ts';
+import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
+import { validateLocalizableText } from '../localizeText.ts';
+import type { localizableText } from '../localizeText.ts';
+import type { CollectorSectionInterface, RequestSectionType } from './interfaces.ts';
 
 type localizableTextLanguages = keyof localizableText;
 

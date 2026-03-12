@@ -1,6 +1,6 @@
-import { itemKeysOrDefsToDefs } from './internalModelUtils.js';
-import { HDSModel } from './HDSModel.js';
-import { HDSItemDef } from './HDSItemDef.js';
+import { itemKeysOrDefsToDefs } from './internalModelUtils.ts';
+import { HDSModel } from './HDSModel.ts';
+import { HDSItemDef } from './HDSItemDef.ts';
 
 /**
  * Streams - Extension of HDSModel

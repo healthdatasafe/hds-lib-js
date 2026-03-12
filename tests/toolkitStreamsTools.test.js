@@ -1,6 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
 
-import { allStreamsAndChildren, getStreamIdAndChildrenIds } from '../js/toolkit/StreamsTools.js';
+import { allStreamsAndChildren, getStreamIdAndChildrenIds } from '../ts/toolkit/StreamsTools.ts';
 
 describe('[TKTX] toolKit Streams Tools', function () {
   describe('[TKAX] allStreamsAndChildren', function () {

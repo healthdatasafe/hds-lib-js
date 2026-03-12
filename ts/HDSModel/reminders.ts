@@ -1,5 +1,5 @@
-import { durationToSeconds } from '../utils/duration.js';
-import type { ReminderConfig } from './HDSItemDef.js';
+import { durationToSeconds } from '../utils/duration.ts';
+import type { ReminderConfig } from './HDSItemDef.ts';
 
 export interface ReminderSource {
   origin: 'default' | 'collector' | 'user';

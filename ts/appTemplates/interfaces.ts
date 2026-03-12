@@ -1,4 +1,4 @@
-import { localizableText } from '../localizeText.js';
+import type { localizableText } from '../localizeText.ts';
 
 export type RequestSectionType = 'recurring' | 'permanent';
 

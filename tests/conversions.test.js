@@ -4,7 +4,7 @@ import { assert } from './test-utils/deps-node.js';
 // model at model.datasafe.dev doesn't have conversions yet.
 // HDSModelConversions reads from model.modelData.conversions.
 
-import HDSLib from '../js/index.js';
+import HDSLib from '../ts/index.ts';
 
 // Create a minimal mock model with conversions data
 function createMockModelWithConversions () {

@@ -1,10 +1,8 @@
 import { assert } from './test-utils/deps-node.js';
 import { pryv, createUserPermissions } from './test-utils/pryvService.js';
-import HDSLib from '../js/index.js';
-const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = HDSLib.appTemplates;
-import { HDSLibError } from '../js/errors.js';
-import { initHDSModel } from '../js/index.js';
+import HDSLib, { HDSLibError, initHDSModel } from '../ts/index.ts';
 import { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } from './test-utils/helpersAppTemplate.js';
+const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = HDSLib.appTemplates;
 
 describe('[APTX] appTemplates', function () {
   this.timeout(10000);

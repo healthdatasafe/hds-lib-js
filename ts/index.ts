@@ -1,22 +1,25 @@
-import { localizeText } from './localizeText.js';
-import * as settings from './settings.js';
-import { pryv } from './patchedPryv.js';
-import { HDSModel } from './HDSModel/HDSModel.js';
-import * as appTemplates from './appTemplates/appTemplates.js';
-import * as logger from './logger.js';
-import { HDSService } from './HDSService.js';
-import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton.js';
-import * as toolkit from './toolkit/index.js';
-import { durationToSeconds, durationToLabel } from './utils/duration.js';
-import { computeReminders } from './HDSModel/reminders.js';
-import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText.js';
-import { MonitorScope } from './MonitorScope.js';
-import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings.js';
-import { HDSModelConversions } from './HDSModel/HDSModel-Conversions.js';
-export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.js';
-export type { ReminderConfig } from './HDSModel/HDSItemDef.js';
-export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.js';
-export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from './settings/HDSSettings.js';
+import { localizeText } from './localizeText.ts';
+import * as settings from './settings.ts';
+import { pryv } from './patchedPryv.ts';
+import { HDSModel } from './HDSModel/HDSModel.ts';
+import * as appTemplates from './appTemplates/appTemplates.ts';
+import * as logger from './logger.ts';
+import { HDSService } from './HDSService.ts';
+import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton.ts';
+import * as toolkit from './toolkit/index.ts';
+import { durationToSeconds, durationToLabel } from './utils/duration.ts';
+import { computeReminders } from './HDSModel/reminders.ts';
+import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText.ts';
+import { MonitorScope } from './MonitorScope.ts';
+import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings.ts';
+import { HDSProfile, PROFILE_FIELDS } from './settings/HDSProfile.ts';
+import { HDSModelConversions } from './HDSModel/HDSModel-Conversions.ts';
+import { HDSLibError } from './errors.ts';
+export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
+export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
+export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
+export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from './settings/HDSSettings.ts';
+export type { ProfileKey, ProfileValues } from './settings/HDSProfile.ts';
 
 export const model = (() => {
   console.warn('HDSLib.model is deprecated use getHDSModel() instead');
@@ -25,7 +28,7 @@ export const model = (() => {
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSModelConversions };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSLibError };
 
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
 const HDSLib = {
@@ -48,6 +51,8 @@ const HDSLib = {
   MonitorScope,
   HDSSettings,
   SETTING_TYPES,
+  HDSProfile,
+  PROFILE_FIELDS,
   HDSModelConversions
 };
 export default HDSLib;

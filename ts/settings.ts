@@ -1,4 +1,4 @@
-import { setPreferredLocales } from './localizeText.js';
+import { setPreferredLocales } from './localizeText.ts';
 
 // todo change when in production
 let serviceInfoUrl: string = 'https://demo.datasafe.dev/reg/service/info';

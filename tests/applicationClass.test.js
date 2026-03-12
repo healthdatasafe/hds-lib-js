@@ -1,8 +1,8 @@
 import { assert } from './test-utils/deps-node.js';
 import { createUserAndPermissions } from './test-utils/pryvService.js';
-import HDSLib from '../js/index.js';
-const Application = HDSLib.appTemplates.Application;
+import HDSLib from '../ts/index.ts';
 import { helperNewAppManaging } from './test-utils/helpersAppTemplate.js';
+const Application = HDSLib.appTemplates.Application;
 
 describe('[APAX] Application class', function () {
   this.timeout(5000);

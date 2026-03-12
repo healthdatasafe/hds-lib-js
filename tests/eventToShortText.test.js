@@ -1,7 +1,7 @@
 import { assert } from './test-utils/deps-node.js';
+import { HDSModel, eventToShortText } from '../ts/index.ts';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
-import { HDSModel, eventToShortText } from '../js/index.js';
 
 describe('[ESTX] eventToShortText', () => {
   let model;

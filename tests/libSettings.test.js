@@ -1,6 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
 
-import HDSLib from '../js/index.js';
+import HDSLib from '../ts/index.ts';
 
 describe('[LISX] Lib settings', () => {
   before(async () => {

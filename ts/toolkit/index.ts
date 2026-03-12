@@ -1,4 +1,4 @@
-import { StreamsAutoCreate } from './StreamsAutoCreate.js';
-import * as StreamTools from './StreamsTools.js';
+import { StreamsAutoCreate } from './StreamsAutoCreate.ts';
+import * as StreamTools from './StreamsTools.ts';
 
 export { StreamsAutoCreate, StreamTools };

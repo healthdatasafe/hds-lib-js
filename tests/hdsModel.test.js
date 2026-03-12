@@ -1,9 +1,8 @@
 import { assert } from './test-utils/deps-node.js';
+import { HDSModel, initHDSModel } from '../ts/index.ts';
+import { resetPreferredLocales, setPreferredLocales } from '../ts/localizeText.ts';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
-
-import { HDSModel, initHDSModel } from '../js/index.js';
-import { resetPreferredLocales, setPreferredLocales } from '../js/localizeText.js';
 
 describe('[MODX] Model', () => {
   let model;

@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { MonitorScope } from '../js/index.js';
+import { MonitorScope } from '../ts/index.ts';
 
 // Mock connection that simulates Pryv API responses
 function createMockConnection (responses = {}) {

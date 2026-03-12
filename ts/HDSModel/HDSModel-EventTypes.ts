@@ -1,4 +1,4 @@
-import { HDSModel } from './HDSModel.js';
+import { HDSModel } from './HDSModel.ts';
 
 /**
  * Streams - Extension of HDSModel

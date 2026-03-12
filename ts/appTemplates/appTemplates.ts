@@ -1,8 +1,8 @@
-import { AppManagingAccount } from './AppManagingAccount.js';
-import { AppClientAccount } from './AppClientAccount.js';
-import { Application } from './Application.js';
-import { Collector } from './Collector.js';
-import { CollectorClient } from './CollectorClient.js';
-import { CollectorInvite } from './CollectorInvite.js';
-import { CollectorRequest } from './CollectorRequest.js';
+import { AppManagingAccount } from './AppManagingAccount.ts';
+import { AppClientAccount } from './AppClientAccount.ts';
+import { Application } from './Application.ts';
+import { Collector } from './Collector.ts';
+import { CollectorClient } from './CollectorClient.ts';
+import { CollectorInvite } from './CollectorInvite.ts';
+import { CollectorRequest } from './CollectorRequest.ts';
 export { AppManagingAccount, AppClientAccount, Application, Collector, CollectorClient, CollectorInvite, CollectorRequest };

@@ -1,5 +1,5 @@
-import { pryv } from '../patchedPryv.js';
-import { StreamsAutoCreate } from '../toolkit/index.js';
+import { pryv } from '../patchedPryv.ts';
+import { StreamsAutoCreate } from '../toolkit/index.ts';
 
 const APPS_ROOT_STREAM = 'applications';
 

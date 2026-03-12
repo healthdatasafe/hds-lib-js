@@ -11,6 +11,7 @@ import './eventToShortText.test.js';
 import './formatEventDate.test.js';
 import './hdsLib.test.js';
 import './hdsModel.test.js';
+import './HDSProfile.test.js';
 import './HDSSettings.test.js';
 import './libSettings.test.js';
 import './localizeText.test.js';

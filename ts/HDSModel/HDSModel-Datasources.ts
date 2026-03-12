@@ -1,5 +1,5 @@
-import { HDSDatasourceDef } from './HDSDatasourceDef.js';
-import { HDSModel } from './HDSModel.js';
+import { HDSDatasourceDef } from './HDSDatasourceDef.ts';
+import { HDSModel } from './HDSModel.ts';
 
 /**
  * Datasources - Extension of HDSModel

@@ -1,12 +1,11 @@
 import './debug.js';
-import HDSLib from '../../js/index.js';
-const { pryv, HDSService } = HDSLib;
-
+import HDSLib from '../../ts/index.ts';
 import ShortUniqueId from 'short-unique-id';
-const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
-
 import config from './config.js';
-import { setServiceInfoURL } from '../../js/settings.js';
+import { setServiceInfoURL } from '../../ts/settings.ts';
+
+const { pryv, HDSService } = HDSLib;
+const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
 
 export {
   init,

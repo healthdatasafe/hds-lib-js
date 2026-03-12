@@ -1,4 +1,4 @@
-import { pryv } from './patchedPryv.js';
+import { pryv } from './patchedPryv.ts';
 
 /**
  * MonitorScope — Progressive event loading with Monitor integration.

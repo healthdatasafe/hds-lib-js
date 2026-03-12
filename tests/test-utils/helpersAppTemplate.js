@@ -1,6 +1,6 @@
 import { assert } from './deps-node.js';
 import { createUserAndPermissions, pryv, createUser, createUserPermissions } from './pryvService.js';
-import HDSLib from '../../js/index.js';
+import HDSLib from '../../ts/index.ts';
 const { AppManagingAccount, AppClientAccount } = HDSLib.appTemplates;
 
 export {

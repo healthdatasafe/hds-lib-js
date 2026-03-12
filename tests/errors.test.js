@@ -1,6 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
 
-import { HDSLibError } from '../js/errors.js';
+import { HDSLibError } from '../ts/errors.ts';
 
 describe('[ERRX] HDSLibError', () => {
   it('[ERRS] HDSLibError.toString() without inner message', async () => {

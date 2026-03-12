@@ -17,6 +17,7 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "noEmitOnError": false,
+    "rewriteRelativeImportExtensions": true,
     "outDir": "js",
     "rootDir": "ts"
   },

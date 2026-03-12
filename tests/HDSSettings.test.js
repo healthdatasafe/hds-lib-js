@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { HDSSettings, SETTING_TYPES } from '../js/index.js';
+import { HDSSettings, SETTING_TYPES } from '../ts/index.ts';
 
 // Mock connection that captures API calls
 function createMockConnection (responses = {}) {

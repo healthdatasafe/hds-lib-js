@@ -15,7 +15,8 @@ module.exports = [
       'docs/**',
       'tests-browser/**',
       'js/**',
-      'dist/**'
+      'dist/**',
+      '**/*.cjs'
     ]
   },
 

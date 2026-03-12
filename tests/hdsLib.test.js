@@ -2,9 +2,9 @@ import { assert } from './test-utils/deps-node.js';
 /**
  * Tests related to HDSLib.index.js & utils
  */
-import HDSLib from '../js/index.js';
-import { waitUntilFalse } from '../js/utils.js';
-import { resetModel } from '../js/HDSModel/HDSModelInitAndSingleton.js';
+import HDSLib from '../ts/index.ts';
+import { waitUntilFalse } from '../ts/utils.ts';
+import { resetModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 
 describe('[HDLX] HDSLib.index', () => {
   before(async () => {

@@ -1,7 +1,7 @@
-import { initHDSModel } from '../js/index.js';
+import { initHDSModel } from '../ts/index.ts';
 import { helperNewAppManaging } from './test-utils/helpersAppTemplate.js';
 import { assert } from './test-utils/deps-node.js';
-import { CollectorRequest } from '../js/appTemplates/CollectorRequest.js';
+import { CollectorRequest } from '../ts/appTemplates/CollectorRequest.ts';
 
 describe('[APRX] appTemplates Requests', function () {
   this.timeout(8000);
