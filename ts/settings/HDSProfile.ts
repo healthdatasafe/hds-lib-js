@@ -164,11 +164,18 @@ async function load (): Promise<void> {
   _values = { ...DEFAULTS };
   _cache = {};
 
-  const events: any[] = await _connection.apiOne(
-    'events.get',
-    { streams: ['profile'], limit: 100 },
-    'events'
-  );
+  let events: any[];
+  try {
+    events = await _connection.apiOne(
+      'events.get',
+      { streams: ['profile'], limit: 100 },
+      'events'
+    );
+  } catch {
+    // Connection may not have access to profile/ streams (e.g. app-scoped permission)
+    _hooked = true;
+    return;
+  }
 
   for (const event of events) {
     const key = matchField(event);
