@@ -1,6 +1,6 @@
 {
   "name": "hds-lib",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Health Data Safe - Library",
   "type": "module",
   "engines": {
@@ -25,10 +25,10 @@
     "url": "git+https://github.com/healthdatasafe/hds-lib-js.git"
   },
   "main": "js/index.js",
-  "types": "ts/index.ts",
+  "types": "js/index.d.ts",
   "exports": {
     ".": {
-      "types": "./ts/index.ts",
+      "types": "./js/index.d.ts",
       "import": "./js/index.js",
       "default": "./js/index.js"
     },
