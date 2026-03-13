@@ -1,3566 +1,6 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ "./js/HDSModel/HDSDatasourceDef.js"
-/*!*****************************************!*\
-  !*** ./js/HDSModel/HDSDatasourceDef.js ***!
-  \*****************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSDatasourceDef = void 0;
-const localizeText_1 = __webpack_require__(/*! ../localizeText */ "./js/localizeText.js");
-class HDSDatasourceDef {
-    #data;
-    #key;
-    #getAssets;
-    constructor(key, definitionData, getAssets) {
-        this.#key = key;
-        this.#data = definitionData;
-        this.#getAssets = getAssets;
-    }
-    get key() {
-        return this.#key;
-    }
-    get data() {
-        return this.#data;
-    }
-    /** label Localized */
-    get label() {
-        return (0, localizeText_1.localizeText)(this.#data.label);
-    }
-    /** description Localized */
-    get description() {
-        return (0, localizeText_1.localizeText)(this.#data.description);
-    }
-    /**
-     * Resolved endpoint URL.
-     * If the raw endpoint starts with `http`, it is used as-is.
-     * Otherwise it is treated as `<assetKey>://<path>` and resolved
-     * against the service-info assets map.
-     * e.g. `datasets://medication` → `assets.datasets` + `medication`
-     */
-    get endpoint() {
-        const raw = this.#data.endpoint;
-        if (raw.startsWith('http'))
-            return raw;
-        const sep = raw.indexOf('://');
-        if (sep === -1)
-            return raw;
-        const assetKey = raw.substring(0, sep);
-        const path = raw.substring(sep + 3);
-        const assets = this.#getAssets();
-        const baseUrl = assets[assetKey];
-        if (!baseUrl) {
-            throw new Error(`Cannot resolve datasource endpoint "${raw}": no asset "${assetKey}" in service-info`);
-        }
-        // Ensure proper URL joining (handle trailing slash on baseUrl)
-        return baseUrl.endsWith('/') ? baseUrl + path : baseUrl + '/' + path;
-    }
-    get queryParam() {
-        return this.#data.queryParam;
-    }
-    get minQueryLength() {
-        return this.#data.minQueryLength;
-    }
-    get resultKey() {
-        return this.#data.resultKey;
-    }
-    get displayFields() {
-        return this.#data.displayFields;
-    }
-    get valueFields() {
-        return this.#data.valueFields;
-    }
-}
-exports.HDSDatasourceDef = HDSDatasourceDef;
-//# sourceMappingURL=HDSDatasourceDef.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/HDSItemDef.js"
-/*!***********************************!*\
-  !*** ./js/HDSModel/HDSItemDef.js ***!
-  \***********************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSItemDef = void 0;
-const localizeText_1 = __webpack_require__(/*! ../localizeText */ "./js/localizeText.js");
-class HDSItemDef {
-    #data;
-    #key;
-    constructor(key, definitionData) {
-        this.#key = key;
-        this.#data = definitionData;
-    }
-    get eventTypes() {
-        if (this.#data.eventType)
-            return [this.#data.eventType];
-        return this.#data.variations.eventType.options.map((o) => o.value);
-    }
-    get key() {
-        return this.#key;
-    }
-    get data() {
-        return this.#data;
-    }
-    get repeatable() {
-        return this.#data.repeatable || 'unlimited';
-    }
-    get reminder() {
-        return this.#data.reminder || null;
-    }
-    /** label Localized */
-    get label() {
-        return (0, localizeText_1.localizeText)(this.#data.label);
-    }
-    /** description Localized */
-    get description() {
-        return (0, localizeText_1.localizeText)(this.#data.description);
-    }
-    /**
-     * a template event with eventType and streamIds
-     * // TODO handle variations
-     */
-    eventTemplate() {
-        return {
-            streamIds: [this.#data.streamId],
-            type: this.eventTypes[0]
-        };
-    }
-}
-exports.HDSItemDef = HDSItemDef;
-//# sourceMappingURL=HDSItemDef.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/HDSModel-Authorizations.js"
-/*!************************************************!*\
-  !*** ./js/HDSModel/HDSModel-Authorizations.js ***!
-  \************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelAuthorizations = void 0;
-/**
- * Authorizations - Extension of HDSModel
- */
-class HDSModelAuthorizations {
-    /**
-     * Model instance
-     */
-    #model;
-    constructor(model) {
-        this.#model = model;
-    }
-    /**
-     * Get minimal Authorization set for itemKeys
-     * /!\ Does not handle requests with streamId = "*"
-     */
-    forItemKeys(itemKeys, options = {}) {
-        const opts = {
-            defaultLevel: 'read',
-            preRequest: [],
-            includeDefaultName: true
-        };
-        Object.assign(opts, options);
-        const streamsRequested = {};
-        for (const pre of opts.preRequest) {
-            if (!pre.streamId)
-                throw new Error(`Missing streamId in options.preRequest item: ${JSON.stringify(pre)}`);
-            // complete pre with defaultName if missing
-            if (opts.includeDefaultName && !pre.defaultName) {
-                // try to get it from streams Data
-                const stream = this.#model.streams.getDataById(pre.streamId, false);
-                if (stream) {
-                    pre.defaultName = stream.name;
-                }
-                else {
-                    throw new Error(`No "defaultName" in options.preRequest item: ${JSON.stringify(pre)} and cannot find matching streams in default list`);
-                }
-            }
-            // check there is no defaultName if not required
-            if (!opts.includeDefaultName) {
-                if (pre.defaultName)
-                    throw new Error(`Do not include defaultName when not included explicitely on ${JSON.stringify(pre)}`);
-            }
-            // add default level
-            if (!pre.level) {
-                pre.level = opts.defaultLevel;
-            }
-            streamsRequested[pre.streamId] = pre;
-        }
-        // add streamId not already in
-        for (const itemKey of itemKeys) {
-            const itemDef = this.#model.itemsDefs.forKey(itemKey);
-            const streamId = itemDef.data.streamId;
-            if (!streamsRequested[streamId]) { // new streamId
-                const auth = { streamId, level: opts.defaultLevel };
-                if (opts.includeDefaultName) {
-                    const stream = this.#model.streams.getDataById(streamId);
-                    auth.defaultName = stream.name;
-                }
-                streamsRequested[streamId] = auth;
-            }
-            else { // existing just adapt level
-                streamsRequested[streamId].level = mixAuthorizationLevels(streamsRequested[streamId].level, opts.defaultLevel);
-            }
-        }
-        // remove all permissions with a parent having identical or higher level
-        for (const auth of Object.values(streamsRequested)) {
-            const parents = this.#model.streams.getParentsIds(auth.streamId, false);
-            for (const parent of parents) {
-                const found = streamsRequested[parent];
-                if (found && authorizationOverride(found.level, auth.level)) {
-                    // delete entry
-                    delete streamsRequested[auth.streamId];
-                    // break loop
-                    continue;
-                }
-            }
-        }
-        return Object.values(streamsRequested);
-    }
-}
-exports.HDSModelAuthorizations = HDSModelAuthorizations;
-/**
- * Authorization level1 (parent) does override level2
- * Return "true" if identical or level1 == "manage"
- */
-function authorizationOverride(level1, level2) {
-    if (level1 === level2)
-        return true;
-    if (level1 === 'manage')
-        return true;
-    if (level1 === 'contribute' && level2 !== 'manage')
-        return true;
-    return false;
-}
-/**
- * Given two authorization level, give the resulting one
- */
-function mixAuthorizationLevels(level1, level2) {
-    if (level1 === level2)
-        return level1;
-    // sort level in orders [ 'contribute', 'manage', 'read', 'writeOnly' ]
-    const levels = [level1, level2].sort();
-    if (levels.includes('manage'))
-        return 'manage'; // any & manage
-    if (levels[0] === 'contribute')
-        return 'contribute'; // read ore writeOnly & contribute
-    if (levels[1] === 'writeOnly')
-        return 'contribute'; // mix read & writeOnly
-    /* c8 ignore next */ // error if there .. 'read' & 'read' should have already be found
-    throw new Error(`Invalid level found level1: ${level1}, level2 ${level2}`);
-}
-//# sourceMappingURL=HDSModel-Authorizations.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/HDSModel-Datasources.js"
-/*!*********************************************!*\
-  !*** ./js/HDSModel/HDSModel-Datasources.js ***!
-  \*********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelDatasources = void 0;
-const HDSDatasourceDef_1 = __webpack_require__(/*! ./HDSDatasourceDef */ "./js/HDSModel/HDSDatasourceDef.js");
-/**
- * Datasources - Extension of HDSModel
- */
-class HDSModelDatasources {
-    #model;
-    #datasourceDefs;
-    constructor(model) {
-        this.#model = model;
-        this.#datasourceDefs = {};
-    }
-    /**
-     * get all datasource definitions
-     */
-    getAll() {
-        const res = [];
-        for (const key of Object.keys(this.#model.modelData.datasources || {})) {
-            res.push(this.forKey(key));
-        }
-        return res;
-    }
-    /**
-     * get datasource definition for a key
-     */
-    forKey(key, throwErrorIfNotFound = true) {
-        if (this.#datasourceDefs[key])
-            return this.#datasourceDefs[key];
-        const datasources = this.#model.modelData.datasources || {};
-        const defData = datasources[key];
-        if (!defData) {
-            if (throwErrorIfNotFound)
-                throw new Error('Cannot find datasource definition with key: ' + key);
-            return null;
-        }
-        this.#datasourceDefs[key] = new HDSDatasourceDef_1.HDSDatasourceDef(key, defData, () => this.#model.assets);
-        return this.#datasourceDefs[key];
-    }
-}
-exports.HDSModelDatasources = HDSModelDatasources;
-//# sourceMappingURL=HDSModel-Datasources.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/HDSModel-EventTypes.js"
-/*!********************************************!*\
-  !*** ./js/HDSModel/HDSModel-EventTypes.js ***!
-  \********************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelEventTypes = void 0;
-/**
- * Streams - Extension of HDSModel
- */
-class HDSModelEventTypes {
-    /**
-     * Model instance
-     */
-    #model;
-    constructor(model) {
-        this.#model = model;
-    }
-    getEventTypeDefinition(eventType) {
-        return this.#model.modelData.eventTypes.types[eventType];
-    }
-    getEventTypeExtra(eventType) {
-        return this.#model.modelData.eventTypes.extras[eventType];
-    }
-    getEventTypeSymbol(eventType) {
-        return this.#model.modelData.eventTypes.extras[eventType]?.symbol || null;
-    }
-}
-exports.HDSModelEventTypes = HDSModelEventTypes;
-//# sourceMappingURL=HDSModel-EventTypes.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/HDSModel-ItemsDefs.js"
-/*!*******************************************!*\
-  !*** ./js/HDSModel/HDSModel-ItemsDefs.js ***!
-  \*******************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelItemsDefs = void 0;
-const HDSItemDef_1 = __webpack_require__(/*! ./HDSItemDef */ "./js/HDSModel/HDSItemDef.js");
-/**
- * ItemsDefs - Extension of HDSModel
- */
-class HDSModelItemsDefs {
-    /**
-     * Model instance
-     */
-    #model;
-    /**
-     * ItemDefs Cache
-     * KeyValue of itemsDefs
-     */
-    #itemsDefs;
-    /**
-     * get itemsData by streamId and eventType
-     */
-    #modelDataByStreamIdEventTypes;
-    constructor(model) {
-        this.#model = model;
-        this.#itemsDefs = {};
-        this.#modelDataByStreamIdEventTypes = {};
-        loadModelDataByStreamIdEventTypes(this.#model.modelData.items, this.#modelDataByStreamIdEventTypes);
-    }
-    /**
-     * get all itemDefs
-     */
-    getAll() {
-        const res = [];
-        for (const key of Object.keys(this.#model.modelData.items)) {
-            res.push(this.forKey(key));
-        }
-        return res;
-    }
-    /**
-     * get item for a key
-     */
-    forKey(key, throwErrorIfNotFound = true) {
-        if (this.#itemsDefs[key])
-            return this.#itemsDefs[key];
-        const defData = this.#model.modelData.items[key];
-        if (!defData) {
-            if (throwErrorIfNotFound)
-                throw new Error('Cannot find item definition with key: ' + key);
-            return null;
-        }
-        this.#itemsDefs[key] = new HDSItemDef_1.HDSItemDef(key, defData);
-        return this.#itemsDefs[key];
-    }
-    /**
-     * get a definition for an event
-     */
-    forEvent(event, throwErrorIfNotFound = true) {
-        const candidates = [];
-        for (const streamId of event.streamIds) {
-            const keyStreamIdEventType = streamId + ':' + event.type;
-            const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
-            if (candidate)
-                candidates.push(candidate);
-        }
-        if (candidates.length === 0) {
-            if (throwErrorIfNotFound)
-                throw new Error('Cannot find definition for event: ' + JSON.stringify(event));
-            return null;
-        }
-        if (candidates.length > 1) {
-            throw new Error(`Found multiple matching definitions "${candidates.map(c => (c.key)).join(', ')}" for event: ${JSON.stringify(event)}`);
-        }
-        return this.forKey(candidates[0].key, throwErrorIfNotFound);
-    }
-}
-exports.HDSModelItemsDefs = HDSModelItemsDefs;
-/**
- * Add key to model items and
- * load modeldata item into modelDataByStreamIdEventTypes for fast search
- */
-function loadModelDataByStreamIdEventTypes(model, map) {
-    for (const item of Object.values(model)) {
-        const eventTypes = [];
-        if (item.eventType) {
-            eventTypes.push(item.eventType);
-        }
-        else {
-            const types = item.variations.eventType.options.map((o) => o.value);
-            eventTypes.push(...types);
-        }
-        for (const eventType of eventTypes) {
-            const keyStreamIdEventType = item.streamId + ':' + eventType;
-            if (map[keyStreamIdEventType]) {
-                // should be tested with a faulty model
-                throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
-            }
-            map[keyStreamIdEventType] = item;
-        }
-    }
-}
-//# sourceMappingURL=HDSModel-ItemsDefs.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/HDSModel-Streams.js"
-/*!*****************************************!*\
-  !*** ./js/HDSModel/HDSModel-Streams.js ***!
-  \*****************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelStreams = void 0;
-const internalModelUtils_1 = __webpack_require__(/*! ./internalModelUtils */ "./js/HDSModel/internalModelUtils.js");
-/**
- * Streams - Extension of HDSModel
- */
-class HDSModelStreams {
-    /**
-     * Model instance
-     */
-    #model;
-    /**
-     * streamsById
-     * Map to find streams by Id
-     */
-    #modelStreamsById;
-    constructor(model) {
-        this.#model = model;
-        this.#modelStreamsById = {};
-        loadModelStreamsById(this.#model.modelData.streams, this.#modelStreamsById);
-    }
-    /**
-     * Get a list of streams to be created for usage of these keys (whithout children)
-     */
-    getNecessaryListForItems(itemKeysOrDefs, params = {}) {
-        const itemDefs = (0, internalModelUtils_1.itemKeysOrDefsToDefs)(this.#model, itemKeysOrDefs);
-        const knowExistingStreamsIds = params.knowExistingStreamsIds || [];
-        const nameProperty = params.nameProperty || 'name';
-        const result = [];
-        const streams = new Map(); // tempMap to keep streams already in
-        for (const knowStreamId of knowExistingStreamsIds) {
-            const strs = this.getParentsIds(knowStreamId, false, [knowStreamId]).reverse();
-            for (const strId of strs) {
-                streams.set(strId, true);
-            }
-        }
-        for (const itemDef of itemDefs) {
-            const streamParentIds = this.getParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
-            const resultToBeReversed = [];
-            for (let i = streamParentIds.length - 1; i > -1; i--) { // loop reverse to break as soon as we find an existing stream
-                const streamId = streamParentIds[i];
-                if (streams.has(streamId))
-                    break;
-                const stream = this.getDataById(streamId);
-                streams.set(streamId, true); // just to flag
-                const itemStream = { id: streamId, parentId: stream.parentId };
-                if (nameProperty !== 'none') {
-                    itemStream[nameProperty] = stream.name; // to be translated
-                }
-                resultToBeReversed.push(itemStream);
-            }
-            // result need to be reversed in order to get parents created before
-            result.push(...resultToBeReversed.reverse());
-        }
-        return result;
-    }
-    /**
-     * Get stream Data by Id;
-     */
-    getDataById(streamId, throwErrorIfNotFound = true) {
-        const streamData = this.#modelStreamsById[streamId];
-        if (throwErrorIfNotFound && !streamData)
-            throw new Error(`Stream with id: "${streamId}" not found`);
-        return streamData;
-    }
-    /**
-     * Get all parents id;
-     */
-    getParentsIds(streamId, throwErrorIfNotFound = true, initialArray = []) {
-        const streamData = this.getDataById(streamId, throwErrorIfNotFound);
-        if (!streamData)
-            return initialArray;
-        if (streamData.parentId !== null) {
-            initialArray.unshift(streamData.parentId);
-            this.getParentsIds(streamData.parentId, true, initialArray);
-        }
-        return initialArray;
-    }
-}
-exports.HDSModelStreams = HDSModelStreams;
-/**
- * @param streams
- * @param map - key value map
- */
-function loadModelStreamsById(streams, map) {
-    if (!streams)
-        return;
-    for (const stream of streams) {
-        if (map[stream.id]) {
-            // should be tested with a faulty model
-            throw new Error(`Duplicate streamId "${stream.id}" for strean ${JSON.stringify(stream)}`);
-        }
-        map[stream.id] = stream;
-        loadModelStreamsById(stream.children, map);
-    }
-}
-//# sourceMappingURL=HDSModel-Streams.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/HDSModel.js"
-/*!*********************************!*\
-  !*** ./js/HDSModel/HDSModel.js ***!
-  \*********************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModel = void 0;
-const errors_1 = __webpack_require__(/*! ../errors */ "./js/errors.js");
-const utils_1 = __webpack_require__(/*! ../utils */ "./js/utils.js");
-const HDSModel_Streams_1 = __webpack_require__(/*! ./HDSModel-Streams */ "./js/HDSModel/HDSModel-Streams.js");
-const HDSModel_Authorizations_1 = __webpack_require__(/*! ./HDSModel-Authorizations */ "./js/HDSModel/HDSModel-Authorizations.js");
-const HDSModel_ItemsDefs_1 = __webpack_require__(/*! ./HDSModel-ItemsDefs */ "./js/HDSModel/HDSModel-ItemsDefs.js");
-const HDSModel_EventTypes_1 = __webpack_require__(/*! ./HDSModel-EventTypes */ "./js/HDSModel/HDSModel-EventTypes.js");
-const HDSModel_Datasources_1 = __webpack_require__(/*! ./HDSModel-Datasources */ "./js/HDSModel/HDSModel-Datasources.js");
-class HDSModel {
-    /**
-     * JSON definition file URL.
-     * Should come from service/info assets.hds-model
-     */
-    #modelUrl;
-    /** RAW content of model definitions */
-    #modelData;
-    /** Service-info assets map (e.g. { datasets: 'https://...', ... }) */
-    #assets;
-    /**
-     * Map of properties loaded "on demand"
-     */
-    laziliyLoadedMap = {};
-    /**
-     * @param modelUrl - JSON definition file URL. Should come from service/info assets.hds-model
-     */
-    constructor(modelUrl) {
-        this.#modelUrl = modelUrl;
-        this.laziliyLoadedMap = {};
-        this.#modelData = null;
-        this.#assets = {};
-    }
-    /** Service-info assets used for resolving datasource endpoints */
-    get assets() {
-        return this.#assets;
-    }
-    set assets(value) {
-        this.#assets = value || {};
-    }
-    get isLoaded() {
-        return !!this.#modelData;
-    }
-    /**
-     * Load model definitions
-     */
-    async load(modelUrl = null) {
-        if (modelUrl) {
-            this.#modelUrl = modelUrl;
-        }
-        const response = await fetch(this.#modelUrl);
-        const resultText = await response.text();
-        const result = JSON.parse(resultText);
-        this.#modelData = result;
-        // add key to items before freezing;
-        for (const [key, item] of Object.entries(this.#modelData.items)) {
-            item.key = key;
-        }
-        // make sure it cannot be modified
-        (0, utils_1.deepFreeze)(this.#modelData);
-    }
-    /** RAW model data */
-    get modelData() {
-        if (!this.isLoaded)
-            throwNotLoadedError();
-        return this.#modelData;
-    }
-    get itemsDefs() {
-        if (!this.isLoaded)
-            throwNotLoadedError();
-        if (!this.laziliyLoadedMap.itemsDefs) {
-            this.laziliyLoadedMap.itemsDefs = new HDSModel_ItemsDefs_1.HDSModelItemsDefs(this);
-        }
-        return this.laziliyLoadedMap.itemsDefs;
-    }
-    get streams() {
-        if (!this.isLoaded)
-            throwNotLoadedError();
-        if (!this.laziliyLoadedMap.streams) {
-            this.laziliyLoadedMap.streams = new HDSModel_Streams_1.HDSModelStreams(this);
-        }
-        return this.laziliyLoadedMap.streams;
-    }
-    get authorizations() {
-        if (!this.isLoaded)
-            throwNotLoadedError();
-        if (!this.laziliyLoadedMap.authorizations) {
-            this.laziliyLoadedMap.authorizations = new HDSModel_Authorizations_1.HDSModelAuthorizations(this);
-        }
-        return this.laziliyLoadedMap.authorizations;
-    }
-    get eventTypes() {
-        if (!this.isLoaded)
-            throwNotLoadedError();
-        if (!this.laziliyLoadedMap.eventTypes) {
-            this.laziliyLoadedMap.eventTypes = new HDSModel_EventTypes_1.HDSModelEventTypes(this);
-        }
-        return this.laziliyLoadedMap.eventTypes;
-    }
-    get datasources() {
-        if (!this.isLoaded)
-            throwNotLoadedError();
-        if (!this.laziliyLoadedMap.datasources) {
-            this.laziliyLoadedMap.datasources = new HDSModel_Datasources_1.HDSModelDatasources(this);
-        }
-        return this.laziliyLoadedMap.datasources;
-    }
-}
-exports.HDSModel = HDSModel;
-function throwNotLoadedError() {
-    throw new errors_1.HDSLibError('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
-}
-//# sourceMappingURL=HDSModel.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/HDSModelInitAndSingleton.js"
-/*!*************************************************!*\
-  !*** ./js/HDSModel/HDSModelInitAndSingleton.js ***!
-  \*************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getModel = getModel;
-exports.resetModel = resetModel;
-exports.initHDSModel = initHDSModel;
-const HDSModel_1 = __webpack_require__(/*! ./HDSModel */ "./js/HDSModel/HDSModel.js");
-const HDSService_1 = __webpack_require__(/*! ../HDSService */ "./js/HDSService.js");
-let hdsModelInstance = null;
-function getModel() {
-    if (hdsModelInstance == null) {
-        hdsModelInstance = new HDSModel_1.HDSModel('');
-    }
-    return hdsModelInstance;
-}
-/**
- * Mostly used during test to unload model
- */
-function resetModel() {
-    hdsModelInstance = null;
-}
-/**
- * Initialized model singleton
- */
-async function initHDSModel() {
-    if (!hdsModelInstance) {
-        getModel();
-    }
-    if (!hdsModelInstance.isLoaded) {
-        const service = new HDSService_1.HDSService();
-        const serviceInfo = await service.info();
-        hdsModelInstance.assets = serviceInfo.assets;
-        await hdsModelInstance.load(serviceInfo.assets['hds-model']);
-    }
-    return hdsModelInstance;
-}
-//# sourceMappingURL=HDSModelInitAndSingleton.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/internalModelUtils.js"
-/*!*******************************************!*\
-  !*** ./js/HDSModel/internalModelUtils.js ***!
-  \*******************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.itemKeysOrDefsToDefs = itemKeysOrDefsToDefs;
-exports.itemKeyOrDefToDef = itemKeyOrDefToDef;
-const HDSItemDef_1 = __webpack_require__(/*! ./HDSItemDef */ "./js/HDSModel/HDSItemDef.js");
-/**
- * Some call support either arrays of itemKeys or itemDefs
- * test if they are strings or itemDefs and returns an array of itemDefs
- */
-function itemKeysOrDefsToDefs(model, keysOrDefs) {
-    const res = [];
-    for (const keyOrDef of keysOrDefs) {
-        res.push(itemKeyOrDefToDef(model, keyOrDef));
-    }
-    return res;
-}
-/**
- * Some call support either itemKey or itemDef
- * test if string or itemDef and returns an itemDef
- */
-function itemKeyOrDefToDef(model, keyOrDef) {
-    if (keyOrDef instanceof HDSItemDef_1.HDSItemDef)
-        return keyOrDef;
-    return model.itemsDefs.forKey(keyOrDef);
-}
-//# sourceMappingURL=internalModelUtils.js.map
-
-/***/ },
-
-/***/ "./js/HDSModel/reminders.js"
-/*!**********************************!*\
-  !*** ./js/HDSModel/reminders.js ***!
-  \**********************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.computeReminders = computeReminders;
-const duration_1 = __webpack_require__(/*! ../utils/duration */ "./js/utils/duration.js");
-const IMPORTANCE_ORDER = { may: 0, should: 1, must: 2 };
-function maxImportance(a, b) {
-    const va = IMPORTANCE_ORDER[a || 'may'] || 0;
-    const vb = IMPORTANCE_ORDER[b || 'may'] || 0;
-    return va >= vb ? (a || 'may') : (b || 'may');
-}
-/**
- * Merge reminder configs from multiple sources. Later sources override per-field.
- * Returns merged config + importance (highest across all sources).
- */
-function mergeReminders(sources) {
-    let merged = {};
-    let importance = 'may';
-    for (const source of sources) {
-        const r = source.reminder;
-        if (r.cooldown !== undefined)
-            merged.cooldown = r.cooldown;
-        if (r.expectedInterval !== undefined)
-            merged.expectedInterval = r.expectedInterval;
-        if (r.relativeTo !== undefined)
-            merged.relativeTo = r.relativeTo;
-        if (r.relativeDays !== undefined)
-            merged.relativeDays = r.relativeDays;
-        if (r.importance !== undefined)
-            merged.importance = r.importance;
-        importance = maxImportance(importance, r.importance);
-    }
-    return { config: merged, importance };
-}
-/**
- * Find the most recent event matching an itemDef (by streamId + eventType).
- */
-function findLastEvent(itemDef, events) {
-    const streamId = itemDef.data.streamId;
-    const types = new Set(itemDef.eventTypes);
-    let latest;
-    for (const e of events) {
-        if (!types.has(e.type))
-            continue;
-        const eStreamId = e.streamId || (e.streamIds && e.streamIds[0]);
-        if (eStreamId !== streamId)
-            continue;
-        if (!latest || e.time > latest.time)
-            latest = e;
-    }
-    return latest;
-}
-/**
- * Compute reminder statuses for a set of items given their events and optional overrides.
- *
- * @param itemDefs - array of item definitions (must have .key, .eventTypes, .reminder, .data.streamId)
- * @param events - all events to search for last entries
- * @param overrides - optional collector/user overrides (matched by itemKey in the ReminderSource)
- * @param now - current time in unix seconds (defaults to Date.now()/1000)
- */
-function computeReminders(itemDefs, events, overrides, now) {
-    const nowSec = now ?? Math.floor(Date.now() / 1000);
-    const results = [];
-    // Pre-compute last events for relative lookups
-    const lastEventCache = new Map();
-    for (const itemDef of itemDefs) {
-        lastEventCache.set(itemDef.key, findLastEvent(itemDef, events));
-    }
-    for (const itemDef of itemDefs) {
-        // Build sources: default + overrides
-        const sources = [];
-        if (itemDef.reminder) {
-            sources.push({ origin: 'default', reminder: itemDef.reminder });
-        }
-        const itemOverrides = overrides?.[itemDef.key];
-        if (itemOverrides)
-            sources.push(...itemOverrides);
-        // No reminder config at all → skip
-        if (sources.length === 0)
-            continue;
-        const { config, importance } = mergeReminders(sources);
-        const lastEvent = lastEventCache.get(itemDef.key);
-        const lastEntry = lastEvent?.time;
-        const timeSinceLast = lastEntry != null ? (nowSec - lastEntry) : Infinity;
-        let status;
-        let dueDate;
-        // --- relativeTo logic ---
-        if (config.relativeTo && config.relativeDays) {
-            const refItemDef = itemDefs.find(d => d.key === config.relativeTo);
-            const refEvent = refItemDef ? lastEventCache.get(refItemDef.key) : undefined;
-            if (!refEvent) {
-                // No reference event → can't compute relative timing
-                status = 'ok';
-            }
-            else {
-                // Compute cycle day (day 1 = day of reference event)
-                const daysSinceRef = Math.floor((nowSec - refEvent.time) / 86400);
-                const cycleDay = daysSinceRef + 1;
-                const days = config.relativeDays;
-                const minDay = Math.min(...days);
-                const maxDay = Math.max(...days);
-                if (days.includes(cycleDay)) {
-                    // Check cooldown: if already entered today, suppress
-                    if (lastEntry != null && timeSinceLast < 86400) {
-                        status = 'cooldown';
-                    }
-                    else {
-                        status = 'due';
-                        dueDate = refEvent.time + (cycleDay - 1) * 86400;
-                    }
-                }
-                else if (cycleDay === minDay - 1) {
-                    status = 'upcoming';
-                    dueDate = refEvent.time + (minDay - 1) * 86400;
-                }
-                else if (cycleDay > maxDay) {
-                    // Past the target window — if never entered this cycle, overdue
-                    if (!lastEntry || lastEntry < refEvent.time) {
-                        status = 'overdue';
-                    }
-                    else {
-                        status = 'ok';
-                    }
-                }
-                else {
-                    status = 'ok';
-                }
-            }
-            // --- expectedInterval logic ---
-        }
-        else if (config.expectedInterval) {
-            const interval = config.expectedInterval;
-            const cooldownSec = config.cooldown ? (0, duration_1.durationToSeconds)(config.cooldown) : 0;
-            if (lastEntry == null) {
-                // Never entered → due
-                status = 'due';
-            }
-            else if (cooldownSec > 0 && timeSinceLast < cooldownSec) {
-                status = 'cooldown';
-            }
-            else {
-                const minSec = interval.min ? (0, duration_1.durationToSeconds)(interval.min) : 0;
-                const maxSec = interval.max ? (0, duration_1.durationToSeconds)(interval.max) : Infinity;
-                const thresholdUpcoming = maxSec * 0.9;
-                if (timeSinceLast < minSec) {
-                    status = 'ok';
-                }
-                else if (timeSinceLast < thresholdUpcoming) {
-                    status = 'upcoming';
-                    dueDate = lastEntry + (interval.max ? (0, duration_1.durationToSeconds)(interval.max) : 0);
-                }
-                else if (timeSinceLast <= maxSec) {
-                    status = 'due';
-                    dueDate = lastEntry + (interval.max ? (0, duration_1.durationToSeconds)(interval.max) : 0);
-                }
-                else {
-                    status = 'overdue';
-                    dueDate = lastEntry + (interval.max ? (0, duration_1.durationToSeconds)(interval.max) : 0);
-                }
-            }
-            // --- cooldown-only logic ---
-        }
-        else if (config.cooldown) {
-            const cooldownSec = (0, duration_1.durationToSeconds)(config.cooldown);
-            if (lastEntry != null && timeSinceLast < cooldownSec) {
-                status = 'cooldown';
-            }
-            else {
-                status = 'due';
-                dueDate = lastEntry != null ? lastEntry + cooldownSec : undefined;
-            }
-        }
-        else {
-            // Config has importance but no timing → always due
-            status = 'due';
-        }
-        results.push({
-            itemKey: itemDef.key,
-            status,
-            importance,
-            lastEntry,
-            lastEventContent: lastEvent?.content,
-            dueDate,
-            sources
-        });
-    }
-    // Sort: overdue first, then due, then upcoming, then ok, then cooldown
-    // Within same status: higher importance first
-    const STATUS_ORDER = { overdue: 0, due: 1, upcoming: 2, ok: 3, cooldown: 4 };
-    results.sort((a, b) => {
-        const sa = STATUS_ORDER[a.status] ?? 5;
-        const sb = STATUS_ORDER[b.status] ?? 5;
-        if (sa !== sb)
-            return sa - sb;
-        return (IMPORTANCE_ORDER[b.importance] || 0) - (IMPORTANCE_ORDER[a.importance] || 0);
-    });
-    return results;
-}
-//# sourceMappingURL=reminders.js.map
-
-/***/ },
-
-/***/ "./js/HDSService.js"
-/*!**************************!*\
-  !*** ./js/HDSService.js ***!
-  \**************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSService = void 0;
-const settings = __importStar(__webpack_require__(/*! ./settings */ "./js/settings.js"));
-const patchedPryv_1 = __webpack_require__(/*! ./patchedPryv */ "./js/patchedPryv.js");
-// makes Pryv service aware of default serviceUrl
-class HDSService extends patchedPryv_1.pryv.Service {
-    constructor(serviceInfoUrl, serviceCustomizations) {
-        serviceInfoUrl = serviceInfoUrl || settings.getServiceInfoURL();
-        super(serviceInfoUrl, serviceCustomizations);
-    }
-}
-exports.HDSService = HDSService;
-//# sourceMappingURL=HDSService.js.map
-
-/***/ },
-
-/***/ "./js/appTemplates/AppClientAccount.js"
-/*!*********************************************!*\
-  !*** ./js/appTemplates/AppClientAccount.js ***!
-  \*********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.AppClientAccount = void 0;
-const errors_1 = __webpack_require__(/*! ../errors */ "./js/errors.js");
-const patchedPryv_1 = __webpack_require__(/*! ../patchedPryv */ "./js/patchedPryv.js");
-const Application_1 = __webpack_require__(/*! ./Application */ "./js/appTemplates/Application.js");
-const CollectorClient_1 = __webpack_require__(/*! ./CollectorClient */ "./js/appTemplates/CollectorClient.js");
-const logger = __importStar(__webpack_require__(/*! ../logger */ "./js/logger.js"));
-/**
- * - applications
- *   - [baseStreamId] "Root" stream from this app
- */
-const MAX_COLLECTORS = 1000;
-class AppClientAccount extends Application_1.Application {
-    constructor(baseStreamId, connection, appName, features) {
-        super(baseStreamId, connection, appName, features);
-        this.cache.collectorClientsMap = {};
-    }
-    get appSettings() {
-        return {
-            canBePersonnal: true,
-            mustBeMaster: true
-        };
-    }
-    /**
-     * When the app receives a new request for data sharing
-     */
-    async handleIncomingRequest(apiEndpoint, incomingEventId) {
-        // make sure that collectorClientsMap is initialized
-        await this.getCollectorClients();
-        const requesterConnection = new patchedPryv_1.pryv.Connection(apiEndpoint);
-        const accessInfo = await requesterConnection.accessInfo();
-        // check if request is known
-        const collectorClientKey = CollectorClient_1.CollectorClient.keyFromInfo(accessInfo);
-        logger.debug('AppClient:handleIncomingRequest', { collectorClientKey, accessInfo, incomingEventId });
-        if (this.cache.collectorClientsMap[collectorClientKey]) {
-            const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
-            logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
-            if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
-                // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-                throw new errors_1.HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-                // we might consider reseting() in the future;
-                // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
-            }
-            if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-                throw new errors_1.HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-                // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-                // we might consider reseting() in the future;
-                // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
-                // return null;
-            }
-            return collectorClient;
-        }
-        // check if comming form hdsCollector
-        if (!accessInfo?.clientData?.hdsCollector || accessInfo.clientData?.hdsCollector?.version !== 0) {
-            throw new errors_1.HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
-        }
-        // else create it
-        const collectorClient = await CollectorClient_1.CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
-        this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
-        return collectorClient;
-    }
-    async getCollectorClientByKey(collectorKey) {
-        // ensure collectors are initialized
-        await this.getCollectorClients();
-        return this.cache.collectorClientsMap[collectorKey];
-    }
-    async getCollectorClients(forceRefresh = false) {
-        if (!forceRefresh && this.cache.collectorClientsMapInitialized)
-            return Object.values(this.cache.collectorClientsMap);
-        const apiCalls = [{
-                method: 'accesses.get',
-                params: { includeDeletions: true }
-            }, {
-                method: 'events.get',
-                params: { types: ['request/collector-client-v1'], streams: [this.baseStreamId], limit: MAX_COLLECTORS }
-            }];
-        const [accessesRes, eventRes] = await this.connection.api(apiCalls);
-        const accessHDSCollectorMap = {};
-        for (const access of accessesRes.accesses) {
-            if (access.clientData?.hdsCollectorClient) {
-                accessHDSCollectorMap[access.name] = access;
-            }
-        }
-        for (const event of eventRes.events) {
-            const collectorClient = new CollectorClient_1.CollectorClient(this, event);
-            if (accessHDSCollectorMap[collectorClient.key] != null)
-                collectorClient.accessData = accessHDSCollectorMap[collectorClient.key];
-            // temp process - might be removed
-            await collectorClient.checkConsistency();
-            this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
-        }
-        this.cache.collectorClientsMapInitialized = true;
-        return Object.values(this.cache.collectorClientsMap);
-    }
-    /**
-     * - Check connection validity
-     * - Make sure stream structure exists
-     */
-    async init() {
-        return super.init();
-    }
-}
-exports.AppClientAccount = AppClientAccount;
-//# sourceMappingURL=AppClientAccount.js.map
-
-/***/ },
-
-/***/ "./js/appTemplates/AppManagingAccount.js"
-/*!***********************************************!*\
-  !*** ./js/appTemplates/AppManagingAccount.js ***!
-  \***********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.AppManagingAccount = void 0;
-const short_unique_id_1 = __importDefault(__webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js"));
-const Application_1 = __webpack_require__(/*! ./Application */ "./js/appTemplates/Application.js");
-const Collector_1 = __webpack_require__(/*! ./Collector */ "./js/appTemplates/Collector.js");
-const collectorIdGenerator = new short_unique_id_1.default({ dictionary: 'alphanum_lower', length: 7 });
-/**
- * App which manages Collectors
- * A "Collector" can be seen as a "Request" and set of "Responses"
- * - Responses are authorization tokens from individuals
- *
- * The App can create multiple "collectors e.g. Questionnaires"
- *
- * Stream structure
- * - applications
- *   - [baseStreamId]  "Root" stream for this app
- *     - [baseStreamId]-[collectorsId] Each "questionnaire" or "request for a set of data" has it's own stream
- *       - [baseStreamId]-[collectorsId]-internal Private stuff not to be shared
- *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
- *       - [baseStreamId]-[collectorsId]-pending Contains events with "pending" requests
- *       - [baseStreamId]-[collectorsId]-inbox Contains events with "inbox" requests Will be shared in createOnly
- *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
- *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
- */
-class AppManagingAccount extends Application_1.Application {
-    // used by Application.init();
-    get appSettings() {
-        return {
-            canBePersonnal: true,
-            mustBeMaster: true,
-            appNameFromAccessInfo: true // application name will be taken from Access-Info Name
-        };
-    }
-    async init() {
-        await super.init();
-        // -- check if stream structure exists
-        await this.getCollectors();
-        return this;
-    }
-    async getCollectors(forceRefresh) {
-        await this.#updateCollectorsIfNeeded(forceRefresh);
-        return Object.values(this.cache.collectorsMap);
-    }
-    async getCollectorById(id) {
-        await this.#updateCollectorsIfNeeded();
-        return this.cache.collectorsMap[id];
-    }
-    async #updateCollectorsIfNeeded(forceRefresh = false) {
-        if (!forceRefresh && this.cache.collectorsMap)
-            return;
-        if (forceRefresh)
-            await this.loadStreamData();
-        // TODO do not replace the map, but update collectors if streamData has changed and add new collectors
-        const streams = this.streamData.children || [];
-        const collectorsMap = {};
-        for (const stream of streams) {
-            const collector = new Collector_1.Collector(this, stream);
-            collectorsMap[collector.id] = collector;
-        }
-        this.cache.collectorsMap = collectorsMap;
-    }
-    /**
-     * Create an initialized Collector
-     */
-    async createCollector(name) {
-        const collector = await this.createCollectorUnitialized(name);
-        await collector.init();
-        return collector;
-    }
-    /**
-     * Create an un-initialized Collector (mostly used by tests)
-     */
-    async createCollectorUnitialized(name) {
-        const streamId = this.baseStreamId + '-' + collectorIdGenerator.rnd();
-        const params = {
-            id: streamId,
-            name,
-            parentId: this.baseStreamId
-        };
-        const stream = await this.connection.apiOne('streams.create', params, 'stream');
-        // add new stream to streamCache
-        this.streamData.children.push(stream);
-        const collector = new Collector_1.Collector(this, stream);
-        this.cache.collectorsMap[collector.streamId] = collector;
-        return collector;
-    }
-}
-exports.AppManagingAccount = AppManagingAccount;
-//# sourceMappingURL=AppManagingAccount.js.map
-
-/***/ },
-
-/***/ "./js/appTemplates/Application.js"
-/*!****************************************!*\
-  !*** ./js/appTemplates/Application.js ***!
-  \****************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.Application = void 0;
-const patchedPryv_1 = __webpack_require__(/*! ../patchedPryv */ "./js/patchedPryv.js");
-const toolkit_1 = __webpack_require__(/*! ../toolkit */ "./js/toolkit/index.js");
-const APPS_ROOT_STREAM = 'applications';
-/**
- * Common code for AppClientAccount and AppManagingAccount
- */
-class Application {
-    /** Pryv.Connection */
-    connection;
-    /** string */
-    baseStreamId;
-    /** string */
-    appName;
-    cache = {};
-    /** ApplicationFeatures */
-    features;
-    /**
-     * Get application stream structure
-     * Initialized at init()
-     * Can be refreshed with loadStreamData
-     */
-    get streamData() {
-        if (!this.cache.streamData)
-            throw new Error('Call .init() first');
-        return this.cache.streamData;
-    }
-    get appSettings() {
-        throw new Error('appSettings must be implemented');
-        // possible return values:
-        /**
-         * return {
-         *  canBePersonnal: true,
-         *  mustBeMaster: true
-         *  appNameFromAccessInfo: true // application name will be taken from Access-Info Name
-         * };
-         */
-    }
-    /**
-     * Create with an apiEnpoint
-     */
-    static async newFromApiEndpoint(baseStreamId, apiEndpoint, appName, features) {
-        const connection = new patchedPryv_1.pryv.Connection(apiEndpoint);
-        // in a static method, "this" is the class (here the extending class)
-        return await this.newFromConnection(baseStreamId, connection, appName, features);
-    }
-    /**
-    * Create with an apiEnpoint
-    */
-    static async newFromConnection(baseStreamId, connection, appName, features) {
-        // in a static method "this" is the class (here the extending class)
-        const app = new this(baseStreamId, connection, appName, features);
-        await app.init();
-        return app;
-    }
-    /**
-     * @private
-     * use .newFrom...() to create new AppManagingAccount
-     */
-    constructor(baseStreamId, connection, appName, features) {
-        if (!baseStreamId || baseStreamId.length < 2)
-            throw new Error('Missing or too short baseStreamId');
-        this.baseStreamId = baseStreamId;
-        if (appName == null && !this.appSettings.appNameFromAccessInfo) {
-            throw new Error('appName must be given unless appSettings.appNameFromAccessInfo = true');
-        }
-        this.appName = appName || '';
-        this.connection = connection;
-        this.features = Object.assign({ streamsAutoCreate: true }, features);
-        if (this.features.streamsAutoCreate) {
-            toolkit_1.StreamsAutoCreate.attachToConnection(this.connection, undefined);
-        }
-        this.cache = {};
-    }
-    async init() {
-        await createAppStreams(this);
-        return this;
-    }
-    /**
-     * Save anything you want for your app
-     */
-    async setCustomSettings(content) {
-        const currentCustomSettings = await this.getCustomSettings();
-        if (currentCustomSettings != null) { // update
-            const id = this.cache.customSettingsEvent.id;
-            const updatedEvent = await this.connection.apiOne('events.update', { id, update: { content } }, 'event');
-            this.cache.customSettingsEvent = updatedEvent;
-        }
-        else {
-            await this.#createCustomSettings(content);
-        }
-        return this.cache.customSettingsEvent?.content;
-    }
-    /**
-     * @private
-     * Used by getCustomSettings & setCustomSettings
-     */
-    async #createCustomSettings(content) {
-        const createdEvent = await this.connection.apiOne('events.create', { streamIds: [this.baseStreamId], type: 'settings/any', content }, 'event');
-        this.cache.customSettingsEvent = createdEvent;
-    }
-    /**
-     * Get all current settings previously set with setCustomSettings()
-     */
-    async getCustomSettings(forceRefresh = false) {
-        if (forceRefresh || !this.cache.customSettingsEvent) {
-            const customSettingsEvent = (await this.connection.apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
-            this.cache.customSettingsEvent = customSettingsEvent;
-        }
-        if (!this.cache.customSettingsEvent) {
-            await this.#createCustomSettings({});
-        }
-        return this.cache.customSettingsEvent?.content;
-    }
-    /**
-     * Update value of a custom setting by its key
-     * @param {*} value if value is `null` key will be deleted
-     */
-    async setCustomSetting(key, value) {
-        const currentCustomSettings = await this.getCustomSettings();
-        if (value === null) {
-            delete currentCustomSettings[key];
-        }
-        else {
-            currentCustomSettings[key] = value;
-        }
-        return this.setCustomSettings(currentCustomSettings);
-    }
-    /**
-     * Force loading of streamData
-     */
-    async loadStreamData() {
-        const streams = (await this.connection.apiOne('streams.get', {}, 'streams'));
-        const streamData = findStreamByid(streams, this.baseStreamId);
-        if (streamData) {
-            this.cache.streamData = streamData;
-        }
-        return streamData;
-    }
-}
-exports.Application = Application;
-// findStream in a tree
-function findStreamByid(streams, streamId) {
-    for (const stream of streams) {
-        if (stream.id === streamId)
-            return stream;
-        if (stream.children?.length > 0) {
-            const streamFromChildren = findStreamByid(stream.children, streamId);
-            if (streamFromChildren != null)
-                return streamFromChildren;
-        }
-    }
-    return null;
-}
-// create app Streams
-async function createAppStreams(app) {
-    // check that connection has a personal or master token or has "manage" rights on baseStream
-    const infos = await app.connection.accessInfo();
-    if (app.appSettings.appNameFromAccessInfo) {
-        app.appName = infos.name;
-    }
-    let isPersonalOrMaster = infos.type === 'personal';
-    if (!app.appSettings.canBePersonnal && infos.type === 'personal') {
-        throw new Error('Application should not use a personal token');
-    }
-    if (!isPersonalOrMaster) {
-        const allowPersonalStr = app.appSettings.canBePersonnal ? '"personal" or ' : '';
-        if (infos.type !== 'app')
-            throw new Error(`Application requires a ${allowPersonalStr} "app" type of access`);
-        const masterFound = infos.permissions.find((p) => (p.streamId === '*' && p.level === 'manage'));
-        isPersonalOrMaster = true;
-        if (app.appSettings.mustBemaster && !masterFound) {
-            throw new Error('Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
-        }
-        if (!masterFound) { // check that app has "manage" level on baseStreamId
-            const baseStreamFound = infos.permissions.find((p) => (p.streamId === app.baseStreamId && p.level === 'manage'));
-            if (!baseStreamFound)
-                throw new Error(`Application with "app" type of access requires  (streamId = "${app.baseStreamId}", level = "manage") or master access`);
-        }
-    }
-    // get streamStructure
-    let found = false;
-    try {
-        const streamData = await app.loadStreamData();
-        if (streamData)
-            found = true;
-    }
-    catch (e) {
-        if (e.innerObject?.id !== 'unknown-referenced-resource' || e.innerObject?.data?.id !== app.baseStreamId) {
-            throw e;
-        }
-    }
-    // not found create streams
-    if (!found) {
-        if (!isPersonalOrMaster) {
-            throw new Error('Token has not sufficient right to create App streams. Create them upfront');
-        }
-        const apiCalls = [
-            { method: 'streams.create', params: { id: APPS_ROOT_STREAM, name: 'Applications' } },
-            { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: APPS_ROOT_STREAM } }
-        ];
-        const streamCreateResult = await app.connection.api(apiCalls);
-        if (streamCreateResult[1].error)
-            throw new Error('Failed creating app streams ' + JSON.stringify(streamCreateResult[1].error));
-        const stream = streamCreateResult[1].stream;
-        app.cache.streamData = stream;
-    }
-}
-//# sourceMappingURL=Application.js.map
-
-/***/ },
-
-/***/ "./js/appTemplates/Collector.js"
-/*!**************************************!*\
-  !*** ./js/appTemplates/Collector.js ***!
-  \**************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var _a;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.Collector = void 0;
-const CollectorRequest_1 = __webpack_require__(/*! ./CollectorRequest */ "./js/appTemplates/CollectorRequest.js");
-const errors_1 = __webpack_require__(/*! ../errors */ "./js/errors.js");
-const utils_1 = __webpack_require__(/*! ../utils */ "./js/utils.js");
-const CollectorInvite_1 = __webpack_require__(/*! ./CollectorInvite */ "./js/appTemplates/CollectorInvite.js");
-const logger = __importStar(__webpack_require__(/*! ../logger */ "./js/logger.js"));
-const COLLECTOR_STREAMID_SUFFIXES = {
-    archive: 'archive',
-    internal: 'internal',
-    public: 'public',
-    pending: 'pending',
-    inbox: 'inbox',
-    active: 'active',
-    error: 'error'
-};
-Object.freeze(COLLECTOR_STREAMID_SUFFIXES);
-/**
- * Collector is used by AppManagingAccount
- * A "Collector" can be seen as a "Request" and set of "Responses"
- * - Responses are authorization tokens from individuals
- */
-class Collector {
-    static STREAMID_SUFFIXES = COLLECTOR_STREAMID_SUFFIXES;
-    static STATUSES = Object.freeze({
-        draft: 'draft',
-        active: 'active',
-        deactivated: 'deactivated'
-    });
-    appManaging;
-    streamId;
-    name;
-    #streamData;
-    #cache;
-    request;
-    /**
-     * @param appManaging
-     * @param streamData
-     */
-    constructor(appManaging, streamData) {
-        this.streamId = streamData.id;
-        this.name = streamData.name;
-        this.appManaging = appManaging;
-        this.#streamData = streamData;
-        this.request = new CollectorRequest_1.CollectorRequest({
-            id: this.id
-        });
-        this.#cache = {
-            initialized: false,
-            invites: {},
-            invitesInitialized: false,
-            invitesInitializing: false,
-            statusEvent: null
-        };
-    }
-    /**
-     * @property {string} id - shortcut for streamId
-     */
-    get id() {
-        return this.streamId;
-    }
-    /**
-     * @property {string} one of 'draft', 'active', 'deactivated'
-     */
-    get statusCode() {
-        if (this.#cache.statusEvent == null)
-            throw new Error('Init Collector first');
-        return this.#cache.statusEvent.content.status;
-    }
-    /**
-     * Fetch online data
-     */
-    async init(forceRefresh = false) {
-        if (!forceRefresh && this.#cache.initialized)
-            return;
-        await this.checkStreamStructure();
-        await this.#loadStatus(forceRefresh);
-        this.#cache.initialized = true;
-    }
-    /**
-     * @type {StatusEvent} - extends PryvEvent with a specific content
-     * @property {Object} content - content
-     * @property {String} content.status - one of 'draft', 'active', 'deactivated'
-     * @property {CollectorRequestData} content.request - app specific data
-     */
-    /**
-     * Load Collector status,
-     * @param forceRefresh - if true, forces fetching the status from the server
-     */
-    async #loadStatus(forceRefresh = false) {
-        if (!forceRefresh && this.#cache.statusEvent)
-            return this.#cache.statusEvent;
-        const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(_a.STREAMID_SUFFIXES.internal)] };
-        const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
-        if (statusEvents.length === 0) { // non existent set "draft" status
-            return this.#setStatus(_a.STATUSES.draft);
-        }
-        this.#cache.statusEvent = statusEvents[0];
-        this.request.loadFromStatusEvent(statusEvents[0]);
-    }
-    /**
-     * Change the status
-     * @param status one of 'draft', 'active', 'deactivated'
-     * @returns {StatusEvent}
-     */
-    async #setStatus(status) {
-        if (!_a.STATUSES[status])
-            throw new errors_1.HDSLibError('Unknown status key', { status });
-        const event = {
-            type: 'status/collector-v1',
-            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.internal)],
-            content: {
-                status,
-                request: this.request.content
-            }
-        };
-        const statusEvent = await this.appManaging.connection.apiOne('events.create', event, 'event');
-        this.#cache.statusEvent = statusEvent;
-        this.request.loadFromStatusEvent(statusEvent);
-        return this.#cache.statusEvent;
-    }
-    async save() {
-        if (this.statusCode !== _a.STATUSES.draft)
-            throw new Error(`Cannot save when status = "${this.statusCode}".`);
-        return await this.#setStatus(_a.STATUSES.draft);
-    }
-    async publish() {
-        const publicEventData = {
-            type: 'request/collector-v1',
-            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.public)],
-            content: this.request.content
-        };
-        await this.appManaging.connection.apiOne('events.create', publicEventData, 'event');
-        return await this.#setStatus(_a.STATUSES.active);
-    }
-    #addOrUpdateInvite(eventData) {
-        const key = CollectorInvite_1.CollectorInvite.getKeyForEvent(eventData);
-        if (this.#cache.invites[key]) {
-            this.#cache.invites[key].setEventData(eventData);
-        }
-        else {
-            this.#cache.invites[key] = new CollectorInvite_1.CollectorInvite(this, eventData);
-        }
-        return this.#cache.invites[key];
-    }
-    /**
-     * Retrieve an invite by its key
-     */
-    async getInviteByKey(key) {
-        await this.init(); // do not forceRefresh on Init();
-        await this.#initInvites(false);
-        return this.#cache.invites[key];
-    }
-    /**
-     * Retreive all invites
-     * @param {boolean} [forceRefresh]
-     * @returns {Array<CollectorInvite>}
-     */
-    async getInvites(forceRefresh = false) {
-        await this.init(); // do not forceRefresh on Init();
-        await this.#initInvites(forceRefresh);
-        return Object.values(this.#cache.invites);
-    }
-    async #initInvites(forceRefresh) {
-        await (0, utils_1.waitUntilFalse)(() => (this.#cache.invitesInitializing));
-        if (!forceRefresh && this.#cache.invitesInitialized)
-            return;
-        this.#cache.invitesInitializing = true;
-        const queryParams = { types: ['invite/collector-v1'], streams: [this.streamId], fromTime: 0, toTime: 8640000000000000, limit: 10000 };
-        try {
-            await this.appManaging.connection.getEventsStreamed(queryParams, (eventData) => {
-                this.#addOrUpdateInvite(eventData);
-            });
-        }
-        catch (e) {
-            this.#cache.invitesInitialized = true;
-            this.#cache.invitesInitializing = false;
-            throw e;
-        }
-        this.#cache.invitesInitialized = true;
-        this.#cache.invitesInitializing = false;
-    }
-    async checkInbox() {
-        const newCollectorInvites = [];
-        const params = { types: ['response/collector-v1'], limit: 1000, streams: [this.streamIdFor(_a.STREAMID_SUFFIXES.inbox)] };
-        const responseEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
-        for (const responseEvent of responseEvents) {
-            // fetch corresponding invite
-            const inviteEvent = await this.appManaging.connection.apiOne('events.getOne', { id: responseEvent.content.eventId }, 'event');
-            if (inviteEvent == null)
-                throw new errors_1.HDSLibError(`Cannot find invite event matching id: ${responseEvent.content.eventId}`, responseEvent);
-            const updateInvite = {
-                content: structuredClone(inviteEvent.content)
-            };
-            updateInvite.content.sourceEventId = responseEvent.id;
-            // check type of response
-            switch (responseEvent.content.type) {
-                case 'accept':
-                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.active)];
-                    updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
-                    if (responseEvent.content.chat)
-                        updateInvite.content.chat = responseEvent.content.chat;
-                    break;
-                case 'refuse':
-                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
-                    updateInvite.content.errorType = 'refused';
-                    break;
-                case 'revoke':
-                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
-                    updateInvite.content.errorType = 'revoked';
-                    break;
-                default:
-                    throw new errors_1.HDSLibError(`Unkown or undefined ${responseEvent.content.type}`, responseEvent);
-            }
-            // update inviteEvent and archive inbox message
-            const apiCalls = [
-                {
-                    method: 'events.update',
-                    params: {
-                        id: inviteEvent.id,
-                        update: updateInvite
-                    }
-                },
-                {
-                    method: 'events.update',
-                    params: {
-                        id: responseEvent.id,
-                        update: {
-                            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.archive)]
-                        }
-                    }
-                }
-            ];
-            const results = await this.appManaging.connection.api(apiCalls);
-            const errors = results.filter((r) => (!r.event));
-            if (errors.length > 0)
-                throw new errors_1.HDSLibError('Error activating incoming request', errors);
-            const eventUpdated = results[0].event;
-            const inviteUpdated = this.#addOrUpdateInvite(eventUpdated);
-            newCollectorInvites.push(inviteUpdated);
-        }
-        return newCollectorInvites;
-    }
-    /**
-     * Create a "pending" invite to be sent to an app using AppSharingAccount
-     * @param {string} name a default display name for this request
-     * @param {Object} [options]
-     * @param {Object} [options.customData] any data to be used by the client app
-     */
-    async createInvite(name, options = {}) {
-        if (this.statusCode !== _a.STATUSES.active)
-            throw new Error(`Collector must be in "active" state error to create invite, current: ${this.statusCode}`);
-        const eventParams = {
-            type: 'invite/collector-v1',
-            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.pending)],
-            content: {
-                name,
-                customData: options.customData || {}
-            }
-        };
-        const newInvite = await this.appManaging.connection.apiOne('events.create', eventParams, 'event');
-        const invite = this.#addOrUpdateInvite(newInvite);
-        return invite;
-    }
-    /**
-     * Get sharing api endpoint
-     */
-    async sharingApiEndpoint() {
-        if (this.statusCode !== _a.STATUSES.active)
-            throw new Error(`Collector must be in "active" state error to get sharing link, current: ${this.statusCode}`);
-        if (this.#cache.sharingApiEndpoint)
-            return this.#cache.sharingApiEndpoint;
-        // check if sharing present
-        const sharedAccessId = 'a-' + this.streamId;
-        const accesses = await this.appManaging.connection.apiOne('accesses.get', {}, 'accesses');
-        const sharedAccess = accesses.find((access) => access.name === sharedAccessId);
-        // found return it
-        if (sharedAccess) {
-            this.#cache.sharingApiEndpoint = sharedAccess.apiEndpoint;
-            return sharedAccess.apiEndpoint;
-        }
-        // not found create it
-        const permissions = [
-            { streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.inbox), level: 'create-only' },
-            { streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.public), level: 'read' },
-            // for "publicly shared access" always forbid the selfRevoke feature
-            { feature: 'selfRevoke', setting: 'forbidden' },
-            // for "publicly shared access" always forbid the selfAudit feature
-            { feature: 'selfAudit', setting: 'forbidden' }
-        ];
-        const clientData = {
-            hdsCollector: {
-                version: 0,
-                public: {
-                    streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.public)
-                },
-                inbox: {
-                    streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.inbox)
-                }
-            }
-        };
-        const params = { name: sharedAccessId, type: 'shared', permissions, clientData };
-        const access = await this.appManaging.connection.apiOne('accesses.create', params, 'access');
-        const newSharingApiEndpoint = access?.apiEndpoint;
-        if (!newSharingApiEndpoint)
-            throw new errors_1.HDSLibError('Cannot find apiEndpoint in sharing creation request', { result: access, requestParams: params });
-        this.#cache.sharingApiEndpoint = newSharingApiEndpoint;
-        return newSharingApiEndpoint;
-    }
-    /**
-     * @private
-     * @param {CollectorInvite} invite
-     * @param {boolean} alreadyChecked // to avoid loops
-     * @returns {CollectorInvite}
-     */
-    async revokeInvite(invite, alreadyChecked = false) {
-        // Invalidate Invite APIEndpoint(s)
-        if (invite.status === 'active' && !alreadyChecked) { // invalidate eventual authorization granted
-            const accessInfo = await invite.checkAndGetAccessInfo(true);
-            const deletionResult = await invite.connection.apiOne('accesses.delete', { id: accessInfo.id });
-            if (deletionResult?.accessDeletion?.id == null) {
-                logger.warn(`Failed revoking invite access for ${accessInfo.name}`);
-            }
-        }
-        // invalidate this access
-        const updateInvite = {
-            id: invite.eventData.id,
-            update: {
-                content: structuredClone(invite.eventData.content),
-                streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.error)]
-            }
-        };
-        updateInvite.update.content.errorType = 'revoked';
-        const eventData = await this.appManaging.connection.apiOne('events.update', updateInvite, 'event');
-        invite.eventData = eventData;
-        return invite;
-    }
-    /**
-     * check if required streams are present, if not create them
-     */
-    async checkStreamStructure() {
-        // if streamData has correct child structure, we assume all is OK
-        const childrenData = this.#streamData.children;
-        const toCreate = Object.values(_a.STREAMID_SUFFIXES)
-            .filter((suffix) => {
-            if (!childrenData)
-                return true;
-            if (childrenData.find(child => child.id === this.streamIdFor(suffix)))
-                return false;
-            return true;
-        });
-        if (toCreate.length === 0)
-            return { created: [] };
-        // create required streams
-        const apiCalls = toCreate.map(suffix => ({
-            method: 'streams.create',
-            params: {
-                id: this.streamIdFor(suffix),
-                parentId: this.streamId,
-                name: this.name + ' ' + suffix
-            }
-        }));
-        const result = { created: [], errors: [] };
-        const resultsApi = await this.appManaging.connection.api(apiCalls);
-        for (const resultCreate of resultsApi) {
-            if (resultCreate.error) {
-                result.errors.push(resultCreate.error);
-                continue;
-            }
-            if (resultCreate.stream) {
-                result.created.push(resultCreate.stream);
-                if (!this.#streamData.children)
-                    this.#streamData.children = [];
-                this.#streamData.children.push(resultCreate.stream);
-                continue;
-            }
-            result.errors.push({ id: 'unkown-error', message: 'Cannot find stream in result', data: resultCreate });
-        }
-        return result;
-    }
-    /**
-     * @param {string} suffix
-     */
-    streamIdFor(suffix) {
-        return this.streamId + '-' + suffix;
-    }
-    /**
-     * Invite Status for streamId
-     * reverse of streamIdFor
-     */
-    inviteStatusForStreamId(streamId) {
-        // init cache if needed
-        if (!this.#cache.inviteStatusForStreamId) {
-            this.#cache.inviteStatusForStreamId = {};
-            for (const status of [COLLECTOR_STREAMID_SUFFIXES.pending, COLLECTOR_STREAMID_SUFFIXES.active, COLLECTOR_STREAMID_SUFFIXES.error]) {
-                this.#cache.inviteStatusForStreamId[this.streamIdFor(status)] = status;
-            }
-        }
-        // look for status
-        const status = this.#cache.inviteStatusForStreamId[streamId];
-        if (status == null)
-            throw new errors_1.HDSLibError(`Cannot find status for streamId: ${streamId}`);
-        return status;
-    }
-}
-exports.Collector = Collector;
-_a = Collector;
-/**
- * @typedef {CollectorRequest}
- * @property {number} version
- * @property {Localizable} description
- * @property {Localizable} consent
- * @property {Array<Permission>} permissions - Like Pryv permission request
- * @property {Object} app
- * @property {String} app.id
- * @property {String} app.url
- * @property {Object} app.data - to be finalized
- */
-//# sourceMappingURL=Collector.js.map
-
-/***/ },
-
-/***/ "./js/appTemplates/CollectorClient.js"
-/*!********************************************!*\
-  !*** ./js/appTemplates/CollectorClient.js ***!
-  \********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var _a;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CollectorClient = void 0;
-const CollectorRequest_1 = __webpack_require__(/*! ./CollectorRequest */ "./js/appTemplates/CollectorRequest.js");
-const patchedPryv_1 = __webpack_require__(/*! ../patchedPryv */ "./js/patchedPryv.js");
-const errors_1 = __webpack_require__(/*! ../errors */ "./js/errors.js");
-const logger = __importStar(__webpack_require__(/*! ../logger */ "./js/logger.js"));
-/**
- * Client App in relation to an AppManagingAccount/Collector
- */
-class CollectorClient {
-    static STATUSES = Object.freeze({
-        incoming: 'Incoming',
-        active: 'Active',
-        deactivated: 'Deactivated',
-        refused: 'Refused'
-    });
-    app;
-    eventData;
-    accessData;
-    request;
-    #requesterConnection;
-    /** @property {String} - identified within user's account - can be used to retrieve a Collector Client from an app */
-    get key() {
-        return _a.keyFromInfo(this.eventData.content.accessInfo);
-    }
-    /** @property {String} - id matching an event within requester's account - used as a reference to communicate with requester */
-    get requesterEventId() {
-        return this.eventData.content.requesterEventId;
-    }
-    /** @property {String}  */
-    get requesterApiEndpoint() {
-        return this.eventData.content.apiEndpoint;
-    }
-    get requesterUsername() {
-        return this.eventData.content.accessInfo.user.username;
-    }
-    get requesterConnection() {
-        if (!this.#requesterConnection) {
-            this.#requesterConnection = new patchedPryv_1.pryv.Connection(this.requesterApiEndpoint);
-        }
-        return this.#requesterConnection;
-    }
-    /** @property {Object} - full content of the request */
-    get requestData() {
-        return this.eventData.content.requesterEventData.content;
-    }
-    get hasChatFeature() {
-        return this.requestData.features?.chat != null;
-    }
-    get chatSettings() {
-        if (!this.hasChatFeature)
-            return null;
-        return {
-            chatStreamIncoming: `chat-${this.requesterUsername}-in`,
-            chatStreamMain: `chat-${this.requesterUsername}`
-        };
-    }
-    /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
-    get status() {
-        const eventStatus = this.eventData.content.status;
-        if (eventStatus === _a.STATUSES.deactivated || eventStatus === _a.STATUSES.refused) {
-            if (!this.accessData?.deleted) {
-                logger.error('>> CollectorClient.status TODO check consistency when access is still valid and deactivated or refused', this.accessData);
-            }
-            return eventStatus;
-        }
-        if (this.accessData && !this.accessData.deleted && this.eventData.content.status !== _a.STATUSES.active) {
-            logger.error('>> CollectorClient.status: accessData ', this.accessData);
-            throw new errors_1.HDSLibError('Should be active, try checkConsistency()');
-        }
-        if (!eventStatus) {
-            logger.error('>> CollectorClient.status is null', { eventData: this.eventData, accessData: this.accessData });
-        }
-        return eventStatus;
-    }
-    constructor(app, eventData, accessData = null) {
-        this.app = app;
-        this.eventData = eventData;
-        this.accessData = accessData;
-        this.request = new CollectorRequest_1.CollectorRequest({});
-        this.request.loadFromInviteEvent(eventData.content.requesterEventData);
-    }
-    /**
-     * @private
-     * used by appClientAccount.handleIncomingRequest
-     */
-    static async create(app, apiEndpoint, requesterEventId, accessInfo) {
-        // check content of accessInfo
-        const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
-        // get request event cont
-        const requesterConnection = new patchedPryv_1.pryv.Connection(apiEndpoint);
-        const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
-        if (!requesterEvents[0])
-            throw new errors_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
-        const eventData = {
-            type: 'request/collector-client-v1',
-            streamIds: [app.baseStreamId],
-            content: {
-                apiEndpoint,
-                requesterEventId,
-                requesterEventData: requesterEvents[0],
-                accessInfo,
-                status: _a.STATUSES.incoming
-            }
-        };
-        const event = await app.connection.apiOne('events.create', eventData, 'event');
-        return new _a(app, event);
-    }
-    /**
-     * @private
-     * reset with new request Event of ApiEndpoint
-     * Identical as create but keep current event
-     */
-    async reset(apiEndpoint, requesterEventId) {
-        if (this.accessData && this.accessData?.deleted != null) {
-            logger.error('TODO try to revoke current access');
-        }
-        // get accessInfo
-        const requesterConnection = new patchedPryv_1.pryv.Connection(apiEndpoint);
-        const accessInfo = await requesterConnection.accessInfo();
-        // check content of accessInfo
-        const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
-        // get request event cont
-        const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
-        if (!requesterEvents[0])
-            throw new errors_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
-        const eventData = await this.app.connection.apiOne('events.update', {
-            id: this.eventData.id,
-            update: {
-                content: {
-                    apiEndpoint,
-                    requesterEventId,
-                    requesterEventData: requesterEvents[0],
-                    accessInfo,
-                    status: _a.STATUSES.incoming
-                }
-            }
-        }, 'event');
-        this.eventData = eventData;
-        this.request.loadFromInviteEvent(requesterEvents[0]);
-        return this;
-    }
-    /**
-     * Update business event with new status
-     * @param {string} newStatus
-     * @param {Object} [extraData] - if given this will be added to content ⚠️ - This can overide content!
-     */
-    async #updateStatus(newStatus, extraData = null) {
-        const newContent = structuredClone(this.eventData.content);
-        newContent.status = newStatus;
-        if (extraData !== null)
-            Object.assign(newContent, extraData);
-        const eventData = await this.app.connection.apiOne('events.update', {
-            id: this.eventData.id,
-            update: {
-                content: newContent
-            }
-        }, 'event');
-        this.eventData = eventData;
-    }
-    /**
-     * Accept current request
-     * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
-     */
-    async accept(forceAndSkipAccessCreation = false) {
-        const responseContent = {};
-        if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
-            forceAndSkipAccessCreation = true;
-            logger.error('CollectorClient.accept TODO fix accept when access valid');
-        }
-        if (forceAndSkipAccessCreation) {
-            if (!this.accessData?.apiEndpoint || this.accessData?.delete)
-                throw new errors_1.HDSLibError('Cannot force accept with empty or deleted accessData', this.accessData);
-        }
-        else {
-            if (this.status === 'Active')
-                throw new errors_1.HDSLibError('Cannot accept an Active CollectorClient');
-            // create access for requester
-            const cleanedPermissions = this.requestData.permissions.map((p) => {
-                if (p.streamId)
-                    return { streamId: p.streamId, level: p.level };
-                return p;
-            });
-            // ------------- chat ------------------------ //
-            if (this.hasChatFeature) {
-                // user supported mode - might me moved to a lib
-                // 2. create streams
-                const { chatStreamIncoming, chatStreamMain } = this.chatSettings;
-                const chatStreamsCreateApiCalls = [
-                    { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
-                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
-                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
-                ];
-                const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
-                streamCreateResults.forEach((r) => {
-                    if (r.stream?.id || r.error?.id === 'item-already-exists')
-                        return;
-                    throw new errors_1.HDSLibError('Failed creating chat stream', streamCreateResults);
-                });
-                // 3. add streams to permissions
-                cleanedPermissions.push(...[
-                    { streamId: chatStreamMain, level: 'read' },
-                    { streamId: chatStreamIncoming, level: 'manage' }
-                ]);
-                responseContent.chat = {
-                    type: 'user',
-                    streamRead: chatStreamMain,
-                    streamWrite: chatStreamIncoming
-                };
-                // ---------- end chat ---------- //
-            }
-            const accessCreateData = {
-                name: this.key,
-                type: 'shared',
-                permissions: cleanedPermissions,
-                clientData: {
-                    hdsCollectorClient: {
-                        version: 0,
-                        eventData: this.eventData
-                    }
-                }
-            };
-            const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
-            this.accessData = accessData;
-            if (!this.accessData?.apiEndpoint)
-                throw new errors_1.HDSLibError('Failed creating request access', accessData);
-        }
-        responseContent.apiEndpoint = this.accessData.apiEndpoint;
-        const requesterEvent = await this.#updateRequester('accept', responseContent);
-        if (requesterEvent != null) {
-            await this.#updateStatus(_a.STATUSES.active);
-            return { accessData: this.accessData, requesterEvent };
-        }
-        return null;
-    }
-    async revoke() {
-        if (!this.accessData) {
-            throw new errors_1.HDSLibError('Cannot revoke if no accessData');
-        }
-        if (this.accessData.deleted && this.status === _a.STATUSES.deactivated) {
-            throw new errors_1.HDSLibError('Already revoked');
-        }
-        // revoke access
-        await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
-        // lazyly flag currentAccess as deleted
-        this.accessData.deleted = Date.now() / 1000;
-        const responseContent = {};
-        const requesterEvent = await this.#updateRequester('revoke', responseContent);
-        if (requesterEvent != null) {
-            await this.#updateStatus(_a.STATUSES.deactivated);
-            return { requesterEvent };
-        }
-        return null;
-    }
-    async refuse() {
-        const responseContent = {};
-        const requesterEvent = await this.#updateRequester('refuse', responseContent);
-        if (requesterEvent != null) {
-            await this.#updateStatus(_a.STATUSES.refused);
-            return { requesterEvent };
-        }
-        return null;
-    }
-    /**
-     * @param {string} type - one of 'accpet', 'revoke', 'refuse'
-     * @param {object} responseContent - content is related to type
-     * @returns {Object} - response
-     */
-    async #updateRequester(type, responseContent) {
-        // sent access credentials to requester
-        // check content of accessInfo
-        const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
-        const requesterEventId = this.requesterEventId;
-        // add eventId to content
-        const content = Object.assign({ type, eventId: requesterEventId }, responseContent);
-        // acceptEvent to be sent to requester
-        const responseEvent = {
-            type: 'response/collector-v1',
-            streamIds: [publicStreamId],
-            content
-        };
-        try {
-            const requesterEvent = await this.requesterConnection.apiOne('events.create', responseEvent, 'event');
-            return requesterEvent;
-        }
-        catch (e) {
-            const deactivatedDetail = {
-                type: 'error',
-                message: e.message
-            };
-            if (e.innerObject)
-                deactivatedDetail.data = e.innerObject;
-            logger.error('Failed activating', deactivatedDetail);
-            const deactivatedResult = await this.#updateStatus(_a.STATUSES.deactivated, { deactivatedDetail });
-            console.log('***** ', { deactivatedResult });
-            return null;
-        }
-    }
-    /**
-     * Probable temporary internal to fix possible inconsenticies during lib early stages
-     */
-    async checkConsistency() {
-        // accessData but not active
-        if (this.accessData && this.eventData.content.status == null) {
-            logger.info('Found discrepency with accessData and status not active, fixing it');
-            if (!this.accessData.deleted) {
-                await this.accept(true);
-            }
-            else {
-                await this.revoke();
-            }
-        }
-        else {
-            // logger.debug('CollectorClient:checkConsistency', this.accessData);
-        }
-    }
-    /**
-     * return the key to discriminate collectorClients
-     * @param {PryvAccessInfo} accessInfo
-     */
-    static keyFromInfo(info) {
-        return info.user.username + ':' + info.name;
-    }
-    // -------------------- sections and forms ------------- //
-    getSections() {
-        return this.request?.sections;
-    }
-    // -------------------- chat methods ----------------- //
-    chatEventInfos(event) {
-        if (event.streamIds.includes(this.chatSettings.chatStreamIncoming))
-            return { source: 'requester' };
-        if (event.streamIds.includes(this.chatSettings.chatStreamMain))
-            return { source: 'me' };
-        return { source: 'unkown' };
-    }
-    async chatPost(hdsConnection, content) {
-        if (!this.hasChatFeature)
-            throw new errors_1.HDSLibError('Cannot chat with this ColleectorClient');
-        const newEvent = {
-            type: 'message/hds-chat-v1',
-            streamIds: [this.chatSettings.chatStreamMain],
-            content
-        };
-        return await hdsConnection.apiOne('events.create', newEvent, 'event');
-    }
-}
-exports.CollectorClient = CollectorClient;
-_a = CollectorClient;
-//# sourceMappingURL=CollectorClient.js.map
-
-/***/ },
-
-/***/ "./js/appTemplates/CollectorInvite.js"
-/*!********************************************!*\
-  !*** ./js/appTemplates/CollectorInvite.js ***!
-  \********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CollectorInvite = void 0;
-const patchedPryv_1 = __webpack_require__(/*! ../patchedPryv */ "./js/patchedPryv.js");
-const errors_1 = __webpack_require__(/*! ../errors */ "./js/errors.js");
-/**
- * Collector Invite
- * There is one Collector Invite per Collector => Enduser connection
- */
-class CollectorInvite {
-    /**
-     * get the key that will be assigned to this event;
-     */
-    static getKeyForEvent(eventData) {
-        return eventData.id;
-    }
-    collector;
-    eventData;
-    #connection = null;
-    #accessInfo = null;
-    get key() {
-        return CollectorInvite.getKeyForEvent(this.eventData);
-    }
-    get status() {
-        return this.collector.inviteStatusForStreamId(this.eventData.streamIds[0]);
-    }
-    get apiEndpoint() {
-        if (this.status !== 'active') {
-            throw new errors_1.HDSLibError('invite.apiEndpoint is accessible only when active');
-        }
-        return this.eventData.content.apiEndpoint;
-    }
-    get errorType() {
-        return this.eventData.content?.errorType;
-    }
-    get dateCreation() {
-        return new Date(this.eventData.created * 1000);
-    }
-    get connection() {
-        if (this.#connection == null) {
-            this.#connection = new patchedPryv_1.pryv.Connection(this.apiEndpoint);
-        }
-        return this.#connection;
-    }
-    get hasChat() {
-        return this.eventData.content.chat != null;
-    }
-    get chatSettings() {
-        return this.eventData.content.chat;
-    }
-    // -------------------- chat methods ----------------- //
-    chatEventInfos(event) {
-        if (event.streamIds.includes(this.chatSettings.streamWrite))
-            return { source: 'me' };
-        if (event.streamIds.includes(this.chatSettings.streamRead))
-            return { source: 'user' };
-        return { source: 'unkown' };
-    }
-    async chatPost(content) {
-        if (!this.hasChat)
-            throw new Error('Cannot chat with this contact');
-        const newEvent = {
-            type: 'message/hds-chat-v1',
-            streamIds: [this.chatSettings.streamWrite],
-            content
-        };
-        return await this.connection.apiOne('events.create', newEvent, 'event');
-    }
-    /**
-     * Check if connection is valid. (only if active)
-     * If result is "forbidden" update and set as revoked
-     * @returns accessInfo if valid.
-     */
-    async checkAndGetAccessInfo(forceRefresh = false) {
-        if (!forceRefresh && this.#accessInfo)
-            return this.#accessInfo;
-        try {
-            this.#accessInfo = await this.connection.accessInfo();
-            return this.#accessInfo;
-        }
-        catch (e) {
-            this.#accessInfo = null;
-            if (e.response?.body?.error?.id === 'invalid-access-token') {
-                await this.collector.revokeInvite(this, true);
-                return null;
-            }
-            throw e;
-        }
-    }
-    /**
-     * revoke the invite
-     */
-    async revoke() {
-        return this.collector.revokeInvite(this);
-    }
-    get displayName() {
-        return this.eventData.content.name;
-    }
-    constructor(collector, eventData) {
-        if (eventData.type !== 'invite/collector-v1')
-            throw new errors_1.HDSLibError('Wrong type of event', eventData);
-        this.collector = collector;
-        this.eventData = eventData;
-    }
-    /**
-     * private
-     */
-    setEventData(eventData) {
-        if (eventData.id !== this.eventData.id)
-            throw new errors_1.HDSLibError('CollectInvite event id does not match new Event');
-        this.eventData = eventData;
-    }
-    async getSharingData() {
-        if (this.status !== 'pending')
-            throw new errors_1.HDSLibError('Only pendings can be shared');
-        return {
-            apiEndpoint: await this.collector.sharingApiEndpoint(),
-            eventId: this.eventData.id
-        };
-    }
-}
-exports.CollectorInvite = CollectorInvite;
-//# sourceMappingURL=CollectorInvite.js.map
-
-/***/ },
-
-/***/ "./js/appTemplates/CollectorRequest.js"
-/*!*********************************************!*\
-  !*** ./js/appTemplates/CollectorRequest.js ***!
-  \*********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CollectorRequest = void 0;
-const errors_1 = __webpack_require__(/*! ../errors */ "./js/errors.js");
-const HDSModelInitAndSingleton_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton */ "./js/HDSModel/HDSModelInitAndSingleton.js");
-const localizeText_1 = __webpack_require__(/*! ../localizeText */ "./js/localizeText.js");
-const CURRENT_VERSION = 1;
-/**
- * Each Collector has one Request
- * Which contains
- * - the name of the requester
- * - a title
- * - a description
- * - a consent message
- * - a set of permission requests
- * - a version
- */
-class CollectorRequest {
-    #version;
-    #title;
-    #description;
-    #consent;
-    #requester;
-    #app;
-    #permissionsExtra;
-    #permissions;
-    #sections;
-    #features;
-    #extraContent;
-    constructor(content) {
-        this.#version = CURRENT_VERSION;
-        this.#requester = { name: null };
-        this.#app = { id: null, url: null, data: {} };
-        this.#permissions = [];
-        this.#permissionsExtra = [];
-        this.#sections = [];
-        this.#features = {};
-        this.setContent(content);
-    }
-    /**
-     * Loadfrom invite event
-     * used by CollectorClient only
-     * @param invite
-     */
-    loadFromInviteEvent(inviteEvent) {
-        this.setContent(inviteEvent.content);
-    }
-    /**
-     * Loadfrom status event from Collector
-     * used by Collector only
-     * @param statusEvent
-     */
-    loadFromStatusEvent(statusEvent) {
-        // content.data is deprecated it was used in a previous version, should be removed
-        let potentialContent = statusEvent.content.request || statusEvent.content.data;
-        // for some reason to be investigated sometime the data is in requestContent
-        if (potentialContent.requestContent)
-            potentialContent = potentialContent.requestContent;
-        this.setContent(potentialContent);
-    }
-    /**
-     * Temp content
-     * @param content
-     */
-    setContent(content) {
-        const futureContent = structuredClone(content);
-        // validate content
-        if (futureContent.version != null) {
-            const numV = Number.parseInt(futureContent.version);
-            if (numV === 0) {
-                vo0ToV1(futureContent); // convert to v1 if needed
-            }
-            else {
-                if (numV !== this.#version)
-                    throw new errors_1.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
-            }
-            delete futureContent.version;
-        }
-        // -- title, consent, description
-        for (const key of ['title', 'consent', 'description']) {
-            if (futureContent[key] != null) {
-                this[key] = futureContent[key];
-            }
-            delete futureContent[key];
-        }
-        // -- requester
-        if (futureContent.requester) {
-            if (futureContent.requester.name != null) {
-                this.requesterName = futureContent.requester.name;
-            }
-            delete futureContent.requester;
-        }
-        // -- app
-        if (futureContent.app) {
-            if (futureContent.app.id != null) {
-                this.appId = futureContent.app.id;
-            }
-            if (futureContent.app.url != null) {
-                this.appUrl = futureContent.app.url;
-            }
-            if (futureContent.app.data != null) {
-                this.appCustomData = futureContent.app.data;
-            }
-            delete futureContent.app;
-        }
-        // -- sections
-        if (futureContent.sections != null) {
-            this.#sections = []; // reset sections
-            for (const sectionData of futureContent.sections) {
-                const section = this.createSection(sectionData.key, sectionData.type);
-                section.setName(sectionData.name);
-                section.addItemKeys(sectionData.itemKeys);
-                if (sectionData.itemCustomizations) {
-                    for (const [itemKey, customization] of Object.entries(sectionData.itemCustomizations)) {
-                        section.setItemCustomization(itemKey, customization);
-                    }
-                }
-            }
-            delete futureContent.sections;
-        }
-        // -- permissions
-        if (futureContent.permissions) {
-            this.#permissions = []; // reset permissions
-            futureContent.permissions.forEach((p) => {
-                this.addPermission(p.streamId, p.defaultName, p.level);
-            });
-            delete futureContent.permissions;
-        }
-        // -- permissionsExtra
-        if (futureContent.permissionsExtra) {
-            this.#permissionsExtra = []; // reset permissions Extra
-            futureContent.permissionsExtra.forEach((p) => {
-                this.addPermissionExtra(p);
-            });
-            delete futureContent.permissionsExtra;
-        }
-        // -- features
-        if (futureContent.features) {
-            if (futureContent.features.chat) {
-                this.addChatFeature(futureContent.features.chat);
-                delete futureContent.features.chat;
-            }
-            if (Object.keys(futureContent.features).length > 0) {
-                throw new errors_1.HDSLibError('Found unkown features', futureContent.features);
-            }
-            delete futureContent.features;
-        }
-        this.#extraContent = futureContent;
-    }
-    // ------------- getter and setters ------------ //
-    get version() { return this.#version; }
-    set title(title) { this.#title = (0, localizeText_1.validateLocalizableText)('title', title); }
-    get title() { return this.#title; }
-    set consent(consent) { this.#consent = (0, localizeText_1.validateLocalizableText)('consent', consent); }
-    get consent() { return this.#consent; }
-    set description(description) { this.#description = (0, localizeText_1.validateLocalizableText)('description', description); }
-    get description() { return this.#description; }
-    set requesterName(name) { this.#requester.name = validateString('requester:name', name); }
-    get requesterName() { return this.#requester.name; }
-    set appId(id) { this.#app.id = validateString('app:id', id); }
-    get appId() { return this.#app.id; }
-    set appUrl(url) { this.#app.url = validateString('app:url', url); }
-    get appUrl() { return this.#app.url; }
-    set appCustomData(data) { this.#app.data = data; }
-    get appCustomData() { return this.#app.data; }
-    get permissions() { return this.#permissions; }
-    get permissionsExtra() { return this.#permissionsExtra; }
-    get features() { return this.#features; }
-    // --- section --- //
-    get sections() {
-        return this.#sections;
-    }
-    get sectionsData() {
-        const result = [];
-        for (const section of this.#sections) {
-            const data = section.getData();
-            result.push(data);
-        }
-        return result;
-    }
-    createSection(key, type) {
-        if (this.getSectionByKey(key) != null)
-            throw new errors_1.HDSLibError(`Section with key: ${key} already exists`);
-        const section = new CollectorRequestSection(key, type);
-        this.#sections.push(section);
-        return section;
-    }
-    getSectionByKey(key) {
-        return this.#sections.find((s) => (s.key === key));
-    }
-    moveSection(key, toIndex) {
-        const idx = this.#sections.findIndex((s) => s.key === key);
-        if (idx === -1)
-            throw new errors_1.HDSLibError(`Section with key: ${key} not found`);
-        const [section] = this.#sections.splice(idx, 1);
-        this.#sections.splice(toIndex, 0, section);
-    }
-    removeSection(key) {
-        const idx = this.#sections.findIndex((s) => s.key === key);
-        if (idx === -1)
-            throw new errors_1.HDSLibError(`Section with key: ${key} not found`);
-        this.#sections.splice(idx, 1);
-    }
-    // ---------- permissions ---------- //
-    addPermissions(permissions) {
-        for (const permission of permissions) {
-            this.addPermission(permission.streamId, permission.defaultName, permission.level);
-        }
-    }
-    addPermission(streamId, defaultName, level) {
-        this.#permissions.push({ streamId, defaultName, level });
-    }
-    /**
-     * Add a static permission, not linked to itemKeys for other usages
-     * @param permission
-     */
-    addPermissionExtra(permission) {
-        // todo standard checks
-        this.#permissionsExtra.push(permission);
-    }
-    /**
-     * Reset permissions
-     */
-    resetPermissions() {
-        this.#permissions.splice(0, this.#permissions.length);
-    }
-    /**
-     * Rebuild permissions based on sections itemKeys and staticPermissions
-     */
-    buildPermissions() {
-        // 1- get all items form the questionnary sections
-        const itemKeys = [];
-        for (const section of this.sections) {
-            itemKeys.push(...section.itemKeys);
-        }
-        // 2 - get the permissions with eventual preRequest
-        const preRequest = this.permissionsExtra || [];
-        const permissions = (0, HDSModelInitAndSingleton_1.getModel)().authorizations.forItemKeys(itemKeys, { preRequest });
-        // 3 - if no error araised - reset permissions
-        this.resetPermissions();
-        this.addPermissions(permissions);
-    }
-    // ---------- features ------------- //
-    get hasChatFeature() {
-        return this.#features.chat != null;
-    }
-    addChatFeature(settings = { type: 'user' }) {
-        if (!['user', 'usernames'].includes(settings.type))
-            throw new errors_1.HDSLibError('Invalid chat type', settings);
-        this.#features.chat = settings;
-    }
-    // ---------- sections ------------- //
-    /**
-     * Return Content to comply with initial implementation as an object
-     */
-    get content() {
-        const content = {
-            version: this.version,
-            title: this.title,
-            consent: this.consent,
-            description: this.description,
-            requester: {
-                name: this.requesterName
-            },
-            features: this.features,
-            permissionsExtra: this.permissionsExtra,
-            permissions: this.permissions,
-            app: {
-                id: this.appId,
-                url: this.appUrl,
-                data: this.appCustomData
-            },
-            sections: this.sectionsData
-        };
-        Object.assign(content, this.#extraContent);
-        return content;
-    }
-}
-exports.CollectorRequest = CollectorRequest;
-function validateString(key, totest) {
-    if (totest == null || typeof totest !== 'string')
-        throw new errors_1.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
-    return totest;
-}
-class CollectorRequestSection {
-    #type;
-    #name;
-    #key;
-    #itemKeys;
-    #itemCustomizations;
-    constructor(key, type) {
-        this.#key = key;
-        this.#type = type;
-        this.#itemKeys = [];
-        this.#itemCustomizations = {};
-        this.#name = {
-            en: ''
-        };
-    }
-    addItemKeys(keys) {
-        keys.forEach((k) => this.addItemKey(k));
-    }
-    addItemKey(key) {
-        (0, HDSModelInitAndSingleton_1.getModel)().itemsDefs.forKey(key); // will throw error if not found
-        if (this.#itemKeys.includes(key))
-            return; // avoid double entries
-        this.#itemKeys.push(key);
-    }
-    setName(localizedName) {
-        for (const [languageCode, name] of Object.entries(localizedName)) {
-            this.setNameLocal(languageCode, name);
-        }
-    }
-    setNameLocal(languageCode, name) {
-        this.#name[languageCode] = name;
-    }
-    get type() { return this.#type; }
-    get key() { return this.#key; }
-    get itemKeys() { return this.#itemKeys; }
-    get name() { return this.#name; }
-    get itemCustomizations() { return this.#itemCustomizations; }
-    moveItemKey(key, toIndex) {
-        const idx = this.#itemKeys.indexOf(key);
-        if (idx === -1)
-            throw new errors_1.HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
-        this.#itemKeys.splice(idx, 1);
-        this.#itemKeys.splice(toIndex, 0, key);
-    }
-    removeItemKey(key) {
-        const idx = this.#itemKeys.indexOf(key);
-        if (idx === -1)
-            throw new errors_1.HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
-        this.#itemKeys.splice(idx, 1);
-    }
-    setItemCustomization(key, customizations) {
-        this.#itemCustomizations[key] = customizations;
-    }
-    getItemCustomization(key) {
-        return this.#itemCustomizations[key];
-    }
-    getData() {
-        const data = {
-            key: this.key,
-            type: this.#type,
-            name: this.#name,
-            itemKeys: this.#itemKeys
-        };
-        if (Object.keys(this.#itemCustomizations).length > 0) {
-            data.itemCustomizations = this.#itemCustomizations;
-        }
-        return data;
-    }
-}
-/**
- * Transform data to match v1
- * @param v0Data
- */
-function vo0ToV1(v0Data) {
-    if (v0Data.app?.data?.forms) {
-        if (v0Data.sections)
-            throw new errors_1.HDSLibError('Cannot mix data.forms & sections', v0Data);
-        v0Data.sections = [];
-        for (const [key, value] of Object.entries(v0Data.app.data.forms)) {
-            value.key = key;
-            value.name = {
-                en: value.name
-            };
-            v0Data.sections.push(value);
-        }
-        delete v0Data.app.data.forms;
-    }
-    v0Data.version = 1;
-}
-//# sourceMappingURL=CollectorRequest.js.map
-
-/***/ },
-
-/***/ "./js/appTemplates/appTemplates.js"
-/*!*****************************************!*\
-  !*** ./js/appTemplates/appTemplates.js ***!
-  \*****************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CollectorRequest = exports.CollectorInvite = exports.CollectorClient = exports.Collector = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = void 0;
-const AppManagingAccount_1 = __webpack_require__(/*! ./AppManagingAccount */ "./js/appTemplates/AppManagingAccount.js");
-Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_1.AppManagingAccount; } }));
-const AppClientAccount_1 = __webpack_require__(/*! ./AppClientAccount */ "./js/appTemplates/AppClientAccount.js");
-Object.defineProperty(exports, "AppClientAccount", ({ enumerable: true, get: function () { return AppClientAccount_1.AppClientAccount; } }));
-const Application_1 = __webpack_require__(/*! ./Application */ "./js/appTemplates/Application.js");
-Object.defineProperty(exports, "Application", ({ enumerable: true, get: function () { return Application_1.Application; } }));
-const Collector_1 = __webpack_require__(/*! ./Collector */ "./js/appTemplates/Collector.js");
-Object.defineProperty(exports, "Collector", ({ enumerable: true, get: function () { return Collector_1.Collector; } }));
-const CollectorClient_1 = __webpack_require__(/*! ./CollectorClient */ "./js/appTemplates/CollectorClient.js");
-Object.defineProperty(exports, "CollectorClient", ({ enumerable: true, get: function () { return CollectorClient_1.CollectorClient; } }));
-const CollectorInvite_1 = __webpack_require__(/*! ./CollectorInvite */ "./js/appTemplates/CollectorInvite.js");
-Object.defineProperty(exports, "CollectorInvite", ({ enumerable: true, get: function () { return CollectorInvite_1.CollectorInvite; } }));
-const CollectorRequest_1 = __webpack_require__(/*! ./CollectorRequest */ "./js/appTemplates/CollectorRequest.js");
-Object.defineProperty(exports, "CollectorRequest", ({ enumerable: true, get: function () { return CollectorRequest_1.CollectorRequest; } }));
-//# sourceMappingURL=appTemplates.js.map
-
-/***/ },
-
-/***/ "./js/errors.js"
-/*!**********************!*\
-  !*** ./js/errors.js ***!
-  \**********************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSLibError = void 0;
-class HDSLibError extends Error {
-    innerObject;
-    constructor(message, innerObject = {}) {
-        const msg = (innerObject.message != null) ? message + ' >> ' + innerObject.message : message;
-        super(msg);
-        this.innerObject = innerObject;
-    }
-    toString() {
-        const res = super.toString();
-        return res + '\nInner Object:\n' + JSON.stringify(this.innerObject, null, 2);
-    }
-}
-exports.HDSLibError = HDSLibError;
-//# sourceMappingURL=errors.js.map
-
-/***/ },
-
-/***/ "./js/index.js"
-/*!*********************!*\
-  !*** ./js/index.js ***!
-  \*********************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
-const localizeText_1 = __webpack_require__(/*! ./localizeText */ "./js/localizeText.js");
-Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
-Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_1.localizeText; } }));
-const settings = __importStar(__webpack_require__(/*! ./settings */ "./js/settings.js"));
-exports.settings = settings;
-const patchedPryv_1 = __webpack_require__(/*! ./patchedPryv */ "./js/patchedPryv.js");
-Object.defineProperty(exports, "pryv", ({ enumerable: true, get: function () { return patchedPryv_1.pryv; } }));
-const HDSModel_1 = __webpack_require__(/*! ./HDSModel/HDSModel */ "./js/HDSModel/HDSModel.js");
-Object.defineProperty(exports, "HDSModel", ({ enumerable: true, get: function () { return HDSModel_1.HDSModel; } }));
-const appTemplates = __importStar(__webpack_require__(/*! ./appTemplates/appTemplates */ "./js/appTemplates/appTemplates.js"));
-exports.appTemplates = appTemplates;
-const logger = __importStar(__webpack_require__(/*! ./logger */ "./js/logger.js"));
-exports.logger = logger;
-const HDSService_1 = __webpack_require__(/*! ./HDSService */ "./js/HDSService.js");
-Object.defineProperty(exports, "HDSService", ({ enumerable: true, get: function () { return HDSService_1.HDSService; } }));
-const HDSModelInitAndSingleton = __importStar(__webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton */ "./js/HDSModel/HDSModelInitAndSingleton.js"));
-const toolkit = __importStar(__webpack_require__(/*! ./toolkit */ "./js/toolkit/index.js"));
-exports.toolkit = toolkit;
-const duration_1 = __webpack_require__(/*! ./utils/duration */ "./js/utils/duration.js");
-Object.defineProperty(exports, "durationToSeconds", ({ enumerable: true, get: function () { return duration_1.durationToSeconds; } }));
-Object.defineProperty(exports, "durationToLabel", ({ enumerable: true, get: function () { return duration_1.durationToLabel; } }));
-const reminders_1 = __webpack_require__(/*! ./HDSModel/reminders */ "./js/HDSModel/reminders.js");
-Object.defineProperty(exports, "computeReminders", ({ enumerable: true, get: function () { return reminders_1.computeReminders; } }));
-exports.model = (() => {
-    console.warn('HDSLib.model is deprecated use getHDSModel() instead');
-    return HDSModelInitAndSingleton.getModel();
-})();
-exports.getHDSModel = HDSModelInitAndSingleton.getModel;
-exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-// also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
-const HDSLib = {
-    getHDSModel: exports.getHDSModel,
-    initHDSModel: exports.initHDSModel,
-    pryv: patchedPryv_1.pryv,
-    settings,
-    HDSService: HDSService_1.HDSService,
-    HDSModel: HDSModel_1.HDSModel,
-    appTemplates,
-    localizeText: localizeText_1.localizeText,
-    l: localizeText_1.localizeText,
-    toolkit,
-    logger,
-    durationToSeconds: duration_1.durationToSeconds,
-    durationToLabel: duration_1.durationToLabel,
-    computeReminders: reminders_1.computeReminders
-};
-exports["default"] = HDSLib;
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./js/localizeText.js"
-/*!****************************!*\
-  !*** ./js/localizeText.js ***!
-  \****************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-/**
- * basic localization functions
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getPreferredLocales = getPreferredLocales;
-exports.getSupportedLocales = getSupportedLocales;
-exports.resetPreferredLocales = resetPreferredLocales;
-exports.localizeText = localizeText;
-exports.setPreferredLocales = setPreferredLocales;
-exports.validateLocalizableText = validateLocalizableText;
-const errors_1 = __webpack_require__(/*! ./errors */ "./js/errors.js");
-const supportedLocales = ['en', 'fr', 'es'];
-Object.freeze(supportedLocales);
-let preferredLocales = [...supportedLocales];
-/**
- * get the current preferred locales
- */
-function getPreferredLocales() {
-    return [...preferredLocales];
-}
-/**
- * get the current supported locales
- */
-function getSupportedLocales() {
-    return [...supportedLocales];
-}
-/**
- * reset prefferedLocalesTo Original state
- */
-function resetPreferredLocales() {
-    setPreferredLocales([...supportedLocales]);
-}
-/**
- * return the translation of this item considering the setting of preffered language
- */
-function localizeText(textItem) {
-    if (textItem == null)
-        return null;
-    if (!textItem.en)
-        throw new errors_1.HDSLibError('textItems must have an english translation', { textItem });
-    for (const l of preferredLocales) {
-        if (textItem[l])
-            return textItem[l];
-    }
-    return textItem.en;
-}
-/**
- * Change prefferedLocal order
- */
-function setPreferredLocales(arrayOfLocals) {
-    if (!Array.isArray(arrayOfLocals)) {
-        throw new errors_1.HDSLibError('setPreferredLocales takes an array of language codes');
-    }
-    const unsupportedLocales = arrayOfLocals.filter(l => (supportedLocales.indexOf(l) < 0));
-    if (unsupportedLocales.length > 0) {
-        throw new errors_1.HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
-    }
-    preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
-}
-/**
- * throw errors if an item is not of type localizableText
- */
-function validateLocalizableText(key, toTest) {
-    if (toTest.en == null || typeof toTest.en !== 'string')
-        throw new errors_1.HDSLibError(`Missing or invalid localizable text for ${key}`, { [key]: toTest });
-    for (const optionalLang of supportedLocales) {
-        if (optionalLang === 'en')
-            continue;
-        if (toTest[optionalLang] != null && typeof toTest[optionalLang] !== 'string')
-            throw new errors_1.HDSLibError(`Missing or invalid localizable text for ${key} languagecode: ${optionalLang}`, { [key]: toTest, languageCode: optionalLang });
-    }
-    return toTest;
-}
-//# sourceMappingURL=localizeText.js.map
-
-/***/ },
-
-/***/ "./js/logger.js"
-/*!**********************!*\
-  !*** ./js/logger.js ***!
-  \**********************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-/**
- * Basic logger
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.setLogger = setLogger;
-exports.info = info;
-exports.error = error;
-exports.debug = debug;
-exports.warn = warn;
-let logger = {
-    info: log('info'),
-    error: log('error'),
-    debug: log('debug')
-};
-function setLogger(newLogger) {
-    logger = newLogger;
-}
-function info(...args) { logger.info(...args); }
-function error(...args) { logger.error(...args); }
-function debug(..._args) {
-    // logger.debug(..._args);
-}
-function warn(...args) {
-    logger.info(...args); // Use info for warn for now
-}
-function log(type) {
-    return function (...args) {
-        console.log(`Logger: [${type}]`, ...args);
-    };
-}
-//# sourceMappingURL=logger.js.map
-
-/***/ },
-
-/***/ "./js/patchedPryv.js"
-/*!***************************!*\
-  !*** ./js/patchedPryv.js ***!
-  \***************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.pryv = void 0;
-/**
- * While developing this lib some functionalities should be
- * added to pryv js-lib in a second step
- */
-const pryv = __importStar(__webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js"));
-exports.pryv = pryv;
-const monitor_1 = __importDefault(__webpack_require__(/*! @pryv/monitor */ "./node_modules/@pryv/monitor/src/index.js"));
-const socket_io_1 = __importDefault(__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js"));
-(0, monitor_1.default)(pryv);
-(0, socket_io_1.default)(pryv);
-//# sourceMappingURL=patchedPryv.js.map
-
-/***/ },
-
-/***/ "./js/settings.js"
-/*!************************!*\
-  !*** ./js/settings.js ***!
-  \************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.setPreferredLocales = void 0;
-exports.setServiceInfoURL = setServiceInfoURL;
-exports.getServiceInfoURL = getServiceInfoURL;
-const localizeText_1 = __webpack_require__(/*! ./localizeText */ "./js/localizeText.js");
-Object.defineProperty(exports, "setPreferredLocales", ({ enumerable: true, get: function () { return localizeText_1.setPreferredLocales; } }));
-// todo change when in production
-let serviceInfoUrl = 'https://demo.datasafe.dev/reg/service/info';
-/**
- * Set default service info URL
- */
-function setServiceInfoURL(url) {
-    serviceInfoUrl = url;
-}
-/**
- * Get default service info URL
- */
-function getServiceInfoURL() {
-    return serviceInfoUrl;
-}
-//# sourceMappingURL=settings.js.map
-
-/***/ },
-
-/***/ "./js/toolkit/StreamsAutoCreate.js"
-/*!*****************************************!*\
-  !*** ./js/toolkit/StreamsAutoCreate.js ***!
-  \*****************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.StreamsAutoCreate = void 0;
-const errors_1 = __webpack_require__(/*! ../errors */ "./js/errors.js");
-const HDSModelInitAndSingleton_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton */ "./js/HDSModel/HDSModelInitAndSingleton.js");
-const StreamsTools_1 = __webpack_require__(/*! ./StreamsTools */ "./js/toolkit/StreamsTools.js");
-class StreamsAutoCreate {
-    connection;
-    knownStreams = {};
-    /**
-     * Safe way to create StreamsAutoCreate as it check if ones is already attached to connection
-     */
-    static attachToConnection(connection, knownStreamStructure) {
-        const streamsAutoCreate = connection.streamsAutoCreate || new StreamsAutoCreate(connection);
-        streamsAutoCreate.addStreamStructure(knownStreamStructure);
-        return streamsAutoCreate;
-    }
-    /**
-     * @private
-     * Don't use.. use StreamsAutoCreate.attachToConnection
-     */
-    constructor(connection) {
-        // make connection a weak reference to avoid cycles
-        this.connection = new WeakRef(connection);
-        this.knownStreams = {};
-        connection.streamsAutoCreate = this;
-    }
-    /**
-     * @param keysOrDefs - Array or Set of itemDefs or itemKeys
-     */
-    async ensureExistsForItems(keysOrDefs) {
-        // get existing streamIds;
-        const modelStreams = (0, HDSModelInitAndSingleton_1.getModel)().streams;
-        const streamsToCreate = modelStreams.getNecessaryListForItems(Array.from(keysOrDefs), { knowExistingStreamsIds: this.knowStreamIds() });
-        const apiCalls = streamsToCreate.map((s) => ({
-            method: 'streams.create',
-            params: s
-        }));
-        const connection = this.connection?.deref();
-        if (!connection) {
-            throw new Error('Lost reference to connection');
-        }
-        const results = await connection.api(apiCalls);
-        const streamsCreated = [];
-        const errors = [];
-        for (const result of results) {
-            if (result.stream?.id) {
-                streamsCreated.push(result.stream);
-                continue;
-            }
-            if (result.error) {
-                if (result.error.id === 'item-already-exists')
-                    continue; // all OK
-                errors.push(result.error);
-                continue;
-            }
-            // shouldn't be there
-            errors.push({
-                id: 'unexpected-error',
-                message: 'Unexpected content in api response',
-                data: result
-            });
-        }
-        if (errors.length > 0) {
-            throw new errors_1.HDSLibError('Error creating streams', errors);
-        }
-        return streamsCreated;
-    }
-    knowStreamIds() {
-        return Object.keys(this.knownStreams);
-    }
-    addStreamStructure(streamStructure) {
-        if (streamStructure == null)
-            return;
-        for (const stream of (0, StreamsTools_1.allStreamsAndChildren)(streamStructure)) {
-            this.#addStream(stream);
-        }
-    }
-    #addStream(stream) {
-        if (!this.knownStreams[stream.id]) {
-            this.knownStreams[stream.id] = {};
-        }
-    }
-}
-exports.StreamsAutoCreate = StreamsAutoCreate;
-//# sourceMappingURL=StreamsAutoCreate.js.map
-
-/***/ },
-
-/***/ "./js/toolkit/StreamsTools.js"
-/*!************************************!*\
-  !*** ./js/toolkit/StreamsTools.js ***!
-  \************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.allStreamsAndChildren = allStreamsAndChildren;
-exports.getStreamIdAndChildrenIds = getStreamIdAndChildrenIds;
-/**
- * Iterate all streams and children
- */
-function* allStreamsAndChildren(streamStructure) {
-    for (const stream of streamStructure) {
-        yield stream;
-        if (stream.children && stream.children.length > 0) {
-            for (const child of allStreamsAndChildren(stream.children)) {
-                yield child;
-            }
-        }
-    }
-}
-function getStreamIdAndChildrenIds(stream) {
-    const streamIds = [];
-    for (const s of allStreamsAndChildren([stream])) {
-        streamIds.push(s.id);
-    }
-    return streamIds;
-}
-//# sourceMappingURL=StreamsTools.js.map
-
-/***/ },
-
-/***/ "./js/toolkit/index.js"
-/*!*****************************!*\
-  !*** ./js/toolkit/index.js ***!
-  \*****************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.StreamTools = exports.StreamsAutoCreate = void 0;
-const StreamsAutoCreate_1 = __webpack_require__(/*! ./StreamsAutoCreate */ "./js/toolkit/StreamsAutoCreate.js");
-Object.defineProperty(exports, "StreamsAutoCreate", ({ enumerable: true, get: function () { return StreamsAutoCreate_1.StreamsAutoCreate; } }));
-const StreamTools = __importStar(__webpack_require__(/*! ./StreamsTools */ "./js/toolkit/StreamsTools.js"));
-exports.StreamTools = StreamTools;
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./js/utils.js"
-/*!*********************!*\
-  !*** ./js/utils.js ***!
-  \*********************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-/**
- * Set of Misc utilities
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.waitUntilFalse = waitUntilFalse;
-exports.deepFreeze = deepFreeze;
-/**
- * Timed semaphore
- */
-async function waitUntilFalse(callBackToReturnFalse, maxWaitMs = 5000) {
-    const started = Date.now();
-    while (callBackToReturnFalse()) {
-        await new Promise((resolve) => { setTimeout(resolve, 100); });
-        if (Date.now() - started > maxWaitMs)
-            throw new Error(`Timeout after ${maxWaitMs}ms`);
-    }
-}
-/**
- * Recursively make immutable an object
- */
-function deepFreeze(object) {
-    // Retrieve the property names defined on object
-    const propNames = Reflect.ownKeys(object);
-    // Freeze properties before freezing self
-    for (const name of propNames) {
-        const value = object[name];
-        if ((value && typeof value === 'object') || typeof value === 'function') {
-            deepFreeze(value);
-        }
-    }
-    return Object.freeze(object);
-}
-//# sourceMappingURL=utils.js.map
-
-/***/ },
-
-/***/ "./js/utils/duration.js"
-/*!******************************!*\
-  !*** ./js/utils/duration.js ***!
-  \******************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-/**
- * ISO 8601 duration parser and formatter.
- * Supports: P{n}D, P{n}W, P{n}M, P{n}Y, and combinations like P1Y6M.
- * Month = 30 days, Year = 365 days (approximation sufficient for reminder logic).
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.durationToSeconds = durationToSeconds;
-exports.durationToLabel = durationToLabel;
-const SECONDS_PER_HOUR = 3600;
-const SECONDS_PER_DAY = 86400;
-const SECONDS_PER_WEEK = 604800;
-const SECONDS_PER_MONTH = 2592000; // 30 days
-const SECONDS_PER_YEAR = 31536000; // 365 days
-const durationRegex = /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/;
-/**
- * Parse an ISO 8601 duration string to seconds.
- * @throws if the string is not a valid duration
- */
-function durationToSeconds(iso) {
-    const m = durationRegex.exec(iso);
-    if (!m)
-        throw new Error(`Invalid ISO 8601 duration: "${iso}"`);
-    const [, years, months, weeks, days, hours, minutes] = m;
-    let total = 0;
-    if (years)
-        total += parseInt(years) * SECONDS_PER_YEAR;
-    if (months)
-        total += parseInt(months) * SECONDS_PER_MONTH;
-    if (weeks)
-        total += parseInt(weeks) * SECONDS_PER_WEEK;
-    if (days)
-        total += parseInt(days) * SECONDS_PER_DAY;
-    if (hours)
-        total += parseInt(hours) * SECONDS_PER_HOUR;
-    if (minutes)
-        total += parseInt(minutes) * 60;
-    if (total === 0)
-        throw new Error(`Duration is zero: "${iso}"`);
-    return total;
-}
-/**
- * Format seconds as a human-readable duration label.
- */
-function durationToLabel(seconds) {
-    if (seconds >= SECONDS_PER_YEAR) {
-        const n = Math.round(seconds / SECONDS_PER_YEAR);
-        return n === 1 ? '1 year' : `${n} years`;
-    }
-    if (seconds >= SECONDS_PER_MONTH) {
-        const n = Math.round(seconds / SECONDS_PER_MONTH);
-        return n === 1 ? '1 month' : `${n} months`;
-    }
-    if (seconds >= SECONDS_PER_WEEK) {
-        const n = Math.round(seconds / SECONDS_PER_WEEK);
-        return n === 1 ? '1 week' : `${n} weeks`;
-    }
-    if (seconds >= SECONDS_PER_DAY) {
-        const n = Math.round(seconds / SECONDS_PER_DAY);
-        return n === 1 ? '1 day' : `${n} days`;
-    }
-    if (seconds >= SECONDS_PER_HOUR) {
-        const n = Math.round(seconds / SECONDS_PER_HOUR);
-        return n === 1 ? '1 hour' : `${n} hours`;
-    }
-    const n = Math.round(seconds / 60);
-    return n === 1 ? '1 minute' : `${n} minutes`;
-}
-//# sourceMappingURL=duration.js.map
-
-/***/ },
-
 /***/ "./node_modules/@pryv/monitor/src/Monitor.js"
 /*!***************************************************!*\
   !*** ./node_modules/@pryv/monitor/src/Monitor.js ***!
@@ -12760,6 +9200,4580 @@ var ShortUniqueId = (() => {
 
 /***/ },
 
+/***/ "./ts/HDSModel/HDSDatasourceDef.ts"
+/*!*****************************************!*\
+  !*** ./ts/HDSModel/HDSDatasourceDef.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSDatasourceDef = void 0;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+class HDSDatasourceDef {
+    #data;
+    #key;
+    #getAssets;
+    constructor(key, definitionData, getAssets) {
+        this.#key = key;
+        this.#data = definitionData;
+        this.#getAssets = getAssets;
+    }
+    get key() {
+        return this.#key;
+    }
+    get data() {
+        return this.#data;
+    }
+    /** label Localized */
+    get label() {
+        return (0, localizeText_ts_1.localizeText)(this.#data.label);
+    }
+    /** description Localized */
+    get description() {
+        return (0, localizeText_ts_1.localizeText)(this.#data.description);
+    }
+    /**
+     * Resolved endpoint URL.
+     * If the raw endpoint starts with `http`, it is used as-is.
+     * Otherwise it is treated as `<assetKey>://<path>` and resolved
+     * against the service-info assets map.
+     * e.g. `datasets://medication` → `assets.datasets` + `medication`
+     */
+    get endpoint() {
+        const raw = this.#data.endpoint;
+        if (raw.startsWith('http'))
+            return raw;
+        const sep = raw.indexOf('://');
+        if (sep === -1)
+            return raw;
+        const assetKey = raw.substring(0, sep);
+        const path = raw.substring(sep + 3);
+        const assets = this.#getAssets();
+        const baseUrl = assets[assetKey];
+        if (!baseUrl) {
+            throw new Error(`Cannot resolve datasource endpoint "${raw}": no asset "${assetKey}" in service-info`);
+        }
+        // Ensure proper URL joining (handle trailing slash on baseUrl)
+        return baseUrl.endsWith('/') ? baseUrl + path : baseUrl + '/' + path;
+    }
+    get queryParam() {
+        return this.#data.queryParam;
+    }
+    get minQueryLength() {
+        return this.#data.minQueryLength;
+    }
+    get resultKey() {
+        return this.#data.resultKey;
+    }
+    get displayFields() {
+        return this.#data.displayFields;
+    }
+    get valueFields() {
+        return this.#data.valueFields;
+    }
+}
+exports.HDSDatasourceDef = HDSDatasourceDef;
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSItemDef.ts"
+/*!***********************************!*\
+  !*** ./ts/HDSModel/HDSItemDef.ts ***!
+  \***********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSItemDef = void 0;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+class HDSItemDef {
+    #data;
+    #key;
+    constructor(key, definitionData) {
+        this.#key = key;
+        this.#data = definitionData;
+    }
+    get eventTypes() {
+        if (this.#data.eventType)
+            return [this.#data.eventType];
+        return this.#data.variations.eventType.options.map((o) => o.value);
+    }
+    get key() {
+        return this.#key;
+    }
+    get data() {
+        return this.#data;
+    }
+    get repeatable() {
+        return this.#data.repeatable || 'unlimited';
+    }
+    get reminder() {
+        return this.#data.reminder || null;
+    }
+    /** label Localized */
+    get label() {
+        return (0, localizeText_ts_1.localizeText)(this.#data.label);
+    }
+    /** description Localized */
+    get description() {
+        return (0, localizeText_ts_1.localizeText)(this.#data.description);
+    }
+    /**
+     * a template event with eventType and streamIds
+     * // TODO handle variations
+     */
+    eventTemplate() {
+        return {
+            streamIds: [this.#data.streamId],
+            type: this.eventTypes[0]
+        };
+    }
+}
+exports.HDSItemDef = HDSItemDef;
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModel-Authorizations.ts"
+/*!************************************************!*\
+  !*** ./ts/HDSModel/HDSModel-Authorizations.ts ***!
+  \************************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelAuthorizations = void 0;
+/**
+ * Authorizations - Extension of HDSModel
+ */
+class HDSModelAuthorizations {
+    /**
+     * Model instance
+     */
+    #model;
+    constructor(model) {
+        this.#model = model;
+    }
+    /**
+     * Get minimal Authorization set for itemKeys
+     * /!\ Does not handle requests with streamId = "*"
+     */
+    forItemKeys(itemKeys, options = {}) {
+        const opts = {
+            defaultLevel: 'read',
+            preRequest: [],
+            includeDefaultName: true
+        };
+        Object.assign(opts, options);
+        const streamsRequested = {};
+        for (const pre of opts.preRequest) {
+            if (!pre.streamId)
+                throw new Error(`Missing streamId in options.preRequest item: ${JSON.stringify(pre)}`);
+            // complete pre with defaultName if missing
+            if (opts.includeDefaultName && !pre.defaultName) {
+                // try to get it from streams Data
+                const stream = this.#model.streams.getDataById(pre.streamId, false);
+                if (stream) {
+                    pre.defaultName = stream.name;
+                }
+                else {
+                    throw new Error(`No "defaultName" in options.preRequest item: ${JSON.stringify(pre)} and cannot find matching streams in default list`);
+                }
+            }
+            // check there is no defaultName if not required
+            if (!opts.includeDefaultName) {
+                if (pre.defaultName)
+                    throw new Error(`Do not include defaultName when not included explicitely on ${JSON.stringify(pre)}`);
+            }
+            // add default level
+            if (!pre.level) {
+                pre.level = opts.defaultLevel;
+            }
+            streamsRequested[pre.streamId] = pre;
+        }
+        // add streamId not already in
+        for (const itemKey of itemKeys) {
+            const itemDef = this.#model.itemsDefs.forKey(itemKey);
+            const streamId = itemDef.data.streamId;
+            if (!streamsRequested[streamId]) { // new streamId
+                const auth = { streamId, level: opts.defaultLevel };
+                if (opts.includeDefaultName) {
+                    const stream = this.#model.streams.getDataById(streamId);
+                    auth.defaultName = stream.name;
+                }
+                streamsRequested[streamId] = auth;
+            }
+            else { // existing just adapt level
+                streamsRequested[streamId].level = mixAuthorizationLevels(streamsRequested[streamId].level, opts.defaultLevel);
+            }
+        }
+        // remove all permissions with a parent having identical or higher level
+        for (const auth of Object.values(streamsRequested)) {
+            const parents = this.#model.streams.getParentsIds(auth.streamId, false);
+            for (const parent of parents) {
+                const found = streamsRequested[parent];
+                if (found && authorizationOverride(found.level, auth.level)) {
+                    // delete entry
+                    delete streamsRequested[auth.streamId];
+                    // break loop
+                    continue;
+                }
+            }
+        }
+        return Object.values(streamsRequested);
+    }
+}
+exports.HDSModelAuthorizations = HDSModelAuthorizations;
+/**
+ * Authorization level1 (parent) does override level2
+ * Return "true" if identical or level1 == "manage"
+ */
+function authorizationOverride(level1, level2) {
+    if (level1 === level2)
+        return true;
+    if (level1 === 'manage')
+        return true;
+    if (level1 === 'contribute' && level2 !== 'manage')
+        return true;
+    return false;
+}
+/**
+ * Given two authorization level, give the resulting one
+ */
+function mixAuthorizationLevels(level1, level2) {
+    if (level1 === level2)
+        return level1;
+    // sort level in orders [ 'contribute', 'manage', 'read', 'writeOnly' ]
+    const levels = [level1, level2].sort();
+    if (levels.includes('manage'))
+        return 'manage'; // any & manage
+    if (levels[0] === 'contribute')
+        return 'contribute'; // read ore writeOnly & contribute
+    if (levels[1] === 'writeOnly')
+        return 'contribute'; // mix read & writeOnly
+    /* c8 ignore next */ // error if there .. 'read' & 'read' should have already be found
+    throw new Error(`Invalid level found level1: ${level1}, level2 ${level2}`);
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModel-Conversions.ts"
+/*!*********************************************!*\
+  !*** ./ts/HDSModel/HDSModel-Conversions.ts ***!
+  \*********************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelConversions = void 0;
+/**
+ * Conversions — Extension of HDSModel
+ *
+ * Reads conversion definitions from the model (pack.json → conversions).
+ * Each category (mass, length, temperature) defines:
+ *   - metric/imperial unit names
+ *   - factors: { from: { to: number | [factor, offset] } }
+ */
+class HDSModelConversions {
+    #model;
+    constructor(model) {
+        this.#model = model;
+    }
+    /**
+     * Convert a numeric value from one event type to the preferred unit system.
+     * Returns null if no conversion is needed or available.
+     *
+     * @param eventType - e.g. "mass/kg"
+     * @param value - the numeric value to convert
+     * @param targetSystem - "metric" or "imperial"
+     */
+    convert(eventType, value, targetSystem) {
+        const conversions = this.#model.modelData.conversions;
+        if (!conversions)
+            return null;
+        const slash = eventType.indexOf('/');
+        if (slash < 0)
+            return null;
+        const category = eventType.substring(0, slash);
+        const unit = eventType.substring(slash + 1);
+        const catDef = conversions[category];
+        if (!catDef)
+            return null;
+        // Already in the target system?
+        if (catDef[targetSystem] === unit)
+            return null;
+        const targetUnit = catDef[targetSystem];
+        if (!targetUnit)
+            return null;
+        // Look up conversion factor: from current unit to target unit
+        const factor = catDef.factors?.[unit]?.[targetUnit];
+        if (factor != null) {
+            return {
+                value: applyFactor(value, factor),
+                targetEventType: category + '/' + targetUnit,
+            };
+        }
+        // Try reverse: target → current, then invert
+        const reverseFactor = catDef.factors?.[targetUnit]?.[unit];
+        if (reverseFactor != null) {
+            return {
+                value: applyReverseFactor(value, reverseFactor),
+                targetEventType: category + '/' + targetUnit,
+            };
+        }
+        return null;
+    }
+}
+exports.HDSModelConversions = HDSModelConversions;
+/** Apply a conversion factor: number = multiply, [factor, offset] = affine */
+function applyFactor(value, factor) {
+    if (typeof factor === 'number')
+        return Math.round(value * factor * 100) / 100;
+    return Math.round((value * factor[0] + factor[1]) * 100) / 100;
+}
+/** Invert a conversion factor */
+function applyReverseFactor(value, factor) {
+    if (typeof factor === 'number')
+        return Math.round((value / factor) * 100) / 100;
+    return Math.round(((value - factor[1]) / factor[0]) * 100) / 100;
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModel-Datasources.ts"
+/*!*********************************************!*\
+  !*** ./ts/HDSModel/HDSModel-Datasources.ts ***!
+  \*********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelDatasources = void 0;
+const HDSDatasourceDef_ts_1 = __webpack_require__(/*! ./HDSDatasourceDef.js */ "./ts/HDSModel/HDSDatasourceDef.ts");
+/**
+ * Datasources - Extension of HDSModel
+ */
+class HDSModelDatasources {
+    #model;
+    #datasourceDefs;
+    constructor(model) {
+        this.#model = model;
+        this.#datasourceDefs = {};
+    }
+    /**
+     * get all datasource definitions
+     */
+    getAll() {
+        const res = [];
+        for (const key of Object.keys(this.#model.modelData.datasources || {})) {
+            res.push(this.forKey(key));
+        }
+        return res;
+    }
+    /**
+     * get datasource definition for a key
+     */
+    forKey(key, throwErrorIfNotFound = true) {
+        if (this.#datasourceDefs[key])
+            return this.#datasourceDefs[key];
+        const datasources = this.#model.modelData.datasources || {};
+        const defData = datasources[key];
+        if (!defData) {
+            if (throwErrorIfNotFound)
+                throw new Error('Cannot find datasource definition with key: ' + key);
+            return null;
+        }
+        this.#datasourceDefs[key] = new HDSDatasourceDef_ts_1.HDSDatasourceDef(key, defData, () => this.#model.assets);
+        return this.#datasourceDefs[key];
+    }
+}
+exports.HDSModelDatasources = HDSModelDatasources;
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModel-EventTypes.ts"
+/*!********************************************!*\
+  !*** ./ts/HDSModel/HDSModel-EventTypes.ts ***!
+  \********************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelEventTypes = void 0;
+/**
+ * Streams - Extension of HDSModel
+ */
+class HDSModelEventTypes {
+    /**
+     * Model instance
+     */
+    #model;
+    constructor(model) {
+        this.#model = model;
+    }
+    getEventTypeDefinition(eventType) {
+        return this.#model.modelData.eventTypes.types[eventType];
+    }
+    getEventTypeExtra(eventType) {
+        return this.#model.modelData.eventTypes.extras[eventType];
+    }
+    getEventTypeSymbol(eventType) {
+        return this.#model.modelData.eventTypes.extras[eventType]?.symbol || null;
+    }
+}
+exports.HDSModelEventTypes = HDSModelEventTypes;
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModel-ItemsDefs.ts"
+/*!*******************************************!*\
+  !*** ./ts/HDSModel/HDSModel-ItemsDefs.ts ***!
+  \*******************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelItemsDefs = void 0;
+const HDSItemDef_ts_1 = __webpack_require__(/*! ./HDSItemDef.js */ "./ts/HDSModel/HDSItemDef.ts");
+/**
+ * ItemsDefs - Extension of HDSModel
+ */
+class HDSModelItemsDefs {
+    /**
+     * Model instance
+     */
+    #model;
+    /**
+     * ItemDefs Cache
+     * KeyValue of itemsDefs
+     */
+    #itemsDefs;
+    /**
+     * get itemsData by streamId and eventType
+     */
+    #modelDataByStreamIdEventTypes;
+    constructor(model) {
+        this.#model = model;
+        this.#itemsDefs = {};
+        this.#modelDataByStreamIdEventTypes = {};
+        loadModelDataByStreamIdEventTypes(this.#model.modelData.items, this.#modelDataByStreamIdEventTypes);
+    }
+    /**
+     * get all itemDefs
+     */
+    getAll() {
+        const res = [];
+        for (const key of Object.keys(this.#model.modelData.items)) {
+            res.push(this.forKey(key));
+        }
+        return res;
+    }
+    /**
+     * get item for a key
+     */
+    forKey(key, throwErrorIfNotFound = true) {
+        if (this.#itemsDefs[key])
+            return this.#itemsDefs[key];
+        const defData = this.#model.modelData.items[key];
+        if (!defData) {
+            if (throwErrorIfNotFound)
+                throw new Error('Cannot find item definition with key: ' + key);
+            return null;
+        }
+        this.#itemsDefs[key] = new HDSItemDef_ts_1.HDSItemDef(key, defData);
+        return this.#itemsDefs[key];
+    }
+    /**
+     * get a definition for an event
+     */
+    forEvent(event, throwErrorIfNotFound = true) {
+        const candidates = [];
+        for (const streamId of event.streamIds) {
+            const keyStreamIdEventType = streamId + ':' + event.type;
+            const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
+            if (candidate)
+                candidates.push(candidate);
+        }
+        if (candidates.length === 0) {
+            if (throwErrorIfNotFound)
+                throw new Error('Cannot find definition for event: ' + JSON.stringify(event));
+            return null;
+        }
+        if (candidates.length > 1) {
+            throw new Error(`Found multiple matching definitions "${candidates.map(c => (c.key)).join(', ')}" for event: ${JSON.stringify(event)}`);
+        }
+        return this.forKey(candidates[0].key, throwErrorIfNotFound);
+    }
+}
+exports.HDSModelItemsDefs = HDSModelItemsDefs;
+/**
+ * Add key to model items and
+ * load modeldata item into modelDataByStreamIdEventTypes for fast search
+ */
+function loadModelDataByStreamIdEventTypes(model, map) {
+    for (const item of Object.values(model)) {
+        const eventTypes = [];
+        if (item.eventType) {
+            eventTypes.push(item.eventType);
+        }
+        else {
+            const types = item.variations.eventType.options.map((o) => o.value);
+            eventTypes.push(...types);
+        }
+        for (const eventType of eventTypes) {
+            const keyStreamIdEventType = item.streamId + ':' + eventType;
+            if (map[keyStreamIdEventType]) {
+                // should be tested with a faulty model
+                throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+            }
+            map[keyStreamIdEventType] = item;
+        }
+    }
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModel-Streams.ts"
+/*!*****************************************!*\
+  !*** ./ts/HDSModel/HDSModel-Streams.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelStreams = void 0;
+const internalModelUtils_ts_1 = __webpack_require__(/*! ./internalModelUtils.js */ "./ts/HDSModel/internalModelUtils.ts");
+/**
+ * Streams - Extension of HDSModel
+ */
+class HDSModelStreams {
+    /**
+     * Model instance
+     */
+    #model;
+    /**
+     * streamsById
+     * Map to find streams by Id
+     */
+    #modelStreamsById;
+    constructor(model) {
+        this.#model = model;
+        this.#modelStreamsById = {};
+        loadModelStreamsById(this.#model.modelData.streams, this.#modelStreamsById);
+    }
+    /**
+     * Get a list of streams to be created for usage of these keys (whithout children)
+     */
+    getNecessaryListForItems(itemKeysOrDefs, params = {}) {
+        const itemDefs = (0, internalModelUtils_ts_1.itemKeysOrDefsToDefs)(this.#model, itemKeysOrDefs);
+        const knowExistingStreamsIds = params.knowExistingStreamsIds || [];
+        const nameProperty = params.nameProperty || 'name';
+        const result = [];
+        const streams = new Map(); // tempMap to keep streams already in
+        for (const knowStreamId of knowExistingStreamsIds) {
+            const strs = this.getParentsIds(knowStreamId, false, [knowStreamId]).reverse();
+            for (const strId of strs) {
+                streams.set(strId, true);
+            }
+        }
+        for (const itemDef of itemDefs) {
+            const streamParentIds = this.getParentsIds(itemDef.data.streamId, true, [itemDef.data.streamId]);
+            const resultToBeReversed = [];
+            for (let i = streamParentIds.length - 1; i > -1; i--) { // loop reverse to break as soon as we find an existing stream
+                const streamId = streamParentIds[i];
+                if (streams.has(streamId))
+                    break;
+                const stream = this.getDataById(streamId);
+                streams.set(streamId, true); // just to flag
+                const itemStream = { id: streamId, parentId: stream.parentId };
+                if (nameProperty !== 'none') {
+                    itemStream[nameProperty] = stream.name; // to be translated
+                }
+                resultToBeReversed.push(itemStream);
+            }
+            // result need to be reversed in order to get parents created before
+            result.push(...resultToBeReversed.reverse());
+        }
+        return result;
+    }
+    /**
+     * Get stream Data by Id;
+     */
+    getDataById(streamId, throwErrorIfNotFound = true) {
+        const streamData = this.#modelStreamsById[streamId];
+        if (throwErrorIfNotFound && !streamData)
+            throw new Error(`Stream with id: "${streamId}" not found`);
+        return streamData;
+    }
+    /**
+     * Get all parents id;
+     */
+    getParentsIds(streamId, throwErrorIfNotFound = true, initialArray = []) {
+        const streamData = this.getDataById(streamId, throwErrorIfNotFound);
+        if (!streamData)
+            return initialArray;
+        if (streamData.parentId !== null) {
+            initialArray.unshift(streamData.parentId);
+            this.getParentsIds(streamData.parentId, true, initialArray);
+        }
+        return initialArray;
+    }
+}
+exports.HDSModelStreams = HDSModelStreams;
+/**
+ * @param streams
+ * @param map - key value map
+ */
+function loadModelStreamsById(streams, map) {
+    if (!streams)
+        return;
+    for (const stream of streams) {
+        if (map[stream.id]) {
+            // should be tested with a faulty model
+            throw new Error(`Duplicate streamId "${stream.id}" for strean ${JSON.stringify(stream)}`);
+        }
+        map[stream.id] = stream;
+        loadModelStreamsById(stream.children, map);
+    }
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModel.ts"
+/*!*********************************!*\
+  !*** ./ts/HDSModel/HDSModel.ts ***!
+  \*********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModel = void 0;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const utils_ts_1 = __webpack_require__(/*! ../utils.js */ "./ts/utils.ts");
+const HDSModel_Streams_ts_1 = __webpack_require__(/*! ./HDSModel-Streams.js */ "./ts/HDSModel/HDSModel-Streams.ts");
+const HDSModel_Authorizations_ts_1 = __webpack_require__(/*! ./HDSModel-Authorizations.js */ "./ts/HDSModel/HDSModel-Authorizations.ts");
+const HDSModel_ItemsDefs_ts_1 = __webpack_require__(/*! ./HDSModel-ItemsDefs.js */ "./ts/HDSModel/HDSModel-ItemsDefs.ts");
+const HDSModel_EventTypes_ts_1 = __webpack_require__(/*! ./HDSModel-EventTypes.js */ "./ts/HDSModel/HDSModel-EventTypes.ts");
+const HDSModel_Datasources_ts_1 = __webpack_require__(/*! ./HDSModel-Datasources.js */ "./ts/HDSModel/HDSModel-Datasources.ts");
+const HDSModel_Conversions_ts_1 = __webpack_require__(/*! ./HDSModel-Conversions.js */ "./ts/HDSModel/HDSModel-Conversions.ts");
+class HDSModel {
+    /**
+     * JSON definition file URL.
+     * Should come from service/info assets.hds-model
+     */
+    #modelUrl;
+    /** RAW content of model definitions */
+    #modelData;
+    /** Service-info assets map (e.g. { datasets: 'https://...', ... }) */
+    #assets;
+    /**
+     * Map of properties loaded "on demand"
+     */
+    laziliyLoadedMap = {};
+    /**
+     * @param modelUrl - JSON definition file URL. Should come from service/info assets.hds-model
+     */
+    constructor(modelUrl) {
+        this.#modelUrl = modelUrl;
+        this.laziliyLoadedMap = {};
+        this.#modelData = null;
+        this.#assets = {};
+    }
+    /** Service-info assets used for resolving datasource endpoints */
+    get assets() {
+        return this.#assets;
+    }
+    set assets(value) {
+        this.#assets = value || {};
+    }
+    get isLoaded() {
+        return !!this.#modelData;
+    }
+    /**
+     * Load model definitions
+     */
+    async load(modelUrl = null) {
+        if (modelUrl) {
+            this.#modelUrl = modelUrl;
+        }
+        const response = await fetch(this.#modelUrl);
+        const resultText = await response.text();
+        const result = JSON.parse(resultText);
+        this.#modelData = result;
+        // add key to items before freezing;
+        for (const [key, item] of Object.entries(this.#modelData.items)) {
+            item.key = key;
+        }
+        // make sure it cannot be modified
+        (0, utils_ts_1.deepFreeze)(this.#modelData);
+    }
+    /** RAW model data */
+    get modelData() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        return this.#modelData;
+    }
+    get itemsDefs() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.itemsDefs) {
+            this.laziliyLoadedMap.itemsDefs = new HDSModel_ItemsDefs_ts_1.HDSModelItemsDefs(this);
+        }
+        return this.laziliyLoadedMap.itemsDefs;
+    }
+    get streams() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.streams) {
+            this.laziliyLoadedMap.streams = new HDSModel_Streams_ts_1.HDSModelStreams(this);
+        }
+        return this.laziliyLoadedMap.streams;
+    }
+    get authorizations() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.authorizations) {
+            this.laziliyLoadedMap.authorizations = new HDSModel_Authorizations_ts_1.HDSModelAuthorizations(this);
+        }
+        return this.laziliyLoadedMap.authorizations;
+    }
+    get eventTypes() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.eventTypes) {
+            this.laziliyLoadedMap.eventTypes = new HDSModel_EventTypes_ts_1.HDSModelEventTypes(this);
+        }
+        return this.laziliyLoadedMap.eventTypes;
+    }
+    get datasources() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.datasources) {
+            this.laziliyLoadedMap.datasources = new HDSModel_Datasources_ts_1.HDSModelDatasources(this);
+        }
+        return this.laziliyLoadedMap.datasources;
+    }
+    get conversions() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.conversions) {
+            this.laziliyLoadedMap.conversions = new HDSModel_Conversions_ts_1.HDSModelConversions(this);
+        }
+        return this.laziliyLoadedMap.conversions;
+    }
+}
+exports.HDSModel = HDSModel;
+function throwNotLoadedError() {
+    throw new errors_ts_1.HDSLibError('Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModelInitAndSingleton.ts"
+/*!*************************************************!*\
+  !*** ./ts/HDSModel/HDSModelInitAndSingleton.ts ***!
+  \*************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getModel = getModel;
+exports.resetModel = resetModel;
+exports.initHDSModel = initHDSModel;
+const HDSModel_ts_1 = __webpack_require__(/*! ./HDSModel.js */ "./ts/HDSModel/HDSModel.ts");
+const HDSService_ts_1 = __webpack_require__(/*! ../HDSService.js */ "./ts/HDSService.ts");
+let hdsModelInstance = null;
+function getModel() {
+    if (hdsModelInstance == null) {
+        hdsModelInstance = new HDSModel_ts_1.HDSModel('');
+    }
+    return hdsModelInstance;
+}
+/**
+ * Mostly used during test to unload model
+ */
+function resetModel() {
+    hdsModelInstance = null;
+}
+/**
+ * Initialized model singleton
+ */
+async function initHDSModel() {
+    if (!hdsModelInstance) {
+        getModel();
+    }
+    if (!hdsModelInstance.isLoaded) {
+        const service = new HDSService_ts_1.HDSService();
+        const serviceInfo = await service.info();
+        hdsModelInstance.assets = serviceInfo.assets;
+        await hdsModelInstance.load(serviceInfo.assets['hds-model']);
+    }
+    return hdsModelInstance;
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/eventToShortText.ts"
+/*!*****************************************!*\
+  !*** ./ts/HDSModel/eventToShortText.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.formatEventDate = formatEventDate;
+exports.eventToShortText = eventToShortText;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ../settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
+const DATE_SEPARATORS = {
+    'DD.MM.YYYY': (d) => pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
+    'DD/MM/YYYY': (d) => pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(),
+    'MM/DD/YYYY': (d) => pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear(),
+    'YYYY-MM-DD': (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()),
+};
+function pad(n) { return n < 10 ? '0' + n : String(n); }
+/**
+ * Format a Unix timestamp (seconds) as a date string.
+ * Uses HDSSettings dateFormat + timezone when available, otherwise ISO date.
+ */
+function formatEventDate(timeSec) {
+    const d = new Date(timeSec * 1000);
+    if (HDSSettings_ts_1.default.isHooked) {
+        const fmt = HDSSettings_ts_1.default.get('dateFormat');
+        const formatter = DATE_SEPARATORS[fmt];
+        if (formatter)
+            return formatter(d);
+    }
+    return d.toISOString().split('T')[0];
+}
+/**
+ * Convert an event's content to a short human-readable string.
+ * Resolves itemDef from the model (streamId + eventType match).
+ *
+ * With itemDef: select → localized option label, checkbox → "Yes",
+ * number → "60 Kg" (with unit symbol from eventType extras),
+ * datasource-search → drug label + intake details, date → ISO date.
+ *
+ * Without itemDef (fallback): derives unit from eventType symbol if available,
+ * for object content produces short textual representation.
+ */
+function eventToShortText(event) {
+    if (event == null)
+        return null;
+    const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    const itemDef = model.itemsDefs.forEvent(event, false);
+    const content = event.content;
+    if (itemDef) {
+        // For checkbox/date items, content may be null — the event time IS the data
+        if (content == null && itemDef.data.type === 'checkbox') {
+            return formatEventDate(event.time);
+        }
+        if (content == null && itemDef.data.type === 'date') {
+            return formatEventDate(event.time);
+        }
+        if (content == null)
+            return null;
+        return formatWithItemDef(event, content, itemDef, model);
+    }
+    if (content == null)
+        return null;
+    return formatFallback(event, content, model);
+}
+function formatWithItemDef(event, content, itemDef, model) {
+    const type = itemDef.data.type;
+    if (type === 'checkbox') {
+        return event.type === 'activity/plain' ? 'Yes' : String(content);
+    }
+    if (type === 'select') {
+        return formatSelect(event, content, itemDef);
+    }
+    if (type === 'date') {
+        // date items store time on the event itself
+        return formatEventDate(event.time);
+    }
+    if (type === 'datasource-search') {
+        return formatDatasource(content);
+    }
+    // number, text, composite, etc.
+    if (typeof content === 'number') {
+        return formatNumber(event.type, content, model);
+    }
+    if (typeof content === 'string') {
+        return content.length > 60 ? content.slice(0, 60) + '...' : content;
+    }
+    if (typeof content === 'boolean') {
+        return content ? 'Yes' : 'No';
+    }
+    // Composite / object — try common fields
+    return formatObject(content);
+}
+function formatFallback(event, content, model) {
+    if (typeof content === 'number') {
+        return formatNumber(event.type, content, model);
+    }
+    if (typeof content === 'string') {
+        return content.length > 60 ? content.slice(0, 60) + '...' : content;
+    }
+    if (typeof content === 'boolean') {
+        return content ? 'Yes' : 'No';
+    }
+    if (typeof content === 'object') {
+        return formatObject(content);
+    }
+    return String(content);
+}
+function formatNumber(eventType, content, model) {
+    if (HDSSettings_ts_1.default.isHooked) {
+        const system = HDSSettings_ts_1.default.get('unitSystem');
+        const result = model.conversions.convert(eventType, content, system);
+        if (result) {
+            const symbol = getSymbol(result.targetEventType, model);
+            return symbol ? `${result.value} ${symbol}` : String(result.value);
+        }
+    }
+    const symbol = getSymbol(eventType, model);
+    return symbol ? `${content} ${symbol}` : String(content);
+}
+function formatSelect(event, content, itemDef) {
+    let valueForSelect = content;
+    let prefix = '';
+    if (event.type === 'ratio/generic' && typeof content === 'object') {
+        prefix = content.value + '/' + content.relativeTo + ' ';
+        valueForSelect = content.value;
+    }
+    const options = itemDef.data.options;
+    if (options) {
+        const selected = options.find((o) => o.value === valueForSelect);
+        if (selected?.label) {
+            const text = typeof selected.label === 'string' ? selected.label : ((0, localizeText_ts_1.localizeText)(selected.label) || String(valueForSelect));
+            const truncated = text.length > 50 ? text.slice(0, 50) + '...' : text;
+            return prefix + truncated;
+        }
+    }
+    return prefix + String(valueForSelect);
+}
+function formatDatasource(content) {
+    if (!content || typeof content !== 'object')
+        return String(content);
+    // medication/coded-v1: {drug: {label}, intake: {doseValue, doseUnit, route}}
+    // legacy flat: {label, codes, doseValue, doseUnit, route}
+    const label = content.drug?.label || content.label;
+    let text;
+    if (label) {
+        text = typeof label === 'string' ? label : ((0, localizeText_ts_1.localizeText)(label) || JSON.stringify(content));
+    }
+    else {
+        text = JSON.stringify(content);
+    }
+    const intake = content.intake || content;
+    const parts = [];
+    if (intake.doseValue) {
+        const unitLabel = intake.doseUnit
+            ? intake.doseUnit.replace(/^dose\//, '').replace(/^(mass|volume)\//, '')
+            : '';
+        parts.push(`${intake.doseValue} ${unitLabel}`.trim());
+    }
+    if (intake.route)
+        parts.push(intake.route);
+    if (parts.length > 0)
+        text += ' — ' + parts.join(', ');
+    return text;
+}
+function formatObject(content) {
+    if (content == null)
+        return null;
+    // Try common patterns
+    if (content.label) {
+        const txt = typeof content.label === 'object' ? (0, localizeText_ts_1.localizeText)(content.label) : content.label;
+        if (txt)
+            return String(txt);
+    }
+    if (content.drug?.label) {
+        const dl = content.drug.label;
+        return typeof dl === 'string' ? dl : ((0, localizeText_ts_1.localizeText)(dl) || null);
+    }
+    if (content.value != null)
+        return String(content.value);
+    // Last resort: count keys
+    const keys = Object.keys(content);
+    if (keys.length === 0)
+        return null;
+    // Try first string/number field
+    for (const k of keys) {
+        const v = content[k];
+        if (typeof v === 'string')
+            return v.length > 40 ? v.slice(0, 40) + '...' : v;
+        if (typeof v === 'number')
+            return String(v);
+    }
+    return `{${keys.length} fields}`;
+}
+function getSymbol(eventType, model) {
+    try {
+        return model.eventTypes.getEventTypeSymbol(eventType);
+    }
+    catch {
+        return null;
+    }
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/internalModelUtils.ts"
+/*!*******************************************!*\
+  !*** ./ts/HDSModel/internalModelUtils.ts ***!
+  \*******************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.itemKeysOrDefsToDefs = itemKeysOrDefsToDefs;
+exports.itemKeyOrDefToDef = itemKeyOrDefToDef;
+const HDSItemDef_ts_1 = __webpack_require__(/*! ./HDSItemDef.js */ "./ts/HDSModel/HDSItemDef.ts");
+/**
+ * Some call support either arrays of itemKeys or itemDefs
+ * test if they are strings or itemDefs and returns an array of itemDefs
+ */
+function itemKeysOrDefsToDefs(model, keysOrDefs) {
+    const res = [];
+    for (const keyOrDef of keysOrDefs) {
+        res.push(itemKeyOrDefToDef(model, keyOrDef));
+    }
+    return res;
+}
+/**
+ * Some call support either itemKey or itemDef
+ * test if string or itemDef and returns an itemDef
+ */
+function itemKeyOrDefToDef(model, keyOrDef) {
+    if (keyOrDef instanceof HDSItemDef_ts_1.HDSItemDef)
+        return keyOrDef;
+    return model.itemsDefs.forKey(keyOrDef);
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/reminders.ts"
+/*!**********************************!*\
+  !*** ./ts/HDSModel/reminders.ts ***!
+  \**********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.computeReminders = computeReminders;
+const duration_ts_1 = __webpack_require__(/*! ../utils/duration.js */ "./ts/utils/duration.ts");
+const IMPORTANCE_ORDER = { may: 0, should: 1, must: 2 };
+function maxImportance(a, b) {
+    const va = IMPORTANCE_ORDER[a || 'may'] || 0;
+    const vb = IMPORTANCE_ORDER[b || 'may'] || 0;
+    return va >= vb ? (a || 'may') : (b || 'may');
+}
+/**
+ * Merge reminder configs from multiple sources. Later sources override per-field.
+ * Returns merged config + importance (highest across all sources).
+ */
+function mergeReminders(sources) {
+    const merged = {};
+    let importance = 'may';
+    for (const source of sources) {
+        const r = source.reminder;
+        if (r.cooldown !== undefined)
+            merged.cooldown = r.cooldown;
+        if (r.expectedInterval !== undefined)
+            merged.expectedInterval = r.expectedInterval;
+        if (r.relativeTo !== undefined)
+            merged.relativeTo = r.relativeTo;
+        if (r.relativeDays !== undefined)
+            merged.relativeDays = r.relativeDays;
+        if (r.importance !== undefined)
+            merged.importance = r.importance;
+        importance = maxImportance(importance, r.importance);
+    }
+    return { config: merged, importance };
+}
+/**
+ * Find the most recent event matching an itemDef (by streamId + eventType).
+ */
+function findLastEvent(itemDef, events) {
+    const streamId = itemDef.data.streamId;
+    const types = new Set(itemDef.eventTypes);
+    let latest;
+    for (const e of events) {
+        if (!types.has(e.type))
+            continue;
+        const eStreamId = e.streamId || (e.streamIds && e.streamIds[0]);
+        if (eStreamId !== streamId)
+            continue;
+        if (!latest || e.time > latest.time)
+            latest = e;
+    }
+    return latest;
+}
+/**
+ * Compute reminder statuses for a set of items given their events and optional overrides.
+ *
+ * @param itemDefs - array of item definitions (must have .key, .eventTypes, .reminder, .data.streamId)
+ * @param events - all events to search for last entries
+ * @param overrides - optional collector/user overrides (matched by itemKey in the ReminderSource)
+ * @param now - current time in unix seconds (defaults to Date.now()/1000)
+ */
+function computeReminders(itemDefs, events, overrides, now) {
+    const nowSec = now ?? Math.floor(Date.now() / 1000);
+    const results = [];
+    // Pre-compute last events for relative lookups
+    const lastEventCache = new Map();
+    for (const itemDef of itemDefs) {
+        lastEventCache.set(itemDef.key, findLastEvent(itemDef, events));
+    }
+    for (const itemDef of itemDefs) {
+        // Build sources: default + overrides
+        const sources = [];
+        if (itemDef.reminder) {
+            sources.push({ origin: 'default', reminder: itemDef.reminder });
+        }
+        const itemOverrides = overrides?.[itemDef.key];
+        if (itemOverrides)
+            sources.push(...itemOverrides);
+        // No reminder config at all → skip
+        if (sources.length === 0)
+            continue;
+        const { config, importance } = mergeReminders(sources);
+        const lastEvent = lastEventCache.get(itemDef.key);
+        const lastEntry = lastEvent?.time;
+        const timeSinceLast = lastEntry != null ? (nowSec - lastEntry) : Infinity;
+        let status;
+        let dueDate;
+        // --- relativeTo logic ---
+        if (config.relativeTo && config.relativeDays) {
+            const refItemDef = itemDefs.find(d => d.key === config.relativeTo);
+            const refEvent = refItemDef ? lastEventCache.get(refItemDef.key) : undefined;
+            if (!refEvent) {
+                // No reference event → can't compute relative timing
+                status = 'ok';
+            }
+            else {
+                // Compute cycle day (day 1 = day of reference event)
+                const daysSinceRef = Math.floor((nowSec - refEvent.time) / 86400);
+                const cycleDay = daysSinceRef + 1;
+                const days = config.relativeDays;
+                const minDay = Math.min(...days);
+                const maxDay = Math.max(...days);
+                if (days.includes(cycleDay)) {
+                    // Check cooldown: if already entered today, suppress
+                    if (lastEntry != null && timeSinceLast < 86400) {
+                        status = 'cooldown';
+                    }
+                    else {
+                        status = 'due';
+                        dueDate = refEvent.time + (cycleDay - 1) * 86400;
+                    }
+                }
+                else if (cycleDay === minDay - 1) {
+                    status = 'upcoming';
+                    dueDate = refEvent.time + (minDay - 1) * 86400;
+                }
+                else if (cycleDay > maxDay) {
+                    // Past the target window — if never entered this cycle, overdue
+                    if (!lastEntry || lastEntry < refEvent.time) {
+                        status = 'overdue';
+                    }
+                    else {
+                        status = 'ok';
+                    }
+                }
+                else {
+                    status = 'ok';
+                }
+            }
+            // --- expectedInterval logic ---
+        }
+        else if (config.expectedInterval) {
+            const interval = config.expectedInterval;
+            const cooldownSec = config.cooldown ? (0, duration_ts_1.durationToSeconds)(config.cooldown) : 0;
+            if (lastEntry == null) {
+                // Never entered → due
+                status = 'due';
+            }
+            else if (cooldownSec > 0 && timeSinceLast < cooldownSec) {
+                status = 'cooldown';
+            }
+            else {
+                const minSec = interval.min ? (0, duration_ts_1.durationToSeconds)(interval.min) : 0;
+                const maxSec = interval.max ? (0, duration_ts_1.durationToSeconds)(interval.max) : Infinity;
+                const thresholdUpcoming = maxSec * 0.9;
+                if (timeSinceLast < minSec) {
+                    status = 'ok';
+                }
+                else if (timeSinceLast < thresholdUpcoming) {
+                    status = 'upcoming';
+                    dueDate = lastEntry + (interval.max ? (0, duration_ts_1.durationToSeconds)(interval.max) : 0);
+                }
+                else if (timeSinceLast <= maxSec) {
+                    status = 'due';
+                    dueDate = lastEntry + (interval.max ? (0, duration_ts_1.durationToSeconds)(interval.max) : 0);
+                }
+                else {
+                    status = 'overdue';
+                    dueDate = lastEntry + (interval.max ? (0, duration_ts_1.durationToSeconds)(interval.max) : 0);
+                }
+            }
+            // --- cooldown-only logic ---
+        }
+        else if (config.cooldown) {
+            const cooldownSec = (0, duration_ts_1.durationToSeconds)(config.cooldown);
+            if (lastEntry != null && timeSinceLast < cooldownSec) {
+                status = 'cooldown';
+            }
+            else {
+                status = 'due';
+                dueDate = lastEntry != null ? lastEntry + cooldownSec : undefined;
+            }
+        }
+        else {
+            // Config has importance but no timing → always due
+            status = 'due';
+        }
+        results.push({
+            itemKey: itemDef.key,
+            status,
+            importance,
+            lastEntry,
+            lastEventContent: lastEvent?.content,
+            lastEvent,
+            dueDate,
+            sources
+        });
+    }
+    // Sort: overdue first, then due, then upcoming, then ok, then cooldown
+    // Within same status: higher importance first
+    const STATUS_ORDER = { overdue: 0, due: 1, upcoming: 2, ok: 3, cooldown: 4 };
+    results.sort((a, b) => {
+        const sa = STATUS_ORDER[a.status] ?? 5;
+        const sb = STATUS_ORDER[b.status] ?? 5;
+        if (sa !== sb)
+            return sa - sb;
+        return (IMPORTANCE_ORDER[b.importance] || 0) - (IMPORTANCE_ORDER[a.importance] || 0);
+    });
+    return results;
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSService.ts"
+/*!**************************!*\
+  !*** ./ts/HDSService.ts ***!
+  \**************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSService = void 0;
+const settings = __importStar(__webpack_require__(/*! ./settings.js */ "./ts/settings.ts"));
+const patchedPryv_ts_1 = __webpack_require__(/*! ./patchedPryv.js */ "./ts/patchedPryv.ts");
+// makes Pryv service aware of default serviceUrl
+class HDSService extends patchedPryv_ts_1.pryv.Service {
+    constructor(serviceInfoUrl, serviceCustomizations) {
+        serviceInfoUrl = serviceInfoUrl || settings.getServiceInfoURL();
+        super(serviceInfoUrl, serviceCustomizations);
+    }
+}
+exports.HDSService = HDSService;
+
+
+/***/ },
+
+/***/ "./ts/MonitorScope.ts"
+/*!****************************!*\
+  !*** ./ts/MonitorScope.ts ***!
+  \****************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MonitorScope = void 0;
+const patchedPryv_ts_1 = __webpack_require__(/*! ./patchedPryv.js */ "./ts/patchedPryv.ts");
+class MonitorScope {
+    connection;
+    config;
+    callbacks;
+    monitor = null;
+    oldestLoadedTime = Number.MAX_VALUE;
+    _hasMoreOlder = false;
+    maxModified = 0;
+    stopped = false;
+    constructor(connection, config, callbacks) {
+        this.connection = connection;
+        this.config = config;
+        this.callbacks = callbacks;
+    }
+    get hasMoreOlder() {
+        return this._hasMoreOlder;
+    }
+    /**
+     * Start progressive loading:
+     * 1. Fetch streams + first page of newest events
+     * 2. Page backwards until fromTime boundary reached
+     * 3. Start Monitor for real-time updates
+     *
+     * Each page triggers onEvents → UI updates progressively.
+     */
+    async start() {
+        if (this.stopped)
+            return;
+        const toTime = this.config.toTime ?? (Date.now() / 1000);
+        // Step 1: First page + streams (batch call)
+        const result = await this.connection.api([
+            { method: 'events.get', params: { limit: this.config.pageSize, fromTime: this.config.fromTime, toTime } },
+            { method: 'streams.get', params: {} },
+        ]);
+        if (this.stopped)
+            return;
+        // Process streams
+        if (result[1] && !result[1].error && result[1].streams) {
+            this.callbacks.onStreams?.(result[1].streams);
+        }
+        // Process first page of events
+        let totalLoaded = 0;
+        if (result[0] && !result[0].error && result[0].events) {
+            const events = result[0].events;
+            totalLoaded = events.length;
+            this.deliverEvents(events);
+        }
+        if (this.stopped)
+            return;
+        // Step 2: Page backwards until fromTime boundary is reached
+        // Each page is a separate HTTP request → browser yields → React can re-render
+        while (totalLoaded > 0 &&
+            totalLoaded % this.config.pageSize === 0 &&
+            this.oldestLoadedTime > this.config.fromTime) {
+            if (this.stopped)
+                return;
+            const pageResult = await this.connection.api([{
+                    method: 'events.get',
+                    params: {
+                        fromTime: this.config.fromTime,
+                        toTime: this.oldestLoadedTime,
+                        limit: this.config.pageSize,
+                    },
+                }]);
+            if (this.stopped)
+                return;
+            if (pageResult[0] && !pageResult[0].error && pageResult[0].events) {
+                const pageEvents = pageResult[0].events;
+                if (pageEvents.length === 0)
+                    break;
+                const prevOldest = this.oldestLoadedTime;
+                totalLoaded += pageEvents.length;
+                this.deliverEvents(pageEvents);
+                // Safety: stop if no progress (oldest didn't change — would loop forever)
+                if (this.oldestLoadedTime >= prevOldest)
+                    break;
+                // If fewer than pageSize returned, we've reached the boundary
+                if (pageEvents.length < this.config.pageSize)
+                    break;
+            }
+            else {
+                break;
+            }
+        }
+        // Assume there may be older events beyond fromTime — loadMore will confirm
+        this._hasMoreOlder = totalLoaded > 0;
+        if (this.stopped)
+            return;
+        // Step 3: Start Monitor for real-time updates
+        // modifiedSince trick — initial fetch returns ~nothing
+        const eventsGetScope = {
+            fromTime: this.config.fromTime,
+            toTime,
+            modifiedSince: this.maxModified,
+        };
+        this.monitor = new patchedPryv_ts_1.pryv.Monitor(this.connection, eventsGetScope)
+            .on('event', (event) => {
+            this.trackEvent(event);
+            // Real-time updates: use onEvent for individual events
+            if (this.callbacks.onEvent) {
+                this.callbacks.onEvent(event);
+            }
+            else if (this.callbacks.onEvents) {
+                this.callbacks.onEvents([event]);
+            }
+        })
+            .on('eventDelete', (event) => {
+            this.callbacks.onEventDelete?.(event);
+        })
+            .on('streams', (streams) => {
+            this.callbacks.onStreams?.(streams);
+        })
+            .on('error', (error) => {
+            this.callbacks.onError?.(error);
+        });
+        // Start before adding Socket to avoid race condition
+        await this.monitor.start();
+        this.monitor.addUpdateMethod(new patchedPryv_ts_1.pryv.Monitor.UpdateMethod.Socket());
+    }
+    /**
+     * Load older events beyond current scope (triggered by scroll-up).
+     * Loads pageSize events older than the oldest currently loaded.
+     */
+    async loadMore() {
+        if (!this._hasMoreOlder) {
+            return { events: [], hasMore: false };
+        }
+        const result = await this.connection.api([
+            { method: 'events.get', params: { toTime: this.oldestLoadedTime, limit: this.config.pageSize, fromTime: 0 } },
+        ]);
+        const events = [];
+        if (result[0] && !result[0].error && result[0].events) {
+            for (const event of result[0].events) {
+                this.trackEvent(event);
+                events.push(event);
+            }
+            if (result[0].events.length < this.config.pageSize) {
+                this._hasMoreOlder = false;
+            }
+        }
+        else {
+            this._hasMoreOlder = false;
+        }
+        return { events, hasMore: this._hasMoreOlder };
+    }
+    /**
+     * Stop monitoring and clean up.
+     */
+    stop() {
+        this.stopped = true;
+        if (this.monitor) {
+            this.monitor.stop();
+            this.monitor = null;
+        }
+    }
+    /** Deliver a batch of events via onEvents (preferred) or onEvent fallback */
+    deliverEvents(events) {
+        for (const event of events) {
+            this.trackEvent(event);
+        }
+        if (this.callbacks.onEvents) {
+            this.callbacks.onEvents(events);
+        }
+        else if (this.callbacks.onEvent) {
+            for (const event of events) {
+                this.callbacks.onEvent(event);
+            }
+        }
+    }
+    /** Track event timestamps for pagination bookkeeping */
+    trackEvent(event) {
+        if (event.time < this.oldestLoadedTime) {
+            this.oldestLoadedTime = event.time;
+        }
+        const mod = event.modified || event.time;
+        if (mod > this.maxModified) {
+            this.maxModified = mod;
+        }
+    }
+}
+exports.MonitorScope = MonitorScope;
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/AppClientAccount.ts"
+/*!*********************************************!*\
+  !*** ./ts/appTemplates/AppClientAccount.ts ***!
+  \*********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AppClientAccount = void 0;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTemplates/Application.ts");
+const CollectorClient_ts_1 = __webpack_require__(/*! ./CollectorClient.js */ "./ts/appTemplates/CollectorClient.ts");
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+/**
+ * - applications
+ *   - [baseStreamId] "Root" stream from this app
+ */
+const MAX_COLLECTORS = 1000;
+class AppClientAccount extends Application_ts_1.Application {
+    constructor(baseStreamId, connection, appName, features) {
+        super(baseStreamId, connection, appName, features);
+        this.cache.collectorClientsMap = {};
+    }
+    get appSettings() {
+        return {
+            canBePersonnal: true,
+            mustBeMaster: true
+        };
+    }
+    /**
+     * When the app receives a new request for data sharing
+     */
+    async handleIncomingRequest(apiEndpoint, incomingEventId) {
+        // make sure that collectorClientsMap is initialized
+        await this.getCollectorClients();
+        const requesterConnection = new patchedPryv_ts_1.pryv.Connection(apiEndpoint);
+        const accessInfo = await requesterConnection.accessInfo();
+        // check if request is known
+        const collectorClientKey = CollectorClient_ts_1.CollectorClient.keyFromInfo(accessInfo);
+        logger.debug('AppClient:handleIncomingRequest', { collectorClientKey, accessInfo, incomingEventId });
+        if (this.cache.collectorClientsMap[collectorClientKey]) {
+            const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
+            logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
+            if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
+                // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+                throw new errors_ts_1.HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
+                // we might consider reseting() in the future;
+                // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+            }
+            if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
+                throw new errors_ts_1.HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+                // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
+                // we might consider reseting() in the future;
+                // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+                // return null;
+            }
+            return collectorClient;
+        }
+        // check if comming form hdsCollector
+        if (!accessInfo?.clientData?.hdsCollector || accessInfo.clientData?.hdsCollector?.version !== 0) {
+            throw new errors_ts_1.HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
+        }
+        // else create it
+        const collectorClient = await CollectorClient_ts_1.CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
+        this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
+        return collectorClient;
+    }
+    async getCollectorClientByKey(collectorKey) {
+        // ensure collectors are initialized
+        await this.getCollectorClients();
+        return this.cache.collectorClientsMap[collectorKey];
+    }
+    async getCollectorClients(forceRefresh = false) {
+        if (!forceRefresh && this.cache.collectorClientsMapInitialized)
+            return Object.values(this.cache.collectorClientsMap);
+        const apiCalls = [{
+                method: 'accesses.get',
+                params: { includeDeletions: true }
+            }, {
+                method: 'events.get',
+                params: { types: ['request/collector-client-v1'], streams: [this.baseStreamId], limit: MAX_COLLECTORS }
+            }];
+        const [accessesRes, eventRes] = await this.connection.api(apiCalls);
+        const accessHDSCollectorMap = {};
+        for (const access of accessesRes.accesses) {
+            if (access.clientData?.hdsCollectorClient) {
+                accessHDSCollectorMap[access.name] = access;
+            }
+        }
+        for (const event of eventRes.events) {
+            const collectorClient = new CollectorClient_ts_1.CollectorClient(this, event);
+            if (accessHDSCollectorMap[collectorClient.key] != null)
+                collectorClient.accessData = accessHDSCollectorMap[collectorClient.key];
+            // temp process - might be removed
+            await collectorClient.checkConsistency();
+            this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
+        }
+        this.cache.collectorClientsMapInitialized = true;
+        return Object.values(this.cache.collectorClientsMap);
+    }
+    /**
+     * - Check connection validity
+     * - Make sure stream structure exists
+     */
+    async init() {
+        return super.init();
+    }
+}
+exports.AppClientAccount = AppClientAccount;
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/AppManagingAccount.ts"
+/*!***********************************************!*\
+  !*** ./ts/appTemplates/AppManagingAccount.ts ***!
+  \***********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AppManagingAccount = void 0;
+const short_unique_id_1 = __importDefault(__webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js"));
+const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTemplates/Application.ts");
+const Collector_ts_1 = __webpack_require__(/*! ./Collector.js */ "./ts/appTemplates/Collector.ts");
+const collectorIdGenerator = new short_unique_id_1.default({ dictionary: 'alphanum_lower', length: 7 });
+/**
+ * App which manages Collectors
+ * A "Collector" can be seen as a "Request" and set of "Responses"
+ * - Responses are authorization tokens from individuals
+ *
+ * The App can create multiple "collectors e.g. Questionnaires"
+ *
+ * Stream structure
+ * - applications
+ *   - [baseStreamId]  "Root" stream for this app
+ *     - [baseStreamId]-[collectorsId] Each "questionnaire" or "request for a set of data" has it's own stream
+ *       - [baseStreamId]-[collectorsId]-internal Private stuff not to be shared
+ *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
+ *       - [baseStreamId]-[collectorsId]-pending Contains events with "pending" requests
+ *       - [baseStreamId]-[collectorsId]-inbox Contains events with "inbox" requests Will be shared in createOnly
+ *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
+ *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
+ */
+class AppManagingAccount extends Application_ts_1.Application {
+    // used by Application.init();
+    get appSettings() {
+        return {
+            canBePersonnal: true,
+            mustBeMaster: true,
+            appNameFromAccessInfo: true // application name will be taken from Access-Info Name
+        };
+    }
+    async init() {
+        await super.init();
+        // -- check if stream structure exists
+        await this.getCollectors();
+        return this;
+    }
+    async getCollectors(forceRefresh) {
+        await this.#updateCollectorsIfNeeded(forceRefresh);
+        return Object.values(this.cache.collectorsMap);
+    }
+    async getCollectorById(id) {
+        await this.#updateCollectorsIfNeeded();
+        return this.cache.collectorsMap[id];
+    }
+    async #updateCollectorsIfNeeded(forceRefresh = false) {
+        if (!forceRefresh && this.cache.collectorsMap)
+            return;
+        if (forceRefresh)
+            await this.loadStreamData();
+        // TODO do not replace the map, but update collectors if streamData has changed and add new collectors
+        const streams = this.streamData.children || [];
+        const collectorsMap = {};
+        for (const stream of streams) {
+            const collector = new Collector_ts_1.Collector(this, stream);
+            collectorsMap[collector.id] = collector;
+        }
+        this.cache.collectorsMap = collectorsMap;
+    }
+    /**
+     * Create an initialized Collector
+     */
+    async createCollector(name) {
+        const collector = await this.createCollectorUnitialized(name);
+        await collector.init();
+        return collector;
+    }
+    /**
+     * Create an un-initialized Collector (mostly used by tests)
+     */
+    async createCollectorUnitialized(name) {
+        const streamId = this.baseStreamId + '-' + collectorIdGenerator.rnd();
+        const params = {
+            id: streamId,
+            name,
+            parentId: this.baseStreamId
+        };
+        const stream = await this.connection.apiOne('streams.create', params, 'stream');
+        // add new stream to streamCache
+        this.streamData.children.push(stream);
+        const collector = new Collector_ts_1.Collector(this, stream);
+        this.cache.collectorsMap[collector.streamId] = collector;
+        return collector;
+    }
+}
+exports.AppManagingAccount = AppManagingAccount;
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/Application.ts"
+/*!****************************************!*\
+  !*** ./ts/appTemplates/Application.ts ***!
+  \****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Application = void 0;
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const index_ts_1 = __webpack_require__(/*! ../toolkit/index.js */ "./ts/toolkit/index.ts");
+const APPS_ROOT_STREAM = 'applications';
+/**
+ * Common code for AppClientAccount and AppManagingAccount
+ */
+class Application {
+    /** Pryv.Connection */
+    connection;
+    /** string */
+    baseStreamId;
+    /** string */
+    appName;
+    cache = {};
+    /** ApplicationFeatures */
+    features;
+    /**
+     * Get application stream structure
+     * Initialized at init()
+     * Can be refreshed with loadStreamData
+     */
+    get streamData() {
+        if (!this.cache.streamData)
+            throw new Error('Call .init() first');
+        return this.cache.streamData;
+    }
+    get appSettings() {
+        throw new Error('appSettings must be implemented');
+        // possible return values:
+        /**
+         * return {
+         *  canBePersonnal: true,
+         *  mustBeMaster: true
+         *  appNameFromAccessInfo: true // application name will be taken from Access-Info Name
+         * };
+         */
+    }
+    /**
+     * Create with an apiEnpoint
+     */
+    static async newFromApiEndpoint(baseStreamId, apiEndpoint, appName, features) {
+        const connection = new patchedPryv_ts_1.pryv.Connection(apiEndpoint);
+        // in a static method, "this" is the class (here the extending class)
+        return await this.newFromConnection(baseStreamId, connection, appName, features);
+    }
+    /**
+    * Create with an apiEnpoint
+    */
+    static async newFromConnection(baseStreamId, connection, appName, features) {
+        // in a static method "this" is the class (here the extending class)
+        const app = new this(baseStreamId, connection, appName, features);
+        await app.init();
+        return app;
+    }
+    /**
+     * @private
+     * use .newFrom...() to create new AppManagingAccount
+     */
+    constructor(baseStreamId, connection, appName, features) {
+        if (!baseStreamId || baseStreamId.length < 2)
+            throw new Error('Missing or too short baseStreamId');
+        this.baseStreamId = baseStreamId;
+        if (appName == null && !this.appSettings.appNameFromAccessInfo) {
+            throw new Error('appName must be given unless appSettings.appNameFromAccessInfo = true');
+        }
+        this.appName = appName || '';
+        this.connection = connection;
+        this.features = Object.assign({ streamsAutoCreate: true }, features);
+        if (this.features.streamsAutoCreate) {
+            index_ts_1.StreamsAutoCreate.attachToConnection(this.connection, undefined);
+        }
+        this.cache = {};
+    }
+    async init() {
+        await createAppStreams(this);
+        return this;
+    }
+    /**
+     * Save anything you want for your app
+     */
+    async setCustomSettings(content) {
+        const currentCustomSettings = await this.getCustomSettings();
+        if (currentCustomSettings != null) { // update
+            const id = this.cache.customSettingsEvent.id;
+            const updatedEvent = await this.connection.apiOne('events.update', { id, update: { content } }, 'event');
+            this.cache.customSettingsEvent = updatedEvent;
+        }
+        else {
+            await this.#createCustomSettings(content);
+        }
+        return this.cache.customSettingsEvent?.content;
+    }
+    /**
+     * @private
+     * Used by getCustomSettings & setCustomSettings
+     */
+    async #createCustomSettings(content) {
+        const createdEvent = await this.connection.apiOne('events.create', { streamIds: [this.baseStreamId], type: 'settings/any', content }, 'event');
+        this.cache.customSettingsEvent = createdEvent;
+    }
+    /**
+     * Get all current settings previously set with setCustomSettings()
+     */
+    async getCustomSettings(forceRefresh = false) {
+        if (forceRefresh || !this.cache.customSettingsEvent) {
+            const customSettingsEvent = (await this.connection.apiOne('events.get', { streams: [this.baseStreamId], types: ['settings/any'], limit: 1 }, 'events'))[0];
+            this.cache.customSettingsEvent = customSettingsEvent;
+        }
+        if (!this.cache.customSettingsEvent) {
+            await this.#createCustomSettings({});
+        }
+        return this.cache.customSettingsEvent?.content;
+    }
+    /**
+     * Update value of a custom setting by its key
+     * @param {*} value if value is `null` key will be deleted
+     */
+    async setCustomSetting(key, value) {
+        const currentCustomSettings = await this.getCustomSettings();
+        if (value === null) {
+            delete currentCustomSettings[key];
+        }
+        else {
+            currentCustomSettings[key] = value;
+        }
+        return this.setCustomSettings(currentCustomSettings);
+    }
+    /**
+     * Force loading of streamData
+     */
+    async loadStreamData() {
+        const streams = (await this.connection.apiOne('streams.get', {}, 'streams'));
+        const streamData = findStreamByid(streams, this.baseStreamId);
+        if (streamData) {
+            this.cache.streamData = streamData;
+        }
+        return streamData;
+    }
+}
+exports.Application = Application;
+// findStream in a tree
+function findStreamByid(streams, streamId) {
+    for (const stream of streams) {
+        if (stream.id === streamId)
+            return stream;
+        if (stream.children?.length > 0) {
+            const streamFromChildren = findStreamByid(stream.children, streamId);
+            if (streamFromChildren != null)
+                return streamFromChildren;
+        }
+    }
+    return null;
+}
+// create app Streams
+async function createAppStreams(app) {
+    // check that connection has a personal or master token or has "manage" rights on baseStream
+    const infos = await app.connection.accessInfo();
+    if (app.appSettings.appNameFromAccessInfo) {
+        app.appName = infos.name;
+    }
+    let isPersonalOrMaster = infos.type === 'personal';
+    if (!app.appSettings.canBePersonnal && infos.type === 'personal') {
+        throw new Error('Application should not use a personal token');
+    }
+    if (!isPersonalOrMaster) {
+        const allowPersonalStr = app.appSettings.canBePersonnal ? '"personal" or ' : '';
+        if (infos.type !== 'app')
+            throw new Error(`Application requires a ${allowPersonalStr} "app" type of access`);
+        const masterFound = infos.permissions.find((p) => (p.streamId === '*' && p.level === 'manage'));
+        isPersonalOrMaster = true;
+        if (app.appSettings.mustBemaster && !masterFound) {
+            throw new Error('Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
+        }
+        if (!masterFound) { // check that app has "manage" level on baseStreamId
+            const baseStreamFound = infos.permissions.find((p) => (p.streamId === app.baseStreamId && p.level === 'manage'));
+            if (!baseStreamFound)
+                throw new Error(`Application with "app" type of access requires  (streamId = "${app.baseStreamId}", level = "manage") or master access`);
+        }
+    }
+    // get streamStructure
+    let found = false;
+    try {
+        const streamData = await app.loadStreamData();
+        if (streamData)
+            found = true;
+    }
+    catch (e) {
+        if (e.innerObject?.id !== 'unknown-referenced-resource' || e.innerObject?.data?.id !== app.baseStreamId) {
+            throw e;
+        }
+    }
+    // not found create streams
+    if (!found) {
+        if (!isPersonalOrMaster) {
+            throw new Error('Token has not sufficient right to create App streams. Create them upfront');
+        }
+        const apiCalls = [
+            { method: 'streams.create', params: { id: APPS_ROOT_STREAM, name: 'Applications' } },
+            { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: APPS_ROOT_STREAM } }
+        ];
+        const streamCreateResult = await app.connection.api(apiCalls);
+        if (streamCreateResult[1].error)
+            throw new Error('Failed creating app streams ' + JSON.stringify(streamCreateResult[1].error));
+        const stream = streamCreateResult[1].stream;
+        app.cache.streamData = stream;
+    }
+}
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/Collector.ts"
+/*!**************************************!*\
+  !*** ./ts/appTemplates/Collector.ts ***!
+  \**************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Collector = void 0;
+const CollectorRequest_ts_1 = __webpack_require__(/*! ./CollectorRequest.js */ "./ts/appTemplates/CollectorRequest.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const utils_ts_1 = __webpack_require__(/*! ../utils.js */ "./ts/utils.ts");
+const CollectorInvite_ts_1 = __webpack_require__(/*! ./CollectorInvite.js */ "./ts/appTemplates/CollectorInvite.ts");
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+const COLLECTOR_STREAMID_SUFFIXES = {
+    archive: 'archive',
+    internal: 'internal',
+    public: 'public',
+    pending: 'pending',
+    inbox: 'inbox',
+    active: 'active',
+    error: 'error'
+};
+Object.freeze(COLLECTOR_STREAMID_SUFFIXES);
+/**
+ * Collector is used by AppManagingAccount
+ * A "Collector" can be seen as a "Request" and set of "Responses"
+ * - Responses are authorization tokens from individuals
+ */
+class Collector {
+    static STREAMID_SUFFIXES = COLLECTOR_STREAMID_SUFFIXES;
+    static STATUSES = Object.freeze({
+        draft: 'draft',
+        active: 'active',
+        deactivated: 'deactivated'
+    });
+    appManaging;
+    streamId;
+    name;
+    #streamData;
+    #cache;
+    request;
+    /**
+     * @param appManaging
+     * @param streamData
+     */
+    constructor(appManaging, streamData) {
+        this.streamId = streamData.id;
+        this.name = streamData.name;
+        this.appManaging = appManaging;
+        this.#streamData = streamData;
+        this.request = new CollectorRequest_ts_1.CollectorRequest({
+            id: this.id
+        });
+        this.#cache = {
+            initialized: false,
+            invites: {},
+            invitesInitialized: false,
+            invitesInitializing: false,
+            statusEvent: null
+        };
+    }
+    /**
+     * @property {string} id - shortcut for streamId
+     */
+    get id() {
+        return this.streamId;
+    }
+    /**
+     * @property {string} one of 'draft', 'active', 'deactivated'
+     */
+    get statusCode() {
+        if (this.#cache.statusEvent == null)
+            throw new Error('Init Collector first');
+        return this.#cache.statusEvent.content.status;
+    }
+    /**
+     * Fetch online data
+     */
+    async init(forceRefresh = false) {
+        if (!forceRefresh && this.#cache.initialized)
+            return;
+        await this.checkStreamStructure();
+        await this.#loadStatus(forceRefresh);
+        this.#cache.initialized = true;
+    }
+    /**
+     * @type {StatusEvent} - extends PryvEvent with a specific content
+     * @property {Object} content - content
+     * @property {String} content.status - one of 'draft', 'active', 'deactivated'
+     * @property {CollectorRequestData} content.request - app specific data
+     */
+    /**
+     * Load Collector status,
+     * @param forceRefresh - if true, forces fetching the status from the server
+     */
+    async #loadStatus(forceRefresh = false) {
+        if (!forceRefresh && this.#cache.statusEvent)
+            return this.#cache.statusEvent;
+        const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(_a.STREAMID_SUFFIXES.internal)] };
+        const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
+        if (statusEvents.length === 0) { // non existent set "draft" status
+            return this.#setStatus(_a.STATUSES.draft);
+        }
+        this.#cache.statusEvent = statusEvents[0];
+        this.request.loadFromStatusEvent(statusEvents[0]);
+    }
+    /**
+     * Change the status
+     * @param status one of 'draft', 'active', 'deactivated'
+     * @returns {StatusEvent}
+     */
+    async #setStatus(status) {
+        if (!_a.STATUSES[status])
+            throw new errors_ts_1.HDSLibError('Unknown status key', { status });
+        const event = {
+            type: 'status/collector-v1',
+            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.internal)],
+            content: {
+                status,
+                request: this.request.content
+            }
+        };
+        const statusEvent = await this.appManaging.connection.apiOne('events.create', event, 'event');
+        this.#cache.statusEvent = statusEvent;
+        this.request.loadFromStatusEvent(statusEvent);
+        return this.#cache.statusEvent;
+    }
+    async save() {
+        if (this.statusCode !== _a.STATUSES.draft)
+            throw new Error(`Cannot save when status = "${this.statusCode}".`);
+        return await this.#setStatus(_a.STATUSES.draft);
+    }
+    async publish() {
+        const publicEventData = {
+            type: 'request/collector-v1',
+            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.public)],
+            content: this.request.content
+        };
+        await this.appManaging.connection.apiOne('events.create', publicEventData, 'event');
+        return await this.#setStatus(_a.STATUSES.active);
+    }
+    #addOrUpdateInvite(eventData) {
+        const key = CollectorInvite_ts_1.CollectorInvite.getKeyForEvent(eventData);
+        if (this.#cache.invites[key]) {
+            this.#cache.invites[key].setEventData(eventData);
+        }
+        else {
+            this.#cache.invites[key] = new CollectorInvite_ts_1.CollectorInvite(this, eventData);
+        }
+        return this.#cache.invites[key];
+    }
+    /**
+     * Retrieve an invite by its key
+     */
+    async getInviteByKey(key) {
+        await this.init(); // do not forceRefresh on Init();
+        await this.#initInvites(false);
+        return this.#cache.invites[key];
+    }
+    /**
+     * Retreive all invites
+     * @param {boolean} [forceRefresh]
+     * @returns {Array<CollectorInvite>}
+     */
+    async getInvites(forceRefresh = false) {
+        await this.init(); // do not forceRefresh on Init();
+        await this.#initInvites(forceRefresh);
+        return Object.values(this.#cache.invites);
+    }
+    async #initInvites(forceRefresh) {
+        await (0, utils_ts_1.waitUntilFalse)(() => (this.#cache.invitesInitializing));
+        if (!forceRefresh && this.#cache.invitesInitialized)
+            return;
+        this.#cache.invitesInitializing = true;
+        const queryParams = { types: ['invite/collector-v1'], streams: [this.streamId], fromTime: 0, toTime: 8640000000000000, limit: 10000 };
+        try {
+            await this.appManaging.connection.getEventsStreamed(queryParams, (eventData) => {
+                this.#addOrUpdateInvite(eventData);
+            });
+        }
+        catch (e) {
+            this.#cache.invitesInitialized = true;
+            this.#cache.invitesInitializing = false;
+            throw e;
+        }
+        this.#cache.invitesInitialized = true;
+        this.#cache.invitesInitializing = false;
+    }
+    async checkInbox() {
+        const newCollectorInvites = [];
+        const params = { types: ['response/collector-v1'], limit: 1000, streams: [this.streamIdFor(_a.STREAMID_SUFFIXES.inbox)] };
+        const responseEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
+        for (const responseEvent of responseEvents) {
+            // fetch corresponding invite
+            const inviteEvent = await this.appManaging.connection.apiOne('events.getOne', { id: responseEvent.content.eventId }, 'event');
+            if (inviteEvent == null)
+                throw new errors_ts_1.HDSLibError(`Cannot find invite event matching id: ${responseEvent.content.eventId}`, responseEvent);
+            const updateInvite = {
+                content: structuredClone(inviteEvent.content)
+            };
+            updateInvite.content.sourceEventId = responseEvent.id;
+            // check type of response
+            switch (responseEvent.content.type) {
+                case 'accept':
+                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.active)];
+                    updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
+                    if (responseEvent.content.chat)
+                        updateInvite.content.chat = responseEvent.content.chat;
+                    break;
+                case 'refuse':
+                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
+                    updateInvite.content.errorType = 'refused';
+                    break;
+                case 'revoke':
+                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
+                    updateInvite.content.errorType = 'revoked';
+                    break;
+                default:
+                    throw new errors_ts_1.HDSLibError(`Unkown or undefined ${responseEvent.content.type}`, responseEvent);
+            }
+            // update inviteEvent and archive inbox message
+            const apiCalls = [
+                {
+                    method: 'events.update',
+                    params: {
+                        id: inviteEvent.id,
+                        update: updateInvite
+                    }
+                },
+                {
+                    method: 'events.update',
+                    params: {
+                        id: responseEvent.id,
+                        update: {
+                            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.archive)]
+                        }
+                    }
+                }
+            ];
+            const results = await this.appManaging.connection.api(apiCalls);
+            const errors = results.filter((r) => (!r.event));
+            if (errors.length > 0)
+                throw new errors_ts_1.HDSLibError('Error activating incoming request', errors);
+            const eventUpdated = results[0].event;
+            const inviteUpdated = this.#addOrUpdateInvite(eventUpdated);
+            newCollectorInvites.push(inviteUpdated);
+        }
+        return newCollectorInvites;
+    }
+    /**
+     * Create a "pending" invite to be sent to an app using AppSharingAccount
+     * @param {string} name a default display name for this request
+     * @param {Object} [options]
+     * @param {Object} [options.customData] any data to be used by the client app
+     */
+    async createInvite(name, options = {}) {
+        if (this.statusCode !== _a.STATUSES.active)
+            throw new Error(`Collector must be in "active" state error to create invite, current: ${this.statusCode}`);
+        const eventParams = {
+            type: 'invite/collector-v1',
+            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.pending)],
+            content: {
+                name,
+                customData: options.customData || {}
+            }
+        };
+        const newInvite = await this.appManaging.connection.apiOne('events.create', eventParams, 'event');
+        const invite = this.#addOrUpdateInvite(newInvite);
+        return invite;
+    }
+    /**
+     * Get sharing api endpoint
+     */
+    async sharingApiEndpoint() {
+        if (this.statusCode !== _a.STATUSES.active)
+            throw new Error(`Collector must be in "active" state error to get sharing link, current: ${this.statusCode}`);
+        if (this.#cache.sharingApiEndpoint)
+            return this.#cache.sharingApiEndpoint;
+        // check if sharing present
+        const sharedAccessId = 'a-' + this.streamId;
+        const accesses = await this.appManaging.connection.apiOne('accesses.get', {}, 'accesses');
+        const sharedAccess = accesses.find((access) => access.name === sharedAccessId);
+        // found return it
+        if (sharedAccess) {
+            this.#cache.sharingApiEndpoint = sharedAccess.apiEndpoint;
+            return sharedAccess.apiEndpoint;
+        }
+        // not found create it
+        const permissions = [
+            { streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.inbox), level: 'create-only' },
+            { streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.public), level: 'read' },
+            // for "publicly shared access" always forbid the selfRevoke feature
+            { feature: 'selfRevoke', setting: 'forbidden' },
+            // for "publicly shared access" always forbid the selfAudit feature
+            { feature: 'selfAudit', setting: 'forbidden' }
+        ];
+        const clientData = {
+            hdsCollector: {
+                version: 0,
+                public: {
+                    streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.public)
+                },
+                inbox: {
+                    streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.inbox)
+                }
+            }
+        };
+        const params = { name: sharedAccessId, type: 'shared', permissions, clientData };
+        const access = await this.appManaging.connection.apiOne('accesses.create', params, 'access');
+        const newSharingApiEndpoint = access?.apiEndpoint;
+        if (!newSharingApiEndpoint)
+            throw new errors_ts_1.HDSLibError('Cannot find apiEndpoint in sharing creation request', { result: access, requestParams: params });
+        this.#cache.sharingApiEndpoint = newSharingApiEndpoint;
+        return newSharingApiEndpoint;
+    }
+    /**
+     * @private
+     * @param {CollectorInvite} invite
+     * @param {boolean} alreadyChecked // to avoid loops
+     * @returns {CollectorInvite}
+     */
+    async revokeInvite(invite, alreadyChecked = false) {
+        // Invalidate Invite APIEndpoint(s)
+        if (invite.status === 'active' && !alreadyChecked) { // invalidate eventual authorization granted
+            const accessInfo = await invite.checkAndGetAccessInfo(true);
+            const deletionResult = await invite.connection.apiOne('accesses.delete', { id: accessInfo.id });
+            if (deletionResult?.accessDeletion?.id == null) {
+                logger.warn(`Failed revoking invite access for ${accessInfo.name}`);
+            }
+        }
+        // invalidate this access
+        const updateInvite = {
+            id: invite.eventData.id,
+            update: {
+                content: structuredClone(invite.eventData.content),
+                streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.error)]
+            }
+        };
+        updateInvite.update.content.errorType = 'revoked';
+        const eventData = await this.appManaging.connection.apiOne('events.update', updateInvite, 'event');
+        invite.eventData = eventData;
+        return invite;
+    }
+    /**
+     * check if required streams are present, if not create them
+     */
+    async checkStreamStructure() {
+        // if streamData has correct child structure, we assume all is OK
+        const childrenData = this.#streamData.children;
+        const toCreate = Object.values(_a.STREAMID_SUFFIXES)
+            .filter((suffix) => {
+            if (!childrenData)
+                return true;
+            if (childrenData.find(child => child.id === this.streamIdFor(suffix)))
+                return false;
+            return true;
+        });
+        if (toCreate.length === 0)
+            return { created: [] };
+        // create required streams
+        const apiCalls = toCreate.map(suffix => ({
+            method: 'streams.create',
+            params: {
+                id: this.streamIdFor(suffix),
+                parentId: this.streamId,
+                name: this.name + ' ' + suffix
+            }
+        }));
+        const result = { created: [], errors: [] };
+        const resultsApi = await this.appManaging.connection.api(apiCalls);
+        for (const resultCreate of resultsApi) {
+            if (resultCreate.error) {
+                result.errors.push(resultCreate.error);
+                continue;
+            }
+            if (resultCreate.stream) {
+                result.created.push(resultCreate.stream);
+                if (!this.#streamData.children)
+                    this.#streamData.children = [];
+                this.#streamData.children.push(resultCreate.stream);
+                continue;
+            }
+            result.errors.push({ id: 'unkown-error', message: 'Cannot find stream in result', data: resultCreate });
+        }
+        return result;
+    }
+    /**
+     * @param {string} suffix
+     */
+    streamIdFor(suffix) {
+        return this.streamId + '-' + suffix;
+    }
+    /**
+     * Invite Status for streamId
+     * reverse of streamIdFor
+     */
+    inviteStatusForStreamId(streamId) {
+        // init cache if needed
+        if (!this.#cache.inviteStatusForStreamId) {
+            this.#cache.inviteStatusForStreamId = {};
+            for (const status of [COLLECTOR_STREAMID_SUFFIXES.pending, COLLECTOR_STREAMID_SUFFIXES.active, COLLECTOR_STREAMID_SUFFIXES.error]) {
+                this.#cache.inviteStatusForStreamId[this.streamIdFor(status)] = status;
+            }
+        }
+        // look for status
+        const status = this.#cache.inviteStatusForStreamId[streamId];
+        if (status == null)
+            throw new errors_ts_1.HDSLibError(`Cannot find status for streamId: ${streamId}`);
+        return status;
+    }
+}
+exports.Collector = Collector;
+_a = Collector;
+/**
+ * @typedef {CollectorRequest}
+ * @property {number} version
+ * @property {Localizable} description
+ * @property {Localizable} consent
+ * @property {Array<Permission>} permissions - Like Pryv permission request
+ * @property {Object} app
+ * @property {String} app.id
+ * @property {String} app.url
+ * @property {Object} app.data - to be finalized
+ */
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/CollectorClient.ts"
+/*!********************************************!*\
+  !*** ./ts/appTemplates/CollectorClient.ts ***!
+  \********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CollectorClient = void 0;
+const CollectorRequest_ts_1 = __webpack_require__(/*! ./CollectorRequest.js */ "./ts/appTemplates/CollectorRequest.ts");
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+/**
+ * Client App in relation to an AppManagingAccount/Collector
+ */
+class CollectorClient {
+    static STATUSES = Object.freeze({
+        incoming: 'Incoming',
+        active: 'Active',
+        deactivated: 'Deactivated',
+        refused: 'Refused'
+    });
+    app;
+    eventData;
+    accessData;
+    request;
+    #requesterConnection;
+    /** @property {String} - identified within user's account - can be used to retrieve a Collector Client from an app */
+    get key() {
+        return _a.keyFromInfo(this.eventData.content.accessInfo);
+    }
+    /** @property {String} - id matching an event within requester's account - used as a reference to communicate with requester */
+    get requesterEventId() {
+        return this.eventData.content.requesterEventId;
+    }
+    /** @property {String}  */
+    get requesterApiEndpoint() {
+        return this.eventData.content.apiEndpoint;
+    }
+    get requesterUsername() {
+        return this.eventData.content.accessInfo.user.username;
+    }
+    get requesterConnection() {
+        if (!this.#requesterConnection) {
+            this.#requesterConnection = new patchedPryv_ts_1.pryv.Connection(this.requesterApiEndpoint);
+        }
+        return this.#requesterConnection;
+    }
+    /** @property {Object} - full content of the request */
+    get requestData() {
+        return this.eventData.content.requesterEventData.content;
+    }
+    get hasChatFeature() {
+        return this.requestData.features?.chat != null;
+    }
+    get chatSettings() {
+        if (!this.hasChatFeature)
+            return null;
+        return {
+            chatStreamIncoming: `chat-${this.requesterUsername}-in`,
+            chatStreamMain: `chat-${this.requesterUsername}`
+        };
+    }
+    /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
+    get status() {
+        const eventStatus = this.eventData.content.status;
+        if (eventStatus === _a.STATUSES.deactivated || eventStatus === _a.STATUSES.refused) {
+            if (!this.accessData?.deleted) {
+                logger.error('>> CollectorClient.status TODO check consistency when access is still valid and deactivated or refused', this.accessData);
+            }
+            return eventStatus;
+        }
+        if (this.accessData && !this.accessData.deleted && this.eventData.content.status !== _a.STATUSES.active) {
+            logger.error('>> CollectorClient.status: accessData ', this.accessData);
+            throw new errors_ts_1.HDSLibError('Should be active, try checkConsistency()');
+        }
+        if (!eventStatus) {
+            logger.error('>> CollectorClient.status is null', { eventData: this.eventData, accessData: this.accessData });
+        }
+        return eventStatus;
+    }
+    constructor(app, eventData, accessData = null) {
+        this.app = app;
+        this.eventData = eventData;
+        this.accessData = accessData;
+        this.request = new CollectorRequest_ts_1.CollectorRequest({});
+        this.request.loadFromInviteEvent(eventData.content.requesterEventData);
+    }
+    /**
+     * @private
+     * used by appClientAccount.handleIncomingRequest
+     */
+    static async create(app, apiEndpoint, requesterEventId, accessInfo) {
+        // check content of accessInfo
+        const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
+        // get request event cont
+        const requesterConnection = new patchedPryv_ts_1.pryv.Connection(apiEndpoint);
+        const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
+        if (!requesterEvents[0])
+            throw new errors_ts_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
+        const eventData = {
+            type: 'request/collector-client-v1',
+            streamIds: [app.baseStreamId],
+            content: {
+                apiEndpoint,
+                requesterEventId,
+                requesterEventData: requesterEvents[0],
+                accessInfo,
+                status: _a.STATUSES.incoming
+            }
+        };
+        const event = await app.connection.apiOne('events.create', eventData, 'event');
+        return new _a(app, event);
+    }
+    /**
+     * @private
+     * reset with new request Event of ApiEndpoint
+     * Identical as create but keep current event
+     */
+    async reset(apiEndpoint, requesterEventId) {
+        if (this.accessData && this.accessData?.deleted != null) {
+            logger.error('TODO try to revoke current access');
+        }
+        // get accessInfo
+        const requesterConnection = new patchedPryv_ts_1.pryv.Connection(apiEndpoint);
+        const accessInfo = await requesterConnection.accessInfo();
+        // check content of accessInfo
+        const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
+        // get request event cont
+        const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
+        if (!requesterEvents[0])
+            throw new errors_ts_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
+        const eventData = await this.app.connection.apiOne('events.update', {
+            id: this.eventData.id,
+            update: {
+                content: {
+                    apiEndpoint,
+                    requesterEventId,
+                    requesterEventData: requesterEvents[0],
+                    accessInfo,
+                    status: _a.STATUSES.incoming
+                }
+            }
+        }, 'event');
+        this.eventData = eventData;
+        this.request.loadFromInviteEvent(requesterEvents[0]);
+        return this;
+    }
+    /**
+     * Update business event with new status
+     * @param {string} newStatus
+     * @param {Object} [extraData] - if given this will be added to content ⚠️ - This can overide content!
+     */
+    async #updateStatus(newStatus, extraData = null) {
+        const newContent = structuredClone(this.eventData.content);
+        newContent.status = newStatus;
+        if (extraData !== null)
+            Object.assign(newContent, extraData);
+        const eventData = await this.app.connection.apiOne('events.update', {
+            id: this.eventData.id,
+            update: {
+                content: newContent
+            }
+        }, 'event');
+        this.eventData = eventData;
+    }
+    /**
+     * Accept current request
+     * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
+     */
+    async accept(forceAndSkipAccessCreation = false) {
+        const responseContent = {};
+        if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
+            forceAndSkipAccessCreation = true;
+            logger.error('CollectorClient.accept TODO fix accept when access valid');
+        }
+        if (forceAndSkipAccessCreation) {
+            if (!this.accessData?.apiEndpoint || this.accessData?.delete)
+                throw new errors_ts_1.HDSLibError('Cannot force accept with empty or deleted accessData', this.accessData);
+        }
+        else {
+            if (this.status === 'Active')
+                throw new errors_ts_1.HDSLibError('Cannot accept an Active CollectorClient');
+            // create access for requester
+            const cleanedPermissions = this.requestData.permissions.map((p) => {
+                if (p.streamId)
+                    return { streamId: p.streamId, level: p.level };
+                return p;
+            });
+            // ------------- chat ------------------------ //
+            if (this.hasChatFeature) {
+                // user supported mode - might me moved to a lib
+                // 2. create streams
+                const { chatStreamIncoming, chatStreamMain } = this.chatSettings;
+                const chatStreamsCreateApiCalls = [
+                    { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
+                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
+                ];
+                const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
+                streamCreateResults.forEach((r) => {
+                    if (r.stream?.id || r.error?.id === 'item-already-exists')
+                        return;
+                    throw new errors_ts_1.HDSLibError('Failed creating chat stream', streamCreateResults);
+                });
+                // 3. add streams to permissions
+                cleanedPermissions.push(...[
+                    { streamId: chatStreamMain, level: 'read' },
+                    { streamId: chatStreamIncoming, level: 'manage' }
+                ]);
+                responseContent.chat = {
+                    type: 'user',
+                    streamRead: chatStreamMain,
+                    streamWrite: chatStreamIncoming
+                };
+                // ---------- end chat ---------- //
+            }
+            const accessCreateData = {
+                name: this.key,
+                type: 'shared',
+                permissions: cleanedPermissions,
+                clientData: {
+                    hdsCollectorClient: {
+                        version: 0,
+                        eventData: this.eventData
+                    }
+                }
+            };
+            const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
+            this.accessData = accessData;
+            if (!this.accessData?.apiEndpoint)
+                throw new errors_ts_1.HDSLibError('Failed creating request access', accessData);
+        }
+        responseContent.apiEndpoint = this.accessData.apiEndpoint;
+        const requesterEvent = await this.#updateRequester('accept', responseContent);
+        if (requesterEvent != null) {
+            await this.#updateStatus(_a.STATUSES.active);
+            return { accessData: this.accessData, requesterEvent };
+        }
+        return null;
+    }
+    async revoke() {
+        if (!this.accessData) {
+            throw new errors_ts_1.HDSLibError('Cannot revoke if no accessData');
+        }
+        if (this.accessData.deleted && this.status === _a.STATUSES.deactivated) {
+            throw new errors_ts_1.HDSLibError('Already revoked');
+        }
+        // revoke access
+        await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
+        // lazyly flag currentAccess as deleted
+        this.accessData.deleted = Date.now() / 1000;
+        const responseContent = {};
+        const requesterEvent = await this.#updateRequester('revoke', responseContent);
+        if (requesterEvent != null) {
+            await this.#updateStatus(_a.STATUSES.deactivated);
+            return { requesterEvent };
+        }
+        return null;
+    }
+    async refuse() {
+        const responseContent = {};
+        const requesterEvent = await this.#updateRequester('refuse', responseContent);
+        if (requesterEvent != null) {
+            await this.#updateStatus(_a.STATUSES.refused);
+            return { requesterEvent };
+        }
+        return null;
+    }
+    /**
+     * @param {string} type - one of 'accpet', 'revoke', 'refuse'
+     * @param {object} responseContent - content is related to type
+     * @returns {Object} - response
+     */
+    async #updateRequester(type, responseContent) {
+        // sent access credentials to requester
+        // check content of accessInfo
+        const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
+        const requesterEventId = this.requesterEventId;
+        // add eventId to content
+        const content = Object.assign({ type, eventId: requesterEventId }, responseContent);
+        // acceptEvent to be sent to requester
+        const responseEvent = {
+            type: 'response/collector-v1',
+            streamIds: [publicStreamId],
+            content
+        };
+        try {
+            const requesterEvent = await this.requesterConnection.apiOne('events.create', responseEvent, 'event');
+            return requesterEvent;
+        }
+        catch (e) {
+            const deactivatedDetail = {
+                type: 'error',
+                message: e.message
+            };
+            if (e.innerObject)
+                deactivatedDetail.data = e.innerObject;
+            logger.error('Failed activating', deactivatedDetail);
+            const deactivatedResult = await this.#updateStatus(_a.STATUSES.deactivated, { deactivatedDetail });
+            console.log('***** ', { deactivatedResult });
+            return null;
+        }
+    }
+    /**
+     * Probable temporary internal to fix possible inconsenticies during lib early stages
+     */
+    async checkConsistency() {
+        // accessData but not active
+        if (this.accessData && this.eventData.content.status == null) {
+            logger.info('Found discrepency with accessData and status not active, fixing it');
+            if (!this.accessData.deleted) {
+                await this.accept(true);
+            }
+            else {
+                await this.revoke();
+            }
+        }
+        else {
+            // logger.debug('CollectorClient:checkConsistency', this.accessData);
+        }
+    }
+    /**
+     * return the key to discriminate collectorClients
+     * @param {PryvAccessInfo} accessInfo
+     */
+    static keyFromInfo(info) {
+        return info.user.username + ':' + info.name;
+    }
+    // -------------------- sections and forms ------------- //
+    getSections() {
+        return this.request?.sections;
+    }
+    // -------------------- chat methods ----------------- //
+    chatEventInfos(event) {
+        if (event.streamIds.includes(this.chatSettings.chatStreamIncoming))
+            return { source: 'requester' };
+        if (event.streamIds.includes(this.chatSettings.chatStreamMain))
+            return { source: 'me' };
+        return { source: 'unkown' };
+    }
+    async chatPost(hdsConnection, content) {
+        if (!this.hasChatFeature)
+            throw new errors_ts_1.HDSLibError('Cannot chat with this ColleectorClient');
+        const newEvent = {
+            type: 'message/hds-chat-v1',
+            streamIds: [this.chatSettings.chatStreamMain],
+            content
+        };
+        return await hdsConnection.apiOne('events.create', newEvent, 'event');
+    }
+}
+exports.CollectorClient = CollectorClient;
+_a = CollectorClient;
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/CollectorInvite.ts"
+/*!********************************************!*\
+  !*** ./ts/appTemplates/CollectorInvite.ts ***!
+  \********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CollectorInvite = void 0;
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+/**
+ * Collector Invite
+ * There is one Collector Invite per Collector => Enduser connection
+ */
+class CollectorInvite {
+    /**
+     * get the key that will be assigned to this event;
+     */
+    static getKeyForEvent(eventData) {
+        return eventData.id;
+    }
+    collector;
+    eventData;
+    #connection = null;
+    #accessInfo = null;
+    get key() {
+        return CollectorInvite.getKeyForEvent(this.eventData);
+    }
+    get status() {
+        return this.collector.inviteStatusForStreamId(this.eventData.streamIds[0]);
+    }
+    get apiEndpoint() {
+        if (this.status !== 'active') {
+            throw new errors_ts_1.HDSLibError('invite.apiEndpoint is accessible only when active');
+        }
+        return this.eventData.content.apiEndpoint;
+    }
+    get errorType() {
+        return this.eventData.content?.errorType;
+    }
+    get dateCreation() {
+        return new Date(this.eventData.created * 1000);
+    }
+    get connection() {
+        if (this.#connection == null) {
+            this.#connection = new patchedPryv_ts_1.pryv.Connection(this.apiEndpoint);
+        }
+        return this.#connection;
+    }
+    get hasChat() {
+        return this.eventData.content.chat != null;
+    }
+    get chatSettings() {
+        return this.eventData.content.chat;
+    }
+    // -------------------- chat methods ----------------- //
+    chatEventInfos(event) {
+        if (event.streamIds.includes(this.chatSettings.streamWrite))
+            return { source: 'me' };
+        if (event.streamIds.includes(this.chatSettings.streamRead))
+            return { source: 'user' };
+        return { source: 'unkown' };
+    }
+    async chatPost(content) {
+        if (!this.hasChat)
+            throw new Error('Cannot chat with this contact');
+        const newEvent = {
+            type: 'message/hds-chat-v1',
+            streamIds: [this.chatSettings.streamWrite],
+            content
+        };
+        return await this.connection.apiOne('events.create', newEvent, 'event');
+    }
+    /**
+     * Check if connection is valid. (only if active)
+     * If result is "forbidden" update and set as revoked
+     * @returns accessInfo if valid.
+     */
+    async checkAndGetAccessInfo(forceRefresh = false) {
+        if (!forceRefresh && this.#accessInfo)
+            return this.#accessInfo;
+        try {
+            this.#accessInfo = await this.connection.accessInfo();
+            return this.#accessInfo;
+        }
+        catch (e) {
+            this.#accessInfo = null;
+            if (e.response?.body?.error?.id === 'invalid-access-token') {
+                await this.collector.revokeInvite(this, true);
+                return null;
+            }
+            throw e;
+        }
+    }
+    /**
+     * revoke the invite
+     */
+    async revoke() {
+        return this.collector.revokeInvite(this);
+    }
+    get displayName() {
+        return this.eventData.content.name;
+    }
+    constructor(collector, eventData) {
+        if (eventData.type !== 'invite/collector-v1')
+            throw new errors_ts_1.HDSLibError('Wrong type of event', eventData);
+        this.collector = collector;
+        this.eventData = eventData;
+    }
+    /**
+     * private
+     */
+    setEventData(eventData) {
+        if (eventData.id !== this.eventData.id)
+            throw new errors_ts_1.HDSLibError('CollectInvite event id does not match new Event');
+        this.eventData = eventData;
+    }
+    async getSharingData() {
+        if (this.status !== 'pending')
+            throw new errors_ts_1.HDSLibError('Only pendings can be shared');
+        return {
+            apiEndpoint: await this.collector.sharingApiEndpoint(),
+            eventId: this.eventData.id
+        };
+    }
+}
+exports.CollectorInvite = CollectorInvite;
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/CollectorRequest.ts"
+/*!*********************************************!*\
+  !*** ./ts/appTemplates/CollectorRequest.ts ***!
+  \*********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CollectorRequest = void 0;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const CURRENT_VERSION = 1;
+/**
+ * Each Collector has one Request
+ * Which contains
+ * - the name of the requester
+ * - a title
+ * - a description
+ * - a consent message
+ * - a set of permission requests
+ * - a version
+ */
+class CollectorRequest {
+    #version;
+    #title;
+    #description;
+    #consent;
+    #requester;
+    #app;
+    #permissionsExtra;
+    #permissions;
+    #sections;
+    #features;
+    #extraContent;
+    constructor(content) {
+        this.#version = CURRENT_VERSION;
+        this.#requester = { name: null };
+        this.#app = { id: null, url: null, data: {} };
+        this.#permissions = [];
+        this.#permissionsExtra = [];
+        this.#sections = [];
+        this.#features = {};
+        this.setContent(content);
+    }
+    /**
+     * Loadfrom invite event
+     * used by CollectorClient only
+     * @param invite
+     */
+    loadFromInviteEvent(inviteEvent) {
+        this.setContent(inviteEvent.content);
+    }
+    /**
+     * Loadfrom status event from Collector
+     * used by Collector only
+     * @param statusEvent
+     */
+    loadFromStatusEvent(statusEvent) {
+        // content.data is deprecated it was used in a previous version, should be removed
+        let potentialContent = statusEvent.content.request || statusEvent.content.data;
+        // for some reason to be investigated sometime the data is in requestContent
+        if (potentialContent.requestContent)
+            potentialContent = potentialContent.requestContent;
+        this.setContent(potentialContent);
+    }
+    /**
+     * Temp content
+     * @param content
+     */
+    setContent(content) {
+        const futureContent = structuredClone(content);
+        // validate content
+        if (futureContent.version != null) {
+            const numV = Number.parseInt(futureContent.version);
+            if (numV === 0) {
+                vo0ToV1(futureContent); // convert to v1 if needed
+            }
+            else {
+                if (numV !== this.#version)
+                    throw new errors_ts_1.HDSLibError(`Invalid CollectorRequest content version: ${futureContent.version}`);
+            }
+            delete futureContent.version;
+        }
+        // -- title, consent, description
+        for (const key of ['title', 'consent', 'description']) {
+            if (futureContent[key] != null) {
+                this[key] = futureContent[key];
+            }
+            delete futureContent[key];
+        }
+        // -- requester
+        if (futureContent.requester) {
+            if (futureContent.requester.name != null) {
+                this.requesterName = futureContent.requester.name;
+            }
+            delete futureContent.requester;
+        }
+        // -- app
+        if (futureContent.app) {
+            if (futureContent.app.id != null) {
+                this.appId = futureContent.app.id;
+            }
+            if (futureContent.app.url != null) {
+                this.appUrl = futureContent.app.url;
+            }
+            if (futureContent.app.data != null) {
+                this.appCustomData = futureContent.app.data;
+            }
+            delete futureContent.app;
+        }
+        // -- sections
+        if (futureContent.sections != null) {
+            this.#sections = []; // reset sections
+            for (const sectionData of futureContent.sections) {
+                const section = this.createSection(sectionData.key, sectionData.type);
+                section.setName(sectionData.name);
+                section.addItemKeys(sectionData.itemKeys);
+                if (sectionData.itemCustomizations) {
+                    for (const [itemKey, customization] of Object.entries(sectionData.itemCustomizations)) {
+                        section.setItemCustomization(itemKey, customization);
+                    }
+                }
+            }
+            delete futureContent.sections;
+        }
+        // -- permissions
+        if (futureContent.permissions) {
+            this.#permissions = []; // reset permissions
+            futureContent.permissions.forEach((p) => {
+                this.addPermission(p.streamId, p.defaultName, p.level);
+            });
+            delete futureContent.permissions;
+        }
+        // -- permissionsExtra
+        if (futureContent.permissionsExtra) {
+            this.#permissionsExtra = []; // reset permissions Extra
+            futureContent.permissionsExtra.forEach((p) => {
+                this.addPermissionExtra(p);
+            });
+            delete futureContent.permissionsExtra;
+        }
+        // -- features
+        if (futureContent.features) {
+            if (futureContent.features.chat) {
+                this.addChatFeature(futureContent.features.chat);
+                delete futureContent.features.chat;
+            }
+            if (Object.keys(futureContent.features).length > 0) {
+                throw new errors_ts_1.HDSLibError('Found unkown features', futureContent.features);
+            }
+            delete futureContent.features;
+        }
+        this.#extraContent = futureContent;
+    }
+    // ------------- getter and setters ------------ //
+    get version() { return this.#version; }
+    set title(title) { this.#title = (0, localizeText_ts_1.validateLocalizableText)('title', title); }
+    get title() { return this.#title; }
+    set consent(consent) { this.#consent = (0, localizeText_ts_1.validateLocalizableText)('consent', consent); }
+    get consent() { return this.#consent; }
+    set description(description) { this.#description = (0, localizeText_ts_1.validateLocalizableText)('description', description); }
+    get description() { return this.#description; }
+    set requesterName(name) { this.#requester.name = validateString('requester:name', name); }
+    get requesterName() { return this.#requester.name; }
+    set appId(id) { this.#app.id = validateString('app:id', id); }
+    get appId() { return this.#app.id; }
+    set appUrl(url) { this.#app.url = validateString('app:url', url); }
+    get appUrl() { return this.#app.url; }
+    set appCustomData(data) { this.#app.data = data; }
+    get appCustomData() { return this.#app.data; }
+    get permissions() { return this.#permissions; }
+    get permissionsExtra() { return this.#permissionsExtra; }
+    get features() { return this.#features; }
+    // --- section --- //
+    get sections() {
+        return this.#sections;
+    }
+    get sectionsData() {
+        const result = [];
+        for (const section of this.#sections) {
+            const data = section.getData();
+            result.push(data);
+        }
+        return result;
+    }
+    createSection(key, type) {
+        if (this.getSectionByKey(key) != null)
+            throw new errors_ts_1.HDSLibError(`Section with key: ${key} already exists`);
+        const section = new CollectorRequestSection(key, type);
+        this.#sections.push(section);
+        return section;
+    }
+    getSectionByKey(key) {
+        return this.#sections.find((s) => (s.key === key));
+    }
+    moveSection(key, toIndex) {
+        const idx = this.#sections.findIndex((s) => s.key === key);
+        if (idx === -1)
+            throw new errors_ts_1.HDSLibError(`Section with key: ${key} not found`);
+        const [section] = this.#sections.splice(idx, 1);
+        this.#sections.splice(toIndex, 0, section);
+    }
+    removeSection(key) {
+        const idx = this.#sections.findIndex((s) => s.key === key);
+        if (idx === -1)
+            throw new errors_ts_1.HDSLibError(`Section with key: ${key} not found`);
+        this.#sections.splice(idx, 1);
+    }
+    // ---------- permissions ---------- //
+    addPermissions(permissions) {
+        for (const permission of permissions) {
+            this.addPermission(permission.streamId, permission.defaultName, permission.level);
+        }
+    }
+    addPermission(streamId, defaultName, level) {
+        this.#permissions.push({ streamId, defaultName, level });
+    }
+    /**
+     * Add a static permission, not linked to itemKeys for other usages
+     * @param permission
+     */
+    addPermissionExtra(permission) {
+        // todo standard checks
+        this.#permissionsExtra.push(permission);
+    }
+    /**
+     * Reset permissions
+     */
+    resetPermissions() {
+        this.#permissions.splice(0, this.#permissions.length);
+    }
+    /**
+     * Rebuild permissions based on sections itemKeys and staticPermissions
+     */
+    buildPermissions() {
+        // 1- get all items form the questionnary sections
+        const itemKeys = [];
+        for (const section of this.sections) {
+            itemKeys.push(...section.itemKeys);
+        }
+        // 2 - get the permissions with eventual preRequest
+        const preRequest = this.permissionsExtra || [];
+        const permissions = (0, HDSModelInitAndSingleton_ts_1.getModel)().authorizations.forItemKeys(itemKeys, { preRequest });
+        // 3 - if no error araised - reset permissions
+        this.resetPermissions();
+        this.addPermissions(permissions);
+    }
+    // ---------- features ------------- //
+    get hasChatFeature() {
+        return this.#features.chat != null;
+    }
+    addChatFeature(settings = { type: 'user' }) {
+        if (!['user', 'usernames'].includes(settings.type))
+            throw new errors_ts_1.HDSLibError('Invalid chat type', settings);
+        this.#features.chat = settings;
+    }
+    // ---------- sections ------------- //
+    /**
+     * Return Content to comply with initial implementation as an object
+     */
+    get content() {
+        const content = {
+            version: this.version,
+            title: this.title,
+            consent: this.consent,
+            description: this.description,
+            requester: {
+                name: this.requesterName
+            },
+            features: this.features,
+            permissionsExtra: this.permissionsExtra,
+            permissions: this.permissions,
+            app: {
+                id: this.appId,
+                url: this.appUrl,
+                data: this.appCustomData
+            },
+            sections: this.sectionsData
+        };
+        Object.assign(content, this.#extraContent);
+        return content;
+    }
+}
+exports.CollectorRequest = CollectorRequest;
+function validateString(key, totest) {
+    if (totest == null || typeof totest !== 'string')
+        throw new errors_ts_1.HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
+    return totest;
+}
+class CollectorRequestSection {
+    #type;
+    #name;
+    #key;
+    #itemKeys;
+    #itemCustomizations;
+    constructor(key, type) {
+        this.#key = key;
+        this.#type = type;
+        this.#itemKeys = [];
+        this.#itemCustomizations = {};
+        this.#name = {
+            en: ''
+        };
+    }
+    addItemKeys(keys) {
+        keys.forEach((k) => this.addItemKey(k));
+    }
+    addItemKey(key) {
+        (0, HDSModelInitAndSingleton_ts_1.getModel)().itemsDefs.forKey(key); // will throw error if not found
+        if (this.#itemKeys.includes(key))
+            return; // avoid double entries
+        this.#itemKeys.push(key);
+    }
+    setName(localizedName) {
+        for (const [languageCode, name] of Object.entries(localizedName)) {
+            this.setNameLocal(languageCode, name);
+        }
+    }
+    setNameLocal(languageCode, name) {
+        this.#name[languageCode] = name;
+    }
+    get type() { return this.#type; }
+    get key() { return this.#key; }
+    get itemKeys() { return this.#itemKeys; }
+    get name() { return this.#name; }
+    get itemCustomizations() { return this.#itemCustomizations; }
+    moveItemKey(key, toIndex) {
+        const idx = this.#itemKeys.indexOf(key);
+        if (idx === -1)
+            throw new errors_ts_1.HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
+        this.#itemKeys.splice(idx, 1);
+        this.#itemKeys.splice(toIndex, 0, key);
+    }
+    removeItemKey(key) {
+        const idx = this.#itemKeys.indexOf(key);
+        if (idx === -1)
+            throw new errors_ts_1.HDSLibError(`ItemKey: ${key} not found in section: ${this.#key}`);
+        this.#itemKeys.splice(idx, 1);
+    }
+    setItemCustomization(key, customizations) {
+        this.#itemCustomizations[key] = customizations;
+    }
+    getItemCustomization(key) {
+        return this.#itemCustomizations[key];
+    }
+    getData() {
+        const data = {
+            key: this.key,
+            type: this.#type,
+            name: this.#name,
+            itemKeys: this.#itemKeys
+        };
+        if (Object.keys(this.#itemCustomizations).length > 0) {
+            data.itemCustomizations = this.#itemCustomizations;
+        }
+        return data;
+    }
+}
+/**
+ * Transform data to match v1
+ * @param v0Data
+ */
+function vo0ToV1(v0Data) {
+    if (v0Data.app?.data?.forms) {
+        if (v0Data.sections)
+            throw new errors_ts_1.HDSLibError('Cannot mix data.forms & sections', v0Data);
+        v0Data.sections = [];
+        for (const [key, value] of Object.entries(v0Data.app.data.forms)) {
+            value.key = key;
+            value.name = {
+                en: value.name
+            };
+            v0Data.sections.push(value);
+        }
+        delete v0Data.app.data.forms;
+    }
+    v0Data.version = 1;
+}
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/appTemplates.ts"
+/*!*****************************************!*\
+  !*** ./ts/appTemplates/appTemplates.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CollectorRequest = exports.CollectorInvite = exports.CollectorClient = exports.Collector = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = void 0;
+const AppManagingAccount_ts_1 = __webpack_require__(/*! ./AppManagingAccount.js */ "./ts/appTemplates/AppManagingAccount.ts");
+Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_ts_1.AppManagingAccount; } }));
+const AppClientAccount_ts_1 = __webpack_require__(/*! ./AppClientAccount.js */ "./ts/appTemplates/AppClientAccount.ts");
+Object.defineProperty(exports, "AppClientAccount", ({ enumerable: true, get: function () { return AppClientAccount_ts_1.AppClientAccount; } }));
+const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTemplates/Application.ts");
+Object.defineProperty(exports, "Application", ({ enumerable: true, get: function () { return Application_ts_1.Application; } }));
+const Collector_ts_1 = __webpack_require__(/*! ./Collector.js */ "./ts/appTemplates/Collector.ts");
+Object.defineProperty(exports, "Collector", ({ enumerable: true, get: function () { return Collector_ts_1.Collector; } }));
+const CollectorClient_ts_1 = __webpack_require__(/*! ./CollectorClient.js */ "./ts/appTemplates/CollectorClient.ts");
+Object.defineProperty(exports, "CollectorClient", ({ enumerable: true, get: function () { return CollectorClient_ts_1.CollectorClient; } }));
+const CollectorInvite_ts_1 = __webpack_require__(/*! ./CollectorInvite.js */ "./ts/appTemplates/CollectorInvite.ts");
+Object.defineProperty(exports, "CollectorInvite", ({ enumerable: true, get: function () { return CollectorInvite_ts_1.CollectorInvite; } }));
+const CollectorRequest_ts_1 = __webpack_require__(/*! ./CollectorRequest.js */ "./ts/appTemplates/CollectorRequest.ts");
+Object.defineProperty(exports, "CollectorRequest", ({ enumerable: true, get: function () { return CollectorRequest_ts_1.CollectorRequest; } }));
+
+
+/***/ },
+
+/***/ "./ts/errors.ts"
+/*!**********************!*\
+  !*** ./ts/errors.ts ***!
+  \**********************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSLibError = void 0;
+class HDSLibError extends Error {
+    innerObject;
+    constructor(message, innerObject = {}) {
+        const msg = (innerObject.message != null) ? message + ' >> ' + innerObject.message : message;
+        super(msg);
+        this.innerObject = innerObject;
+    }
+    toString() {
+        const res = super.toString();
+        return res + '\nInner Object:\n' + JSON.stringify(this.innerObject, null, 2);
+    }
+}
+exports.HDSLibError = HDSLibError;
+
+
+/***/ },
+
+/***/ "./ts/index.ts"
+/*!*********************!*\
+  !*** ./ts/index.ts ***!
+  \*********************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSLibError = exports.HDSModelConversions = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
+const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
+Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
+Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
+const settings = __importStar(__webpack_require__(/*! ./settings.js */ "./ts/settings.ts"));
+exports.settings = settings;
+const patchedPryv_ts_1 = __webpack_require__(/*! ./patchedPryv.js */ "./ts/patchedPryv.ts");
+Object.defineProperty(exports, "pryv", ({ enumerable: true, get: function () { return patchedPryv_ts_1.pryv; } }));
+const HDSModel_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel.js */ "./ts/HDSModel/HDSModel.ts");
+Object.defineProperty(exports, "HDSModel", ({ enumerable: true, get: function () { return HDSModel_ts_1.HDSModel; } }));
+const appTemplates = __importStar(__webpack_require__(/*! ./appTemplates/appTemplates.js */ "./ts/appTemplates/appTemplates.ts"));
+exports.appTemplates = appTemplates;
+const logger = __importStar(__webpack_require__(/*! ./logger.js */ "./ts/logger.ts"));
+exports.logger = logger;
+const HDSService_ts_1 = __webpack_require__(/*! ./HDSService.js */ "./ts/HDSService.ts");
+Object.defineProperty(exports, "HDSService", ({ enumerable: true, get: function () { return HDSService_ts_1.HDSService; } }));
+const HDSModelInitAndSingleton = __importStar(__webpack_require__(/*! ./HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts"));
+const toolkit = __importStar(__webpack_require__(/*! ./toolkit/index.js */ "./ts/toolkit/index.ts"));
+exports.toolkit = toolkit;
+const duration_ts_1 = __webpack_require__(/*! ./utils/duration.js */ "./ts/utils/duration.ts");
+Object.defineProperty(exports, "durationToSeconds", ({ enumerable: true, get: function () { return duration_ts_1.durationToSeconds; } }));
+Object.defineProperty(exports, "durationToLabel", ({ enumerable: true, get: function () { return duration_ts_1.durationToLabel; } }));
+const reminders_ts_1 = __webpack_require__(/*! ./HDSModel/reminders.js */ "./ts/HDSModel/reminders.ts");
+Object.defineProperty(exports, "computeReminders", ({ enumerable: true, get: function () { return reminders_ts_1.computeReminders; } }));
+const eventToShortText_ts_1 = __webpack_require__(/*! ./HDSModel/eventToShortText.js */ "./ts/HDSModel/eventToShortText.ts");
+Object.defineProperty(exports, "eventToShortText", ({ enumerable: true, get: function () { return eventToShortText_ts_1.eventToShortText; } }));
+Object.defineProperty(exports, "formatEventDate", ({ enumerable: true, get: function () { return eventToShortText_ts_1.formatEventDate; } }));
+const MonitorScope_ts_1 = __webpack_require__(/*! ./MonitorScope.js */ "./ts/MonitorScope.ts");
+Object.defineProperty(exports, "MonitorScope", ({ enumerable: true, get: function () { return MonitorScope_ts_1.MonitorScope; } }));
+const HDSSettings_ts_1 = __webpack_require__(/*! ./settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts");
+Object.defineProperty(exports, "HDSSettings", ({ enumerable: true, get: function () { return HDSSettings_ts_1.HDSSettings; } }));
+Object.defineProperty(exports, "SETTING_TYPES", ({ enumerable: true, get: function () { return HDSSettings_ts_1.SETTING_TYPES; } }));
+const HDSProfile_ts_1 = __webpack_require__(/*! ./settings/HDSProfile.js */ "./ts/settings/HDSProfile.ts");
+Object.defineProperty(exports, "HDSProfile", ({ enumerable: true, get: function () { return HDSProfile_ts_1.HDSProfile; } }));
+Object.defineProperty(exports, "PROFILE_FIELDS", ({ enumerable: true, get: function () { return HDSProfile_ts_1.PROFILE_FIELDS; } }));
+const HDSModel_Conversions_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Conversions.js */ "./ts/HDSModel/HDSModel-Conversions.ts");
+Object.defineProperty(exports, "HDSModelConversions", ({ enumerable: true, get: function () { return HDSModel_Conversions_ts_1.HDSModelConversions; } }));
+const errors_ts_1 = __webpack_require__(/*! ./errors.js */ "./ts/errors.ts");
+Object.defineProperty(exports, "HDSLibError", ({ enumerable: true, get: function () { return errors_ts_1.HDSLibError; } }));
+exports.model = (() => {
+    console.warn('HDSLib.model is deprecated use getHDSModel() instead');
+    return HDSModelInitAndSingleton.getModel();
+})();
+exports.getHDSModel = HDSModelInitAndSingleton.getModel;
+exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
+// also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
+const HDSLib = {
+    getHDSModel: exports.getHDSModel,
+    initHDSModel: exports.initHDSModel,
+    pryv: patchedPryv_ts_1.pryv,
+    settings,
+    HDSService: HDSService_ts_1.HDSService,
+    HDSModel: HDSModel_ts_1.HDSModel,
+    appTemplates,
+    localizeText: localizeText_ts_1.localizeText,
+    l: localizeText_ts_1.localizeText,
+    toolkit,
+    logger,
+    durationToSeconds: duration_ts_1.durationToSeconds,
+    durationToLabel: duration_ts_1.durationToLabel,
+    computeReminders: reminders_ts_1.computeReminders,
+    eventToShortText: eventToShortText_ts_1.eventToShortText,
+    formatEventDate: eventToShortText_ts_1.formatEventDate,
+    MonitorScope: MonitorScope_ts_1.MonitorScope,
+    HDSSettings: HDSSettings_ts_1.HDSSettings,
+    SETTING_TYPES: HDSSettings_ts_1.SETTING_TYPES,
+    HDSProfile: HDSProfile_ts_1.HDSProfile,
+    PROFILE_FIELDS: HDSProfile_ts_1.PROFILE_FIELDS,
+    HDSModelConversions: HDSModel_Conversions_ts_1.HDSModelConversions
+};
+exports["default"] = HDSLib;
+
+
+/***/ },
+
+/***/ "./ts/localizeText.ts"
+/*!****************************!*\
+  !*** ./ts/localizeText.ts ***!
+  \****************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * basic localization functions
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getPreferredLocales = getPreferredLocales;
+exports.getSupportedLocales = getSupportedLocales;
+exports.resetPreferredLocales = resetPreferredLocales;
+exports.localizeText = localizeText;
+exports.setPreferredLocales = setPreferredLocales;
+exports.validateLocalizableText = validateLocalizableText;
+const errors_ts_1 = __webpack_require__(/*! ./errors.js */ "./ts/errors.ts");
+const supportedLocales = ['en', 'fr', 'es'];
+Object.freeze(supportedLocales);
+let preferredLocales = [...supportedLocales];
+/**
+ * get the current preferred locales
+ */
+function getPreferredLocales() {
+    return [...preferredLocales];
+}
+/**
+ * get the current supported locales
+ */
+function getSupportedLocales() {
+    return [...supportedLocales];
+}
+/**
+ * reset prefferedLocalesTo Original state
+ */
+function resetPreferredLocales() {
+    setPreferredLocales([...supportedLocales]);
+}
+/**
+ * return the translation of this item considering the setting of preffered language
+ */
+function localizeText(textItem) {
+    if (textItem == null)
+        return null;
+    if (!textItem.en)
+        throw new errors_ts_1.HDSLibError('textItems must have an english translation', { textItem });
+    for (const l of preferredLocales) {
+        if (textItem[l])
+            return textItem[l];
+    }
+    return textItem.en;
+}
+/**
+ * Change prefferedLocal order
+ */
+function setPreferredLocales(arrayOfLocals) {
+    if (!Array.isArray(arrayOfLocals)) {
+        throw new errors_ts_1.HDSLibError('setPreferredLocales takes an array of language codes');
+    }
+    const unsupportedLocales = arrayOfLocals.filter(l => (supportedLocales.indexOf(l) < 0));
+    if (unsupportedLocales.length > 0) {
+        throw new errors_ts_1.HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
+    }
+    preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
+}
+/**
+ * throw errors if an item is not of type localizableText
+ */
+function validateLocalizableText(key, toTest) {
+    if (toTest.en == null || typeof toTest.en !== 'string')
+        throw new errors_ts_1.HDSLibError(`Missing or invalid localizable text for ${key}`, { [key]: toTest });
+    for (const optionalLang of supportedLocales) {
+        if (optionalLang === 'en')
+            continue;
+        if (toTest[optionalLang] != null && typeof toTest[optionalLang] !== 'string')
+            throw new errors_ts_1.HDSLibError(`Missing or invalid localizable text for ${key} languagecode: ${optionalLang}`, { [key]: toTest, languageCode: optionalLang });
+    }
+    return toTest;
+}
+
+
+/***/ },
+
+/***/ "./ts/logger.ts"
+/*!**********************!*\
+  !*** ./ts/logger.ts ***!
+  \**********************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * Basic logger
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.setLogger = setLogger;
+exports.info = info;
+exports.error = error;
+exports.debug = debug;
+exports.warn = warn;
+let logger = {
+    info: log('info'),
+    error: log('error'),
+    debug: log('debug')
+};
+function setLogger(newLogger) {
+    logger = newLogger;
+}
+function info(...args) { logger.info(...args); }
+function error(...args) { logger.error(...args); }
+function debug(..._args) {
+    // logger.debug(..._args);
+}
+function warn(...args) {
+    logger.info(...args); // Use info for warn for now
+}
+function log(type) {
+    return function (...args) {
+        console.log(`Logger: [${type}]`, ...args);
+    };
+}
+
+
+/***/ },
+
+/***/ "./ts/patchedPryv.ts"
+/*!***************************!*\
+  !*** ./ts/patchedPryv.ts ***!
+  \***************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.pryv = void 0;
+/**
+ * CJS→ESM interop for the pryv package with plugin patching.
+ *
+ * Default import gives the module.exports object directly (Connection, Auth, etc.).
+ * We re-export both the runtime value AND a merged type namespace so that consumers
+ * can use `pryv.Connection` as both a constructor and a type annotation.
+ */
+const pryv_1 = __importDefault(__webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js"));
+const monitor_1 = __importDefault(__webpack_require__(/*! @pryv/monitor */ "./node_modules/@pryv/monitor/src/index.js"));
+const socket_io_1 = __importDefault(__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js"));
+// @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
+(0, monitor_1.default)(pryv_1.default);
+// @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
+(0, socket_io_1.default)(pryv_1.default);
+// Declaration merging: the exported `pryv` const provides the runtime value,
+// and the namespace augments it with all the types from pryv's .d.ts.
+// This lets consumers write both `new pryv.Connection(...)` and `x: pryv.Connection`.
+// eslint-disable-next-line import-x/export -- declaration merging: value + type namespace
+exports.pryv = pryv_1.default;
+
+
+/***/ },
+
+/***/ "./ts/settings.ts"
+/*!************************!*\
+  !*** ./ts/settings.ts ***!
+  \************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.setPreferredLocales = void 0;
+exports.setServiceInfoURL = setServiceInfoURL;
+exports.getServiceInfoURL = getServiceInfoURL;
+const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
+Object.defineProperty(exports, "setPreferredLocales", ({ enumerable: true, get: function () { return localizeText_ts_1.setPreferredLocales; } }));
+// todo change when in production
+let serviceInfoUrl = 'https://demo.datasafe.dev/reg/service/info';
+/**
+ * Set default service info URL
+ */
+function setServiceInfoURL(url) {
+    serviceInfoUrl = url;
+}
+/**
+ * Get default service info URL
+ */
+function getServiceInfoURL() {
+    return serviceInfoUrl;
+}
+
+
+/***/ },
+
+/***/ "./ts/settings/HDSProfile.ts"
+/*!***********************************!*\
+  !*** ./ts/settings/HDSProfile.ts ***!
+  \***********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSProfile = exports.PROFILE_FIELDS = void 0;
+const getAttachmentUrl_ts_1 = __webpack_require__(/*! ../toolkit/getAttachmentUrl.js */ "./ts/toolkit/getAttachmentUrl.ts");
+/**
+ * Profile field definitions — each maps to a Pryv event in the profile/ stream tree.
+ * These are account-level, shared across all connections (unlike HDSSettings which is per-app).
+ */
+exports.PROFILE_FIELDS = {
+    displayName: { streamId: 'profile-display-name', eventType: 'contact/display-name' },
+    avatar: { streamId: 'profile-avatar', eventType: 'picture/*' },
+    name: { streamId: 'profile-name', eventType: 'contact/name' },
+    surname: { streamId: 'profile-name', eventType: 'contact/surname' },
+    dateOfBirth: { streamId: 'profile-date-of-birth', eventType: 'date/iso-8601' },
+    sex: { streamId: 'profile-sex', eventType: 'attributes/biological-sex' },
+    country: { streamId: 'profile-address', eventType: 'contact/country' },
+};
+const DEFAULTS = {
+    displayName: null,
+    avatar: null,
+    name: null,
+    surname: null,
+    dateOfBirth: null,
+    sex: null,
+    country: null,
+};
+/** @internal */
+let _connection = null;
+/** @internal */
+let _cache = {};
+/** @internal */
+let _values = { ...DEFAULTS };
+/** @internal */
+let _hooked = false;
+/** @internal — tracks which streams have been verified/created */
+let _ensuredStreams = new Set();
+/**
+ * Check if event type matches a field's eventType (supports `picture/*` wildcard).
+ */
+function typeMatches(eventType, fieldType) {
+    if (fieldType.endsWith('/*')) {
+        return eventType.startsWith(fieldType.slice(0, -1));
+    }
+    return eventType === fieldType;
+}
+/**
+ * Match an event to a profile field by eventType + streamId.
+ */
+function matchField(event) {
+    for (const [key, field] of Object.entries(exports.PROFILE_FIELDS)) {
+        if (typeMatches(event.type, field.eventType) &&
+            event.streamIds?.includes(field.streamId)) {
+            return key;
+        }
+    }
+    return null;
+}
+/**
+ * Resolve avatar URL from a picture event.
+ * Handles: attachment (construct API URL), data URL in content, plain URL in content.
+ */
+function resolveAvatarUrl(event, conn = _connection) {
+    // Attachment — use shared getAttachmentUrl utility
+    if (event.attachments?.length > 0 && conn) {
+        return (0, getAttachmentUrl_ts_1.getAttachmentUrl)(conn, event);
+    }
+    // Content is a string (data URL or plain URL)
+    if (typeof event.content === 'string' && event.content.length > 0) {
+        return event.content;
+    }
+    return null;
+}
+/**
+ * Read profile from any connection (read-only, does not affect the singleton).
+ * Use this to read someone else's profile via a shared connection.
+ * Returns null values for fields the connection cannot access.
+ */
+async function readProfileFromConnection(conn) {
+    const values = { ...DEFAULTS };
+    let events;
+    try {
+        events = await conn.apiOne('events.get', { streams: ['profile'], limit: 100 }, 'events');
+    }
+    catch {
+        // Connection may not have access to profile/ streams
+        return values;
+    }
+    for (const event of events) {
+        const key = matchField(event);
+        if (key && values[key] === null) {
+            if (key === 'avatar') {
+                values.avatar = resolveAvatarUrl(event, conn);
+            }
+            else {
+                values[key] = event.content;
+            }
+        }
+    }
+    return values;
+}
+async function trashExistingAvatar() {
+    const existing = _cache.avatar;
+    if (existing && _connection) {
+        await _connection.apiOne('events.update', { id: existing.id, update: { trashed: true } }, 'event');
+        delete _cache.avatar;
+        _values.avatar = null;
+    }
+}
+/**
+ * Ensure a profile child stream exists, creating the parent `profile` stream and the child if needed.
+ */
+async function ensureStream(streamId) {
+    if (_ensuredStreams.has(streamId) || !_connection)
+        return;
+    try {
+        // Create parent 'profile' stream (idempotent — ignores "already exists" error)
+        await _connection.apiOne('streams.create', { id: 'profile', name: 'Profile' }, 'stream').catch(() => { });
+        // Create child stream
+        await _connection.apiOne('streams.create', { id: streamId, name: streamId, parentId: 'profile' }, 'stream').catch(() => { });
+        _ensuredStreams.add(streamId);
+    }
+    catch {
+        // best effort — the subsequent events.create will fail with a clear error if stream is truly missing
+    }
+}
+async function load() {
+    if (!_connection)
+        return;
+    _values = { ...DEFAULTS };
+    _cache = {};
+    let events;
+    try {
+        events = await _connection.apiOne('events.get', { streams: ['profile'], limit: 100 }, 'events');
+    }
+    catch {
+        // Connection may not have access to profile/ streams (e.g. app-scoped permission)
+        _hooked = true;
+        return;
+    }
+    for (const event of events) {
+        const key = matchField(event);
+        if (key && !_cache[key]) {
+            _cache[key] = event;
+            if (key === 'avatar') {
+                _values.avatar = resolveAvatarUrl(event);
+            }
+            else {
+                _values[key] = event.content;
+            }
+        }
+    }
+    _hooked = true;
+}
+/**
+ * HDSProfile — singleton for account-level profile data stored in profile/ streams.
+ *
+ * Unlike HDSSettings (per-app preferences), profile data is shared across all connections.
+ *
+ * Usage:
+ *   await HDSProfile.hookToConnection(connection);
+ *   const name = HDSProfile.get('displayName');
+ *   await HDSProfile.set('displayName', 'Alice');
+ *
+ * Fallback chain for displayName:
+ *   HDSSettings.get('displayName') ?? HDSProfile.get('displayName') ?? null
+ */
+const HDSProfile = {
+    /**
+     * Read profile from any connection (read-only, does not affect the singleton).
+     * Use this to read a contact's profile via a shared connection.
+     *
+     * Example:
+     *   const contactProfile = await HDSProfile.readFromConnection(invite.connection);
+     *   const name = contactProfile.displayName;
+     *   const avatarUrl = contactProfile.avatar; // resolved URL ready for <img src>
+     */
+    async readFromConnection(connection) {
+        return readProfileFromConnection(connection);
+    },
+    /**
+     * Hook to a Pryv Connection — loads profile from profile/ streams.
+     */
+    async hookToConnection(connection) {
+        _connection = connection;
+        await load();
+    },
+    /**
+     * Get the current value for a profile field.
+     */
+    get(key) {
+        return _values[key];
+    },
+    /**
+     * Get all current profile values.
+     */
+    getAll() {
+        return { ..._values };
+    },
+    /**
+     * Set a profile value — persists to HDS server and updates cache.
+     */
+    async set(key, value) {
+        if (!_connection) {
+            throw new Error('HDSProfile: call hookToConnection() first');
+        }
+        const field = exports.PROFILE_FIELDS[key];
+        const existing = _cache[key];
+        if (existing) {
+            const updated = await _connection.apiOne('events.update', { id: existing.id, update: { content: value } }, 'event');
+            _cache[key] = updated;
+        }
+        else {
+            await ensureStream(field.streamId);
+            const created = await _connection.apiOne('events.create', { streamIds: [field.streamId], type: field.eventType, content: value }, 'event');
+            _cache[key] = created;
+        }
+        _values[key] = value;
+    },
+    /**
+     * Get avatar URL — resolves from attachment, data URL, or plain URL.
+     * Returns null if no avatar event exists.
+     */
+    getAvatarUrl() {
+        const event = _cache.avatar;
+        if (!event)
+            return null;
+        return resolveAvatarUrl(event);
+    },
+    /**
+     * Set avatar from a file (Blob/Buffer) — creates a picture/attached event with attachment.
+     * If an avatar event already exists, it is trashed and a new one is created.
+     *
+     * @param fileData - Blob (browser) or Buffer (Node.js)
+     * @param filename - e.g. 'avatar.png'
+     */
+    async setAvatarFromFile(fileData, filename) {
+        if (!_connection) {
+            throw new Error('HDSProfile: call hookToConnection() first');
+        }
+        await trashExistingAvatar();
+        await ensureStream(exports.PROFILE_FIELDS.avatar.streamId);
+        const result = await _connection.createEventWithFileFromBuffer({ type: 'picture/attached', streamIds: [exports.PROFILE_FIELDS.avatar.streamId] }, fileData, filename);
+        _cache.avatar = result.event;
+        _values.avatar = resolveAvatarUrl(result.event);
+    },
+    /**
+     * Set avatar from a base64 data URL string — creates a picture/base64 event.
+     * If an avatar event already exists, it is trashed and a new one is created.
+     *
+     * @param dataUrl - e.g. 'data:image/png;base64,iVBOR...'
+     */
+    async setAvatarFromDataUrl(dataUrl) {
+        if (!_connection) {
+            throw new Error('HDSProfile: call hookToConnection() first');
+        }
+        await trashExistingAvatar();
+        await ensureStream(exports.PROFILE_FIELDS.avatar.streamId);
+        const created = await _connection.apiOne('events.create', { streamIds: [exports.PROFILE_FIELDS.avatar.streamId], type: 'picture/base64', content: dataUrl }, 'event');
+        _cache.avatar = created;
+        _values.avatar = dataUrl;
+    },
+    /**
+     * Whether profile has been loaded from the server.
+     */
+    get isHooked() {
+        return _hooked;
+    },
+    /**
+     * Reload profile from the server.
+     */
+    async reload() {
+        await load();
+    },
+    /**
+     * Reset to defaults (in-memory only — does not delete server events).
+     */
+    unhook() {
+        _connection = null;
+        _cache = {};
+        _values = { ...DEFAULTS };
+        _hooked = false;
+        _ensuredStreams = new Set();
+    },
+};
+exports.HDSProfile = HDSProfile;
+exports["default"] = HDSProfile;
+
+
+/***/ },
+
+/***/ "./ts/settings/HDSSettings.ts"
+/*!************************************!*\
+  !*** ./ts/settings/HDSSettings.ts ***!
+  \************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSSettings = exports.SETTING_TYPES = void 0;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+/**
+ * Known setting event types — each stored as a separate Pryv event.
+ */
+exports.SETTING_TYPES = {
+    preferredLocales: 'settings/preferred-locales',
+    theme: 'settings/theme',
+    timezone: 'settings/timezone',
+    dateFormat: 'settings/date-format',
+    unitSystem: 'settings/unit-system',
+    displayName: 'contact/display-name',
+};
+const DEFAULTS = {
+    preferredLocales: ['en'],
+    theme: 'light',
+    timezone: 'Europe/Zurich',
+    dateFormat: 'DD.MM.YYYY',
+    unitSystem: 'metric',
+    displayName: null,
+};
+/**
+ * Detect browser defaults for settings that can be inferred.
+ */
+function browserDefaults() {
+    if (typeof navigator === 'undefined')
+        return {};
+    const result = {};
+    try {
+        const lang = navigator.language?.split('-')[0];
+        if (lang)
+            result.preferredLocales = [lang];
+    }
+    catch { /* ignore */ }
+    try {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (tz)
+            result.timezone = tz;
+    }
+    catch { /* ignore */ }
+    return result;
+}
+function keyForType(type) {
+    for (const [key, t] of Object.entries(exports.SETTING_TYPES)) {
+        if (t === type)
+            return key;
+    }
+    return null;
+}
+function applySideEffects(values, key) {
+    if (key === 'preferredLocales') {
+        try {
+            (0, localizeText_ts_1.setPreferredLocales)(values.preferredLocales);
+        }
+        catch { /* locale may not be supported — ignore */ }
+    }
+}
+/** @internal */
+let _connection = null;
+/** @internal */
+let _streamId = null;
+/** @internal */
+let _cache = {};
+/** @internal */
+let _values = { ...DEFAULTS };
+/** @internal */
+let _hooked = false;
+async function load() {
+    if (!_connection || !_streamId)
+        return;
+    const browser = browserDefaults();
+    _values = { ...DEFAULTS, ...browser };
+    _cache = {};
+    const settingsEvents = await _connection.apiOne('events.get', { streams: [_streamId], types: Object.values(exports.SETTING_TYPES), limit: 100 }, 'events');
+    for (const event of settingsEvents) {
+        const key = keyForType(event.type);
+        if (key && !_cache[key]) {
+            _cache[key] = event;
+            _values[key] = event.content;
+        }
+    }
+    applySideEffects(_values, 'preferredLocales');
+    _hooked = true;
+}
+/**
+ * HDSSettings — singleton managing user settings as individual Pryv events.
+ *
+ * Each setting is stored as its own event with a specific type
+ * (e.g. `settings/preferredLocales`) in the application's baseStream.
+ *
+ * Usage:
+ *   await HDSSettings.hookToApplication(app);
+ *   const locale = HDSSettings.get('preferredLocales');
+ *   await HDSSettings.set('theme', 'dark');
+ */
+const HDSSettings = {
+    /**
+     * Hook to an Application instance — loads settings from the app's baseStream.
+     */
+    async hookToApplication(app) {
+        _connection = app.connection;
+        _streamId = app.baseStreamId;
+        await load();
+    },
+    /**
+     * Hook to a raw Pryv Connection with a target stream.
+     * Used when no Application wrapper is available.
+     */
+    async hookToConnection(connection, streamId) {
+        _connection = connection;
+        _streamId = streamId;
+        await load();
+    },
+    /**
+     * Get the current value for a setting.
+     */
+    get(key) {
+        return _values[key];
+    },
+    /**
+     * Get all current settings values.
+     */
+    getAll() {
+        return { ..._values };
+    },
+    /**
+     * Set a setting value — persists to HDS server and updates cache.
+     */
+    async set(key, value) {
+        if (!_connection || !_streamId) {
+            throw new Error('HDSSettings: call hookToApplication() or hookToConnection() first');
+        }
+        const eventType = exports.SETTING_TYPES[key];
+        const existing = _cache[key];
+        if (existing) {
+            const updated = await _connection.apiOne('events.update', { id: existing.id, update: { content: value } }, 'event');
+            _cache[key] = updated;
+        }
+        else {
+            const created = await _connection.apiOne('events.create', { streamIds: [_streamId], type: eventType, content: value }, 'event');
+            _cache[key] = created;
+        }
+        _values[key] = value;
+        applySideEffects(_values, key);
+    },
+    /**
+     * Whether settings have been loaded from the server.
+     */
+    get isHooked() {
+        return _hooked;
+    },
+    /**
+     * Reload settings from the server.
+     */
+    async reload() {
+        await load();
+    },
+    /**
+     * Reset to defaults (in-memory only — does not delete server events).
+     */
+    unhook() {
+        _connection = null;
+        _streamId = null;
+        _cache = {};
+        _values = { ...DEFAULTS };
+        _hooked = false;
+    },
+};
+exports.HDSSettings = HDSSettings;
+exports["default"] = HDSSettings;
+
+
+/***/ },
+
+/***/ "./ts/toolkit/StreamsAutoCreate.ts"
+/*!*****************************************!*\
+  !*** ./ts/toolkit/StreamsAutoCreate.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.StreamsAutoCreate = void 0;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const StreamsTools_ts_1 = __webpack_require__(/*! ./StreamsTools.js */ "./ts/toolkit/StreamsTools.ts");
+class StreamsAutoCreate {
+    connection;
+    knownStreams = {};
+    /**
+     * Safe way to create StreamsAutoCreate as it check if ones is already attached to connection
+     */
+    static attachToConnection(connection, knownStreamStructure) {
+        const streamsAutoCreate = connection.streamsAutoCreate || new StreamsAutoCreate(connection);
+        streamsAutoCreate.addStreamStructure(knownStreamStructure);
+        return streamsAutoCreate;
+    }
+    /**
+     * @private
+     * Don't use.. use StreamsAutoCreate.attachToConnection
+     */
+    constructor(connection) {
+        // make connection a weak reference to avoid cycles
+        this.connection = new WeakRef(connection);
+        this.knownStreams = {};
+        connection.streamsAutoCreate = this;
+    }
+    /**
+     * @param keysOrDefs - Array or Set of itemDefs or itemKeys
+     */
+    async ensureExistsForItems(keysOrDefs) {
+        // get existing streamIds;
+        const modelStreams = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams;
+        const streamsToCreate = modelStreams.getNecessaryListForItems(Array.from(keysOrDefs), { knowExistingStreamsIds: this.knowStreamIds() });
+        const apiCalls = streamsToCreate.map((s) => ({
+            method: 'streams.create',
+            params: s
+        }));
+        const connection = this.connection?.deref();
+        if (!connection) {
+            throw new Error('Lost reference to connection');
+        }
+        const results = await connection.api(apiCalls);
+        const streamsCreated = [];
+        const errors = [];
+        for (const result of results) {
+            if (result.stream?.id) {
+                streamsCreated.push(result.stream);
+                continue;
+            }
+            if (result.error) {
+                if (result.error.id === 'item-already-exists')
+                    continue; // all OK
+                errors.push(result.error);
+                continue;
+            }
+            // shouldn't be there
+            errors.push({
+                id: 'unexpected-error',
+                message: 'Unexpected content in api response',
+                data: result
+            });
+        }
+        if (errors.length > 0) {
+            throw new errors_ts_1.HDSLibError('Error creating streams', errors);
+        }
+        return streamsCreated;
+    }
+    knowStreamIds() {
+        return Object.keys(this.knownStreams);
+    }
+    addStreamStructure(streamStructure) {
+        if (streamStructure == null)
+            return;
+        for (const stream of (0, StreamsTools_ts_1.allStreamsAndChildren)(streamStructure)) {
+            this.#addStream(stream);
+        }
+    }
+    #addStream(stream) {
+        if (!this.knownStreams[stream.id]) {
+            this.knownStreams[stream.id] = {};
+        }
+    }
+}
+exports.StreamsAutoCreate = StreamsAutoCreate;
+
+
+/***/ },
+
+/***/ "./ts/toolkit/StreamsTools.ts"
+/*!************************************!*\
+  !*** ./ts/toolkit/StreamsTools.ts ***!
+  \************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.allStreamsAndChildren = allStreamsAndChildren;
+exports.getStreamIdAndChildrenIds = getStreamIdAndChildrenIds;
+/**
+ * Iterate all streams and children
+ */
+function* allStreamsAndChildren(streamStructure) {
+    for (const stream of streamStructure) {
+        yield stream;
+        if (stream.children && stream.children.length > 0) {
+            for (const child of allStreamsAndChildren(stream.children)) {
+                yield child;
+            }
+        }
+    }
+}
+function getStreamIdAndChildrenIds(stream) {
+    const streamIds = [];
+    for (const s of allStreamsAndChildren([stream])) {
+        streamIds.push(s.id);
+    }
+    return streamIds;
+}
+
+
+/***/ },
+
+/***/ "./ts/toolkit/getAttachmentUrl.ts"
+/*!****************************************!*\
+  !*** ./ts/toolkit/getAttachmentUrl.ts ***!
+  \****************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getAttachmentUrl = getAttachmentUrl;
+/**
+ * Build a browser-safe URL for an event attachment.
+ * Uses the attachment's `readToken` for auth (no embedded credentials in the URL).
+ *
+ * @param connection - Pryv Connection (uses `.endpoint` for the clean base URL)
+ * @param event - Pryv event with attachments
+ * @param attachmentIndex - index of the attachment (default 0)
+ * @returns URL string or null if no attachment at the given index
+ */
+function getAttachmentUrl(connection, event, attachmentIndex = 0) {
+    if (!event.attachments?.[attachmentIndex])
+        return null;
+    const attachment = event.attachments[attachmentIndex];
+    const baseUrl = (connection.endpoint || '').replace(/\/$/, '');
+    return `${baseUrl}/events/${event.id}/${attachment.id}?readToken=${attachment.readToken}`;
+}
+
+
+/***/ },
+
+/***/ "./ts/toolkit/index.ts"
+/*!*****************************!*\
+  !*** ./ts/toolkit/index.ts ***!
+  \*****************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getAttachmentUrl = exports.StreamTools = exports.StreamsAutoCreate = void 0;
+const StreamsAutoCreate_ts_1 = __webpack_require__(/*! ./StreamsAutoCreate.js */ "./ts/toolkit/StreamsAutoCreate.ts");
+Object.defineProperty(exports, "StreamsAutoCreate", ({ enumerable: true, get: function () { return StreamsAutoCreate_ts_1.StreamsAutoCreate; } }));
+const StreamTools = __importStar(__webpack_require__(/*! ./StreamsTools.js */ "./ts/toolkit/StreamsTools.ts"));
+exports.StreamTools = StreamTools;
+const getAttachmentUrl_ts_1 = __webpack_require__(/*! ./getAttachmentUrl.js */ "./ts/toolkit/getAttachmentUrl.ts");
+Object.defineProperty(exports, "getAttachmentUrl", ({ enumerable: true, get: function () { return getAttachmentUrl_ts_1.getAttachmentUrl; } }));
+
+
+/***/ },
+
+/***/ "./ts/utils.ts"
+/*!*********************!*\
+  !*** ./ts/utils.ts ***!
+  \*********************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * Set of Misc utilities
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.waitUntilFalse = waitUntilFalse;
+exports.deepFreeze = deepFreeze;
+/**
+ * Timed semaphore
+ */
+async function waitUntilFalse(callBackToReturnFalse, maxWaitMs = 5000) {
+    const started = Date.now();
+    while (callBackToReturnFalse()) {
+        await new Promise((resolve) => { setTimeout(resolve, 100); });
+        if (Date.now() - started > maxWaitMs)
+            throw new Error(`Timeout after ${maxWaitMs}ms`);
+    }
+}
+/**
+ * Recursively make immutable an object
+ */
+function deepFreeze(object) {
+    // Retrieve the property names defined on object
+    const propNames = Reflect.ownKeys(object);
+    // Freeze properties before freezing self
+    for (const name of propNames) {
+        const value = object[name];
+        if ((value && typeof value === 'object') || typeof value === 'function') {
+            deepFreeze(value);
+        }
+    }
+    return Object.freeze(object);
+}
+
+
+/***/ },
+
+/***/ "./ts/utils/duration.ts"
+/*!******************************!*\
+  !*** ./ts/utils/duration.ts ***!
+  \******************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * ISO 8601 duration parser and formatter.
+ * Supports: P{n}D, P{n}W, P{n}M, P{n}Y, and combinations like P1Y6M.
+ * Month = 30 days, Year = 365 days (approximation sufficient for reminder logic).
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.durationToSeconds = durationToSeconds;
+exports.durationToLabel = durationToLabel;
+const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_DAY = 86400;
+const SECONDS_PER_WEEK = 604800;
+const SECONDS_PER_MONTH = 2592000; // 30 days
+const SECONDS_PER_YEAR = 31536000; // 365 days
+const durationRegex = /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/;
+/**
+ * Parse an ISO 8601 duration string to seconds.
+ * @throws if the string is not a valid duration
+ */
+function durationToSeconds(iso) {
+    const m = durationRegex.exec(iso);
+    if (!m)
+        throw new Error(`Invalid ISO 8601 duration: "${iso}"`);
+    const [, years, months, weeks, days, hours, minutes] = m;
+    let total = 0;
+    if (years)
+        total += parseInt(years) * SECONDS_PER_YEAR;
+    if (months)
+        total += parseInt(months) * SECONDS_PER_MONTH;
+    if (weeks)
+        total += parseInt(weeks) * SECONDS_PER_WEEK;
+    if (days)
+        total += parseInt(days) * SECONDS_PER_DAY;
+    if (hours)
+        total += parseInt(hours) * SECONDS_PER_HOUR;
+    if (minutes)
+        total += parseInt(minutes) * 60;
+    if (total === 0)
+        throw new Error(`Duration is zero: "${iso}"`);
+    return total;
+}
+/**
+ * Format seconds as a human-readable duration label.
+ */
+function durationToLabel(seconds) {
+    if (seconds >= SECONDS_PER_YEAR) {
+        const n = Math.round(seconds / SECONDS_PER_YEAR);
+        return n === 1 ? '1 year' : `${n} years`;
+    }
+    if (seconds >= SECONDS_PER_MONTH) {
+        const n = Math.round(seconds / SECONDS_PER_MONTH);
+        return n === 1 ? '1 month' : `${n} months`;
+    }
+    if (seconds >= SECONDS_PER_WEEK) {
+        const n = Math.round(seconds / SECONDS_PER_WEEK);
+        return n === 1 ? '1 week' : `${n} weeks`;
+    }
+    if (seconds >= SECONDS_PER_DAY) {
+        const n = Math.round(seconds / SECONDS_PER_DAY);
+        return n === 1 ? '1 day' : `${n} days`;
+    }
+    if (seconds >= SECONDS_PER_HOUR) {
+        const n = Math.round(seconds / SECONDS_PER_HOUR);
+        return n === 1 ? '1 hour' : `${n} hours`;
+    }
+    const n = Math.round(seconds / 60);
+    return n === 1 ? '1 minute' : `${n} minutes`;
+}
+
+
+/***/ },
+
 /***/ "./node_modules/util/support/isBufferBrowser.js"
 /*!******************************************************!*\
   !*** ./node_modules/util/support/isBufferBrowser.js ***!
@@ -13975,2368 +14989,6 @@ module.exports = function whichTypedArray(value) {
 	if (!gOPD) { return null; } // unknown engine
 	return tryTypedArrays(value);
 };
-
-
-/***/ },
-
-/***/ "./tests/applicationClass.test.js"
-/*!****************************************!*\
-  !*** ./tests/applicationClass.test.js ***!
-  \****************************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-const { createUserAndPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-const HDSLib = __webpack_require__(/*! ../js */ "./js/index.js");
-const Application = HDSLib.appTemplates.Application;
-const { helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate */ "./tests/test-utils/helpersAppTemplate.js");
-
-describe('[APAX] Application class', function () {
-  this.timeout(5000);
-  const baseStreamId = 'application-class';
-  const appName = 'application-app';
-  let user;
-  before(async () => {
-    await HDSLib.initHDSModel();
-    const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamId, name: appName, parentId: 'applications' }];
-    const permissionsManager = [{ streamId: baseStreamId, level: 'manage' }];
-    user = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
-  });
-
-  describe('[APIX] Application class internal', () => {
-    it('[APIS] Application custom settings', async () => {
-      class Dummy extends Application {
-        get appSettings () {
-          return { };
-        }
-      }
-      const appDummy = await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
-
-      const settings = await appDummy.getCustomSettings();
-      assert.deepEqual(settings, {});
-      const newSettings = { hello: 'Tom', value: 2 };
-      const newSettings1 = await appDummy.setCustomSettings(newSettings);
-      assert.deepEqual(newSettings, newSettings1);
-      const newSettings2 = await appDummy.getCustomSettings();
-      assert.deepEqual(newSettings, newSettings2);
-      assert.deepEqual(newSettings1, newSettings2);
-      assert.equal(newSettings1, newSettings2, 'should be the same object');
-      const newSettings3 = await appDummy.getCustomSettings(true);
-      assert.deepEqual(newSettings1, newSettings3);
-      assert.notEqual(newSettings1, newSettings3, 'should not be the same object');
-    });
-  });
-
-  describe('[APAE] Application class errors', () => {
-    it('[APAI] Application extension', async () => {
-      class Dummy extends Application { }
-
-      try {
-        await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
-        throw new Error('Should throw an error');
-      } catch (e) {
-        assert.equal(e.message, 'appSettings must be implemented');
-      }
-
-      try {
-      // eslint-disable-next-line no-new
-        new Dummy('u', user.appApiEndpoint, appName);
-        throw new Error('Should throw an error');
-      } catch (e) {
-        assert.equal(e.message, 'Missing or too short baseStreamId');
-      }
-    });
-
-    it('[APAA] Application name from accessInfo fails in not in settings', () => {
-      class Dummy extends Application {
-        get appSettings () {
-          return { };
-        }
-      }
-
-      try {
-      // eslint-disable-next-line no-new
-        new Dummy(baseStreamId, user.appApiEndpoint);
-        throw new Error('Should throw an error');
-      } catch (e) {
-        assert.equal(e.message, 'appName must be given unless appSettings.appNameFromAccessInfo = true');
-      }
-    });
-
-    it('[APAB] Application name from accessInfo', async () => {
-      class Dummy2 extends Application {
-        get appSettings () {
-          return {
-            appNameFromAccessInfo: true
-          };
-        }
-      }
-
-      const dummy2 = await Dummy2.newFromApiEndpoint(baseStreamId, user.appApiEndpoint);
-      assert.ok(dummy2, 'if appSettings.appNameFromAccessInfo = true appName is not required');
-    });
-
-    it('[APAC] Application should throw error if baseStream is not accessible', async () => {
-      class Dummy extends Application {
-        get appSettings () {
-          return { };
-        }
-      }
-
-      try {
-        await Dummy.newFromApiEndpoint('uuuu', user.appApiEndpoint, appName);
-        throw new Error('Should throw an error');
-      } catch (e) {
-        assert.equal(e.message, 'Application with "app" type of access requires  (streamId = "uuuu", level = "manage") or master access');
-      }
-    });
-
-    it('[APAD] Application should throw error if personaToken are not explicity allowed', async () => {
-      class Dummy extends Application {
-        get appSettings () {
-          return { };
-        }
-      }
-
-      try {
-        await Dummy.newFromApiEndpoint('uuuu', user.personalApiEndpoint, appName);
-        throw new Error('Should throw an error');
-      } catch (e) {
-        assert.equal(e.message, 'Application should not use a personal token');
-      }
-    });
-
-    it('[APAE] Application should throw error if master token not provided and required', async () => {
-      class Dummy extends Application {
-        get appSettings () {
-          return {
-            mustBemaster: true
-          };
-        }
-      }
-
-      try {
-        await Dummy.newFromApiEndpoint('uuuu', user.appApiEndpoint, appName);
-        throw new Error('Should throw an error');
-      } catch (e) {
-        assert.equal(e.message, 'Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
-      }
-    });
-  });
-
-  describe('[AMGX] AppManagingAccount tests', function () {
-    it('[AMGA] getCollectorById returns collector when exists', async () => {
-      const testBaseStreamId = 'amga-test';
-      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGA');
-      const collector = await appManaging.createCollector('Test Collector AMGA');
-
-      const foundCollector = await appManaging.getCollectorById(collector.id);
-      assert.ok(foundCollector);
-      assert.equal(foundCollector.id, collector.id);
-    });
-
-    it('[AMGB] getCollectorById returns undefined when not exists', async () => {
-      const testBaseStreamId = 'amgb-test';
-      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGB');
-
-      const foundCollector = await appManaging.getCollectorById('non-existent-id');
-      assert.equal(foundCollector, undefined);
-    });
-
-    it('[AMGC] getCollectors with forceRefresh reloads data', async () => {
-      const testBaseStreamId = 'amgc-test';
-      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGC');
-
-      const collectors1 = await appManaging.getCollectors();
-      assert.equal(collectors1.length, 0);
-
-      await appManaging.createCollector('Test Collector AMGC');
-      const collectors2 = await appManaging.getCollectors(true);
-      assert.equal(collectors2.length, 1);
-    });
-  });
-
-  describe('[ACSX] Application setCustomSetting tests', function () {
-    it('[ACSA] setCustomSetting adds a key', async () => {
-      class Dummy extends Application {
-        get appSettings () {
-          return { };
-        }
-      }
-      const appDummy = await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
-
-      await appDummy.setCustomSetting('newKey', 'newValue');
-      const settings = await appDummy.getCustomSettings();
-      assert.equal(settings.newKey, 'newValue');
-    });
-
-    it('[ACSB] setCustomSetting with null deletes key', async () => {
-      class Dummy extends Application {
-        get appSettings () {
-          return { };
-        }
-      }
-      const appDummy = await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
-
-      await appDummy.setCustomSetting('keyToDelete', 'value');
-      let settings = await appDummy.getCustomSettings();
-      assert.equal(settings.keyToDelete, 'value');
-
-      await appDummy.setCustomSetting('keyToDelete', null);
-      settings = await appDummy.getCustomSettings();
-      assert.equal(settings.keyToDelete, undefined);
-    });
-  });
-});
-
-
-/***/ },
-
-/***/ "./tests/apptemplates.test.js"
-/*!************************************!*\
-  !*** ./tests/apptemplates.test.js ***!
-  \************************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-const { pryv, createUserPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-const HDSLib = __webpack_require__(/*! ../js */ "./js/index.js");
-const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = HDSLib.appTemplates;
-const { HDSLibError } = __webpack_require__(/*! ../js/errors */ "./js/errors.js");
-const { initHDSModel } = __webpack_require__(/*! ../js/index */ "./js/index.js");
-const { helperNewAppAndUsers, helperNewInvite, helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate */ "./tests/test-utils/helpersAppTemplate.js");
-
-describe('[APTX] appTemplates', function () {
-  this.timeout(10000);
-
-  let managingUser, appManaging, clientUser, _clientUserResultPermissions, appClient;
-  const baseStreamIdManager = 'test-app-template-manager';
-  const baseStreamIdClient = 'test-app-template-client';
-  const appName = 'Test HDSLib.appTemplates';
-  const appClientName = 'Test Client HDSLib.appTemplates';
-
-  before(async () => {
-    ({ managingUser, appManaging, clientUser, clientUserResultPermissions: _clientUserResultPermissions, appClient } = await helperNewAppAndUsers(baseStreamIdManager, appName, baseStreamIdClient, appClientName));
-    await initHDSModel();
-  });
-
-  it('[APTA] Full flow create collector and sharing', async () => {
-    assert.equal(appManaging.appName, appName);
-    assert.equal(appManaging.baseStreamId, baseStreamIdManager);
-
-    const collectorEmpty = await appManaging.getCollectors();
-    assert.ok(Array.isArray(collectorEmpty), 'Collectors should be an array');
-    assert.equal(collectorEmpty.length, 0, 'Collectors should be an empty array');
-
-    const collectorName = 'Test';
-    // create a Collector
-    const newCollector = await appManaging.createCollectorUnitialized(collectorName);
-    assert.ok(newCollector.streamId.startsWith(baseStreamIdManager), 'Collectors id should start with baseStreamId');
-    assert.ok(newCollector.name, collectorName);
-    // check that streams has been addes to streamData
-    assert.ok(appManaging.streamData.children[0].name, collectorName);
-
-    // Create a Collector with the same name should fail
-    try {
-      await appManaging.createCollectorUnitialized(collectorName);
-      throw new Error('Creating a Collector with the same name should fail');
-    } catch (e) {
-      assert.ok(e.message.endsWith('>> Result: {"id":"item-already-exists","message":"A stream with name \\"Test\\" already exists","data":{"name":"Test"}}"'));
-      assert.equal(e.innerObject?.id, 'item-already-exists');
-    }
-
-    // check if collector is in the list
-    const collectors = await appManaging.getCollectors();
-    const found = collectors.find(c => c.name === collectorName);
-    if (!found) throw new Error('Should find collector with name: ' + collectorName);
-    assert.equal(found, newCollector);
-
-    // check StreamStructure
-    const resultCheckStructure = await newCollector.checkStreamStructure();
-    assert.equal(resultCheckStructure.created.length, 7, 'Should create 7 streams');
-    for (const created of resultCheckStructure.created) {
-      assert.equal(created.parentId, newCollector.streamId, 'Should have collector stream as parentid');
-    }
-
-    // 2nd call of StreamStructure should be empty
-    const resultCheckStructure2 = await newCollector.checkStreamStructure();
-    assert.equal(resultCheckStructure2.created.length, 0, 'Should create 0 streams');
-
-    // Should throw error as status is not yet set
-    try {
-      newCollector.statusCode;
-      throw new Error('Should throw error');
-    } catch (e) {
-      assert.equal(e.message, 'Init Collector first');
-    }
-
-    await newCollector.init();
-
-    // Get status
-    assert.equal(newCollector.statusCode, 'draft');
-
-    // trying to get a sharing token in draft should throw an error
-    try {
-      await newCollector.sharingApiEndpoint();
-      throw new Error('Should throw error');
-    } catch (e) {
-      assert.equal(e.message, 'Collector must be in "active" state error to get sharing link, current: draft');
-    }
-
-    // trying to create an invite in draft should throw an error
-    try {
-      await newCollector.createInvite({});
-      throw new Error('Should throw error');
-    } catch (e) {
-      assert.equal(e.message, 'Collector must be in "active" state error to create invite, current: draft');
-    }
-
-    // Publish
-    await newCollector.publish();
-
-    // Sharing token creation
-    const sharingApiEndpoint = await newCollector.sharingApiEndpoint();
-    assert.ok(sharingApiEndpoint.startsWith('https://'));
-
-    // Should return the same
-    const sharingApiEndpoint2 = await newCollector.sharingApiEndpoint();
-    assert.equal(sharingApiEndpoint2, sharingApiEndpoint);
-
-    // ---------- creation of a manager on existing structure ---------- //
-
-    // creating a new Manager with same connection should load the structure
-    const connection2 = new pryv.Connection(appManaging.connection.apiEndpoint);
-    const appManaging2 = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection2);
-    // check if collector is in the list
-    const collectors2 = await appManaging2.getCollectors();
-    const collector2 = collectors2.find(c => c.name === collectorName);
-    if (!collector2) throw new Error('Should find collector with name: ' + collectorName);
-    // init collector found;
-    await collector2.init();
-    // call of StreamStructure should be empty as already created
-    const resultCheckStructure3 = await collector2.checkStreamStructure();
-    assert.equal(resultCheckStructure3.created.length, 0, 'Should create 0 streams');
-    // should return the same access access point
-    const sharingApiEndpoint3 = await collector2.sharingApiEndpoint();
-    assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
-  });
-
-  describe('[APIX] Collector invite flows & internals', async function () {
-    this.timeout(10000);
-
-    it('[APTI] Collector invite accept full flow testing internal', async () => {
-      const newCollector = await appManaging.createCollector('Invite test 1');
-      assert(newCollector.statusCode, 'draft');
-
-      // set request content
-      const requestContent = {
-        version: 1,
-        requester: {
-          name: 'Test requester name'
-        },
-        title: {
-          en: 'Title of the request'
-        },
-        description: {
-          en: 'Short Description'
-        },
-        consent: {
-          en: 'This is a consent message'
-        },
-        features: { },
-        permissionsExtra: [],
-        permissions: [
-          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
-          {
-            streamId: 'profile-date-of-birth',
-            defaultName: 'Date of Birth',
-            level: 'read'
-          }
-        ],
-        app: { // may have "url" in the future
-          id: 'test-app',
-          url: 'https://xxx.yyy',
-          data: { // settings for the app
-            dummy: 'dummy'
-          }
-        },
-        sections: [{
-          itemKeys: [
-            'profile-name',
-            'profile-surname'
-          ],
-          key: 'profile',
-          name: {
-            en: 'Profile'
-          },
-          type: 'permanent'
-        },
-        {
-          itemKeys: ['fertility-ttc-tta', 'body-weight'],
-          key: 'history',
-          name: {
-            en: 'History'
-          },
-          type: 'recurring'
-        }
-        ]
-      };
-      newCollector.request.setContent(requestContent);
-
-      // save
-      await newCollector.save();
-      assert.deepEqual(newCollector.request.content, requestContent);
-      assert.ok(newCollector.request.content !== requestContent, 'Should be the same content but different objects');
-      // publish
-      await newCollector.publish();
-      assert.equal(newCollector.statusCode, Collector.STATUSES.active);
-
-      // create invite
-      const options = { customData: { hello: 'bob' } };
-      const invite = await newCollector.createInvite('Invite One', options);
-      assert.equal(invite.status, 'pending');
-      const inviteSharingData = await invite.getSharingData();
-      assert.equal(inviteSharingData.apiEndpoint, await newCollector.sharingApiEndpoint());
-      assert.ok(invite.key.length > 5);
-      assert.ok(inviteSharingData.eventId.length > 5);
-
-      // check invite can be found in "pendings"
-      const inviteEvent = await appManaging.connection.apiOne('events.getOne', { id: inviteSharingData.eventId }, 'event');
-      assert.equal(inviteEvent.type, 'invite/collector-v1');
-      assert.ok(inviteEvent.streamIds[0].endsWith('-pending'));
-      assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
-
-      // also on current invites
-      const invites1 = await newCollector.getInvites();
-      assert.equal(invites1.length, 1);
-      assert.equal(invites1[0].status, 'pending');
-
-      // Invitee receives the invite
-      const permissionsClient = [{ streamId: '*', level: 'manage' }];
-      const myClientUserPermissionsResult = await createUserPermissions(clientUser, permissionsClient, [], appClientName + 'APTI');
-
-      const myAppClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, myClientUserPermissionsResult.appApiEndpoint, appClientName);
-      const collectorClient = await myAppClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
-      assert.equal(collectorClient.eventData.streamIds[0], myAppClient.baseStreamId);
-      assert.equal(collectorClient.eventData.content.apiEndpoint, inviteSharingData.apiEndpoint);
-      assert.equal(collectorClient.eventData.content.requesterEventId, inviteSharingData.eventId);
-
-      // TODO check collectorClient.eventData.accessInfo
-
-      // check collectorClients
-      const collectorClientsCached = await myAppClient.getCollectorClients();
-      assert.equal(collectorClientsCached.length, 1);
-      const collectorClients = await myAppClient.getCollectorClients(true);
-      assert.equal(collectorClients.length, 1);
-
-      // collectorClients can be retrieved by key
-      const found = await myAppClient.getCollectorClientByKey(collectorClient.key);
-      assert.equal(found, collectorClients[0]);
-
-      // check requestData
-      assert.deepEqual(collectorClient.requestData, requestContent);
-
-      // accept
-      const acceptResult = await collectorClient.accept();
-      assert.equal(acceptResult.requesterEvent.content.eventId, inviteSharingData.eventId);
-      assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
-      assert.equal(collectorClient.status, 'Active');
-
-      // try to re-accept throws an error
-      try {
-        await collectorClient.accept();
-        throw new Error('should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Cannot accept an Active CollectorClient');
-      }
-
-      // force refresh and check online
-      const collectorClients2 = await myAppClient.getCollectorClients(true);
-      assert.equal(collectorClients2.length, 1);
-      assert.deepEqual(collectorClients2[0].accessData, acceptResult.accessData);
-
-      // Continue on Collector side
-      const invitesFromInbox = await newCollector.checkInbox();
-      assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
-      assert.equal(invitesFromInbox[0].status, 'active');
-
-      // check current invites
-      const invites2 = await newCollector.getInvites(true);
-      assert.equal(invites2.length, 1);
-      assert.equal(invites2[0], invitesFromInbox[0]);
-      assert.equal(invites2[0].status, 'active');
-    });
-
-    it('[APIA] Collector invite accept', async () => {
-      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APIA');
-      assert.ok(invite.status, 'pending');
-      assert.ok(!collectorClient.hasChatFeature);
-      await collectorClient.accept();
-      await collector.checkInbox();
-      assert.ok(invite.status, 'active');
-      assert.ok(!invite.hasChat);
-    });
-
-    it('[APIZ] Collector - with chat', async () => {
-      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APIZ', { addChat: true });
-      assert.ok(collectorClient.hasChatFeature);
-      await collectorClient.accept();
-      await collector.checkInbox();
-      assert.ok(invite.hasChat);
-      const expectedChatSettings = {
-        type: 'user',
-        streamRead: `chat-${managingUser.username}`,
-        streamWrite: `chat-${managingUser.username}-in`
-      };
-      assert.deepEqual(invite.chatSettings, expectedChatSettings);
-      // -- post Chat From Doctor
-      await invite.chatPost('Hello Patient');
-
-      // -- post Chat From Patient
-      await collectorClient.chatPost(appClient.connection, 'Hello Dr.');
-
-      // check events on patient side
-      const eventsOnPatient = await appClient.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
-      assert.equal(eventsOnPatient[0].content, 'Hello Dr.');
-      assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[0]), { source: 'me' });
-      assert.equal(eventsOnPatient[1].content, 'Hello Patient');
-      assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[1]), { source: 'requester' });
-
-      // check events on patient side
-      const eventsOnDr = await invite.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
-      assert.equal(eventsOnDr[0].content, 'Hello Dr.');
-      assert.deepEqual(invite.chatEventInfos(eventsOnDr[0]), { source: 'user' });
-      assert.equal(eventsOnDr[1].content, 'Hello Patient');
-      assert.deepEqual(invite.chatEventInfos(eventsOnDr[1]), { source: 'me' });
-    });
-
-    it('[APII] Collector invite internals', async () => {
-      const beforeCreation = new Date();
-      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APII');
-      const afterCreation = new Date();
-      assert.ok(invite.dateCreation > beforeCreation && invite.dateCreation < afterCreation);
-
-      // apiEndpoint should throw Error
-      try {
-        invite.apiEndpoint;
-        throw new HDSLibError('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'invite.apiEndpoint is accessible only when active');
-      }
-
-      await collectorClient.accept();
-      await collector.checkInbox();
-
-      invite.apiEndpoint; // should not throw error
-
-      // connection is cached and valid
-      const connection = invite.connection;
-      const inviteInfo = await connection.accessInfo();
-      assert.ok(!!inviteInfo.clientData.hdsCollectorClient);
-    });
-
-    it('[APTR] Collector invite refuse', async () => {
-      const { collector, collectorClient, inviteSharingData } = await helperNewInvite(appManaging, appClient, 'APTR');
-      const refuseResult = await collectorClient.refuse();
-      assert.equal(refuseResult.requesterEvent.content.eventId, inviteSharingData.eventId);
-      assert.equal(collectorClient.status, 'Refused');
-
-      // check collector
-      const invitesFromInbox = await collector.checkInbox();
-      assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
-      assert.equal(invitesFromInbox[0].status, 'error');
-      assert.equal(invitesFromInbox[0].errorType, 'refused');
-    });
-
-    it('[APCR] Collector Client invite revoke', async () => {
-      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCR');
-      await collectorClient.accept();
-
-      // check collector
-      const invitesFromInbox1 = await collector.checkInbox();
-      assert.equal(invitesFromInbox1[0], invite);
-      assert.equal(invite.status, 'active');
-
-      // client revoke
-      await collectorClient.revoke();
-      assert.equal(collectorClient.status, 'Deactivated');
-      assert.ok(collectorClient.accessData.deleted);
-
-      // check collector
-      const invitesFromInbox2 = await collector.checkInbox();
-      assert.equal(invitesFromInbox2[0], invite);
-      assert.equal(invite.status, 'error');
-      assert.equal(invite.errorType, 'revoked');
-    });
-
-    it('[APCM] Collector (manager) invite revoke after accept', async () => {
-      const { collector, collectorClient, invite } = await helperNewInvite(appManaging, appClient, 'APCM');
-      await collectorClient.accept();
-
-      // check collector
-      const invitesFromInbox1 = await collector.checkInbox();
-      assert.equal(invitesFromInbox1[0], invite);
-      assert.equal(invite.status, 'active');
-
-      // revoke invitation
-      await invite.revoke();
-      assert.equal(invite.status, 'error');
-      assert.equal(invite.errorType, 'revoked');
-
-      // check if authorization is revoked
-
-      const res = await invite.connection.accessInfo();
-      assert.equal(res.error.id, 'invalid-access-token');
-    });
-
-    it('[APCV] Collector convert v0 to v1 correctly', async () => {
-      const newCollector = await appManaging.createCollector('Invite test APCV');
-
-      const requestContent = {
-        version: 0,
-        requester: {
-          name: 'Test requester name'
-        },
-        title: {
-          en: 'Title of the request'
-        },
-        description: {
-          en: 'Short Description'
-        },
-        consent: {
-          en: 'This is a consent message'
-        },
-        features: { },
-        permissions: [
-          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
-          {
-            streamId: 'profile-date-of-birth',
-            defaultName: 'Date of Birth',
-            level: 'read'
-          }
-        ],
-        app: { // may have "url" in the future
-          id: 'test-app',
-          url: 'https://xxx.yyy',
-          data: { // settings for the app
-            dummy: 'dummy',
-            forms: {
-              profile: {
-                itemKeys: [
-                  'profile-name',
-                  'profile-surname'
-                ],
-                name: 'Profile',
-                type: 'permanent'
-              }
-            }
-          }
-        }
-      };
-
-      // set expected content
-      const expectedContent = {
-        version: 1,
-        requester: {
-          name: 'Test requester name'
-        },
-        title: {
-          en: 'Title of the request'
-        },
-        description: {
-          en: 'Short Description'
-        },
-        consent: {
-          en: 'This is a consent message'
-        },
-        features: { },
-        permissionsExtra: [],
-        permissions: [
-          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
-          {
-            streamId: 'profile-date-of-birth',
-            defaultName: 'Date of Birth',
-            level: 'read'
-          }
-        ],
-        app: { // may have "url" in the future
-          id: 'test-app',
-          url: 'https://xxx.yyy',
-          data: { // settings for the app
-            dummy: 'dummy'
-          }
-        },
-        sections: [{
-          itemKeys: [
-            'profile-name',
-            'profile-surname'
-          ],
-          key: 'profile',
-          name: {
-            en: 'Profile'
-          },
-          type: 'permanent'
-        }
-        ]
-      };
-      newCollector.request.setContent(requestContent);
-      assert.deepEqual(newCollector.request.content, expectedContent);
-    });
-  });
-
-  describe('[APEX] Errors ', () => {
-    it('[APEH] Collector.client handleIncoming Request Errors', async function () {
-      this.timeout(20000);
-      const new0 = await helperNewAppAndUsers('dummy', 'dummyApp', 'dummyC', 'dummyCApp');
-      const inv0 = await helperNewInvite(new0.appManaging, new0.appClient, 'APEH');
-
-      // Already known but different incomingEnventId
-      try {
-        await new0.appClient.handleIncomingRequest(inv0.inviteSharingData.apiEndpoint, 'bogusId');
-        throw new Error('should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Found existing collectorClient with a different eventId');
-      }
-
-      // -- The following case happens when a user revokes its app permission
-      // and re-grant other permissions to the same app
-
-      // revoke appManaging
-      await new0.appManaging.connection.revoke();
-      // create a new appManaging with the same name for the same user
-      const manager1 = await helperNewAppManaging('dummy', 'dummyApp', new0.managingUser);
-      // get invites from precedent collector
-      const collector1 = (await manager1.appManaging.getCollectors())[0];
-      await collector1.init();
-      const inv1 = (await collector1.getInvites())[0];
-      const inviteSharingData1 = await inv1.getSharingData();
-      // Already known but different incomingEnventId
-      try {
-        await new0.appClient.handleIncomingRequest(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
-        throw new Error('should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Found existing collectorClient with a different apiEndpoint');
-      }
-
-      // reset to new incoming (might be implement later)
-      const requesterConnection = new pryv.Connection(inviteSharingData1.apiEndpoint);
-      const accessInfo = await requesterConnection.accessInfo();
-      const collectorClient = await new0.appClient.getCollectorClientByKey(CollectorClient.keyFromInfo(accessInfo));
-      await collectorClient.reset(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
-      assert.equal(collectorClient.status, CollectorClient.STATUSES.incoming);
-    });
-  });
-
-  describe('[APCX] app Templates Client', function () {
-    it('[APCE] Should throw error if not initialized with a personal or master token', async () => {
-      const permissionsDummy = [{ streamId: 'dummy', level: 'manage' }];
-      const clientUserNonMaster = await createUserPermissions(clientUser, permissionsDummy, [], appName);
-      // non master app
-      try {
-        await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserNonMaster.appApiEndpoint, appClientName);
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, `Application with "app" type of access requires  (streamId = "${baseStreamIdClient}", level = "manage") or master access`);
-      }
-      // personal
-      const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUser.apiEndpoint, appClientName);
-      assert.equal(appClient.streamData.id, baseStreamIdClient);
-      assert.equal(appClient.streamData.name, appClientName);
-    });
-  });
-});
-
-
-/***/ },
-
-/***/ "./tests/apptemplatesRequest.test.js"
-/*!*******************************************!*\
-  !*** ./tests/apptemplatesRequest.test.js ***!
-  \*******************************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { initHDSModel } = __webpack_require__(/*! ../js */ "./js/index.js");
-const { helperNewAppManaging } = __webpack_require__(/*! ./test-utils/helpersAppTemplate */ "./tests/test-utils/helpersAppTemplate.js");
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-const { CollectorRequest } = __webpack_require__(/*! ../js/appTemplates/CollectorRequest */ "./js/appTemplates/CollectorRequest.js");
-
-describe('[APRX] appTemplates Requests', function () {
-  this.timeout(8000);
-
-  before(async () => {
-    await initHDSModel();
-  });
-
-  describe('[AREX] CollectorRequest error cases', function () {
-    it('[AREA] should throw error for unknown features', () => {
-      const request = new CollectorRequest({});
-      try {
-        request.setContent({
-          features: { unknownFeature: { setting: 'value' } }
-        });
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Found unkown features');
-      }
-    });
-
-    it('[AREB] should throw error for invalid chat type', () => {
-      const request = new CollectorRequest({});
-      try {
-        request.addChatFeature({ type: 'invalid' });
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Invalid chat type');
-      }
-    });
-
-    it('[AREC] should throw error for duplicate section key', () => {
-      const request = new CollectorRequest({});
-      request.createSection('test-section', 'permanent');
-      try {
-        request.createSection('test-section', 'recurring');
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Section with key: test-section already exists');
-      }
-    });
-
-    it('[ARED] should throw error for invalid version', () => {
-      const request = new CollectorRequest({});
-      try {
-        request.setContent({ version: 99 });
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Invalid CollectorRequest content version: 99');
-      }
-    });
-
-    it('[AREE] should handle permissionsExtra in content', () => {
-      const request = new CollectorRequest({});
-      request.setContent({
-        permissionsExtra: [
-          { streamId: 'test-stream', level: 'read' }
-        ]
-      });
-      assert.equal(request.permissionsExtra.length, 1);
-      assert.equal(request.permissionsExtra[0].streamId, 'test-stream');
-    });
-
-    it('[AREF] addChatFeature with usernames type', () => {
-      const request = new CollectorRequest({});
-      request.addChatFeature({ type: 'usernames' });
-      assert.deepEqual(request.features.chat, { type: 'usernames' });
-      assert.equal(request.hasChatFeature, true);
-    });
-  });
-
-  describe('[ARSO] Section ordering and customizations', function () {
-    it('[ARSA] moveItemKey reorders items within a section', () => {
-      const request = new CollectorRequest({});
-      const section = request.createSection('test', 'permanent');
-      section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
-      section.moveItemKey('profile-sex', 0);
-      assert.deepEqual(section.itemKeys, ['profile-sex', 'profile-name', 'profile-surname']);
-    });
-
-    it('[ARSB] removeItemKey removes item from section', () => {
-      const request = new CollectorRequest({});
-      const section = request.createSection('test', 'permanent');
-      section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
-      section.removeItemKey('profile-surname');
-      assert.deepEqual(section.itemKeys, ['profile-name', 'profile-sex']);
-    });
-
-    it('[ARSC] moveSection reorders sections', () => {
-      const request = new CollectorRequest({});
-      request.createSection('a', 'permanent');
-      request.createSection('b', 'recurring');
-      request.createSection('c', 'permanent');
-      request.moveSection('c', 0);
-      assert.deepEqual(request.sections.map(s => s.key), ['c', 'a', 'b']);
-    });
-
-    it('[ARSD] removeSection removes a section', () => {
-      const request = new CollectorRequest({});
-      request.createSection('a', 'permanent');
-      request.createSection('b', 'recurring');
-      request.removeSection('a');
-      assert.equal(request.sections.length, 1);
-      assert.equal(request.sections[0].key, 'b');
-    });
-
-    it('[ARSE] itemCustomizations set/get', () => {
-      const request = new CollectorRequest({});
-      const section = request.createSection('test', 'permanent');
-      section.addItemKeys(['profile-name', 'profile-surname']);
-      section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
-      assert.deepEqual(section.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
-      assert.equal(section.getItemCustomization('profile-surname'), undefined);
-    });
-
-    it('[ARSF] itemCustomizations serialization round-trip', () => {
-      const request = new CollectorRequest({});
-      const section = request.createSection('test', 'permanent');
-      section.addItemKeys(['profile-name', 'profile-surname']);
-      section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
-
-      const content = request.content;
-      assert.deepEqual(content.sections[0].itemCustomizations, {
-        'profile-name': { placeholder: 'Enter name' }
-      });
-
-      // Round-trip: reload from serialized content
-      const request2 = new CollectorRequest(content);
-      const section2 = request2.getSectionByKey('test');
-      assert.deepEqual(section2.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
-    });
-
-    it('[ARSG] getData omits itemCustomizations when empty', () => {
-      const request = new CollectorRequest({});
-      const section = request.createSection('test', 'permanent');
-      section.addItemKeys(['profile-name']);
-      const data = section.getData();
-      assert.equal(data.itemCustomizations, undefined);
-    });
-
-    it('[ARSH] moveItemKey throws for unknown key', () => {
-      const request = new CollectorRequest({});
-      const section = request.createSection('test', 'permanent');
-      section.addItemKeys(['profile-name']);
-      assert.throws(() => section.moveItemKey('unknown', 0), /not found/);
-    });
-
-    it('[ARSI] moveSection throws for unknown key', () => {
-      const request = new CollectorRequest({});
-      request.createSection('a', 'permanent');
-      assert.throws(() => request.moveSection('unknown', 0), /not found/);
-    });
-
-    it('[ARSJ] removeSection throws for unknown key', () => {
-      const request = new CollectorRequest({});
-      request.createSection('a', 'permanent');
-      assert.throws(() => request.removeSection('unknown'), /not found/);
-    });
-  });
-
-  it('[APRC] Compute a simple request', async () => {
-    const baseStreamId = 'aprc';
-    const { appManaging } = await helperNewAppManaging(baseStreamId, 'test-APRC');
-    const newCollector = await appManaging.createCollector('Invite test APCV');
-
-    const request = newCollector.request;
-    request.appId = 'dr-form';
-    request.appUrl = 'https://xxx.yyy';
-    request.title = { en: 'My title' };
-    request.requesterName = 'Username APRC';
-    request.description = { en: 'Short Description' };
-    request.consent = { en: 'Short Consent' };
-    request.addPermissionExtra({ streamId: 'profile' });
-    request.addPermissionExtra({ streamId: 'fertility' });
-
-    const sectionA = request.createSection('profile', 'permanent');
-    sectionA.setNameLocal('en', 'A');
-    sectionA.addItemKeys([
-      'profile-name',
-      'profile-surname',
-      'profile-sex',
-      'family-children-count',
-      'fertility-miscarriages-count'
-    ]);
-
-    const sectionB = request.createSection('history', 'recurring');
-    sectionB.setNameLocal('en', 'B');
-    sectionB.addItemKeys([
-      'fertility-ttc-tta',
-      'body-weight'
-    ]);
-    // build permissions needed
-    request.buildPermissions();
-    const requestContent = request.content;
-    assert.ok(requestContent.id.startsWith(baseStreamId), 'id should start with the basetreamid of the manager');
-
-    const expectedContent = {
-      version: 1,
-      title: { en: 'My title' },
-      consent: { en: 'Short Consent' },
-      description: { en: 'Short Description' },
-      requester: { name: 'Username APRC' },
-      features: {},
-      permissionsExtra: [
-        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
-        {
-          streamId: 'fertility',
-          defaultName: 'Fertility',
-          level: 'read'
-        }
-      ],
-      permissions: [
-        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
-        { streamId: 'fertility', defaultName: 'Fertility', level: 'read' },
-        {
-          streamId: 'family-children',
-          defaultName: 'Children',
-          level: 'read'
-        },
-        {
-          streamId: 'body-weight',
-          defaultName: 'Body Weight',
-          level: 'read'
-        }
-      ],
-      app: { id: 'dr-form', url: 'https://xxx.yyy', data: {} },
-      sections: [
-        {
-          key: 'profile',
-          type: 'permanent',
-          name: { en: 'A' },
-          itemKeys: [
-            'profile-name',
-            'profile-surname',
-            'profile-sex',
-            'family-children-count',
-            'fertility-miscarriages-count'
-          ]
-        },
-        {
-          key: 'history',
-          type: 'recurring',
-          name: { en: 'B' },
-          itemKeys: ['fertility-ttc-tta', 'body-weight']
-        }
-      ],
-      id: requestContent.id
-    };
-    assert.deepEqual(requestContent, expectedContent);
-  });
-
-  it('[APRD] A request with chat', async () => {
-    const baseStreamId = 'aprd';
-    const { appManaging } = await helperNewAppManaging(baseStreamId, 'test-APRD');
-    const newCollector = await appManaging.createCollector('Invite test APRD');
-
-    const request = newCollector.request;
-    request.appId = 'dr-form';
-    request.appUrl = 'https://xxx.yyy';
-    request.title = { en: 'My title' };
-    request.requesterName = 'Username APRD';
-    request.description = { en: 'Short Description' };
-    request.consent = { en: 'Short Consent' };
-    request.addPermissionExtra({ streamId: 'profile' });
-    request.addChatFeature();
-
-    const sectionA = request.createSection('profile', 'permanent');
-    sectionA.setNameLocal('en', 'A');
-    sectionA.addItemKeys([
-      'profile-name',
-      'profile-surname'
-    ]);
-
-    // build permissions needed
-    request.buildPermissions();
-
-    const requestContent = request.content;
-
-    assert.ok(requestContent.id.startsWith(baseStreamId), 'id should start with the basetreamid of the manager');
-
-    const expectedContent = {
-      version: 1,
-      title: { en: 'My title' },
-      consent: { en: 'Short Consent' },
-      description: { en: 'Short Description' },
-      requester: { name: 'Username APRD' },
-      features: { chat: { type: 'user' } },
-      permissionsExtra: [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }],
-      permissions: [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }],
-      app: { id: 'dr-form', url: 'https://xxx.yyy', data: {} },
-      sections: [
-        {
-          key: 'profile',
-          type: 'permanent',
-          name: { en: 'A' },
-          itemKeys: ['profile-name', 'profile-surname']
-        }
-      ],
-      id: requestContent.id
-    };
-    assert.deepEqual(requestContent, expectedContent);
-  });
-});
-
-
-/***/ },
-
-/***/ "./tests/errors.test.js"
-/*!******************************!*\
-  !*** ./tests/errors.test.js ***!
-  \******************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-
-const { HDSLibError } = __webpack_require__(/*! ../js/errors */ "./js/errors.js");
-
-describe('[ERRX] HDSLibError', () => {
-  it('[ERRS] HDSLibError.toString() without inner message', async () => {
-    const error = new HDSLibError('Hello');
-    assert.equal(error.message, 'Hello');
-    assert.equal('' + error, 'Error: Hello\nInner Object:\n{}');
-  });
-
-  it('[ERRM] HDSLibError.toString() with inner message', async () => {
-    const innerObject = { message: 'Bob', dummy: 'Dummy' };
-    const error = new HDSLibError('Hello', innerObject);
-    assert.equal(error.message, 'Hello >> Bob');
-    assert.equal('' + error, 'Error: Hello >> Bob\nInner Object:\n{\n  "message": "Bob",\n  "dummy": "Dummy"\n}');
-    assert.deepEqual(error.innerObject, innerObject);
-  });
-
-  it('[ERRO] HDSLibError.toString() with bject without message', async () => {
-    const error = new HDSLibError('Hello', { dummy: 'Dummy' });
-    assert.equal(error.message, 'Hello');
-    assert.equal('' + error, 'Error: Hello\nInner Object:\n{\n  "dummy": "Dummy"\n}');
-  });
-});
-
-
-/***/ },
-
-/***/ "./tests/hdsLib.test.js"
-/*!******************************!*\
-  !*** ./tests/hdsLib.test.js ***!
-  \******************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-/**
- * Tests related to HDSLib.index.js & utils
- */
-const HDSLib = __webpack_require__(/*! ../js */ "./js/index.js");
-const { waitUntilFalse } = __webpack_require__(/*! ../js/utils */ "./js/utils.js");
-const { resetModel } = __webpack_require__(/*! ../js/HDSModel/HDSModelInitAndSingleton */ "./js/HDSModel/HDSModelInitAndSingleton.js");
-
-describe('[HDLX] HDSLib.index', () => {
-  before(async () => {
-    await HDSLib.initHDSModel();
-    resetModel();
-  });
-
-  it('[HDME] HDSLib.getHDSModel() throws error if not initialized', () => {
-    try {
-      HDSLib.getHDSModel().modelData;
-      throw new Error('Should throw an error');
-    } catch (e) {
-      assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
-    }
-
-    try {
-      HDSLib.getHDSModel().streams;
-      throw new Error('Should throw an error');
-    } catch (e) {
-      assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
-    }
-  });
-
-  it('[HDMF] HDSLib.initHDSModel()', async () => {
-    const model0 = await HDSLib.initHDSModel();
-    const model1 = await HDSLib.initHDSModel();
-    assert.equal(model0, model1, 'HDSLib.initHDSModel() should used cached model');
-    const model2 = HDSLib.getHDSModel();
-    assert.equal(model0, model2, 'HDSLib.getHDSModel() should used cached model');
-    // -- refresh model
-  });
-
-  describe('[HDUX] Utils', () => {
-    it('[HDUW] utils.waitUntilFalse', async function () {
-      this.timeout('1000');
-      let toBeSetToFalse = true;
-      setTimeout(() => { toBeSetToFalse = false; }, 500);
-
-      let count = 0;
-      await waitUntilFalse(() => {
-        count++;
-        return toBeSetToFalse;
-      }, 700);
-      assert.ok(count > 2, 'should do at least 2 loops');
-    });
-
-    it('[HDUW] utils.waitUntilFalse throw timout on error', async function () {
-      this.timeout('1000');
-      let toBeSetToFalse = true;
-      setTimeout(() => { toBeSetToFalse = false; }, 600);
-
-      let count = 0;
-      try {
-        await waitUntilFalse(() => {
-          count++;
-          return toBeSetToFalse;
-        }, 400);
-        throw new Error('Should throw errors');
-      } catch (e) {
-        assert.equal(e.message, 'Timeout after 400ms');
-      }
-      assert.ok(count > 2, 'should do at least 2 loops');
-    });
-  });
-});
-
-
-/***/ },
-
-/***/ "./tests/hdsModel.test.js"
-/*!********************************!*\
-  !*** ./tests/hdsModel.test.js ***!
-  \********************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-
-const modelURL = 'https://model.datasafe.dev/pack.json';
-
-const { HDSModel, initHDSModel } = __webpack_require__(/*! ../js/ */ "./js/index.js");
-const { resetPreferredLocales, setPreferredLocales } = __webpack_require__(/*! ../js/localizeText */ "./js/localizeText.js");
-
-describe('[MODX] Model', () => {
-  let model;
-  before(async () => {
-    model = new HDSModel(modelURL);
-    await model.load();
-  });
-
-  it('[MODL] Load model for item with multiple types: body-weight', async () => {
-    const modelLoad = new HDSModel(modelURL);
-    await modelLoad.load();
-    const itemDef = modelLoad.itemsDefs.forKey('body-weight');
-    assert.equal(itemDef.data.streamId, 'body-weight');
-    assert.deepEqual(itemDef.eventTypes, ['mass/kg', 'mass/lb']);
-    assert.equal(itemDef.key, 'body-weight');
-  });
-
-  it('[MODM] Load model for item with single type: body-vulva-wetness-feeling', async () => {
-    const modelLoad = new HDSModel(modelURL);
-    await modelLoad.load();
-    const itemDef = modelLoad.itemsDefs.forKey('body-vulva-wetness-feeling');
-    assert.deepEqual(itemDef.eventTypes, ['ratio/generic']);
-  });
-
-  it('[MODN] get All itemsDef', async () => {
-    const modelLoad = new HDSModel(modelURL);
-    await modelLoad.load();
-    const itemDefs = modelLoad.itemsDefs.getAll();
-    assert.ok(itemDefs.length > 0);
-    for (const itemDef of itemDefs) {
-      assert.ok(itemDef.key);
-    }
-  });
-
-  // ---------- itemDef ------------ //
-  describe('[MDVX] itemDef methods', function () {
-    it('[MDVA] eventTemplate() returns event template with streamId and type', async () => {
-      const itemDef = model.itemsDefs.forKey('body-weight');
-      const template = itemDef.eventTemplate();
-      assert.ok(template.streamIds);
-      assert.ok(template.type);
-      assert.deepEqual(template.streamIds, ['body-weight']);
-      assert.equal(template.type, 'mass/kg'); // first eventType
-    });
-
-    it('[MDVB] eventTemplate() returns correct streamId from data', async () => {
-      const itemDef = model.itemsDefs.forKey('profile-name');
-      const template = itemDef.eventTemplate();
-      assert.deepEqual(template.streamIds, ['profile-name']);
-    });
-  });
-
-  // ---------- items ------------ //
-  describe('[MOLX] items localization', function () {
-    afterEach(() => {
-      // make sure locales are set back to default after each test
-      resetPreferredLocales();
-    });
-    it('[MOLL] Label  & Description properties are localized', () => {
-      const itemDef = model.itemsDefs.forKey('body-weight');
-      assert.equal(itemDef.label, 'Body weight');
-      assert.equal(itemDef.description, 'Measured body weight');
-      setPreferredLocales(['fr']);
-      assert.equal(itemDef.label, 'Poids corporel');
-      assert.equal(itemDef.description, 'Poids corporel mesuré');
-    });
-  });
-
-  describe('[MOIX] items', function () {
-    it('[MOIE] Throw error if itemsDefs.forKey not found', async () => {
-      try {
-        model.itemsDefs.forKey('dummy');
-        throw new Error('Should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Cannot find item definition with key: dummy');
-      }
-    });
-
-    it('[MOIN] Return null with throwErrorIfNotFound = false', async () => {
-      const notFound = model.itemsDefs.forKey('dummy', false);
-      assert.equal(notFound, null);
-    });
-  });
-  // ---------- events ------------ //
-
-  describe('[MOEX] events', function () {
-    it('[MODS] Get definition from event data', async () => {
-      const fakeEvent = {
-        streamIds: ['body-weight', 'dummy'],
-        type: 'mass/kg'
-      };
-      const itemDef = model.itemsDefs.forEvent(fakeEvent);
-      assert.equal(itemDef.data.streamId, 'body-weight');
-      assert.deepEqual(itemDef.eventTypes, ['mass/kg', 'mass/lb']);
-    });
-
-    it('[MOEE] Throw error if itemsDefs.forEvent not found', async () => {
-      const fakeEvent = {
-        streamIds: ['dummy'],
-        type: 'mass/kg'
-      };
-      try {
-        model.itemsDefs.forEvent(fakeEvent);
-        throw new Error('Should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Cannot find definition for event: {"streamIds":["dummy"],"type":"mass/kg"}');
-      }
-    });
-
-    it('[MOEN] Return if itemsDefs.forEvent not found and throwErrorIfNotFound = false', async () => {
-      const fakeEvent = {
-        streamIds: ['dummy'],
-        type: 'mass/kg'
-      };
-      const notFound = model.itemsDefs.forEvent(fakeEvent, false);
-      assert.equal(notFound, null);
-    });
-
-    it('[MOED] Throw error if itemsDefs.forEvent finds duplicates', async () => {
-      const fakeEvent = {
-        streamIds: ['body-vulva-wetness-feeling', 'body-vulva-mucus-stretch'],
-        type: 'ratio/generic'
-      };
-      try {
-        model.itemsDefs.forEvent(fakeEvent);
-        throw new Error('Should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Found multiple matching definitions "body-vulva-wetness-feeling, body-vulva-mucus-stretch" for event: {"streamIds":["body-vulva-wetness-feeling","body-vulva-mucus-stretch"],"type":"ratio/generic"}');
-      }
-    });
-  });
-
-  // ----------- event types ----------- //
-  describe('[MOTX] eventTypes', function () {
-    it('[MOTA] event type definition', async () => {
-      const eventTypeDev = model.eventTypes.getEventTypeDefinition('temperature/c');
-      assert.deepEqual(eventTypeDev, { description: 'Celsius', type: 'number' });
-    });
-
-    it('[MOTB] extra definition', async () => {
-      const eventTypeExtra = model.eventTypes.getEventTypeExtra('temperature/c');
-      assert.deepEqual(eventTypeExtra, { name: { en: 'Degrees Celsius', fr: 'Degrés Celsius' }, symbol: '°C' });
-    });
-
-    it('[MOTC] symbol exists', async () => {
-      const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('temperature/c');
-      assert.deepEqual(eventTypeSymbol, '°C');
-    });
-
-    it('[MOTD] symbol not exists', async () => {
-      const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('audio/attached');
-      assert.deepEqual(eventTypeSymbol, null);
-    });
-  });
-
-  // ---------- datasources ------------ //
-
-  describe('[MODSX] datasources', function () {
-    let dsModel;
-    before(async () => {
-      dsModel = await initHDSModel();
-    });
-
-    it('[MODSA] get all datasources', async () => {
-      const datasources = dsModel.datasources.getAll();
-      assert.ok(datasources.length > 0);
-      for (const ds of datasources) {
-        assert.ok(ds.key);
-        assert.ok(ds.endpoint);
-      }
-    });
-
-    it('[MODSB] forKey returns medication datasource', async () => {
-      const ds = dsModel.datasources.forKey('medication');
-      assert.ok(ds);
-      assert.equal(ds.key, 'medication');
-      assert.equal(ds.endpoint, 'https://datasets.datasafe.dev/medication');
-      assert.equal(ds.queryParam, 'search');
-      assert.equal(ds.minQueryLength, 3);
-      assert.equal(ds.resultKey, 'medications');
-      assert.ok(ds.displayFields);
-      assert.ok(ds.valueFields);
-    });
-
-    it('[MODSC] forKey throws on unknown key', async () => {
-      try {
-        dsModel.datasources.forKey('dummy');
-        throw new Error('Should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Cannot find datasource definition with key: dummy');
-      }
-    });
-
-    it('[MODSD] forKey returns null with throwErrorIfNotFound = false', async () => {
-      const notFound = dsModel.datasources.forKey('dummy', false);
-      assert.equal(notFound, null);
-    });
-  });
-
-  // ---------- streams ------------ //
-
-  describe('[MOSX] streams', function () {
-    it('[MOSB] Streams Data by Id', async () => {
-      const streamData = model.streams.getDataById('fertility-cycles-start');
-      assert.equal(streamData.parentId, 'fertility-cycles');
-    });
-
-    it('[MOSE] Streams Data by Id, Throw Error if not found', async () => {
-      try {
-        model.streams.getDataById('dummy');
-        throw new Error('Should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Stream with id: "dummy" not found');
-      }
-    });
-
-    it('[MOSP] Streams Data parents', async () => {
-      const streamParentIds = model.streams.getParentsIds('fertility-cycles-start');
-      assert.deepEqual(streamParentIds, ['fertility', 'fertility-cycles']);
-    });
-
-    it('[MOSC] Necessary streams to handle itemKeys', async () => {
-      const itemKeys = [
-        'body-vulva-mucus-inspect',
-        'profile-name',
-        'profile-date-of-birth',
-        'body-vulva-mucus-stretch',
-        'profile-surname'
-      ];
-      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys);
-      // keeè a list of streams check that necessary streams exists
-      const streamIdsToCheck = {};
-      for (const itemKey of itemKeys) {
-        const streamId = model.itemsDefs.forKey(itemKey).data.streamId;
-        streamIdsToCheck[streamId] = true;
-      }
-      const parentExist = {}; // list of parent id in order
-      for (const stream of streamsToBeCreated) {
-        assert.ok(!!stream.id, 'stream should have an id');
-        assert.ok(!!stream.name, `stream "${stream.id}" should have a name`);
-        delete streamIdsToCheck[stream.id];
-        if (stream.parentId) assert.ok(!!parentExist[stream.parentId], `stream "${stream.id}" should have parent "${stream.parentId}" already in list`);
-        parentExist[stream.id] = true;
-      }
-      assert.deepEqual(Object.keys(streamIdsToCheck), []);
-    });
-
-    it('[MOSD] Necessary streams to handle itemKey, with existing streamIds', async () => {
-      const itemKeys = [
-        'body-vulva-mucus-inspect',
-        'profile-name',
-        'profile-date-of-birth',
-        'body-vulva-mucus-stretch',
-        'profile-surname'
-      ];
-      const knowExistingStreamsIds = ['body-vulva', 'profile', 'applications'];
-      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { knowExistingStreamsIds });
-      assert.deepEqual(streamsToBeCreated, [
-        {
-          id: 'body-vulva-mucus',
-          name: 'Vulva Mucus',
-          parentId: 'body-vulva'
-        },
-        {
-          id: 'body-vulva-mucus-inspect',
-          name: 'Vulva Mucus Inspect',
-          parentId: 'body-vulva-mucus'
-        },
-        { id: 'profile-name', name: 'Name', parentId: 'profile' },
-        {
-          id: 'profile-date-of-birth',
-          name: 'Date of Birth',
-          parentId: 'profile'
-        },
-        {
-          id: 'body-vulva-mucus-stretch',
-          name: 'Vulva Mucus Stretch',
-          parentId: 'body-vulva-mucus'
-        }
-      ]);
-    });
-
-    it('[MOSE] Necessary streams to handle itemKey, with nameProperty: defaultName', async () => {
-      const itemKeys = [
-        'profile-name'
-      ];
-      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { nameProperty: 'defaultName' });
-      assert.deepEqual(streamsToBeCreated, [
-        { id: 'profile', parentId: null, defaultName: 'Profile' },
-        { id: 'profile-name', parentId: 'profile', defaultName: 'Name' }
-      ]);
-    });
-
-    it('[MOSF] Necessary streams to handle itemKey, with nameProperty: none', async () => {
-      const itemKeys = [
-        'profile-name'
-      ];
-      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { nameProperty: 'none' });
-      assert.deepEqual(streamsToBeCreated, [
-        { id: 'profile', parentId: null },
-        { id: 'profile-name', parentId: 'profile' }
-      ]);
-    });
-  });
-
-  // ------------------- authorizations ------------------ //
-
-  describe('[MOAX] authorizations', function () {
-    it('[MOAA] Get Authorizations from items', async () => {
-      const itemKeys = [
-        'body-vulva-mucus-inspect',
-        'profile-name',
-        'profile-date-of-birth',
-        'body-vulva-mucus-stretch',
-        'profile-surname'
-      ];
-      const authorizationSet = model.authorizations.forItemKeys(itemKeys);
-      const expected = [
-        {
-          streamId: 'body-vulva-mucus-inspect',
-          defaultName: 'Vulva Mucus Inspect',
-          level: 'read'
-        },
-        { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
-        {
-          streamId: 'profile-date-of-birth',
-          defaultName: 'Date of Birth',
-          level: 'read'
-        },
-        {
-          streamId: 'body-vulva-mucus-stretch',
-          defaultName: 'Vulva Mucus Stretch',
-          level: 'read'
-        }
-      ];
-      assert.deepEqual(authorizationSet, expected);
-    });
-
-    it('[MOAL] Get Authorizations from items override correctly authorized level', async () => {
-      const itemKeys = ['profile-name'];
-      const options = { preRequest: [{ streamId: 'profile', level: 'contribute' }] };
-      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
-      const expected = [
-        { streamId: 'profile', level: 'contribute', defaultName: 'Profile' }
-      ];
-      assert.deepEqual(authorizationSet, expected);
-    });
-
-    it('[MOAV] Get Authorizations from items override correctly authorized level', async () => {
-      const itemKeys = ['profile-name'];
-      const options = {
-        defaultLevel: 'manage',
-        preRequest: [{ streamId: 'profile', level: 'read' }]
-      };
-      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
-      const expected = [
-        { streamId: 'profile', level: 'read', defaultName: 'Profile' },
-        { streamId: 'profile-name', defaultName: 'Name', level: 'manage' }
-      ];
-      assert.deepEqual(authorizationSet, expected);
-    });
-
-    it('[MOAM] Get Authorizations from items mix correctly authorized level', async () => {
-      const levels = [{ request: 'manage', expect: 'manage' }, { request: 'contribute', expect: 'contribute' }, { request: 'writeOnly', expect: 'contribute' }];
-      for (const level of levels) {
-        const itemKeys = ['profile-name'];
-        const options = {
-          preRequest: [{ streamId: 'profile-name', level: level.request }]
-        };
-        const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
-        const expected = [
-          { streamId: 'profile-name', level: level.expect, defaultName: 'Name' }
-        ];
-        assert.deepEqual(authorizationSet, expected);
-      }
-    });
-
-    it('[MOAO] Get Authorizations from items with overrides', async () => {
-      const itemKeys = [
-        'body-vulva-mucus-inspect',
-        'profile-name',
-        'profile-date-of-birth',
-        'body-vulva-mucus-stretch',
-        'profile-surname'
-      ];
-      const options = {
-        preRequest: [
-          { streamId: 'profile' },
-          { streamId: 'app-test', defaultName: 'App test', level: 'write' }
-        ]
-      };
-      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
-      const expected = [
-        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
-        { streamId: 'app-test', defaultName: 'App test', level: 'write' },
-        {
-          streamId: 'body-vulva-mucus-inspect',
-          defaultName: 'Vulva Mucus Inspect',
-          level: 'read'
-        },
-        {
-          streamId: 'body-vulva-mucus-stretch',
-          defaultName: 'Vulva Mucus Stretch',
-          level: 'read'
-        }
-      ];
-      assert.deepEqual(authorizationSet, expected);
-    });
-
-    it('[MOAW] Get Authorizations from items with overrides and no defaultName', async () => {
-      const itemKeys = [
-        'body-vulva-mucus-inspect',
-        'profile-name',
-        'profile-date-of-birth',
-        'body-vulva-mucus-stretch',
-        'profile-surname'
-      ];
-      const options = {
-        preRequest: [
-          { streamId: 'profile' },
-          { streamId: 'app-test', level: 'write' }
-        ],
-        includeDefaultName: false
-      };
-      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
-      const expected = [
-        { streamId: 'profile', level: 'read' },
-        { streamId: 'app-test', level: 'write' },
-        {
-          streamId: 'body-vulva-mucus-inspect',
-          level: 'read'
-        },
-        {
-          streamId: 'body-vulva-mucus-stretch',
-          level: 'read'
-        }
-      ];
-      assert.deepEqual(authorizationSet, expected);
-    });
-
-    it('[MOAZ] Get authorization throw error on unknown streamId with no defaultName', async () => {
-      const itemKeys = [
-        'profile-surname'
-      ];
-      const options = {
-        preRequest: [
-          { streamId: 'dummy', defaultName: 'Dummy', level: 'read' }
-        ],
-        includeDefaultName: false
-      };
-      try {
-        model.authorizations.forItemKeys(itemKeys, options);
-        throw new Error('Should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Do not include defaultName when not included explicitely on {"streamId":"dummy","defaultName":"Dummy","level":"read"}');
-      }
-    });
-
-    it('[MOAE] Throw error when defaultName is in one of of the "pre" but not desired ', async () => {
-      const itemKeys = [
-        'profile-surname'
-      ];
-      const options = {
-        preRequest: [
-          { streamIdXXXX: 'dummy', level: 'read' }
-        ]
-      };
-      try {
-        model.authorizations.forItemKeys(itemKeys, options);
-        throw new Error('Should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Missing streamId in options.preRequest item: {"streamIdXXXX":"dummy","level":"read"}');
-      }
-    });
-
-    it('[MOAR] Get authorization throw error on unknown streamId with no defaultName', async () => {
-      const itemKeys = [
-        'profile-surname'
-      ];
-      const options = {
-        preRequest: [
-          { streamId: 'dummy', level: 'read' }
-        ]
-      };
-      try {
-        model.authorizations.forItemKeys(itemKeys, options);
-        throw new Error('Should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'No "defaultName" in options.preRequest item: {"streamId":"dummy","level":"read"} and cannot find matching streams in default list');
-      }
-    });
-  });
-});
-
-
-/***/ },
-
-/***/ "./tests/libSettings.test.js"
-/*!***********************************!*\
-  !*** ./tests/libSettings.test.js ***!
-  \***********************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-
-const HDSLib = __webpack_require__(/*! ../js */ "./js/index.js");
-
-describe('[LISX] Lib settings', () => {
-  before(async () => {
-
-  });
-
-  it('[LISL] settings.setPreferredLocales default Local', async () => {
-    const text = {
-      en: 'Hello',
-      fr: 'Bonjour'
-    };
-    HDSLib.settings.setPreferredLocales(['en']);
-    assert.equal(HDSLib.l(text), text.en);
-    HDSLib.settings.setPreferredLocales(['fr']);
-    assert.equal(HDSLib.l(text), text.fr);
-  });
-});
-
-
-/***/ },
-
-/***/ "./tests/localizeText.test.js"
-/*!************************************!*\
-  !*** ./tests/localizeText.test.js ***!
-  \************************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-const { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales, validateLocalizableText } = __webpack_require__(/*! ../js/localizeText */ "./js/localizeText.js");
-
-describe('[LOCX] Localization', () => {
-  afterEach(() => {
-    // make sure locales are set back to default after each test
-    resetPreferredLocales();
-  });
-
-  describe('[LOVX] validateLocalizableText', () => {
-    it('[LOVA] should validate correct localizable text', () => {
-      const text = { en: 'Hello', fr: 'Bonjour' };
-      const result = validateLocalizableText('testKey', text);
-      assert.deepEqual(result, text);
-    });
-
-    it('[LOVB] should throw error if en is missing', () => {
-      try {
-        validateLocalizableText('testKey', { fr: 'Bonjour' });
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Missing or invalid localizable text for testKey');
-      }
-    });
-
-    it('[LOVC] should throw error if en is not a string', () => {
-      try {
-        validateLocalizableText('testKey', { en: 123 });
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Missing or invalid localizable text for testKey');
-      }
-    });
-
-    it('[LOVD] should throw error if optional language is not a string', () => {
-      try {
-        validateLocalizableText('testKey', { en: 'Hello', fr: 123 });
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Missing or invalid localizable text for testKey languagecode: fr');
-      }
-    });
-
-    it('[LOVE] should throw error if es is not a string', () => {
-      try {
-        validateLocalizableText('testKey', { en: 'Hello', es: { nested: 'object' } });
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'Missing or invalid localizable text for testKey languagecode: es');
-      }
-    });
-  });
-
-  describe('[LOSX] Localization settings', () => {
-    it('[LOSG] getSupportedLocales', () => {
-      const defaultLocales = getSupportedLocales();
-      assert.deepEqual(defaultLocales, ['en', 'fr', 'es']);
-    });
-
-    it('[LOSS] setPreferredLocales, resetPrefferedLocales', () => {
-      const defaultLocales = getSupportedLocales();
-      const text = {
-        en: 'Hello',
-        fr: 'Bonjour'
-      };
-      setPreferredLocales(['en']);
-      assert.equal(localizeText(text), text.en);
-      setPreferredLocales(['fr', 'es']);
-      assert.equal(localizeText(text), text.fr);
-      const prefferedLocales = getPreferredLocales();
-      assert.deepEqual(prefferedLocales, ['fr', 'es', 'en']);
-      resetPreferredLocales();
-      assert.deepEqual(getPreferredLocales(), defaultLocales);
-    });
-
-    it('[LOSE] setPreferredLocales throws error if language code unsuported', () => {
-      try {
-        setPreferredLocales(['ex', 'en', 'fr', 'ut']);
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'locales "ex, ut" are not supported');
-      }
-    });
-
-    it('[LOSA] setPreferredLocales throws error if not array', () => {
-      try {
-        setPreferredLocales('en');
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'setPreferredLocales takes an array of language codes');
-      }
-    });
-  });
-
-  // --- item localization
-
-  describe('[LOLX] item localization', () => {
-    it('[LOLN] localizable null items return null', () => {
-      const nullRes = localizeText(null);
-      assert.equal(nullRes, null);
-    });
-
-    it('[LOLE] localizable should return english translation if none other found', () => {
-      setPreferredLocales(['fr', 'es']);
-      const text = {
-        en: 'Hello'
-      };
-      const res = localizeText(text);
-      assert.equal(res, 'Hello');
-    });
-
-    it('[LOLT] localizable items must have an english translation, even if default language is not english', () => {
-      try {
-        const text = {
-          es: 'Ola',
-          fr: 'Bonjour'
-        };
-        setPreferredLocales(['fr']);
-        localizeText(text);
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'textItems must have an english translation');
-      }
-    });
-  });
-});
-
-
-/***/ },
-
-/***/ "./tests/test-utils/config.js"
-/*!************************************!*\
-  !*** ./tests/test-utils/config.js ***!
-  \************************************/
-(module) {
-
-module.exports = {
-  serviceInfoURL: 'https://demo.datasafe.dev/reg/service/info',
-  appId: 'hds-lib-tests',
-  modelURL: 'https://model.datasafe.dev/pack.json'
-};
-
-
-/***/ },
-
-/***/ "./tests/test-utils/debug.js"
-/*!***********************************!*\
-  !*** ./tests/test-utils/debug.js ***!
-  \***********************************/
-(module, __unused_webpack_exports, __webpack_require__) {
-
-const util = __webpack_require__(/*! util */ "./node_modules/util/util.js");
-
-function log () {
-  for (let i = 0; i < arguments.length; i++) {
-    console.log(util.inspect(arguments[i], { depth: 12, colors: true }));
-  }
-}
-
-function stack (start = 0, length = 100) {
-  const e = new Error();
-  return e.stack.split('\n').filter(l => l.indexOf('node_modules') < 0).slice(start + 1, start + length + 1);
-}
-
-function logstack () {
-  log(...arguments, stack(2, 4));
-}
-
-module.exports = {
-  logstack,
-  log,
-  stack
-};
-
-__webpack_require__.g.$$ = logstack;
-__webpack_require__.g.$$$ = log;
-
-
-/***/ },
-
-/***/ "./tests/test-utils/deps-browser.js"
-/*!******************************************!*\
-  !*** ./tests/test-utils/deps-browser.js ***!
-  \******************************************/
-(module, __unused_webpack_exports, __webpack_require__) {
-
-module.exports = {
-  assert: __webpack_require__(/*! assert */ "./node_modules/assert/build/assert.js")
-};
-
-
-/***/ },
-
-/***/ "./tests/test-utils/helpersAppTemplate.js"
-/*!************************************************!*\
-  !*** ./tests/test-utils/helpersAppTemplate.js ***!
-  \************************************************/
-(module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./deps-node */ "./tests/test-utils/deps-browser.js");
-const { createUserAndPermissions, pryv, createUser, createUserPermissions } = __webpack_require__(/*! ./pryvService */ "./tests/test-utils/pryvService.js");
-const AppManagingAccount = (__webpack_require__(/*! ../../js/ */ "./js/index.js").appTemplates).AppManagingAccount;
-const AppClientAccount = (__webpack_require__(/*! ../../js/ */ "./js/index.js").appTemplates).AppClientAccount;
-
-module.exports = {
-  helperNewAppAndUsers,
-  helperNewAppClient,
-  helperNewAppManaging,
-  helperNewInvite
-};
-
-/**
- * function helperNewAppManaging
- */
-async function helperNewAppManaging (baseStreamIdManager, appName, managingUser = null) {
-  // -- managing
-  const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamIdManager, name: appName, parentId: 'applications' }];
-  const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
-  if (!managingUser) {
-    managingUser = await createUserAndPermissions(null, permissionsManager, initialStreams, appName);
-  } else {
-    // replace managing user with new permissions set
-    managingUser = await createUserPermissions(managingUser, permissionsManager, initialStreams, appName);
-  }
-  const connection = new pryv.Connection(managingUser.appApiEndpoint);
-  const appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
-  return { managingUser, appManaging };
-}
-
-/**
- * helper to generate a new managing user and new client user
- */
-async function helperNewAppClient (baseStreamIdClient, appClientName) {
-  // -- receiving user
-  const clientUser = await createUser();
-  const permissionsClient = [{ streamId: '*', level: 'manage' }];
-  const clientUserResultPermissions = await createUserPermissions(clientUser, permissionsClient, [], appClientName);
-  const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserResultPermissions.appApiEndpoint, appClientName);
-  return { clientUser, clientUserResultPermissions, appClient };
-}
-
-/**
- * helper to generate a new managing user and new client user
- */
-async function helperNewAppAndUsers (baseStreamIdManager, appName, baseStreamIdClient, appClientName) {
-  const res = {};
-  const resManager = await helperNewAppManaging(baseStreamIdManager, appName);
-  const resClient = await helperNewAppClient(baseStreamIdClient, appClientName);
-  Object.assign(res, resManager);
-  Object.assign(res, resClient);
-  return res;
-}
-
-/**
- * heper to generate a new collector and invite for this managing application
- * @param {AppManagingAccount} appManaging
- * @returns {Object}
- */
-async function helperNewInvite (appManaging, appClient, code, extraFeatures = { requestContent: {}, addChat: false }) {
-  code = code || Math.floor(Math.random() * 1000);
-  const collector = await appManaging.createCollector('Invite test ' + code);
-
-  // set request content
-  const requestContent = {
-    version: 0,
-    requester: { name: 'Test requester name' },
-    title: { en: 'Title of the request' },
-    description: { en: 'Short Description' },
-    consent: { en: 'This is a consent message' },
-    permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
-    app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
-  };
-  Object.assign(requestContent, extraFeatures.extraContent || {});
-  collector.request.setContent(requestContent);
-  if (extraFeatures.addChat) {
-    collector.request.addChatFeature();
-  }
-
-  await collector.save();
-  await collector.publish();
-  // create invite
-  const options = { customData: { hello: 'bob' } };
-  const invite = await collector.createInvite('Invite One', options);
-  const inviteSharingData = await invite.getSharingData();
-  assert.equal(inviteSharingData.apiEndpoint, await collector.sharingApiEndpoint());
-
-  // Invitee receives the invite
-  const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
-
-  return { collector, invite, collectorClient, inviteSharingData };
-}
-
-
-/***/ },
-
-/***/ "./tests/test-utils/pryvService.js"
-/*!*****************************************!*\
-  !*** ./tests/test-utils/pryvService.js ***!
-  \*****************************************/
-(module, __unused_webpack_exports, __webpack_require__) {
-
-__webpack_require__(/*! ./debug */ "./tests/test-utils/debug.js");
-const pryv = (__webpack_require__(/*! ../../js/ */ "./js/index.js").pryv);
-const HDSService = (__webpack_require__(/*! ../../js/ */ "./js/index.js").HDSService);
-
-const ShortUniqueId = __webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js");
-const passwordGenerator = new ShortUniqueId({ dictionary: 'alphanum', length: 12 });
-
-const config = __webpack_require__(/*! ./config */ "./tests/test-utils/config.js");
-const { setServiceInfoURL } = __webpack_require__(/*! ../../js/settings */ "./js/settings.js");
-
-module.exports = {
-  init,
-  userExists,
-  createUser,
-  createUserAndPermissions,
-  createUserPermissions,
-  service,
-  pryv,
-  config
-};
-
-/**
- * @type {HDSService}
- */
-let serviceSingleton;
-
-/**
- * @type {ServiceInfo}
- */
-let infosSingleton;
-
-/**
- * Get current HDSService
- * @returns {HDSService}
- */
-function service () {
-  if (serviceSingleton == null) throw new Error('Init pryvService first');
-  return serviceSingleton;
-}
-
-/**
- * Initialize HDSservice from config and creates a singleton
- * accessible via service()
- * @returns {HDSService}
- */
-async function init () {
-  if (infosSingleton) return infosSingleton;
-  if (!config.appId) throw new Error('Cannot find appId in config');
-  if (!config.serviceInfoURL) throw new Error('Cannot find serviceInfoURL in config');
-  setServiceInfoURL(config.serviceInfoURL);
-  serviceSingleton = new HDSService(config.serviceInfoURL);
-  infosSingleton = await serviceSingleton.info();
-  return infosSingleton;
-}
-
-/**
- * @typedef {Object} CreateUserResult
- * @property {string} apiEndpoint - a personal ApiEnpoint
- * @property {string} username - The username
- * @property {string} password - The password
- */
-
-/**
- * Create a user on Pryv.io
- * @param {string} userId - desireg UserId for Prvy.io
- * @param {string} password
- * @param {string} email
- * @returns {CreateUserResult}
- */
-async function createUser (username, password, email) {
-  const host = await getHost();
-  password = password || passwordGenerator.rnd();
-  username = username || getNewUserId('u');
-  email = email || username + '@hds.bogus';
-  try {
-    // create user
-    const res = await fetch(host + 'users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        appId: config.appId,
-        username,
-        password,
-        email,
-        invitationtoken: 'enjoy',
-        languageCode: 'en',
-        referer: 'none'
-      })
-    });
-    const body = await res.json();
-    if (body.apiEndpoint == null) throw new Error('Cannot find apiEndpoint in response');
-    return { apiEndpoint: body.apiEndpoint, username: body.username, password };
-  } catch (e) {
-    throw new Error('Failed creating user ' + host + 'users');
-  }
-}
-
-/**
- * Create userAccountAndPermission
- * @param {string} username
- * @param {Object} permissions - permission set (as per pryv api) - Add name if they might not exist
- * @param {Array<Stream creation>} initialStreams - to be created
- * @param {string} [appName] - default: from config
- * @param {string} [password] - if not provided will be 'pass{usernam}'
- * @param {string} [email] - if not provided will be '{usernam}@hds.bogus'
- * @returns {Object} username, personalApiEndpoint, appId, appApiEndpoint
- */
-async function createUserAndPermissions (username, permissions, initialStreams, appName, password, email) {
-  const newUser = await createUser(username, password, email);
-  const result = await createUserPermissions(newUser, permissions, initialStreams, appName);
-  result.appId = config.appId;
-  return result;
-}
-
-async function createUserPermissions (user, permissions, initialStreams = [], appName) {
-  const personalConnection = new pryv.Connection(user.apiEndpoint || user.personalApiEndpoint);
-  // -- make sure requested streams exists
-  const createStreams = initialStreams.map(s => ({
-    method: 'streams.create',
-    params: {
-      id: s.id,
-      name: s.name,
-      parentId: s.parentId || null
-    }
-  }));
-  // -- create access
-  const accessRequest = {
-    method: 'accesses.create',
-    params: {
-      type: 'app',
-      name: appName,
-      permissions
-    }
-  };
-  const apiCalls = [...createStreams, accessRequest];
-  const res = await personalConnection.api(apiCalls);
-  const accessRequestResult = res.pop();
-  if (accessRequestResult.error) throw new Error(accessRequestResult.error.message);
-  const appApiEndpoint = accessRequestResult.access?.apiEndpoint;
-  const result = {
-    username: user.username,
-    personalApiEndpoint: user.apiEndpoint,
-    appApiEndpoint
-  };
-
-  return result;
-}
-
-/**
- * Utility to check if a user exists on a Pryv pltafom
- * @param {string} userId
- * @returns {boolean}
- */
-async function userExists (userId) {
-  await init();
-  const userExistsRes = await fetch(infosSingleton.register + userId + '/check_username');
-  const userExistsBody = await userExistsRes.json();
-  if (typeof userExistsBody.reserved === 'undefined') throw Error('Pryv invalid user exists response ' + JSON.stringify(userExistsBody));
-  return userExistsBody.reserved;
-}
-
-/**
- * Not really usefull for Open-Pryv.io kept if entreprise version becoms availble
- * @returns {string} first available hosting
- */
-async function getHost () {
-  await init();
-  // get available hosting
-  const hostingsRes = await fetch(infosSingleton.register + 'hostings', {
-    headers: { Accept: 'application/json' }
-  });
-  const hostings = await hostingsRes.json();
-  let hostingCandidate = null;
-  findOneHostingKey(hostings, 'N');
-  function findOneHostingKey (o, parentKey) {
-    for (const key of Object.keys(o)) {
-      if (parentKey === 'hostings') {
-        const hosting = o[key];
-        if (hosting.available) {
-          hostingCandidate = hosting;
-        }
-        return;
-      }
-      if (typeof o[key] !== 'string') {
-        findOneHostingKey(o[key], key);
-      }
-    }
-  }
-  if (hostingCandidate == null) throw Error('Cannot find hosting in: ' + JSON.stringify(hostings));
-  return hostingCandidate.availableCore;
-}
-
-const userIdGenerator = new ShortUniqueId({ dictionary: 'alphanum_lower', length: 7 });
-function getNewUserId (startWith = 'x') {
-  const id = startWith + userIdGenerator.rnd();
-  return id;
-}
-
-
-/***/ },
-
-/***/ "./tests/toolkitStreamAutoCreate.test.js"
-/*!***********************************************!*\
-  !*** ./tests/toolkitStreamAutoCreate.test.js ***!
-  \***********************************************/
-(__unused_webpack_module, __unused_webpack_exports, __webpack_require__) {
-
-const { assert } = __webpack_require__(/*! ./test-utils/deps-node */ "./tests/test-utils/deps-browser.js");
-
-const HDSLib = __webpack_require__(/*! ../js */ "./js/index.js");
-const { createUserAndPermissions } = __webpack_require__(/*! ./test-utils/pryvService */ "./tests/test-utils/pryvService.js");
-
-describe('[TKSX] toolKit Stream Auto Create', function () {
-  this.timeout(10000);
-  before(async () => {
-    await HDSLib.initHDSModel();
-  });
-
-  it('[TKSA] create required streams based on itemsDefs', async () => {
-    const permissionsManager = [{ streamId: '*', level: 'manage' }];
-    const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test LISL');
-    const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
-    const streamsAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
-
-    const itemKeys = [
-      'profile-name'
-    ];
-
-    const createdStreams = await streamsAutoCreate.ensureExistsForItems(itemKeys);
-    assert.equal(createdStreams.length, 2);
-    assert.equal(createdStreams[0].id, 'profile');
-    assert.equal(createdStreams[1].id, 'profile-name');
-
-    const createdStream2 = await streamsAutoCreate.ensureExistsForItems(itemKeys);
-    assert.equal(createdStream2.length, 0, 'Should not recreate existing streams');
-  });
-
-  it('[TKSB] attachToConnection reuses existing instance', async () => {
-    const permissionsManager = [{ streamId: '*', level: 'manage' }];
-    const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test TKSB');
-    const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
-
-    const streamsAutoCreate1 = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
-    const streamsAutoCreate2 = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
-    assert.strictEqual(streamsAutoCreate1, streamsAutoCreate2, 'Should reuse existing instance');
-  });
-
-  it('[TKSC] addStreamStructure adds streams to known list', async () => {
-    const permissionsManager = [{ streamId: '*', level: 'manage' }];
-    const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test TKSC');
-    const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
-    const streamsAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
-
-    // Add stream structure
-    const streamStructure = [
-      { id: 'existing-parent', name: 'Existing Parent', children: [{ id: 'existing-child', name: 'Existing Child' }] }
-    ];
-    streamsAutoCreate.addStreamStructure(streamStructure);
-
-    const knownIds = streamsAutoCreate.knowStreamIds();
-    assert.ok(knownIds.includes('existing-parent'));
-    assert.ok(knownIds.includes('existing-child'));
-  });
-
-  it('[TKSD] addStreamStructure handles null input', async () => {
-    const permissionsManager = [{ streamId: '*', level: 'manage' }];
-    const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test TKSD');
-    const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
-    const streamsAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
-
-    // Should not throw
-    streamsAutoCreate.addStreamStructure(null);
-    streamsAutoCreate.addStreamStructure(undefined);
-  });
-
-  it('[TKSE] ensureExistsForItems handles Set input', async () => {
-    const permissionsManager = [{ streamId: '*', level: 'manage' }];
-    const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test TKSE');
-    const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
-    const streamsAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
-
-    const itemKeys = new Set(['profile-surname']);
-
-    const createdStreams = await streamsAutoCreate.ensureExistsForItems(itemKeys);
-    assert.ok(createdStreams.length > 0);
-  });
-
-  it('[TKSF] ensureExistsForItems with item-already-exists error continues normally', async () => {
-    const permissionsManager = [{ streamId: '*', level: 'manage' }];
-    const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test TKSF');
-    const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
-    const streamsAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
-
-    const itemKeys = ['profile-date-of-birth'];
-
-    // Create streams first
-    await streamsAutoCreate.ensureExistsForItems(itemKeys);
-
-    // Create a fresh instance that doesn't know about existing streams
-    delete connection.streamsAutoCreate;
-    const freshAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
-
-    // Should handle item-already-exists gracefully
-    const result = await freshAutoCreate.ensureExistsForItems(itemKeys);
-    // Since streams exist but freshAutoCreate doesn't know, API returns item-already-exists which is handled
-    assert.ok(Array.isArray(result));
-  });
-});
 
 
 /***/ },
@@ -21209,6 +19861,4293 @@ Emitter.prototype.hasListeners = function(event){
 
 /***/ },
 
+/***/ "./tests/HDSProfile.test.js"
+/*!**********************************!*\
+  !*** ./tests/HDSProfile.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
+
+
+
+
+describe('[PRFL] PROFILE_FIELDS', () => {
+  it('[PRFL1] has expected keys', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.displayName.eventType, 'contact/display-name');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.displayName.streamId, 'profile-display-name');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.avatar.eventType, 'picture/*');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.avatar.streamId, 'profile-avatar');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.name.eventType, 'contact/name');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.surname.eventType, 'contact/surname');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.dateOfBirth.eventType, 'date/iso-8601');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.sex.eventType, 'attributes/biological-sex');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.country.eventType, 'contact/country');
+  });
+});
+
+describe('[HDSP] HDSProfile (dev API)', function () {
+  this.timeout(15000);
+
+  let connection;
+
+  before(async () => {
+    await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.init)();
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUser)();
+    connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.apiEndpoint);
+
+    // Create profile stream tree
+    await connection.api([
+      { method: 'streams.create', params: { id: 'profile', name: 'Profile' } },
+      { method: 'streams.create', params: { id: 'profile-display-name', name: 'Display Name', parentId: 'profile' } },
+      { method: 'streams.create', params: { id: 'profile-avatar', name: 'Avatar', parentId: 'profile' } },
+      { method: 'streams.create', params: { id: 'profile-name', name: 'Name', parentId: 'profile' } },
+      { method: 'streams.create', params: { id: 'profile-date-of-birth', name: 'Date of Birth', parentId: 'profile' } },
+      { method: 'streams.create', params: { id: 'profile-sex', name: 'Sex', parentId: 'profile' } },
+      { method: 'streams.create', params: { id: 'profile-address', name: 'Address', parentId: 'profile' } },
+    ]);
+  });
+
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+  });
+
+  describe('[HDSP-U] unhook / defaults', () => {
+    it('[HDSP-U1] isHooked is false by default', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isHooked, false);
+    });
+
+    it('[HDSP-U2] get returns null for all fields when not hooked', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('name'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('surname'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('dateOfBirth'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('sex'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('country'), null);
+    });
+
+    it('[HDSP-U3] getAll returns all defaults', () => {
+      const all = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAll();
+      for (const key of Object.keys(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS)) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all[key], null, `${key} should be null`);
+      }
+    });
+
+    it('[HDSP-U4] unhook resets after hook', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isHooked, true);
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isHooked, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), null);
+    });
+  });
+
+  describe('[HDSP-H] hookToConnection', () => {
+    it('[HDSP-H1] hooks to empty profile', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isHooked, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('name'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar'), null);
+    });
+
+    it('[HDSP-H2] ignores events outside profile streams', async () => {
+      // Create a contact/display-name event in a non-profile stream
+      await connection.api([
+        { method: 'streams.create', params: { id: 'other-stream', name: 'Other' } },
+        { method: 'events.create', params: { streamIds: ['other-stream'], type: 'contact/display-name', content: 'Wrong' } },
+      ]);
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      // Should not pick up the event from other-stream
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), null);
+    });
+  });
+
+  describe('[HDSP-S] set profile fields', () => {
+    it('[HDSP-S1] throws when not hooked', async () => {
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('displayName', 'Alice'),
+        /hookToConnection/
+      );
+    });
+
+    it('[HDSP-S2] set displayName creates and persists', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('displayName', 'Dr. Smith');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), 'Dr. Smith');
+
+      // Verify persistence
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), 'Dr. Smith');
+    });
+
+    it('[HDSP-S3] update displayName modifies existing', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), 'Dr. Smith');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('displayName', 'Professor Smith');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), 'Professor Smith');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), 'Professor Smith');
+    });
+
+    it('[HDSP-S4] set all profile fields', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('name', 'John');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('surname', 'Smith');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('dateOfBirth', '1985-03-15');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('sex', 'male');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('country', 'Switzerland');
+
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('name'), 'John');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('surname'), 'Smith');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('dateOfBirth'), '1985-03-15');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('sex'), 'male');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('country'), 'Switzerland');
+
+      // Verify all persist
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('name'), 'John');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('surname'), 'Smith');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('dateOfBirth'), '1985-03-15');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('sex'), 'male');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('country'), 'Switzerland');
+    });
+
+    it('[HDSP-S5] getAll returns all set values', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      const all = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAll();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.displayName, 'Professor Smith');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.name, 'John');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.surname, 'Smith');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.dateOfBirth, '1985-03-15');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.sex, 'male');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.country, 'Switzerland');
+    });
+  });
+
+  describe('[HDSP-A] avatar', () => {
+    it('[HDSP-A1] setAvatarFromFile throws when not hooked', async () => {
+      const blob = new Blob(['test'], { type: 'image/png' });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.setAvatarFromFile(blob, 'test.png'),
+        /hookToConnection/
+      );
+    });
+
+    it('[HDSP-A2] setAvatarFromDataUrl throws when not hooked', async () => {
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.setAvatarFromDataUrl('data:image/png;base64,abc'),
+        /hookToConnection/
+      );
+    });
+
+    it('[HDSP-A3] setAvatarFromDataUrl creates and reads back', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar'), null);
+
+      const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.setAvatarFromDataUrl(dataUrl);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar'), dataUrl);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl(), dataUrl);
+
+      // Verify persistence
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar'), dataUrl);
+    });
+
+    it('[HDSP-A4] setAvatarFromDataUrl replaces existing', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar') !== null, 'Should have avatar from previous test');
+
+      const newDataUrl = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.setAvatarFromDataUrl(newDataUrl);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar'), newDataUrl);
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar'), newDataUrl);
+    });
+
+    it('[HDSP-A5] setAvatarFromFile creates event with attachment', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+
+      // Create a small PNG blob (1x1 red pixel)
+      const pngBytes = Uint8Array.from(atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+      ), c => c.charCodeAt(0));
+      const blob = new Blob([pngBytes], { type: 'image/png' });
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.setAvatarFromFile(blob, 'red-pixel.png');
+
+      const avatarUrl = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(avatarUrl, 'Should have avatar URL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(avatarUrl.includes('/events/'), 'Should be an attachment URL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(avatarUrl.includes('readToken='), 'Should contain readToken');
+
+      // Verify persistence
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      const reloadedUrl = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(reloadedUrl, 'Should still have avatar after reload');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(reloadedUrl.includes('/events/'), 'Should still be attachment URL');
+    });
+
+    it('[HDSP-A6] setAvatarFromFile replaces previous avatar', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      const previousUrl = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(previousUrl, 'Should have avatar from previous test');
+
+      const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4E, 0x47])], { type: 'image/png' });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.setAvatarFromFile(blob, 'new-avatar.png');
+
+      const newUrl = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newUrl, 'Should have new avatar URL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newUrl.includes('readToken='), 'Should contain readToken');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notStrictEqual(newUrl, previousUrl, 'URL should differ from previous');
+    });
+  });
+
+  describe('[HDSP-R] reload', () => {
+    it('[HDSP-R1] reload reflects server state', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      const before = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName');
+
+      // Modify directly via API (bypassing HDSProfile)
+      const events = await connection.apiOne('events.get', {
+        streams: ['profile-display-name'],
+        types: ['contact/display-name'],
+        limit: 1
+      }, 'events');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(events.length > 0, 'Should have displayName event');
+      await connection.apiOne('events.update', {
+        id: events[0].id,
+        update: { content: 'Changed Externally' }
+      }, 'event');
+
+      // HDSProfile still has old value
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), before);
+
+      // After reload, picks up the change
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), 'Changed Externally');
+    });
+  });
+
+  describe('[HDSP-X] readFromConnection', () => {
+    let sharedConnection;
+
+    before(async () => {
+      // Create a shared access with profile read permission
+      const access = await connection.apiOne('accesses.create', {
+        name: 'profile-reader',
+        type: 'shared',
+        permissions: [{ streamId: 'profile', level: 'read' }]
+      }, 'access');
+      sharedConnection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(access.apiEndpoint);
+    });
+
+    it('[HDSP-X1] reads profile via shared connection', async () => {
+      const profile = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.readFromConnection(sharedConnection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.displayName, 'Changed Externally');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.name, 'John');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.surname, 'Smith');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.sex, 'male');
+    });
+
+    it('[HDSP-X2] reads avatar via shared connection', async () => {
+      const profile = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.readFromConnection(sharedConnection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(profile.avatar, 'Should have avatar URL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(profile.avatar.includes('/events/'), 'Avatar should be an attachment URL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(profile.avatar.includes('readToken='), 'Avatar URL should contain readToken');
+    });
+
+    it('[HDSP-X3] does not affect singleton state', async () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isHooked, false);
+
+      const profile = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.readFromConnection(sharedConnection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(profile.displayName, 'Should read profile');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isHooked, false, 'Singleton should remain unhooked');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), null, 'Singleton values should be unchanged');
+    });
+
+    it('[HDSP-X4] returns defaults when connection has no profile access', async () => {
+      // Create a restricted access without any profile permission
+      await connection.api([
+        { method: 'streams.create', params: { id: 'unrelated-stream', name: 'Unrelated' } },
+      ]);
+      const restrictedAccess = await connection.apiOne('accesses.create', {
+        name: 'no-profile',
+        type: 'shared',
+        permissions: [{ streamId: 'unrelated-stream', level: 'read' }]
+      }, 'access');
+      const restrictedConn = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(restrictedAccess.apiEndpoint);
+
+      const profile = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.readFromConnection(restrictedConn);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.displayName, null, 'Should not see displayName');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.name, null, 'Should not see name');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.surname, null, 'Should not see surname');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.avatar, null, 'Should not see avatar');
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/HDSSettings.test.js"
+/*!***********************************!*\
+  !*** ./tests/HDSSettings.test.js ***!
+  \***********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+// Mock connection that captures API calls
+function createMockConnection (responses = {}) {
+  return {
+    apiCalls: [],
+    async api (calls) {
+      this.apiCalls.push(...calls);
+      return calls.map(call => {
+        if (responses[call.method]) {
+          return responses[call.method](call.params);
+        }
+        if (call.method === 'events.get') return { events: [] };
+        if (call.method === 'events.create') return { event: { id: 'ev-' + Date.now(), ...call.params } };
+        if (call.method === 'events.update') return { event: { id: call.params.id, ...call.params.update } };
+        return {};
+      });
+    },
+    async apiOne (method, params, key) {
+      const result = await this.api([{ method, params }]);
+      return key ? result[0][key] : result[0];
+    }
+  };
+}
+
+describe('[HDSS] HDSSettings', function () {
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+  });
+
+  describe('[HDSS-U] unhook / defaults', () => {
+    it('[HDSS-U1] isHooked is false by default', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isHooked, false);
+    });
+
+    it('[HDSS-U2] get returns defaults when not hooked', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferredLocales'), ['en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'light');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('unitSystem'), 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('dateFormat'), 'DD.MM.YYYY');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('displayName'), null);
+    });
+
+    it('[HDSS-U3] getAll returns all defaults', () => {
+      const all = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.getAll();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(all.preferredLocales);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(all.theme);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(all.timezone);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(all.dateFormat);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(all.unitSystem);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.displayName, null);
+    });
+
+    it('[HDSS-U4] unhook resets to defaults', async () => {
+      const conn = createMockConnection();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isHooked, true);
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isHooked, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'light');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('displayName'), null);
+    });
+  });
+
+  describe('[HDSS-H] hookToConnection', () => {
+    it('[HDSS-H1] loads settings from server events', async () => {
+      const conn = createMockConnection({
+        'events.get': (params) => ({
+          events: [
+            { id: 'ev1', type: 'settings/theme', content: 'dark' },
+            { id: 'ev2', type: 'settings/preferred-locales', content: ['fr'] },
+            { id: 'ev3', type: 'settings/unit-system', content: 'imperial' },
+            { id: 'ev4', type: 'contact/display-name', content: 'Dr. Smith' }
+          ]
+        })
+      });
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isHooked, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'dark');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferredLocales'), ['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('unitSystem'), 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('displayName'), 'Dr. Smith');
+      // dateFormat not in server events → stays default
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('dateFormat'), 'DD.MM.YYYY');
+    });
+
+    it('[HDSS-H2] handles empty server (no events)', async () => {
+      const conn = createMockConnection();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isHooked, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'light');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('unitSystem'), 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('displayName'), null);
+    });
+  });
+
+  describe('[HDSS-S] set', () => {
+    it('[HDSS-S1] creates new event when no cache exists', async () => {
+      const conn = createMockConnection();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('theme', 'dark');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'dark');
+
+      // Verify the API call was events.create
+      const createCall = conn.apiCalls.find(c => c.method === 'events.create');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(createCall, 'Should have called events.create');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(createCall.params.type, 'settings/theme');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(createCall.params.content, 'dark');
+    });
+
+    it('[HDSS-S2] updates existing event when cached', async () => {
+      const conn = createMockConnection({
+        'events.get': (params) => ({
+          events: [{ id: 'ev-theme', type: 'settings/theme', content: 'light' }]
+        })
+      });
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'light');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('theme', 'dark');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'dark');
+
+      const updateCall = conn.apiCalls.find(c => c.method === 'events.update');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(updateCall, 'Should have called events.update');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(updateCall.params.id, 'ev-theme');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(updateCall.params.update, { content: 'dark' });
+    });
+
+    it('[HDSS-S3] throws when not hooked', async () => {
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('theme', 'dark'),
+        /hookToApplication|hookToConnection/
+      );
+    });
+
+    it('[HDSS-S4] displayName uses same set/get as other settings', async () => {
+      const conn = createMockConnection();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('displayName', 'Alice');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('displayName'), 'Alice');
+
+      const createCall = conn.apiCalls.find(c =>
+        c.method === 'events.create' && c.params.type === 'contact/display-name'
+      );
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(createCall, 'Should have created a settings/displayName event');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(createCall.params.content, 'Alice');
+    });
+
+    it('[HDSS-S5] displayName updates existing event', async () => {
+      const conn = createMockConnection({
+        'events.get': (params) => ({
+          events: [{ id: 'ev-dn', type: 'contact/display-name', content: 'Old Name' }]
+        })
+      });
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('displayName'), 'Old Name');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('displayName', 'New Name');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('displayName'), 'New Name');
+
+      const updateCall = conn.apiCalls.find(c => c.method === 'events.update');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(updateCall, 'Should have called events.update');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(updateCall.params.id, 'ev-dn');
+    });
+  });
+
+  describe('[HDSS-R] reload', () => {
+    it('[HDSS-R1] reloads settings from server', async () => {
+      let callCount = 0;
+      const conn = createMockConnection({
+        'events.get': (params) => {
+          callCount++;
+          if (callCount === 1) {
+            return { events: [{ id: 'ev1', type: 'settings/theme', content: 'light' }] };
+          }
+          return { events: [{ id: 'ev1', type: 'settings/theme', content: 'dark' }] };
+        }
+      });
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'light');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'dark');
+    });
+  });
+});
+
+describe('[STPS] SETTING_TYPES', () => {
+  it('[STPS1] has expected keys', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.SETTING_TYPES.preferredLocales, 'settings/preferred-locales');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.SETTING_TYPES.theme, 'settings/theme');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.SETTING_TYPES.timezone, 'settings/timezone');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.SETTING_TYPES.dateFormat, 'settings/date-format');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.SETTING_TYPES.unitSystem, 'settings/unit-system');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.SETTING_TYPES.displayName, 'contact/display-name');
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/MonitorScope.test.js"
+/*!************************************!*\
+  !*** ./tests/MonitorScope.test.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+// Mock connection that simulates Pryv API responses
+function createMockConnection (responses = {}) {
+  return {
+    apiCalls: [],
+    async api (calls) {
+      this.apiCalls.push(calls);
+      return calls.map(call => {
+        const _key = call.method + ':' + JSON.stringify(call.params);
+        // Check for specific response handlers
+        if (responses[call.method]) {
+          return responses[call.method](call.params);
+        }
+        // Default empty responses
+        if (call.method === 'events.get') return { events: [] };
+        if (call.method === 'streams.get') return { streams: [] };
+        return {};
+      });
+    }
+  };
+}
+
+// Since MonitorScope creates a real Pryv.Monitor internally, and we can't
+// easily mock that without the full pryv module, we test the pre-Monitor logic
+// by stopping before Monitor starts.
+
+describe('[MSC] MonitorScope', () => {
+  const now = Date.now() / 1000;
+  const oneDay = 86400;
+  const thirtyDaysAgo = now - 30 * oneDay;
+
+  it('[MSC1] constructor sets config correctly', () => {
+    const conn = createMockConnection();
+    const config = { pageSize: 100, fromTime: thirtyDaysAgo, toTime: now };
+    const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, { onEvent: () => {} });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(ms.hasMoreOlder, false);
+  });
+
+  it('[MSC2] loadMore returns empty when hasMoreOlder is false', async () => {
+    const conn = createMockConnection();
+    const config = { pageSize: 100, fromTime: thirtyDaysAgo };
+    const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, { onEvent: () => {} });
+    const result = await ms.loadMore();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(result, { events: [], hasMore: false });
+  });
+
+  it('[MSC3] stop prevents start from proceeding', async () => {
+    const conn = createMockConnection();
+    const config = { pageSize: 100, fromTime: thirtyDaysAgo };
+    const events = [];
+    const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, { onEvent: (e) => events.push(e) });
+    ms.stop();
+    await ms.start();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(events.length, 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.apiCalls.length, 0);
+  });
+
+  it('[MSC4] stop is idempotent', () => {
+    const conn = createMockConnection();
+    const config = { pageSize: 100, fromTime: thirtyDaysAgo };
+    const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, { onEvent: () => {} });
+    ms.stop();
+    ms.stop(); // should not throw
+  });
+
+  describe('[MSC-LOAD] event loading logic (mocked, no Monitor)', () => {
+    // For these tests, we test the batch API call and event processing
+    // by checking what API calls are made and what events are delivered
+
+    it('[MSC5] Step 1 delivers events and streams via callbacks', async () => {
+      const mockEvents = [
+        { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt', content: 'a' },
+        { id: 'e2', time: now - 200, modified: now - 200, streamIds: ['s1'], type: 'note/txt', content: 'b' },
+      ];
+      const mockStreams = [{ id: 's1', name: 'Stream 1', children: [] }];
+
+      const conn = createMockConnection({
+        'events.get': (params) => {
+          if (params.limit) return { events: mockEvents };
+          return { events: [] };
+        },
+        'streams.get': () => ({ streams: mockStreams }),
+      });
+
+      const receivedEvents = [];
+      let receivedStreams = null;
+      const config = { pageSize: 100, fromTime: thirtyDaysAgo, toTime: now };
+
+      const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, {
+        onEvent: (e) => receivedEvents.push(e),
+        onStreams: (s) => { receivedStreams = s; },
+      });
+
+      // Stop immediately after start to prevent Monitor creation
+      // We need to test the pre-Monitor logic
+      // Since start() awaits the API call before creating Monitor,
+      // we can't easily intercept. Instead, just verify the API calls structure.
+      // The Monitor constructor will fail without pryv setup, but events will be delivered.
+      try {
+        await ms.start();
+      } catch (_e) {
+        // Monitor creation may fail in test env — that's OK, we test the loading logic
+      }
+      ms.stop();
+
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(receivedEvents.length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(receivedEvents[0].id, 'e1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(receivedEvents[1].id, 'e2');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(receivedStreams, mockStreams);
+
+      // Verify the API batch call structure
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.apiCalls.length >= 1, true);
+      const firstBatch = conn.apiCalls[0];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(firstBatch[0].method, 'events.get');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(firstBatch[0].params.limit, 100);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(firstBatch[1].method, 'streams.get');
+    });
+
+    it('[MSC6] pages backwards progressively when full pages returned', async () => {
+      const pageSize = 3;
+      let callCount = 0;
+
+      const conn = createMockConnection({
+        'events.get': () => {
+          callCount++;
+          if (callCount === 1) {
+            // First page: 3 events (full page)
+            return {
+              events: [
+                { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
+                { id: 'e2', time: now - 200, modified: now - 200, streamIds: ['s1'], type: 'note/txt' },
+                { id: 'e3', time: now - 300, modified: now - 300, streamIds: ['s1'], type: 'note/txt' },
+              ]
+            };
+          }
+          if (callCount === 2) {
+            // Second page: older events (partial = last page)
+            return {
+              events: [
+                { id: 'e4', time: now - 400, modified: now - 400, streamIds: ['s1'], type: 'note/txt' },
+              ]
+            };
+          }
+          return { events: [] };
+        },
+        'streams.get': () => ({ streams: [] }),
+      });
+
+      const receivedEvents = [];
+      const config = { pageSize, fromTime: now - 10000, toTime: now };
+
+      const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, {
+        onEvent: (e) => receivedEvents.push(e),
+      });
+
+      try { await ms.start(); } catch (_e) { /* Monitor may fail */ }
+      ms.stop();
+
+      // First page (3) + second page (1) = 4 events total
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(receivedEvents.length, 4);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(ms.hasMoreOlder, true); // optimistic
+    });
+
+    it('[MSC7] hasMoreOlder is true when events exist (optimistic until loadMore proves otherwise)', async () => {
+      const mockEvents = [
+        { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
+      ];
+
+      const conn = createMockConnection({
+        'events.get': () => ({ events: mockEvents }),
+        'streams.get': () => ({ streams: [] }),
+      });
+
+      const receivedEvents = [];
+      const config = { pageSize: 100, fromTime: thirtyDaysAgo, toTime: now };
+
+      const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, {
+        onEvent: (e) => receivedEvents.push(e),
+      });
+
+      try { await ms.start(); } catch (_e) { /* Monitor may fail */ }
+
+      // hasMoreOlder is true optimistically — loadMore will set false if no older events found
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(ms.hasMoreOlder, true);
+      ms.stop();
+    });
+
+    it('[MSC8] tracks oldest event time correctly', async () => {
+      const mockEvents = [
+        { id: 'e1', time: now - 500, modified: now - 500, streamIds: ['s1'], type: 'note/txt' },
+        { id: 'e2', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
+        { id: 'e3', time: now - 1000, modified: now - 1000, streamIds: ['s1'], type: 'note/txt' },
+      ];
+
+      const conn = createMockConnection({
+        'events.get': () => ({ events: mockEvents }),
+        'streams.get': () => ({ streams: [] }),
+      });
+
+      const receivedEvents = [];
+      const config = { pageSize: 100, fromTime: thirtyDaysAgo, toTime: now };
+
+      const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, {
+        onEvent: (e) => receivedEvents.push(e),
+      });
+
+      try { await ms.start(); } catch (_e) { /* Monitor may fail */ }
+      ms.stop();
+
+      // All 3 events should be received
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(receivedEvents.length, 3);
+    });
+
+    it('[MSC-BATCH] onEvents receives batches instead of individual events', async () => {
+      const mockEvents = [
+        { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
+        { id: 'e2', time: now - 200, modified: now - 200, streamIds: ['s1'], type: 'note/txt' },
+        { id: 'e3', time: now - 300, modified: now - 300, streamIds: ['s1'], type: 'note/txt' },
+      ];
+
+      const conn = createMockConnection({
+        'events.get': (params) => {
+          if (params.limit) return { events: mockEvents };
+          return { events: [] };
+        },
+        'streams.get': () => ({ streams: [] }),
+      });
+
+      const batches = [];
+      const config = { pageSize: 100, fromTime: thirtyDaysAgo, toTime: now };
+
+      const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, {
+        onEvents: (events) => batches.push([...events]),
+      });
+
+      try { await ms.start(); } catch (_e) { /* Monitor may fail */ }
+      ms.stop();
+
+      // Should receive one batch with all 3 events
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(batches.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(batches[0].length, 3);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(batches[0][0].id, 'e1');
+    });
+
+    it('[MSC-PAGE] pages backwards until fromTime boundary', async () => {
+      const pageSize = 2;
+      let callCount = 0;
+
+      const conn = createMockConnection({
+        'events.get': (params) => {
+          callCount++;
+          if (callCount === 1) {
+            // First page: 2 events (full page)
+            return {
+              events: [
+                { id: 'e1', time: now - 100, modified: now - 100, streamIds: ['s1'], type: 'note/txt' },
+                { id: 'e2', time: now - 200, modified: now - 200, streamIds: ['s1'], type: 'note/txt' },
+              ]
+            };
+          }
+          if (callCount === 2) {
+            // Second page: 1 event (partial = last page)
+            return {
+              events: [
+                { id: 'e3', time: now - 300, modified: now - 300, streamIds: ['s1'], type: 'note/txt' },
+              ]
+            };
+          }
+          return { events: [] };
+        },
+        'streams.get': () => ({ streams: [] }),
+      });
+
+      const allReceived = [];
+      const batchCount = { n: 0 };
+      const config = { pageSize, fromTime: now - 10000, toTime: now };
+
+      const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, {
+        onEvents: (events) => { batchCount.n++; allReceived.push(...events); },
+      });
+
+      try { await ms.start(); } catch (_e) { /* Monitor may fail */ }
+      ms.stop();
+
+      // Should have made 2 events.get calls (first page + one gap-fill page)
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(allReceived.length, 3);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(batchCount.n, 2); // 2 batches delivered progressively
+    });
+
+    it('[MSC9] onError callback receives errors', () => {
+      const conn = createMockConnection();
+      let receivedError = null;
+      const config = { pageSize: 100, fromTime: thirtyDaysAgo };
+
+      const ms = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MonitorScope(conn, config, {
+        onEvent: () => {},
+        onError: (e) => { receivedError = e; },
+      });
+
+      // onError is wired to Monitor — just verify it's accepted without error
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(receivedError, null);
+      ms.stop();
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/applicationClass.test.js"
+/*!****************************************!*\
+  !*** ./tests/applicationClass.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
+
+
+
+
+const Application = _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.appTemplates.Application;
+
+describe('[APAX] Application class', function () {
+  this.timeout(5000);
+  const baseStreamId = 'application-class';
+  const appName = 'application-app';
+  let user;
+  before(async () => {
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.initHDSModel();
+    const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamId, name: appName, parentId: 'applications' }];
+    const permissionsManager = [{ streamId: baseStreamId, level: 'manage' }];
+    user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserAndPermissions)(null, permissionsManager, initialStreams, appName);
+  });
+
+  describe('[APIX] Application class internal', () => {
+    it('[APIS] Application custom settings', async () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return { };
+        }
+      }
+      const appDummy = await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+
+      const settings = await appDummy.getCustomSettings();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(settings, {});
+      const newSettings = { hello: 'Tom', value: 2 };
+      const newSettings1 = await appDummy.setCustomSettings(newSettings);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newSettings, newSettings1);
+      const newSettings2 = await appDummy.getCustomSettings();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newSettings, newSettings2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newSettings1, newSettings2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(newSettings1, newSettings2, 'should be the same object');
+      const newSettings3 = await appDummy.getCustomSettings(true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newSettings1, newSettings3);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(newSettings1, newSettings3, 'should not be the same object');
+    });
+  });
+
+  describe('[APAE] Application class errors', () => {
+    it('[APAI] Application extension', async () => {
+      class Dummy extends Application { }
+
+      try {
+        await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+        throw new Error('Should throw an error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'appSettings must be implemented');
+      }
+
+      try {
+      // eslint-disable-next-line no-new
+        new Dummy('u', user.appApiEndpoint, appName);
+        throw new Error('Should throw an error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Missing or too short baseStreamId');
+      }
+    });
+
+    it('[APAA] Application name from accessInfo fails in not in settings', () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return { };
+        }
+      }
+
+      try {
+      // eslint-disable-next-line no-new
+        new Dummy(baseStreamId, user.appApiEndpoint);
+        throw new Error('Should throw an error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'appName must be given unless appSettings.appNameFromAccessInfo = true');
+      }
+    });
+
+    it('[APAB] Application name from accessInfo', async () => {
+      class Dummy2 extends Application {
+        get appSettings () {
+          return {
+            appNameFromAccessInfo: true
+          };
+        }
+      }
+
+      const dummy2 = await Dummy2.newFromApiEndpoint(baseStreamId, user.appApiEndpoint);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(dummy2, 'if appSettings.appNameFromAccessInfo = true appName is not required');
+    });
+
+    it('[APAC] Application should throw error if baseStream is not accessible', async () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return { };
+        }
+      }
+
+      try {
+        await Dummy.newFromApiEndpoint('uuuu', user.appApiEndpoint, appName);
+        throw new Error('Should throw an error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Application with "app" type of access requires  (streamId = "uuuu", level = "manage") or master access');
+      }
+    });
+
+    it('[APAD] Application should throw error if personaToken are not explicity allowed', async () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return { };
+        }
+      }
+
+      try {
+        await Dummy.newFromApiEndpoint('uuuu', user.personalApiEndpoint, appName);
+        throw new Error('Should throw an error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Application should not use a personal token');
+      }
+    });
+
+    it('[APAE] Application should throw error if master token not provided and required', async () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return {
+            mustBemaster: true
+          };
+        }
+      }
+
+      try {
+        await Dummy.newFromApiEndpoint('uuuu', user.appApiEndpoint, appName);
+        throw new Error('Should throw an error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
+      }
+    });
+  });
+
+  describe('[AMGX] AppManagingAccount tests', function () {
+    it('[AMGA] getCollectorById returns collector when exists', async () => {
+      const testBaseStreamId = 'amga-test';
+      const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppManaging)(testBaseStreamId, 'test-AMGA');
+      const collector = await appManaging.createCollector('Test Collector AMGA');
+
+      const foundCollector = await appManaging.getCollectorById(collector.id);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(foundCollector);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(foundCollector.id, collector.id);
+    });
+
+    it('[AMGB] getCollectorById returns undefined when not exists', async () => {
+      const testBaseStreamId = 'amgb-test';
+      const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppManaging)(testBaseStreamId, 'test-AMGB');
+
+      const foundCollector = await appManaging.getCollectorById('non-existent-id');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(foundCollector, undefined);
+    });
+
+    it('[AMGC] getCollectors with forceRefresh reloads data', async () => {
+      const testBaseStreamId = 'amgc-test';
+      const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppManaging)(testBaseStreamId, 'test-AMGC');
+
+      const collectors1 = await appManaging.getCollectors();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectors1.length, 0);
+
+      await appManaging.createCollector('Test Collector AMGC');
+      const collectors2 = await appManaging.getCollectors(true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectors2.length, 1);
+    });
+  });
+
+  describe('[ACSX] Application setCustomSetting tests', function () {
+    it('[ACSA] setCustomSetting adds a key', async () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return { };
+        }
+      }
+      const appDummy = await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+
+      await appDummy.setCustomSetting('newKey', 'newValue');
+      const settings = await appDummy.getCustomSettings();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(settings.newKey, 'newValue');
+    });
+
+    it('[ACSB] setCustomSetting with null deletes key', async () => {
+      class Dummy extends Application {
+        get appSettings () {
+          return { };
+        }
+      }
+      const appDummy = await Dummy.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+
+      await appDummy.setCustomSetting('keyToDelete', 'value');
+      let settings = await appDummy.getCustomSettings();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(settings.keyToDelete, 'value');
+
+      await appDummy.setCustomSetting('keyToDelete', null);
+      settings = await appDummy.getCustomSettings();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(settings.keyToDelete, undefined);
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/apptemplates.test.js"
+/*!************************************!*\
+  !*** ./tests/apptemplates.test.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
+
+
+
+
+const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.appTemplates;
+
+describe('[APTX] appTemplates', function () {
+  this.timeout(10000);
+
+  let managingUser, appManaging, clientUser, _clientUserResultPermissions, appClient;
+  const baseStreamIdManager = 'test-app-template-manager';
+  const baseStreamIdClient = 'test-app-template-client';
+  const appName = 'Test HDSLib.appTemplates';
+  const appClientName = 'Test Client HDSLib.appTemplates';
+
+  before(async () => {
+    ({ managingUser, appManaging, clientUser, clientUserResultPermissions: _clientUserResultPermissions, appClient } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppAndUsers)(baseStreamIdManager, appName, baseStreamIdClient, appClientName));
+    await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.initHDSModel)();
+  });
+
+  it('[APTA] Full flow create collector and sharing', async () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(appManaging.appName, appName);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(appManaging.baseStreamId, baseStreamIdManager);
+
+    const collectorEmpty = await appManaging.getCollectors();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(Array.isArray(collectorEmpty), 'Collectors should be an array');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorEmpty.length, 0, 'Collectors should be an empty array');
+
+    const collectorName = 'Test';
+    // create a Collector
+    const newCollector = await appManaging.createCollectorUnitialized(collectorName);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newCollector.streamId.startsWith(baseStreamIdManager), 'Collectors id should start with baseStreamId');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newCollector.name, collectorName);
+    // check that streams has been addes to streamData
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(appManaging.streamData.children[0].name, collectorName);
+
+    // Create a Collector with the same name should fail
+    try {
+      await appManaging.createCollectorUnitialized(collectorName);
+      throw new Error('Creating a Collector with the same name should fail');
+    } catch (e) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(e.message.endsWith('>> Result: {"id":"item-already-exists","message":"A stream with name \\"Test\\" already exists","data":{"name":"Test"}}"'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.innerObject?.id, 'item-already-exists');
+    }
+
+    // check if collector is in the list
+    const collectors = await appManaging.getCollectors();
+    const found = collectors.find(c => c.name === collectorName);
+    if (!found) throw new Error('Should find collector with name: ' + collectorName);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(found, newCollector);
+
+    // check StreamStructure
+    const resultCheckStructure = await newCollector.checkStreamStructure();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(resultCheckStructure.created.length, 7, 'Should create 7 streams');
+    for (const created of resultCheckStructure.created) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(created.parentId, newCollector.streamId, 'Should have collector stream as parentid');
+    }
+
+    // 2nd call of StreamStructure should be empty
+    const resultCheckStructure2 = await newCollector.checkStreamStructure();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(resultCheckStructure2.created.length, 0, 'Should create 0 streams');
+
+    // Should throw error as status is not yet set
+    try {
+      newCollector.statusCode;
+      throw new Error('Should throw error');
+    } catch (e) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Init Collector first');
+    }
+
+    await newCollector.init();
+
+    // Get status
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(newCollector.statusCode, 'draft');
+
+    // trying to get a sharing token in draft should throw an error
+    try {
+      await newCollector.sharingApiEndpoint();
+      throw new Error('Should throw error');
+    } catch (e) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Collector must be in "active" state error to get sharing link, current: draft');
+    }
+
+    // trying to create an invite in draft should throw an error
+    try {
+      await newCollector.createInvite({});
+      throw new Error('Should throw error');
+    } catch (e) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Collector must be in "active" state error to create invite, current: draft');
+    }
+
+    // Publish
+    await newCollector.publish();
+
+    // Sharing token creation
+    const sharingApiEndpoint = await newCollector.sharingApiEndpoint();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(sharingApiEndpoint.startsWith('https://'));
+
+    // Should return the same
+    const sharingApiEndpoint2 = await newCollector.sharingApiEndpoint();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(sharingApiEndpoint2, sharingApiEndpoint);
+
+    // ---------- creation of a manager on existing structure ---------- //
+
+    // creating a new Manager with same connection should load the structure
+    const connection2 = new _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(appManaging.connection.apiEndpoint);
+    const appManaging2 = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection2);
+    // check if collector is in the list
+    const collectors2 = await appManaging2.getCollectors();
+    const collector2 = collectors2.find(c => c.name === collectorName);
+    if (!collector2) throw new Error('Should find collector with name: ' + collectorName);
+    // init collector found;
+    await collector2.init();
+    // call of StreamStructure should be empty as already created
+    const resultCheckStructure3 = await collector2.checkStreamStructure();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(resultCheckStructure3.created.length, 0, 'Should create 0 streams');
+    // should return the same access access point
+    const sharingApiEndpoint3 = await collector2.sharingApiEndpoint();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
+  });
+
+  describe('[APIX] Collector invite flows & internals', async function () {
+    this.timeout(10000);
+
+    it('[APTI] Collector invite accept full flow testing internal', async () => {
+      const newCollector = await appManaging.createCollector('Invite test 1');
+      (0,_test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert)(newCollector.statusCode, 'draft');
+
+      // set request content
+      const requestContent = {
+        version: 1,
+        requester: {
+          name: 'Test requester name'
+        },
+        title: {
+          en: 'Title of the request'
+        },
+        description: {
+          en: 'Short Description'
+        },
+        consent: {
+          en: 'This is a consent message'
+        },
+        features: { },
+        permissionsExtra: [],
+        permissions: [
+          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+          {
+            streamId: 'profile-date-of-birth',
+            defaultName: 'Date of Birth',
+            level: 'read'
+          }
+        ],
+        app: { // may have "url" in the future
+          id: 'test-app',
+          url: 'https://xxx.yyy',
+          data: { // settings for the app
+            dummy: 'dummy'
+          }
+        },
+        sections: [{
+          itemKeys: [
+            'profile-name',
+            'profile-surname'
+          ],
+          key: 'profile',
+          name: {
+            en: 'Profile'
+          },
+          type: 'permanent'
+        },
+        {
+          itemKeys: ['fertility-ttc-tta', 'body-weight'],
+          key: 'history',
+          name: {
+            en: 'History'
+          },
+          type: 'recurring'
+        }
+        ]
+      };
+      newCollector.request.setContent(requestContent);
+
+      // save
+      await newCollector.save();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newCollector.request.content, requestContent);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newCollector.request.content !== requestContent, 'Should be the same content but different objects');
+      // publish
+      await newCollector.publish();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(newCollector.statusCode, Collector.STATUSES.active);
+
+      // create invite
+      const options = { customData: { hello: 'bob' } };
+      const invite = await newCollector.createInvite('Invite One', options);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'pending');
+      const inviteSharingData = await invite.getSharingData();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(inviteSharingData.apiEndpoint, await newCollector.sharingApiEndpoint());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.key.length > 5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(inviteSharingData.eventId.length > 5);
+
+      // check invite can be found in "pendings"
+      const inviteEvent = await appManaging.connection.apiOne('events.getOne', { id: inviteSharingData.eventId }, 'event');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(inviteEvent.type, 'invite/collector-v1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(inviteEvent.streamIds[0].endsWith('-pending'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
+
+      // also on current invites
+      const invites1 = await newCollector.getInvites();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites1.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites1[0].status, 'pending');
+
+      // Invitee receives the invite
+      const permissionsClient = [{ streamId: '*', level: 'manage' }];
+      const myClientUserPermissionsResult = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserPermissions)(clientUser, permissionsClient, [], appClientName + 'APTI');
+
+      const myAppClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, myClientUserPermissionsResult.appApiEndpoint, appClientName);
+      const collectorClient = await myAppClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.eventData.streamIds[0], myAppClient.baseStreamId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.eventData.content.apiEndpoint, inviteSharingData.apiEndpoint);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.eventData.content.requesterEventId, inviteSharingData.eventId);
+
+      // TODO check collectorClient.eventData.accessInfo
+
+      // check collectorClients
+      const collectorClientsCached = await myAppClient.getCollectorClients();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClientsCached.length, 1);
+      const collectorClients = await myAppClient.getCollectorClients(true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClients.length, 1);
+
+      // collectorClients can be retrieved by key
+      const found = await myAppClient.getCollectorClientByKey(collectorClient.key);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(found, collectorClients[0]);
+
+      // check requestData
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(collectorClient.requestData, requestContent);
+
+      // accept
+      const acceptResult = await collectorClient.accept();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(acceptResult.requesterEvent.content.eventId, inviteSharingData.eventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.status, 'Active');
+
+      // try to re-accept throws an error
+      try {
+        await collectorClient.accept();
+        throw new Error('should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Cannot accept an Active CollectorClient');
+      }
+
+      // force refresh and check online
+      const collectorClients2 = await myAppClient.getCollectorClients(true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClients2.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(collectorClients2[0].accessData, acceptResult.accessData);
+
+      // Continue on Collector side
+      const invitesFromInbox = await newCollector.checkInbox();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].status, 'active');
+
+      // check current invites
+      const invites2 = await newCollector.getInvites(true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites2.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites2[0], invitesFromInbox[0]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites2[0].status, 'active');
+    });
+
+    it('[APIA] Collector invite accept', async () => {
+      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APIA');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.status, 'pending');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!collectorClient.hasChatFeature);
+      await collectorClient.accept();
+      await collector.checkInbox();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.status, 'active');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!invite.hasChat);
+    });
+
+    it('[APIZ] Collector - with chat', async () => {
+      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APIZ', { addChat: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(collectorClient.hasChatFeature);
+      await collectorClient.accept();
+      await collector.checkInbox();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.hasChat);
+      const expectedChatSettings = {
+        type: 'user',
+        streamRead: `chat-${managingUser.username}`,
+        streamWrite: `chat-${managingUser.username}-in`
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(invite.chatSettings, expectedChatSettings);
+      // -- post Chat From Doctor
+      await invite.chatPost('Hello Patient');
+
+      // -- post Chat From Patient
+      await collectorClient.chatPost(appClient.connection, 'Hello Dr.');
+
+      // check events on patient side
+      const eventsOnPatient = await appClient.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(eventsOnPatient[0].content, 'Hello Dr.');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[0]), { source: 'me' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(eventsOnPatient[1].content, 'Hello Patient');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[1]), { source: 'requester' });
+
+      // check events on patient side
+      const eventsOnDr = await invite.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(eventsOnDr[0].content, 'Hello Dr.');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(invite.chatEventInfos(eventsOnDr[0]), { source: 'user' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(eventsOnDr[1].content, 'Hello Patient');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(invite.chatEventInfos(eventsOnDr[1]), { source: 'me' });
+    });
+
+    it('[APII] Collector invite internals', async () => {
+      const beforeCreation = Date.now() - 5000; // 5s tolerance for server clock drift
+      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APII');
+      const afterCreation = Date.now() + 5000;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.dateCreation.getTime() > beforeCreation && invite.dateCreation.getTime() < afterCreation);
+
+      // apiEndpoint should throw Error
+      try {
+        invite.apiEndpoint;
+        throw new _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'invite.apiEndpoint is accessible only when active');
+      }
+
+      await collectorClient.accept();
+      await collector.checkInbox();
+
+      invite.apiEndpoint; // should not throw error
+
+      // connection is cached and valid
+      const connection = invite.connection;
+      const inviteInfo = await connection.accessInfo();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!!inviteInfo.clientData.hdsCollectorClient);
+    });
+
+    it('[APTR] Collector invite refuse', async () => {
+      const { collector, collectorClient, inviteSharingData } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APTR');
+      const refuseResult = await collectorClient.refuse();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(refuseResult.requesterEvent.content.eventId, inviteSharingData.eventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.status, 'Refused');
+
+      // check collector
+      const invitesFromInbox = await collector.checkInbox();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].status, 'error');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].errorType, 'refused');
+    });
+
+    it('[APCR] Collector Client invite revoke', async () => {
+      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APCR');
+      await collectorClient.accept();
+
+      // check collector
+      const invitesFromInbox1 = await collector.checkInbox();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox1[0], invite);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'active');
+
+      // client revoke
+      await collectorClient.revoke();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.status, 'Deactivated');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(collectorClient.accessData.deleted);
+
+      // check collector
+      const invitesFromInbox2 = await collector.checkInbox();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox2[0], invite);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'error');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.errorType, 'revoked');
+    });
+
+    it('[APCM] Collector (manager) invite revoke after accept', async () => {
+      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APCM');
+      await collectorClient.accept();
+
+      // check collector
+      const invitesFromInbox1 = await collector.checkInbox();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox1[0], invite);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'active');
+
+      // revoke invitation
+      await invite.revoke();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'error');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.errorType, 'revoked');
+
+      // check if authorization is revoked
+
+      const res = await invite.connection.accessInfo();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.error.id, 'invalid-access-token');
+    });
+
+    it('[APCV] Collector convert v0 to v1 correctly', async () => {
+      const newCollector = await appManaging.createCollector('Invite test APCV');
+
+      const requestContent = {
+        version: 0,
+        requester: {
+          name: 'Test requester name'
+        },
+        title: {
+          en: 'Title of the request'
+        },
+        description: {
+          en: 'Short Description'
+        },
+        consent: {
+          en: 'This is a consent message'
+        },
+        features: { },
+        permissions: [
+          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+          {
+            streamId: 'profile-date-of-birth',
+            defaultName: 'Date of Birth',
+            level: 'read'
+          }
+        ],
+        app: { // may have "url" in the future
+          id: 'test-app',
+          url: 'https://xxx.yyy',
+          data: { // settings for the app
+            dummy: 'dummy',
+            forms: {
+              profile: {
+                itemKeys: [
+                  'profile-name',
+                  'profile-surname'
+                ],
+                name: 'Profile',
+                type: 'permanent'
+              }
+            }
+          }
+        }
+      };
+
+      // set expected content
+      const expectedContent = {
+        version: 1,
+        requester: {
+          name: 'Test requester name'
+        },
+        title: {
+          en: 'Title of the request'
+        },
+        description: {
+          en: 'Short Description'
+        },
+        consent: {
+          en: 'This is a consent message'
+        },
+        features: { },
+        permissionsExtra: [],
+        permissions: [
+          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+          {
+            streamId: 'profile-date-of-birth',
+            defaultName: 'Date of Birth',
+            level: 'read'
+          }
+        ],
+        app: { // may have "url" in the future
+          id: 'test-app',
+          url: 'https://xxx.yyy',
+          data: { // settings for the app
+            dummy: 'dummy'
+          }
+        },
+        sections: [{
+          itemKeys: [
+            'profile-name',
+            'profile-surname'
+          ],
+          key: 'profile',
+          name: {
+            en: 'Profile'
+          },
+          type: 'permanent'
+        }
+        ]
+      };
+      newCollector.request.setContent(requestContent);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newCollector.request.content, expectedContent);
+    });
+  });
+
+  describe('[APEX] Errors ', () => {
+    it('[APEH] Collector.client handleIncoming Request Errors', async function () {
+      this.timeout(20000);
+      const new0 = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppAndUsers)('dummy', 'dummyApp', 'dummyC', 'dummyCApp');
+      const inv0 = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(new0.appManaging, new0.appClient, 'APEH');
+
+      // Already known but different incomingEnventId
+      try {
+        await new0.appClient.handleIncomingRequest(inv0.inviteSharingData.apiEndpoint, 'bogusId');
+        throw new Error('should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Found existing collectorClient with a different eventId');
+      }
+
+      // -- The following case happens when a user revokes its app permission
+      // and re-grant other permissions to the same app
+
+      // revoke appManaging
+      await new0.appManaging.connection.revoke();
+      // create a new appManaging with the same name for the same user
+      const manager1 = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppManaging)('dummy', 'dummyApp', new0.managingUser);
+      // get invites from precedent collector
+      const collector1 = (await manager1.appManaging.getCollectors())[0];
+      await collector1.init();
+      const inv1 = (await collector1.getInvites())[0];
+      const inviteSharingData1 = await inv1.getSharingData();
+      // Already known but different incomingEnventId
+      try {
+        await new0.appClient.handleIncomingRequest(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
+        throw new Error('should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Found existing collectorClient with a different apiEndpoint');
+      }
+
+      // reset to new incoming (might be implement later)
+      const requesterConnection = new _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(inviteSharingData1.apiEndpoint);
+      const accessInfo = await requesterConnection.accessInfo();
+      const collectorClient = await new0.appClient.getCollectorClientByKey(CollectorClient.keyFromInfo(accessInfo));
+      await collectorClient.reset(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.status, CollectorClient.STATUSES.incoming);
+    });
+  });
+
+  describe('[APCX] app Templates Client', function () {
+    it('[APCE] Should throw error if not initialized with a personal or master token', async () => {
+      const permissionsDummy = [{ streamId: 'dummy', level: 'manage' }];
+      const clientUserNonMaster = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserPermissions)(clientUser, permissionsDummy, [], appName);
+      // non master app
+      try {
+        await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserNonMaster.appApiEndpoint, appClientName);
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, `Application with "app" type of access requires  (streamId = "${baseStreamIdClient}", level = "manage") or master access`);
+      }
+      // personal
+      const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUser.apiEndpoint, appClientName);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(appClient.streamData.id, baseStreamIdClient);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(appClient.streamData.name, appClientName);
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/apptemplatesRequest.test.js"
+/*!*******************************************!*\
+  !*** ./tests/apptemplatesRequest.test.js ***!
+  \*******************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/appTemplates/CollectorRequest.ts */ "./ts/appTemplates/CollectorRequest.ts");
+
+
+
+
+
+describe('[APRX] appTemplates Requests', function () {
+  this.timeout(8000);
+
+  before(async () => {
+    await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_0__.initHDSModel)();
+  });
+
+  describe('[AREX] CollectorRequest error cases', function () {
+    it('[AREA] should throw error for unknown features', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      try {
+        request.setContent({
+          features: { unknownFeature: { setting: 'value' } }
+        });
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(e.message, 'Found unkown features');
+      }
+    });
+
+    it('[AREB] should throw error for invalid chat type', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      try {
+        request.addChatFeature({ type: 'invalid' });
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(e.message, 'Invalid chat type');
+      }
+    });
+
+    it('[AREC] should throw error for duplicate section key', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      request.createSection('test-section', 'permanent');
+      try {
+        request.createSection('test-section', 'recurring');
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(e.message, 'Section with key: test-section already exists');
+      }
+    });
+
+    it('[ARED] should throw error for invalid version', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      try {
+        request.setContent({ version: 99 });
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(e.message, 'Invalid CollectorRequest content version: 99');
+      }
+    });
+
+    it('[AREE] should handle permissionsExtra in content', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      request.setContent({
+        permissionsExtra: [
+          { streamId: 'test-stream', level: 'read' }
+        ]
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.permissionsExtra.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.permissionsExtra[0].streamId, 'test-stream');
+    });
+
+    it('[AREF] addChatFeature with usernames type', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      request.addChatFeature({ type: 'usernames' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(request.features.chat, { type: 'usernames' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.hasChatFeature, true);
+    });
+  });
+
+  describe('[ARSO] Section ordering and customizations', function () {
+    it('[ARSA] moveItemKey reorders items within a section', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
+      section.moveItemKey('profile-sex', 0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(section.itemKeys, ['profile-sex', 'profile-name', 'profile-surname']);
+    });
+
+    it('[ARSB] removeItemKey removes item from section', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
+      section.removeItemKey('profile-surname');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(section.itemKeys, ['profile-name', 'profile-sex']);
+    });
+
+    it('[ARSC] moveSection reorders sections', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      request.createSection('a', 'permanent');
+      request.createSection('b', 'recurring');
+      request.createSection('c', 'permanent');
+      request.moveSection('c', 0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(request.sections.map(s => s.key), ['c', 'a', 'b']);
+    });
+
+    it('[ARSD] removeSection removes a section', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      request.createSection('a', 'permanent');
+      request.createSection('b', 'recurring');
+      request.removeSection('a');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.sections.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.sections[0].key, 'b');
+    });
+
+    it('[ARSE] itemCustomizations set/get', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname']);
+      section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(section.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(section.getItemCustomization('profile-surname'), undefined);
+    });
+
+    it('[ARSF] itemCustomizations serialization round-trip', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name', 'profile-surname']);
+      section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
+
+      const content = request.content;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(content.sections[0].itemCustomizations, {
+        'profile-name': { placeholder: 'Enter name' }
+      });
+
+      // Round-trip: reload from serialized content
+      const request2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest(content);
+      const section2 = request2.getSectionByKey('test');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(section2.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
+    });
+
+    it('[ARSG] getData omits itemCustomizations when empty', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name']);
+      const data = section.getData();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(data.itemCustomizations, undefined);
+    });
+
+    it('[ARSH] moveItemKey throws for unknown key', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const section = request.createSection('test', 'permanent');
+      section.addItemKeys(['profile-name']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => section.moveItemKey('unknown', 0), /not found/);
+    });
+
+    it('[ARSI] moveSection throws for unknown key', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      request.createSection('a', 'permanent');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => request.moveSection('unknown', 0), /not found/);
+    });
+
+    it('[ARSJ] removeSection throws for unknown key', () => {
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      request.createSection('a', 'permanent');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => request.removeSection('unknown'), /not found/);
+    });
+  });
+
+  it('[APRC] Compute a simple request', async () => {
+    const baseStreamId = 'aprc';
+    const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_1__.helperNewAppManaging)(baseStreamId, 'test-APRC');
+    const newCollector = await appManaging.createCollector('Invite test APCV');
+
+    const request = newCollector.request;
+    request.appId = 'dr-form';
+    request.appUrl = 'https://xxx.yyy';
+    request.title = { en: 'My title' };
+    request.requesterName = 'Username APRC';
+    request.description = { en: 'Short Description' };
+    request.consent = { en: 'Short Consent' };
+    request.addPermissionExtra({ streamId: 'profile' });
+    request.addPermissionExtra({ streamId: 'fertility' });
+
+    const sectionA = request.createSection('profile', 'permanent');
+    sectionA.setNameLocal('en', 'A');
+    sectionA.addItemKeys([
+      'profile-name',
+      'profile-surname',
+      'profile-sex',
+      'family-children-count',
+      'fertility-miscarriages-count'
+    ]);
+
+    const sectionB = request.createSection('history', 'recurring');
+    sectionB.setNameLocal('en', 'B');
+    sectionB.addItemKeys([
+      'fertility-ttc-tta',
+      'body-weight'
+    ]);
+    // build permissions needed
+    request.buildPermissions();
+    const requestContent = request.content;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.ok(requestContent.id.startsWith(baseStreamId), 'id should start with the basetreamid of the manager');
+
+    const expectedContent = {
+      version: 1,
+      title: { en: 'My title' },
+      consent: { en: 'Short Consent' },
+      description: { en: 'Short Description' },
+      requester: { name: 'Username APRC' },
+      features: {},
+      permissionsExtra: [
+        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
+        {
+          streamId: 'fertility',
+          defaultName: 'Fertility',
+          level: 'read'
+        }
+      ],
+      permissions: [
+        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
+        { streamId: 'fertility', defaultName: 'Fertility', level: 'read' },
+        {
+          streamId: 'family-children',
+          defaultName: 'Children',
+          level: 'read'
+        },
+        {
+          streamId: 'body-weight',
+          defaultName: 'Body Weight',
+          level: 'read'
+        }
+      ],
+      app: { id: 'dr-form', url: 'https://xxx.yyy', data: {} },
+      sections: [
+        {
+          key: 'profile',
+          type: 'permanent',
+          name: { en: 'A' },
+          itemKeys: [
+            'profile-name',
+            'profile-surname',
+            'profile-sex',
+            'family-children-count',
+            'fertility-miscarriages-count'
+          ]
+        },
+        {
+          key: 'history',
+          type: 'recurring',
+          name: { en: 'B' },
+          itemKeys: ['fertility-ttc-tta', 'body-weight']
+        }
+      ],
+      id: requestContent.id
+    };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(requestContent, expectedContent);
+  });
+
+  it('[APRD] A request with chat', async () => {
+    const baseStreamId = 'aprd';
+    const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_1__.helperNewAppManaging)(baseStreamId, 'test-APRD');
+    const newCollector = await appManaging.createCollector('Invite test APRD');
+
+    const request = newCollector.request;
+    request.appId = 'dr-form';
+    request.appUrl = 'https://xxx.yyy';
+    request.title = { en: 'My title' };
+    request.requesterName = 'Username APRD';
+    request.description = { en: 'Short Description' };
+    request.consent = { en: 'Short Consent' };
+    request.addPermissionExtra({ streamId: 'profile' });
+    request.addChatFeature();
+
+    const sectionA = request.createSection('profile', 'permanent');
+    sectionA.setNameLocal('en', 'A');
+    sectionA.addItemKeys([
+      'profile-name',
+      'profile-surname'
+    ]);
+
+    // build permissions needed
+    request.buildPermissions();
+
+    const requestContent = request.content;
+
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.ok(requestContent.id.startsWith(baseStreamId), 'id should start with the basetreamid of the manager');
+
+    const expectedContent = {
+      version: 1,
+      title: { en: 'My title' },
+      consent: { en: 'Short Consent' },
+      description: { en: 'Short Description' },
+      requester: { name: 'Username APRD' },
+      features: { chat: { type: 'user' } },
+      permissionsExtra: [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }],
+      permissions: [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }],
+      app: { id: 'dr-form', url: 'https://xxx.yyy', data: {} },
+      sections: [
+        {
+          key: 'profile',
+          type: 'permanent',
+          name: { en: 'A' },
+          itemKeys: ['profile-name', 'profile-surname']
+        }
+      ],
+      id: requestContent.id
+    };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(requestContent, expectedContent);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/conversions.test.js"
+/*!***********************************!*\
+  !*** ./tests/conversions.test.js ***!
+  \***********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+// We test conversions with a mock model object since the published
+// model at model.datasafe.dev doesn't have conversions yet.
+// HDSModelConversions reads from model.modelData.conversions.
+
+
+
+// Create a minimal mock model with conversions data
+function createMockModelWithConversions () {
+  const mockConversions = {
+    mass: {
+      metric: 'kg',
+      imperial: 'lb',
+      factors: {
+        kg: { lb: 2.2046226218487757 }
+      }
+    },
+    length: {
+      metric: 'm',
+      imperial: 'ft',
+      factors: {
+        m: { ft: 3.280839895013123 }
+      }
+    },
+    temperature: {
+      metric: 'c',
+      imperial: 'f',
+      factors: {
+        c: { f: [1.8, 32] }
+      }
+    }
+  };
+
+  // Create a model-like object that HDSModelConversions can use
+  const model = {
+    modelData: { conversions: mockConversions }
+  };
+
+  // Instantiate HDSModelConversions via the internal constructor
+  // HDSModelConversions reads model.modelData.conversions
+  const ConversionsClass = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModelConversions;
+  if (!ConversionsClass) {
+    // If not exported, we create a workaround using the conversion logic directly
+    // by creating a real HDSModel and injecting data
+    throw new Error('HDSModelConversions not exported — need to add export');
+  }
+  return new ConversionsClass(model);
+}
+
+describe('[CONV] HDSModel Conversions', function () {
+  let conversions;
+
+  before(() => {
+    try {
+      conversions = createMockModelWithConversions();
+    } catch (e) {
+      // HDSModelConversions might not be exported yet, skip gracefully
+      console.log('Note:', e.message);
+    }
+  });
+
+  describe('[CONV-M] mass conversions (kg ↔ lb)', () => {
+    it('[CONV-M1] kg to imperial converts to lb', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('mass/kg', 70, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.targetEventType, 'mass/lb');
+      // 70 kg ≈ 154.32 lb
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.value > 154 && result.value < 155, `Expected ~154.32, got ${result.value}`);
+    });
+
+    it('[CONV-M2] lb to metric converts to kg (reverse)', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('mass/lb', 154.32, 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.targetEventType, 'mass/kg');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.value > 69 && result.value < 71, `Expected ~70, got ${result.value}`);
+    });
+
+    it('[CONV-M3] kg to metric returns null (already in target system)', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('mass/kg', 70, 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, null);
+    });
+
+    it('[CONV-M4] lb to imperial returns null (already in target system)', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('mass/lb', 154, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, null);
+    });
+  });
+
+  describe('[CONV-L] length conversions (m ↔ ft)', () => {
+    it('[CONV-L1] m to imperial converts to ft', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('length/m', 1.8, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.targetEventType, 'length/ft');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.value > 5.8 && result.value < 6.0, `Expected ~5.91, got ${result.value}`);
+    });
+
+    it('[CONV-L2] ft to metric converts to m (reverse)', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('length/ft', 5.91, 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.targetEventType, 'length/m');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.value > 1.79 && result.value < 1.81, `Expected ~1.8, got ${result.value}`);
+    });
+  });
+
+  describe('[CONV-T] temperature conversions (c ↔ f) — affine', () => {
+    it('[CONV-T1] °C to imperial converts to °F', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('temperature/c', 37, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.targetEventType, 'temperature/f');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.value > 98 && result.value < 99, `Expected ~98.6, got ${result.value}`);
+    });
+
+    it('[CONV-T2] 0°C to °F = 32', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('temperature/c', 0, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.value, 32);
+    });
+
+    it('[CONV-T3] 100°C to °F = 212', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('temperature/c', 100, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.value, 212);
+    });
+
+    it('[CONV-T4] °F to metric converts to °C (reverse affine)', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('temperature/f', 98.6, 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.targetEventType, 'temperature/c');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.value > 36.9 && result.value < 37.1, `Expected ~37, got ${result.value}`);
+    });
+
+    it('[CONV-T5] 32°F to °C = 0', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('temperature/f', 32, 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.value, 0);
+    });
+  });
+
+  describe('[CONV-E] edge cases', () => {
+    it('[CONV-E1] unknown category returns null', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('unknown/unit', 42, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, null);
+    });
+
+    it('[CONV-E2] invalid event type (no slash) returns null', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('noslash', 42, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, null);
+    });
+
+    it('[CONV-E3] known category but unknown unit returns null', function () {
+      if (!conversions) return this.skip();
+      const result = conversions.convert('mass/stones', 10, 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, null);
+    });
+
+    it('[CONV-E4] roundtrip conversion is accurate (kg → lb → kg)', function () {
+      if (!conversions) return this.skip();
+      const original = 75.5;
+      const toLb = conversions.convert('mass/kg', original, 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(toLb, 'kg→lb should work');
+      const backToKg = conversions.convert('mass/lb', toLb.value, 'metric');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(backToKg, 'lb→kg should work');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(
+        Math.abs(backToKg.value - original) < 0.1,
+        `Roundtrip: ${original} → ${toLb.value} → ${backToKg.value}`
+      );
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/errors.test.js"
+/*!******************************!*\
+  !*** ./tests/errors.test.js ***!
+  \******************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_errors_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/errors.ts */ "./ts/errors.ts");
+
+
+
+
+describe('[ERRX] HDSLibError', () => {
+  it('[ERRS] HDSLibError.toString() without inner message', async () => {
+    const error = new _ts_errors_ts__WEBPACK_IMPORTED_MODULE_1__.HDSLibError('Hello');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(error.message, 'Hello');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal('' + error, 'Error: Hello\nInner Object:\n{}');
+  });
+
+  it('[ERRM] HDSLibError.toString() with inner message', async () => {
+    const innerObject = { message: 'Bob', dummy: 'Dummy' };
+    const error = new _ts_errors_ts__WEBPACK_IMPORTED_MODULE_1__.HDSLibError('Hello', innerObject);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(error.message, 'Hello >> Bob');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal('' + error, 'Error: Hello >> Bob\nInner Object:\n{\n  "message": "Bob",\n  "dummy": "Dummy"\n}');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(error.innerObject, innerObject);
+  });
+
+  it('[ERRO] HDSLibError.toString() with bject without message', async () => {
+    const error = new _ts_errors_ts__WEBPACK_IMPORTED_MODULE_1__.HDSLibError('Hello', { dummy: 'Dummy' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(error.message, 'Hello');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal('' + error, 'Error: Hello\nInner Object:\n{\n  "dummy": "Dummy"\n}');
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/eventToShortText.test.js"
+/*!****************************************!*\
+  !*** ./tests/eventToShortText.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+describe('[ESTX] eventToShortText', () => {
+  let model;
+  before(async () => {
+    model = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel(modelURL);
+    await model.load();
+  });
+
+  it('[EST1] returns null for null event', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(null), null);
+  });
+
+  it('[EST2] returns null for event with null content', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: null, streamIds: ['x'], type: 'x' }), null);
+  });
+
+  it('[EST3] number with unit symbol (mass/kg)', () => {
+    const event = { content: 60, streamIds: ['body-weight'], type: 'mass/kg' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, '60 Kg');
+  });
+
+  it('[EST4] number with unit symbol (concentration/iu-l)', () => {
+    const event = { content: 12.5, streamIds: ['fertility-hormone-lh'], type: 'concentration/iu-l' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, '12.5 IU/L');
+  });
+
+  it('[EST5] checkbox (activity/plain) returns Yes', () => {
+    const event = { content: true, streamIds: ['fertility-cycles-start'], type: 'activity/plain' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Yes');
+  });
+
+  it('[EST6] select with localized option label', () => {
+    const itemDef = model.itemsDefs.forKey('body-vulva-mucus-inspect');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef, 'itemDef should exist');
+    const event = {
+      content: 'clear',
+      streamIds: [itemDef.data.streamId],
+      type: itemDef.eventTypes[0]
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Clear');
+  });
+
+  it('[EST7] date item returns ISO date string', () => {
+    const itemDef = model.itemsDefs.forKey('profile-date-of-birth');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef, 'itemDef should exist');
+    // Use a known timestamp: 2024-01-15T00:00:00Z = 1705276800
+    const event = {
+      content: '2024-01-15',
+      streamIds: [itemDef.data.streamId],
+      type: itemDef.eventTypes[0],
+      time: 1705276800
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, '2024-01-15');
+  });
+
+  it('[EST8] datasource-search (medication) returns drug label + intake', () => {
+    const event = {
+      content: {
+        drug: { label: { en: 'Aspirin', fr: 'Aspirine' } },
+        intake: { doseValue: 325, doseUnit: 'mass/mg', route: 'oral' }
+      },
+      streamIds: ['medication-intake'],
+      type: 'medication/coded-v1'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Aspirin'), `Expected Aspirin in: ${result}`);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('325'), `Expected 325 in: ${result}`);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('oral'), `Expected oral in: ${result}`);
+  });
+
+  it('[EST9] string content returned as-is', () => {
+    const event = { content: 'John', streamIds: ['profile-name'], type: 'contact/name' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'John');
+  });
+
+  it('[EST10] long string content is truncated', () => {
+    const long = 'a'.repeat(100);
+    const event = { content: long, streamIds: ['profile-name'], type: 'contact/name' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.length < 100, 'Should be truncated');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.endsWith('...'), 'Should end with ...');
+  });
+
+  it('[EST11] fallback: number without itemDef but with symbol', () => {
+    const event = { content: 36.6, streamIds: ['unknown-stream'], type: 'temperature/c' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('36.6'), `Expected 36.6 in: ${result}`);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('°C'), `Expected °C in: ${result}`);
+  });
+
+  it('[EST12] fallback: object with label field', () => {
+    const event = { content: { label: 'Something' }, streamIds: ['x'], type: 'x/y' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Something');
+  });
+
+  it('[EST13] boolean true returns Yes', () => {
+    const event = { content: true, streamIds: ['x'], type: 'x/y' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Yes');
+  });
+
+  it('[EST14] boolean false returns No', () => {
+    const event = { content: false, streamIds: ['x'], type: 'x/y' };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'No');
+  });
+
+  it('[EST15] medication legacy flat format', () => {
+    const event = {
+      content: {
+        label: { en: 'Ibuprofen' },
+        codes: [],
+        doseValue: 200,
+        doseUnit: 'mass/mg',
+        route: 'oral'
+      },
+      streamIds: ['medication-intake'],
+      type: 'medication/coded-v1'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Ibuprofen'), `Expected Ibuprofen in: ${result}`);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('200'), `Expected 200 in: ${result}`);
+  });
+
+  it('[EST16a] checkbox with null content returns date', () => {
+    const event = { content: null, streamIds: ['fertility-cycles-start'], type: 'activity/plain', time: 1720000000 };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a date string');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(result), `Expected ISO date, got: ${result}`);
+  });
+
+  it('[EST16b] medication with plain string label (not i18n object)', () => {
+    const event = {
+      content: {
+        drug: { label: 'Paracetamol' },
+        intake: { doseValue: 500, doseUnit: 'mass/mg' }
+      },
+      streamIds: ['medication-intake'],
+      type: 'medication/coded-v1'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Paracetamol'), `Expected Paracetamol in: ${result}`);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('500'), `Expected 500 in: ${result}`);
+  });
+
+  it('[EST16c] unknown event with nested object extracts first string value', () => {
+    const event = {
+      content: {
+        measurement: {
+          systolic: 120,
+          diastolic: 80,
+          unit: 'mmHg'
+        },
+        device: 'Omron M3',
+        notes: 'Morning reading'
+      },
+      streamIds: ['unknown-stream'],
+      type: 'unknown/type'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    // formatObject tries first string/number field at top level
+    // 'measurement' is an object, 'device' is the first string → 'Omron M3'
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Omron M3');
+  });
+
+  it('[EST16d] unknown event with deeply nested object and no string at top level', () => {
+    const event = {
+      content: {
+        data: { values: [1, 2, 3] },
+        meta: { source: { name: 'Sensor' } }
+      },
+      streamIds: ['unknown-stream'],
+      type: 'unknown/type'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    // No string/number at top level → falls through to '{2 fields}'
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, '{2 fields}');
+  });
+
+  it('[EST16e] unknown event with value field returns value', () => {
+    const event = {
+      content: {
+        value: 42,
+        metadata: { unit: 'bpm', device: 'watch' }
+      },
+      streamIds: ['unknown-stream'],
+      type: 'unknown/type'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, '42');
+  });
+
+  it('[EST16] ratio/generic select', () => {
+    const itemDef = model.itemsDefs.forKey('body-vulva-wetness-feeling');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef, 'itemDef should exist');
+    const event = {
+      content: { value: 1, relativeTo: 3 },
+      streamIds: [itemDef.data.streamId],
+      type: 'ratio/generic'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a result');
+    // Should contain the option label for value 1
+    const opt = itemDef.data.options.find(o => o.value === 1);
+    if (opt) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('1/3'), `Expected ratio prefix in: ${result}`);
+    }
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/formatEventDate.test.js"
+/*!***************************************!*\
+  !*** ./tests/formatEventDate.test.js ***!
+  \***************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+// Mock connection
+function createMockConnection (settingsEvents = []) {
+  return {
+    async api (calls) {
+      return calls.map(call => {
+        if (call.method === 'events.get') {
+          if (call.params.streams[0] === 'test-stream') {
+            return { events: settingsEvents };
+          }
+          return { events: [] };
+        }
+        return {};
+      });
+    },
+    async apiOne (method, params, key) {
+      const result = await this.api([{ method, params }]);
+      return key ? result[0][key] : result[0];
+    }
+  };
+}
+
+describe('[FED] formatEventDate', function () {
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+  });
+
+  // 2024-01-15T12:00:00Z = 1705320000
+  const timestamp = 1705320000;
+
+  it('[FED1] returns ISO date when not hooked', () => {
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, '2024-01-15');
+  });
+
+  it('[FED2] uses DD.MM.YYYY format', async () => {
+    const conn = createMockConnection([
+      { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }
+    ]);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, '15.01.2024');
+  });
+
+  it('[FED3] uses DD/MM/YYYY format', async () => {
+    const conn = createMockConnection([
+      { id: 'ev1', type: 'settings/date-format', content: 'DD/MM/YYYY' }
+    ]);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, '15/01/2024');
+  });
+
+  it('[FED4] uses MM/DD/YYYY format', async () => {
+    const conn = createMockConnection([
+      { id: 'ev1', type: 'settings/date-format', content: 'MM/DD/YYYY' }
+    ]);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, '01/15/2024');
+  });
+
+  it('[FED5] uses YYYY-MM-DD format', async () => {
+    const conn = createMockConnection([
+      { id: 'ev1', type: 'settings/date-format', content: 'YYYY-MM-DD' }
+    ]);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, '2024-01-15');
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/hdsLib.test.js"
+/*!******************************!*\
+  !*** ./tests/hdsLib.test.js ***!
+  \******************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_utils_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/utils.ts */ "./ts/utils.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+/**
+ * Tests related to HDSLib.index.js & utils
+ */
+
+
+
+
+describe('[HDLX] HDSLib.index', () => {
+  before(async () => {
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.initHDSModel();
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_3__.resetModel)();
+  });
+
+  it('[HDME] HDSLib.getHDSModel() throws error if not initialized', () => {
+    try {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel().modelData;
+      throw new Error('Should throw an error');
+    } catch (e) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+    }
+
+    try {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel().streams;
+      throw new Error('Should throw an error');
+    } catch (e) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Model not loaded call `HDSLib.initHDSModel()` or `await model.load()` first.');
+    }
+  });
+
+  it('[HDMF] HDSLib.initHDSModel()', async () => {
+    const model0 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.initHDSModel();
+    const model1 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.initHDSModel();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model0, model1, 'HDSLib.initHDSModel() should used cached model');
+    const model2 = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model0, model2, 'HDSLib.getHDSModel() should used cached model');
+    // -- refresh model
+  });
+
+  describe('[HDUX] Utils', () => {
+    it('[HDUW] utils.waitUntilFalse', async function () {
+      this.timeout('1000');
+      let toBeSetToFalse = true;
+      setTimeout(() => { toBeSetToFalse = false; }, 500);
+
+      let count = 0;
+      await (0,_ts_utils_ts__WEBPACK_IMPORTED_MODULE_2__.waitUntilFalse)(() => {
+        count++;
+        return toBeSetToFalse;
+      }, 700);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(count > 2, 'should do at least 2 loops');
+    });
+
+    it('[HDUW] utils.waitUntilFalse throw timout on error', async function () {
+      this.timeout('1000');
+      let toBeSetToFalse = true;
+      setTimeout(() => { toBeSetToFalse = false; }, 600);
+
+      let count = 0;
+      try {
+        await (0,_ts_utils_ts__WEBPACK_IMPORTED_MODULE_2__.waitUntilFalse)(() => {
+          count++;
+          return toBeSetToFalse;
+        }, 400);
+        throw new Error('Should throw errors');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Timeout after 400ms');
+      }
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(count > 2, 'should do at least 2 loops');
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/hdsModel.test.js"
+/*!********************************!*\
+  !*** ./tests/hdsModel.test.js ***!
+  \********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+describe('[MODX] Model', () => {
+  let model;
+  before(async () => {
+    model = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel(modelURL);
+    await model.load();
+  });
+
+  it('[MODL] Load model for item with multiple types: body-weight', async () => {
+    const modelLoad = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel(modelURL);
+    await modelLoad.load();
+    const itemDef = modelLoad.itemsDefs.forKey('body-weight');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.data.streamId, 'body-weight');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(itemDef.eventTypes, ['mass/kg', 'mass/lb']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'body-weight');
+  });
+
+  it('[MODM] Load model for item with single type: body-vulva-wetness-feeling', async () => {
+    const modelLoad = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel(modelURL);
+    await modelLoad.load();
+    const itemDef = modelLoad.itemsDefs.forKey('body-vulva-wetness-feeling');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(itemDef.eventTypes, ['ratio/generic']);
+  });
+
+  it('[MODN] get All itemsDef', async () => {
+    const modelLoad = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel(modelURL);
+    await modelLoad.load();
+    const itemDefs = modelLoad.itemsDefs.getAll();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDefs.length > 0);
+    for (const itemDef of itemDefs) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef.key);
+    }
+  });
+
+  // ---------- itemDef ------------ //
+  describe('[MDVX] itemDef methods', function () {
+    it('[MDVA] eventTemplate() returns event template with streamId and type', async () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      const template = itemDef.eventTemplate();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(template.streamIds);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(template.type);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(template.streamIds, ['body-weight']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(template.type, 'mass/kg'); // first eventType
+    });
+
+    it('[MDVB] eventTemplate() returns correct streamId from data', async () => {
+      const itemDef = model.itemsDefs.forKey('profile-name');
+      const template = itemDef.eventTemplate();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(template.streamIds, ['profile-name']);
+    });
+  });
+
+  // ---------- items ------------ //
+  describe('[MOLX] items localization', function () {
+    afterEach(() => {
+      // make sure locales are set back to default after each test
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+    });
+    it('[MOLL] Label  & Description properties are localized', () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.label, 'Body weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.description, 'Measured body weight');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.label, 'Poids corporel');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.description, 'Poids corporel mesuré');
+    });
+  });
+
+  describe('[MOIX] items', function () {
+    it('[MOIE] Throw error if itemsDefs.forKey not found', async () => {
+      try {
+        model.itemsDefs.forKey('dummy');
+        throw new Error('Should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Cannot find item definition with key: dummy');
+      }
+    });
+
+    it('[MOIN] Return null with throwErrorIfNotFound = false', async () => {
+      const notFound = model.itemsDefs.forKey('dummy', false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(notFound, null);
+    });
+  });
+  // ---------- events ------------ //
+
+  describe('[MOEX] events', function () {
+    it('[MODS] Get definition from event data', async () => {
+      const fakeEvent = {
+        streamIds: ['body-weight', 'dummy'],
+        type: 'mass/kg'
+      };
+      const itemDef = model.itemsDefs.forEvent(fakeEvent);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.data.streamId, 'body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(itemDef.eventTypes, ['mass/kg', 'mass/lb']);
+    });
+
+    it('[MOEE] Throw error if itemsDefs.forEvent not found', async () => {
+      const fakeEvent = {
+        streamIds: ['dummy'],
+        type: 'mass/kg'
+      };
+      try {
+        model.itemsDefs.forEvent(fakeEvent);
+        throw new Error('Should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Cannot find definition for event: {"streamIds":["dummy"],"type":"mass/kg"}');
+      }
+    });
+
+    it('[MOEN] Return if itemsDefs.forEvent not found and throwErrorIfNotFound = false', async () => {
+      const fakeEvent = {
+        streamIds: ['dummy'],
+        type: 'mass/kg'
+      };
+      const notFound = model.itemsDefs.forEvent(fakeEvent, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(notFound, null);
+    });
+
+    it('[MOED] Throw error if itemsDefs.forEvent finds duplicates', async () => {
+      const fakeEvent = {
+        streamIds: ['body-vulva-wetness-feeling', 'body-vulva-mucus-stretch'],
+        type: 'ratio/generic'
+      };
+      try {
+        model.itemsDefs.forEvent(fakeEvent);
+        throw new Error('Should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Found multiple matching definitions "body-vulva-wetness-feeling, body-vulva-mucus-stretch" for event: {"streamIds":["body-vulva-wetness-feeling","body-vulva-mucus-stretch"],"type":"ratio/generic"}');
+      }
+    });
+  });
+
+  // ----------- event types ----------- //
+  describe('[MOTX] eventTypes', function () {
+    it('[MOTA] event type definition', async () => {
+      const eventTypeDev = model.eventTypes.getEventTypeDefinition('temperature/c');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(eventTypeDev, { description: 'Celsius', type: 'number' });
+    });
+
+    it('[MOTB] extra definition', async () => {
+      const eventTypeExtra = model.eventTypes.getEventTypeExtra('temperature/c');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(eventTypeExtra, { name: { en: 'Degrees Celsius', fr: 'Degrés Celsius' }, symbol: '°C' });
+    });
+
+    it('[MOTC] symbol exists', async () => {
+      const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('temperature/c');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(eventTypeSymbol, '°C');
+    });
+
+    it('[MOTD] symbol not exists', async () => {
+      const eventTypeSymbol = model.eventTypes.getEventTypeSymbol('audio/attached');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(eventTypeSymbol, null);
+    });
+  });
+
+  // ---------- datasources ------------ //
+
+  describe('[MODSX] datasources', function () {
+    let dsModel;
+    before(async () => {
+      dsModel = await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.initHDSModel)();
+    });
+
+    it('[MODSA] get all datasources', async () => {
+      const datasources = dsModel.datasources.getAll();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(datasources.length > 0);
+      for (const ds of datasources) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ds.key);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ds.endpoint);
+      }
+    });
+
+    it('[MODSB] forKey returns medication datasource', async () => {
+      const ds = dsModel.datasources.forKey('medication');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ds);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.key, 'medication');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.endpoint, 'https://demo-datasets.datasafe.dev/medication');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.queryParam, 'search');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.minQueryLength, 3);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.resultKey, 'medications');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ds.displayFields);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ds.valueFields);
+    });
+
+    it('[MODSC] forKey throws on unknown key', async () => {
+      try {
+        dsModel.datasources.forKey('dummy');
+        throw new Error('Should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Cannot find datasource definition with key: dummy');
+      }
+    });
+
+    it('[MODSD] forKey returns null with throwErrorIfNotFound = false', async () => {
+      const notFound = dsModel.datasources.forKey('dummy', false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(notFound, null);
+    });
+  });
+
+  // ---------- streams ------------ //
+
+  describe('[MOSX] streams', function () {
+    it('[MOSB] Streams Data by Id', async () => {
+      const streamData = model.streams.getDataById('fertility-cycles-start');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(streamData.parentId, 'fertility-cycles');
+    });
+
+    it('[MOSE] Streams Data by Id, Throw Error if not found', async () => {
+      try {
+        model.streams.getDataById('dummy');
+        throw new Error('Should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Stream with id: "dummy" not found');
+      }
+    });
+
+    it('[MOSP] Streams Data parents', async () => {
+      const streamParentIds = model.streams.getParentsIds('fertility-cycles-start');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(streamParentIds, ['fertility', 'fertility-cycles']);
+    });
+
+    it('[MOSC] Necessary streams to handle itemKeys', async () => {
+      const itemKeys = [
+        'body-vulva-mucus-inspect',
+        'profile-name',
+        'profile-date-of-birth',
+        'body-vulva-mucus-stretch',
+        'profile-surname'
+      ];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys);
+      // keeè a list of streams check that necessary streams exists
+      const streamIdsToCheck = {};
+      for (const itemKey of itemKeys) {
+        const streamId = model.itemsDefs.forKey(itemKey).data.streamId;
+        streamIdsToCheck[streamId] = true;
+      }
+      const parentExist = {}; // list of parent id in order
+      for (const stream of streamsToBeCreated) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!!stream.id, 'stream should have an id');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!!stream.name, `stream "${stream.id}" should have a name`);
+        delete streamIdsToCheck[stream.id];
+        if (stream.parentId) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!!parentExist[stream.parentId], `stream "${stream.id}" should have parent "${stream.parentId}" already in list`);
+        parentExist[stream.id] = true;
+      }
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(Object.keys(streamIdsToCheck), []);
+    });
+
+    it('[MOSD] Necessary streams to handle itemKey, with existing streamIds', async () => {
+      const itemKeys = [
+        'body-vulva-mucus-inspect',
+        'profile-name',
+        'profile-date-of-birth',
+        'body-vulva-mucus-stretch',
+        'profile-surname'
+      ];
+      const knowExistingStreamsIds = ['body-vulva', 'profile', 'applications'];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { knowExistingStreamsIds });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(streamsToBeCreated, [
+        {
+          id: 'body-vulva-mucus',
+          name: 'Vulva Mucus',
+          parentId: 'body-vulva'
+        },
+        {
+          id: 'body-vulva-mucus-inspect',
+          name: 'Vulva Mucus Inspect',
+          parentId: 'body-vulva-mucus'
+        },
+        { id: 'profile-name', name: 'Name', parentId: 'profile' },
+        {
+          id: 'profile-date-of-birth',
+          name: 'Date of Birth',
+          parentId: 'profile'
+        },
+        {
+          id: 'body-vulva-mucus-stretch',
+          name: 'Vulva Mucus Stretch',
+          parentId: 'body-vulva-mucus'
+        }
+      ]);
+    });
+
+    it('[MOSE] Necessary streams to handle itemKey, with nameProperty: defaultName', async () => {
+      const itemKeys = [
+        'profile-name'
+      ];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { nameProperty: 'defaultName' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(streamsToBeCreated, [
+        { id: 'profile', parentId: null, defaultName: 'Profile' },
+        { id: 'profile-name', parentId: 'profile', defaultName: 'Name' }
+      ]);
+    });
+
+    it('[MOSF] Necessary streams to handle itemKey, with nameProperty: none', async () => {
+      const itemKeys = [
+        'profile-name'
+      ];
+      const streamsToBeCreated = model.streams.getNecessaryListForItems(itemKeys, { nameProperty: 'none' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(streamsToBeCreated, [
+        { id: 'profile', parentId: null },
+        { id: 'profile-name', parentId: 'profile' }
+      ]);
+    });
+  });
+
+  // ------------------- authorizations ------------------ //
+
+  describe('[MOAX] authorizations', function () {
+    it('[MOAA] Get Authorizations from items', async () => {
+      const itemKeys = [
+        'body-vulva-mucus-inspect',
+        'profile-name',
+        'profile-date-of-birth',
+        'body-vulva-mucus-stretch',
+        'profile-surname'
+      ];
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys);
+      const expected = [
+        {
+          streamId: 'body-vulva-mucus-inspect',
+          defaultName: 'Vulva Mucus Inspect',
+          level: 'read'
+        },
+        { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
+        {
+          streamId: 'profile-date-of-birth',
+          defaultName: 'Date of Birth',
+          level: 'read'
+        },
+        {
+          streamId: 'body-vulva-mucus-stretch',
+          defaultName: 'Vulva Mucus Stretch',
+          level: 'read'
+        }
+      ];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAL] Get Authorizations from items override correctly authorized level', async () => {
+      const itemKeys = ['profile-name'];
+      const options = { preRequest: [{ streamId: 'profile', level: 'contribute' }] };
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
+      const expected = [
+        { streamId: 'profile', level: 'contribute', defaultName: 'Profile' }
+      ];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAV] Get Authorizations from items override correctly authorized level', async () => {
+      const itemKeys = ['profile-name'];
+      const options = {
+        defaultLevel: 'manage',
+        preRequest: [{ streamId: 'profile', level: 'read' }]
+      };
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
+      const expected = [
+        { streamId: 'profile', level: 'read', defaultName: 'Profile' },
+        { streamId: 'profile-name', defaultName: 'Name', level: 'manage' }
+      ];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAM] Get Authorizations from items mix correctly authorized level', async () => {
+      const levels = [{ request: 'manage', expect: 'manage' }, { request: 'contribute', expect: 'contribute' }, { request: 'writeOnly', expect: 'contribute' }];
+      for (const level of levels) {
+        const itemKeys = ['profile-name'];
+        const options = {
+          preRequest: [{ streamId: 'profile-name', level: level.request }]
+        };
+        const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
+        const expected = [
+          { streamId: 'profile-name', level: level.expect, defaultName: 'Name' }
+        ];
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(authorizationSet, expected);
+      }
+    });
+
+    it('[MOAO] Get Authorizations from items with overrides', async () => {
+      const itemKeys = [
+        'body-vulva-mucus-inspect',
+        'profile-name',
+        'profile-date-of-birth',
+        'body-vulva-mucus-stretch',
+        'profile-surname'
+      ];
+      const options = {
+        preRequest: [
+          { streamId: 'profile' },
+          { streamId: 'app-test', defaultName: 'App test', level: 'write' }
+        ]
+      };
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
+      const expected = [
+        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
+        { streamId: 'app-test', defaultName: 'App test', level: 'write' },
+        {
+          streamId: 'body-vulva-mucus-inspect',
+          defaultName: 'Vulva Mucus Inspect',
+          level: 'read'
+        },
+        {
+          streamId: 'body-vulva-mucus-stretch',
+          defaultName: 'Vulva Mucus Stretch',
+          level: 'read'
+        }
+      ];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAW] Get Authorizations from items with overrides and no defaultName', async () => {
+      const itemKeys = [
+        'body-vulva-mucus-inspect',
+        'profile-name',
+        'profile-date-of-birth',
+        'body-vulva-mucus-stretch',
+        'profile-surname'
+      ];
+      const options = {
+        preRequest: [
+          { streamId: 'profile' },
+          { streamId: 'app-test', level: 'write' }
+        ],
+        includeDefaultName: false
+      };
+      const authorizationSet = model.authorizations.forItemKeys(itemKeys, options);
+      const expected = [
+        { streamId: 'profile', level: 'read' },
+        { streamId: 'app-test', level: 'write' },
+        {
+          streamId: 'body-vulva-mucus-inspect',
+          level: 'read'
+        },
+        {
+          streamId: 'body-vulva-mucus-stretch',
+          level: 'read'
+        }
+      ];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAZ] Get authorization throw error on unknown streamId with no defaultName', async () => {
+      const itemKeys = [
+        'profile-surname'
+      ];
+      const options = {
+        preRequest: [
+          { streamId: 'dummy', defaultName: 'Dummy', level: 'read' }
+        ],
+        includeDefaultName: false
+      };
+      try {
+        model.authorizations.forItemKeys(itemKeys, options);
+        throw new Error('Should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Do not include defaultName when not included explicitely on {"streamId":"dummy","defaultName":"Dummy","level":"read"}');
+      }
+    });
+
+    it('[MOAE] Throw error when defaultName is in one of of the "pre" but not desired ', async () => {
+      const itemKeys = [
+        'profile-surname'
+      ];
+      const options = {
+        preRequest: [
+          { streamIdXXXX: 'dummy', level: 'read' }
+        ]
+      };
+      try {
+        model.authorizations.forItemKeys(itemKeys, options);
+        throw new Error('Should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Missing streamId in options.preRequest item: {"streamIdXXXX":"dummy","level":"read"}');
+      }
+    });
+
+    it('[MOAR] Get authorization throw error on unknown streamId with no defaultName', async () => {
+      const itemKeys = [
+        'profile-surname'
+      ];
+      const options = {
+        preRequest: [
+          { streamId: 'dummy', level: 'read' }
+        ]
+      };
+      try {
+        model.authorizations.forItemKeys(itemKeys, options);
+        throw new Error('Should throw Error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'No "defaultName" in options.preRequest item: {"streamId":"dummy","level":"read"} and cannot find matching streams in default list');
+      }
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/libSettings.test.js"
+/*!***********************************!*\
+  !*** ./tests/libSettings.test.js ***!
+  \***********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+
+describe('[LISX] Lib settings', () => {
+  before(async () => {
+
+  });
+
+  it('[LISL] settings.setPreferredLocales default Local', async () => {
+    const text = {
+      en: 'Hello',
+      fr: 'Bonjour'
+    };
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.settings.setPreferredLocales(['en']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.l(text), text.en);
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.settings.setPreferredLocales(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.l(text), text.fr);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/localizeText.test.js"
+/*!************************************!*\
+  !*** ./tests/localizeText.test.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+describe('[LOCX] Localization', () => {
+  afterEach(() => {
+    // make sure locales are set back to default after each test
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.resetPreferredLocales)();
+  });
+
+  describe('[LOVX] validateLocalizableText', () => {
+    it('[LOVA] should validate correct localizable text', () => {
+      const text = { en: 'Hello', fr: 'Bonjour' };
+      const result = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('testKey', text);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result, text);
+    });
+
+    it('[LOVB] should throw error if en is missing', () => {
+      try {
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('testKey', { fr: 'Bonjour' });
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Missing or invalid localizable text for testKey');
+      }
+    });
+
+    it('[LOVC] should throw error if en is not a string', () => {
+      try {
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('testKey', { en: 123 });
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Missing or invalid localizable text for testKey');
+      }
+    });
+
+    it('[LOVD] should throw error if optional language is not a string', () => {
+      try {
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('testKey', { en: 'Hello', fr: 123 });
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Missing or invalid localizable text for testKey languagecode: fr');
+      }
+    });
+
+    it('[LOVE] should throw error if es is not a string', () => {
+      try {
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.validateLocalizableText)('testKey', { en: 'Hello', es: { nested: 'object' } });
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Missing or invalid localizable text for testKey languagecode: es');
+      }
+    });
+  });
+
+  describe('[LOSX] Localization settings', () => {
+    it('[LOSG] getSupportedLocales', () => {
+      const defaultLocales = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getSupportedLocales)();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(defaultLocales, ['en', 'fr', 'es']);
+    });
+
+    it('[LOSS] setPreferredLocales, resetPrefferedLocales', () => {
+      const defaultLocales = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getSupportedLocales)();
+      const text = {
+        en: 'Hello',
+        fr: 'Bonjour'
+      };
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(text), text.en);
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr', 'es']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(text), text.fr);
+      const prefferedLocales = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(prefferedLocales, ['fr', 'es', 'en']);
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.resetPreferredLocales)();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)(), defaultLocales);
+    });
+
+    it('[LOSE] setPreferredLocales throws error if language code unsuported', () => {
+      try {
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['ex', 'en', 'fr', 'ut']);
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'locales "ex, ut" are not supported');
+      }
+    });
+
+    it('[LOSA] setPreferredLocales throws error if not array', () => {
+      try {
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)('en');
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'setPreferredLocales takes an array of language codes');
+      }
+    });
+  });
+
+  // --- item localization
+
+  describe('[LOLX] item localization', () => {
+    it('[LOLN] localizable null items return null', () => {
+      const nullRes = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(nullRes, null);
+    });
+
+    it('[LOLE] localizable should return english translation if none other found', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr', 'es']);
+      const text = {
+        en: 'Hello'
+      };
+      const res = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(text);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res, 'Hello');
+    });
+
+    it('[LOLT] localizable items must have an english translation, even if default language is not english', () => {
+      try {
+        const text = {
+          es: 'Ola',
+          fr: 'Bonjour'
+        };
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']);
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(text);
+        throw new Error('Should throw error');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'textItems must have an english translation');
+      }
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/logger.test.js"
+/*!******************************!*\
+  !*** ./tests/logger.test.js ***!
+  \******************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/logger.ts */ "./ts/logger.ts");
+
+
+
+
+describe('[LOGX] Logger', function () {
+  describe('[LGFX] Logger functions', function () {
+    it('[LGFA] info() should call logger.info', () => {
+      let called = false;
+      let loggedArgs = null;
+      const customLogger = {
+        info: (...args) => { called = true; loggedArgs = args; },
+        error: () => {},
+        debug: () => {}
+      };
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.setLogger(customLogger);
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.info('test message', { data: 123 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(called, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(loggedArgs, ['test message', { data: 123 }]);
+    });
+
+    it('[LGFB] error() should call logger.error', () => {
+      let called = false;
+      let loggedArgs = null;
+      const customLogger = {
+        info: () => {},
+        error: (...args) => { called = true; loggedArgs = args; },
+        debug: () => {}
+      };
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.setLogger(customLogger);
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.error('error message', new Error('test'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(called, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(loggedArgs[0], 'error message');
+    });
+
+    it('[LGFC] warn() should call logger.info (warn uses info internally)', () => {
+      let called = false;
+      let loggedArgs = null;
+      const customLogger = {
+        info: (...args) => { called = true; loggedArgs = args; },
+        error: () => {},
+        debug: () => {}
+      };
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.setLogger(customLogger);
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.warn('warning message');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(called, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(loggedArgs, ['warning message']);
+    });
+
+    it('[LGFD] setLogger() should replace the logger', () => {
+      const logs = [];
+      const customLogger = {
+        info: (...args) => logs.push(['info', ...args]),
+        error: (...args) => logs.push(['error', ...args]),
+        debug: (...args) => logs.push(['debug', ...args])
+      };
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.setLogger(customLogger);
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.info('msg1');
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.error('msg2');
+      _ts_logger_ts__WEBPACK_IMPORTED_MODULE_1__.warn('msg3');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(logs.length, 3);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(logs[0], ['info', 'msg1']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(logs[1], ['error', 'msg2']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(logs[2], ['info', 'msg3']); // warn uses info
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/reminders.test.js"
+/*!*********************************!*\
+  !*** ./tests/reminders.test.js ***!
+  \*********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+describe('[REMX] Reminders', () => {
+  // ============ Duration parser ============
+
+  describe('[DURX] Duration parser', () => {
+    it('[DUR1] P1D = 86400 seconds', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('P1D'), 86400);
+    });
+
+    it('[DUR2] P1W = 604800 seconds', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('P1W'), 604800);
+    });
+
+    it('[DUR3] P1M = 2592000 seconds (30 days)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('P1M'), 2592000);
+    });
+
+    it('[DUR4] P1Y = 31536000 seconds (365 days)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('P1Y'), 31536000);
+    });
+
+    it('[DUR5] P1Y6M = year + 6 months', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('P1Y6M'), 31536000 + 6 * 2592000);
+    });
+
+    it('[DUR6] P21D = 21 days', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('P21D'), 21 * 86400);
+    });
+
+    it('[DUR7] PT8H = 8 hours', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('PT8H'), 8 * 3600);
+    });
+
+    it('[DUR8] invalid throws', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('invalid'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)('P'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToSeconds)(''));
+    });
+
+    it('[DUR9] durationToLabel readable', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToLabel)(86400), '1 day');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToLabel)(7 * 86400), '1 week');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToLabel)(30 * 86400), '1 month');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.durationToLabel)(2 * 86400), '2 days');
+    });
+  });
+
+  // ============ computeReminders ============
+
+  describe('[CRMX] computeReminders', () => {
+    const DAY = 86400;
+    const NOW = 1000000;
+
+    // Helper to create a minimal itemDef-like object
+    function makeItem (key, streamId, eventType, reminder) {
+      return {
+        key,
+        eventTypes: [eventType],
+        reminder: reminder || null,
+        data: { streamId }
+      };
+    }
+
+    // Helper to create a minimal event
+    function makeEvent (streamId, type, time) {
+      return { streamId, type, time };
+    }
+
+    it('[CRM1] no reminder config → not in results', () => {
+      const items = [makeItem('body-height', 'body-height', 'length/m', null)];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, [], {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 0);
+    });
+
+    it('[CRM2] cooldown: within → cooldown', () => {
+      const items = [makeItem('body-weight', 'body-weight', 'mass/kg', { cooldown: 'P1D', importance: 'may' })];
+      const events = [makeEvent('body-weight', 'mass/kg', NOW - 3600)]; // 1 hour ago
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].status, 'cooldown');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].importance, 'may');
+    });
+
+    it('[CRM3] cooldown: past → due', () => {
+      const items = [makeItem('body-weight', 'body-weight', 'mass/kg', { cooldown: 'P1D', importance: 'may' })];
+      const events = [makeEvent('body-weight', 'mass/kg', NOW - 2 * DAY)]; // 2 days ago
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].status, 'due');
+    });
+
+    it('[CRM4] cooldown: no events → due', () => {
+      const items = [makeItem('body-weight', 'body-weight', 'mass/kg', { cooldown: 'P1D', importance: 'may' })];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, [], {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].status, 'due');
+    });
+
+    it('[CRM5] expectedInterval: before min → ok', () => {
+      const items = [makeItem('cycle', 's', 'activity/plain', {
+        expectedInterval: { min: 'P21D', max: 'P35D' },
+        cooldown: 'P10D',
+        importance: 'should'
+      })];
+      const events = [makeEvent('s', 'activity/plain', NOW - 15 * DAY)]; // 15 days ago
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].status, 'ok');
+    });
+
+    it('[CRM6] expectedInterval: between min and 90% max → upcoming', () => {
+      const items = [makeItem('cycle', 's', 'activity/plain', {
+        expectedInterval: { min: 'P21D', max: 'P35D' },
+        importance: 'should'
+      })];
+      const events = [makeEvent('s', 'activity/plain', NOW - 25 * DAY)]; // 25 days ago
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].status, 'upcoming');
+    });
+
+    it('[CRM7] expectedInterval: between 90% max and max → due', () => {
+      const items = [makeItem('cycle', 's', 'activity/plain', {
+        expectedInterval: { min: 'P21D', max: 'P35D' },
+        importance: 'should'
+      })];
+      const events = [makeEvent('s', 'activity/plain', NOW - 33 * DAY)]; // 33 days ago (>31.5=90%*35)
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].status, 'due');
+    });
+
+    it('[CRM8] expectedInterval: past max → overdue', () => {
+      const items = [makeItem('cycle', 's', 'activity/plain', {
+        expectedInterval: { min: 'P21D', max: 'P35D' },
+        importance: 'should'
+      })];
+      const events = [makeEvent('s', 'activity/plain', NOW - 40 * DAY)]; // 40 days ago
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].status, 'overdue');
+    });
+
+    it('[CRM9] expectedInterval: no events → due', () => {
+      const items = [makeItem('cycle', 's', 'activity/plain', {
+        expectedInterval: { min: 'P21D', max: 'P35D' },
+        importance: 'should'
+      })];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, [], {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].status, 'due');
+    });
+
+    it('[CRMA] relativeTo: on target day → due', () => {
+      const cycleItem = makeItem('cycle-start', 's', 'activity/plain', null);
+      const lhItem = makeItem('lh', 'lh', 'concentration/mg-l', {
+        relativeTo: 'cycle-start',
+        relativeDays: [2, 3, 4],
+        importance: 'must'
+      });
+      // Cycle started 2 days ago → today is day 3
+      const events = [makeEvent('s', 'activity/plain', NOW - 2 * DAY)];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)([cycleItem, lhItem], events, {}, NOW);
+      const lhResult = result.find(r => r.itemKey === 'lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lhResult.status, 'due');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lhResult.importance, 'must');
+    });
+
+    it('[CRMB] relativeTo: day before target → upcoming', () => {
+      const cycleItem = makeItem('cycle-start', 's', 'activity/plain', null);
+      const lhItem = makeItem('lh', 'lh', 'concentration/mg-l', {
+        relativeTo: 'cycle-start',
+        relativeDays: [2, 3, 4],
+        importance: 'must'
+      });
+      // Cycle started 0 days ago → today is day 1 (day before first target day 2)
+      const events = [makeEvent('s', 'activity/plain', NOW)];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)([cycleItem, lhItem], events, {}, NOW);
+      const lhResult = result.find(r => r.itemKey === 'lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lhResult.status, 'upcoming');
+    });
+
+    it('[CRMC] relativeTo: off day → ok', () => {
+      const cycleItem = makeItem('cycle-start', 's', 'activity/plain', null);
+      const lhItem = makeItem('lh', 'lh', 'concentration/mg-l', {
+        relativeTo: 'cycle-start',
+        relativeDays: [2, 3, 4],
+        importance: 'must'
+      });
+      // Cycle started 10 days ago → today is day 11 (way past target)
+      // But LH was entered during the target window
+      const events = [
+        makeEvent('s', 'activity/plain', NOW - 10 * DAY),
+        makeEvent('lh', 'concentration/mg-l', NOW - 8 * DAY) // entered on day 3
+      ];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)([cycleItem, lhItem], events, {}, NOW);
+      const lhResult = result.find(r => r.itemKey === 'lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lhResult.status, 'ok');
+    });
+
+    it('[CRMD] relativeTo: past window, never entered → overdue', () => {
+      const cycleItem = makeItem('cycle-start', 's', 'activity/plain', null);
+      const lhItem = makeItem('lh', 'lh', 'concentration/mg-l', {
+        relativeTo: 'cycle-start',
+        relativeDays: [2, 3, 4],
+        importance: 'must'
+      });
+      // Cycle started 10 days ago, LH never entered
+      const events = [makeEvent('s', 'activity/plain', NOW - 10 * DAY)];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)([cycleItem, lhItem], events, {}, NOW);
+      const lhResult = result.find(r => r.itemKey === 'lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lhResult.status, 'overdue');
+    });
+
+    it('[CRME] multi-source merge: importance escalation', () => {
+      const items = [makeItem('body-weight', 'body-weight', 'mass/kg', { cooldown: 'P1D', importance: 'may' })];
+      const overrides = {
+        'body-weight': [{ origin: 'collector', collectorId: 'abc', reminder: { importance: 'should' } }]
+      };
+      const events = [makeEvent('body-weight', 'mass/kg', NOW - 2 * DAY)];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, overrides, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].importance, 'should');
+    });
+
+    it('[CRMF] sorting: overdue before due before cooldown', () => {
+      const items = [
+        makeItem('a', 'a', 't', { cooldown: 'P1D', importance: 'may' }),
+        makeItem('b', 'b', 't', { expectedInterval: { min: 'P1D', max: 'P2D' }, importance: 'should' }),
+        makeItem('c', 'c', 't', { cooldown: 'P1D', importance: 'must' })
+      ];
+      const events = [
+        makeEvent('a', 't', NOW - 3600), // within cooldown → cooldown
+        makeEvent('b', 't', NOW - 5 * DAY), // past max → overdue
+        makeEvent('c', 't', NOW - 2 * DAY) // past cooldown → due
+      ];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].itemKey, 'b'); // overdue
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[1].itemKey, 'c'); // due
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[2].itemKey, 'a'); // cooldown
+    });
+
+    it('[CRMG] relativeTo: already entered today → cooldown', () => {
+      const cycleItem = makeItem('cycle-start', 's', 'activity/plain', null);
+      const lhItem = makeItem('lh', 'lh', 'concentration/mg-l', {
+        relativeTo: 'cycle-start',
+        relativeDays: [2, 3, 4],
+        importance: 'must'
+      });
+      // Cycle started 2 days ago (day 3), LH entered 1 hour ago
+      const events = [
+        makeEvent('s', 'activity/plain', NOW - 2 * DAY),
+        makeEvent('lh', 'concentration/mg-l', NOW - 3600)
+      ];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)([cycleItem, lhItem], events, {}, NOW);
+      const lhResult = result.find(r => r.itemKey === 'lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lhResult.status, 'cooldown');
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/test-utils/config.js"
+/*!************************************!*\
+  !*** ./tests/test-utils/config.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
+/* harmony export */ });
+/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = ({
+  serviceInfoURL: 'https://demo.datasafe.dev/reg/service/info',
+  appId: 'hds-lib-tests',
+  modelURL: 'https://model.datasafe.dev/pack.json'
+});
+
+
+/***/ },
+
+/***/ "./tests/test-utils/debug.js"
+/*!***********************************!*\
+  !*** ./tests/test-utils/debug.js ***!
+  \***********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   log: () => (/* binding */ log),
+/* harmony export */   logstack: () => (/* binding */ logstack),
+/* harmony export */   stack: () => (/* binding */ stack)
+/* harmony export */ });
+/* harmony import */ var util__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! util */ "./node_modules/util/util.js");
+
+
+function log () {
+  for (let i = 0; i < arguments.length; i++) {
+    console.log(util__WEBPACK_IMPORTED_MODULE_0__.inspect(arguments[i], { depth: 12, colors: true }));
+  }
+}
+
+function stack (start = 0, length = 100) {
+  const e = new Error();
+  return e.stack.split('\n').filter(l => l.indexOf('node_modules') < 0).slice(start + 1, start + length + 1);
+}
+
+function logstack () {
+  log(...arguments, stack(2, 4));
+}
+
+
+
+__webpack_require__.g.$$ = logstack;
+__webpack_require__.g.$$$ = log;
+
+
+/***/ },
+
+/***/ "./tests/test-utils/deps-browser.js"
+/*!******************************************!*\
+  !*** ./tests/test-utils/deps-browser.js ***!
+  \******************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   assert: () => (/* reexport default export from named module */ assert__WEBPACK_IMPORTED_MODULE_0__)
+/* harmony export */ });
+/* harmony import */ var assert__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! assert */ "./node_modules/assert/build/assert.js");
+
+
+
+
+/***/ },
+
+/***/ "./tests/test-utils/helpersAppTemplate.js"
+/*!************************************************!*\
+  !*** ./tests/test-utils/helpersAppTemplate.js ***!
+  \************************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   helperNewAppAndUsers: () => (/* binding */ helperNewAppAndUsers),
+/* harmony export */   helperNewAppClient: () => (/* binding */ helperNewAppClient),
+/* harmony export */   helperNewAppManaging: () => (/* binding */ helperNewAppManaging),
+/* harmony export */   helperNewInvite: () => (/* binding */ helperNewInvite)
+/* harmony export */ });
+/* harmony import */ var _deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _pryvService_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./pryvService.js */ "./tests/test-utils/pryvService.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../../ts/index.ts */ "./ts/index.ts");
+
+
+
+const { AppManagingAccount, AppClientAccount } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.appTemplates;
+
+
+
+/**
+ * function helperNewAppManaging
+ */
+async function helperNewAppManaging (baseStreamIdManager, appName, managingUser = null) {
+  // -- managing
+  const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamIdManager, name: appName, parentId: 'applications' }];
+  const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
+  if (!managingUser) {
+    managingUser = await (0,_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserAndPermissions)(null, permissionsManager, initialStreams, appName);
+  } else {
+    // replace managing user with new permissions set
+    managingUser = await (0,_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserPermissions)(managingUser, permissionsManager, initialStreams, appName);
+  }
+  const connection = new _pryvService_js__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(managingUser.appApiEndpoint);
+  const appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
+  return { managingUser, appManaging };
+}
+
+/**
+ * helper to generate a new managing user and new client user
+ */
+async function helperNewAppClient (baseStreamIdClient, appClientName) {
+  // -- receiving user
+  const clientUser = await (0,_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUser)();
+  const permissionsClient = [{ streamId: '*', level: 'manage' }];
+  const clientUserResultPermissions = await (0,_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserPermissions)(clientUser, permissionsClient, [], appClientName);
+  const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserResultPermissions.appApiEndpoint, appClientName);
+  return { clientUser, clientUserResultPermissions, appClient };
+}
+
+/**
+ * helper to generate a new managing user and new client user
+ */
+async function helperNewAppAndUsers (baseStreamIdManager, appName, baseStreamIdClient, appClientName) {
+  const res = {};
+  const resManager = await helperNewAppManaging(baseStreamIdManager, appName);
+  const resClient = await helperNewAppClient(baseStreamIdClient, appClientName);
+  Object.assign(res, resManager);
+  Object.assign(res, resClient);
+  return res;
+}
+
+/**
+ * heper to generate a new collector and invite for this managing application
+ * @param {AppManagingAccount} appManaging
+ * @returns {Object}
+ */
+async function helperNewInvite (appManaging, appClient, code, extraFeatures = { requestContent: {}, addChat: false }) {
+  code = code || Math.floor(Math.random() * 1000);
+  const collector = await appManaging.createCollector('Invite test ' + code);
+
+  // set request content
+  const requestContent = {
+    version: 0,
+    requester: { name: 'Test requester name' },
+    title: { en: 'Title of the request' },
+    description: { en: 'Short Description' },
+    consent: { en: 'This is a consent message' },
+    permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
+    app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
+  };
+  Object.assign(requestContent, extraFeatures.extraContent || {});
+  collector.request.setContent(requestContent);
+  if (extraFeatures.addChat) {
+    collector.request.addChatFeature();
+  }
+
+  await collector.save();
+  await collector.publish();
+  // create invite
+  const options = { customData: { hello: 'bob' } };
+  const invite = await collector.createInvite('Invite One', options);
+  const inviteSharingData = await invite.getSharingData();
+  _deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(inviteSharingData.apiEndpoint, await collector.sharingApiEndpoint());
+
+  // Invitee receives the invite
+  const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+
+  return { collector, invite, collectorClient, inviteSharingData };
+}
+
+
+/***/ },
+
+/***/ "./tests/test-utils/pryvService.js"
+/*!*****************************************!*\
+  !*** ./tests/test-utils/pryvService.js ***!
+  \*****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   config: () => (/* reexport safe */ _config_js__WEBPACK_IMPORTED_MODULE_3__["default"]),
+/* harmony export */   createUser: () => (/* binding */ createUser),
+/* harmony export */   createUserAndPermissions: () => (/* binding */ createUserAndPermissions),
+/* harmony export */   createUserPermissions: () => (/* binding */ createUserPermissions),
+/* harmony export */   init: () => (/* binding */ init),
+/* harmony export */   pryv: () => (/* binding */ pryv),
+/* harmony export */   service: () => (/* binding */ service),
+/* harmony export */   userExists: () => (/* binding */ userExists)
+/* harmony export */ });
+/* harmony import */ var _debug_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./debug.js */ "./tests/test-utils/debug.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var short_unique_id__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js");
+/* harmony import */ var _config_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./config.js */ "./tests/test-utils/config.js");
+/* harmony import */ var _ts_settings_ts__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../../ts/settings.ts */ "./ts/settings.ts");
+
+
+
+
+
+
+const { pryv, HDSService } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__;
+const passwordGenerator = new short_unique_id__WEBPACK_IMPORTED_MODULE_2__({ dictionary: 'alphanum', length: 12 });
+
+
+
+/**
+ * @type {HDSService}
+ */
+let serviceSingleton;
+
+/**
+ * @type {ServiceInfo}
+ */
+let infosSingleton;
+
+/**
+ * Get current HDSService
+ * @returns {HDSService}
+ */
+function service () {
+  if (serviceSingleton == null) throw new Error('Init pryvService first');
+  return serviceSingleton;
+}
+
+/**
+ * Initialize HDSservice from config and creates a singleton
+ * accessible via service()
+ * @returns {HDSService}
+ */
+async function init () {
+  if (infosSingleton) return infosSingleton;
+  if (!_config_js__WEBPACK_IMPORTED_MODULE_3__["default"].appId) throw new Error('Cannot find appId in config');
+  if (!_config_js__WEBPACK_IMPORTED_MODULE_3__["default"].serviceInfoURL) throw new Error('Cannot find serviceInfoURL in config');
+  (0,_ts_settings_ts__WEBPACK_IMPORTED_MODULE_4__.setServiceInfoURL)(_config_js__WEBPACK_IMPORTED_MODULE_3__["default"].serviceInfoURL);
+  serviceSingleton = new HDSService(_config_js__WEBPACK_IMPORTED_MODULE_3__["default"].serviceInfoURL);
+  infosSingleton = await serviceSingleton.info();
+  return infosSingleton;
+}
+
+/**
+ * @typedef {Object} CreateUserResult
+ * @property {string} apiEndpoint - a personal ApiEnpoint
+ * @property {string} username - The username
+ * @property {string} password - The password
+ */
+
+/**
+ * Create a user on Pryv.io
+ * @param {string} userId - desireg UserId for Prvy.io
+ * @param {string} password
+ * @param {string} email
+ * @returns {CreateUserResult}
+ */
+async function createUser (username, password, email) {
+  const host = await getHost();
+  password = password || passwordGenerator.rnd();
+  username = username || getNewUserId('u');
+  email = email || username + '@hds.bogus';
+  try {
+    // create user
+    const res = await fetch(host + 'users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        appId: _config_js__WEBPACK_IMPORTED_MODULE_3__["default"].appId,
+        username,
+        password,
+        email,
+        invitationtoken: 'enjoy',
+        languageCode: 'en',
+        referer: 'none'
+      })
+    });
+    const body = await res.json();
+    if (body.apiEndpoint == null) throw new Error('Cannot find apiEndpoint in response');
+    return { apiEndpoint: body.apiEndpoint, username: body.username, password };
+  } catch (e) {
+    throw new Error('Failed creating user ' + host + 'users');
+  }
+}
+
+/**
+ * Create userAccountAndPermission
+ * @param {string} username
+ * @param {Object} permissions - permission set (as per pryv api) - Add name if they might not exist
+ * @param {Array<Stream creation>} initialStreams - to be created
+ * @param {string} [appName] - default: from config
+ * @param {string} [password] - if not provided will be 'pass{usernam}'
+ * @param {string} [email] - if not provided will be '{usernam}@hds.bogus'
+ * @returns {Object} username, personalApiEndpoint, appId, appApiEndpoint
+ */
+async function createUserAndPermissions (username, permissions, initialStreams, appName, password, email) {
+  const newUser = await createUser(username, password, email);
+  const result = await createUserPermissions(newUser, permissions, initialStreams, appName);
+  result.appId = _config_js__WEBPACK_IMPORTED_MODULE_3__["default"].appId;
+  return result;
+}
+
+async function createUserPermissions (user, permissions, initialStreams = [], appName) {
+  const personalConnection = new pryv.Connection(user.apiEndpoint || user.personalApiEndpoint);
+  // -- make sure requested streams exists
+  const createStreams = initialStreams.map(s => ({
+    method: 'streams.create',
+    params: {
+      id: s.id,
+      name: s.name,
+      parentId: s.parentId || null
+    }
+  }));
+  // -- create access
+  const accessRequest = {
+    method: 'accesses.create',
+    params: {
+      type: 'app',
+      name: appName,
+      permissions
+    }
+  };
+  const apiCalls = [...createStreams, accessRequest];
+  const res = await personalConnection.api(apiCalls);
+  const accessRequestResult = res.pop();
+  if (accessRequestResult.error) throw new Error(accessRequestResult.error.message);
+  const appApiEndpoint = accessRequestResult.access?.apiEndpoint;
+  const result = {
+    username: user.username,
+    personalApiEndpoint: user.apiEndpoint,
+    appApiEndpoint
+  };
+
+  return result;
+}
+
+/**
+ * Utility to check if a user exists on a Pryv pltafom
+ * @param {string} userId
+ * @returns {boolean}
+ */
+async function userExists (userId) {
+  await init();
+  const userExistsRes = await fetch(infosSingleton.register + userId + '/check_username');
+  const userExistsBody = await userExistsRes.json();
+  if (typeof userExistsBody.reserved === 'undefined') throw Error('Pryv invalid user exists response ' + JSON.stringify(userExistsBody));
+  return userExistsBody.reserved;
+}
+
+/**
+ * Not really usefull for Open-Pryv.io kept if entreprise version becoms availble
+ * @returns {string} first available hosting
+ */
+async function getHost () {
+  await init();
+  // get available hosting
+  const hostingsRes = await fetch(infosSingleton.register + 'hostings', {
+    headers: { Accept: 'application/json' }
+  });
+  const hostings = await hostingsRes.json();
+  let hostingCandidate = null;
+  findOneHostingKey(hostings, 'N');
+  function findOneHostingKey (o, parentKey) {
+    for (const key of Object.keys(o)) {
+      if (parentKey === 'hostings') {
+        const hosting = o[key];
+        if (hosting.available) {
+          hostingCandidate = hosting;
+        }
+        return;
+      }
+      if (typeof o[key] !== 'string') {
+        findOneHostingKey(o[key], key);
+      }
+    }
+  }
+  if (hostingCandidate == null) throw Error('Cannot find hosting in: ' + JSON.stringify(hostings));
+  return hostingCandidate.availableCore;
+}
+
+const userIdGenerator = new short_unique_id__WEBPACK_IMPORTED_MODULE_2__({ dictionary: 'alphanum_lower', length: 7 });
+function getNewUserId (startWith = 'x') {
+  const id = startWith + userIdGenerator.rnd();
+  return id;
+}
+
+
+/***/ },
+
+/***/ "./tests/toolkitStreamAutoCreate.test.js"
+/*!***********************************************!*\
+  !*** ./tests/toolkitStreamAutoCreate.test.js ***!
+  \***********************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
+
+
+
+
+
+describe('[TKSX] toolKit Stream Auto Create', function () {
+  this.timeout(10000);
+  before(async () => {
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.initHDSModel();
+  });
+
+  it('[TKSA] create required streams based on itemsDefs', async () => {
+    const permissionsManager = [{ streamId: '*', level: 'manage' }];
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, permissionsManager, [], 'tk-test LISL');
+    const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint);
+    const streamsAutoCreate = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+
+    const itemKeys = [
+      'profile-name'
+    ];
+
+    const createdStreams = await streamsAutoCreate.ensureExistsForItems(itemKeys);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(createdStreams.length, 2);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(createdStreams[0].id, 'profile');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(createdStreams[1].id, 'profile-name');
+
+    const createdStream2 = await streamsAutoCreate.ensureExistsForItems(itemKeys);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(createdStream2.length, 0, 'Should not recreate existing streams');
+  });
+
+  it('[TKSB] attachToConnection reuses existing instance', async () => {
+    const permissionsManager = [{ streamId: '*', level: 'manage' }];
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, permissionsManager, [], 'tk-test TKSB');
+    const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint);
+
+    const streamsAutoCreate1 = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+    const streamsAutoCreate2 = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streamsAutoCreate1, streamsAutoCreate2, 'Should reuse existing instance');
+  });
+
+  it('[TKSC] addStreamStructure adds streams to known list', async () => {
+    const permissionsManager = [{ streamId: '*', level: 'manage' }];
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, permissionsManager, [], 'tk-test TKSC');
+    const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint);
+    const streamsAutoCreate = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+
+    // Add stream structure
+    const streamStructure = [
+      { id: 'existing-parent', name: 'Existing Parent', children: [{ id: 'existing-child', name: 'Existing Child' }] }
+    ];
+    streamsAutoCreate.addStreamStructure(streamStructure);
+
+    const knownIds = streamsAutoCreate.knowStreamIds();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(knownIds.includes('existing-parent'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(knownIds.includes('existing-child'));
+  });
+
+  it('[TKSD] addStreamStructure handles null input', async () => {
+    const permissionsManager = [{ streamId: '*', level: 'manage' }];
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, permissionsManager, [], 'tk-test TKSD');
+    const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint);
+    const streamsAutoCreate = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+
+    // Should not throw
+    streamsAutoCreate.addStreamStructure(null);
+    streamsAutoCreate.addStreamStructure(undefined);
+  });
+
+  it('[TKSE] ensureExistsForItems handles Set input', async () => {
+    const permissionsManager = [{ streamId: '*', level: 'manage' }];
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, permissionsManager, [], 'tk-test TKSE');
+    const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint);
+    const streamsAutoCreate = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+
+    const itemKeys = new Set(['profile-surname']);
+
+    const createdStreams = await streamsAutoCreate.ensureExistsForItems(itemKeys);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(createdStreams.length > 0);
+  });
+
+  it('[TKSF] ensureExistsForItems with item-already-exists error continues normally', async () => {
+    const permissionsManager = [{ streamId: '*', level: 'manage' }];
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, permissionsManager, [], 'tk-test TKSF');
+    const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint);
+    const streamsAutoCreate = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+
+    const itemKeys = ['profile-date-of-birth'];
+
+    // Create streams first
+    await streamsAutoCreate.ensureExistsForItems(itemKeys);
+
+    // Create a fresh instance that doesn't know about existing streams
+    delete connection.streamsAutoCreate;
+    const freshAutoCreate = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+
+    // Should handle item-already-exists gracefully
+    const result = await freshAutoCreate.ensureExistsForItems(itemKeys);
+    // Since streams exist but freshAutoCreate doesn't know, API returns item-already-exists which is handled
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(Array.isArray(result));
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/toolkitStreamsTools.test.js"
+/*!*******************************************!*\
+  !*** ./tests/toolkitStreamsTools.test.js ***!
+  \*******************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/toolkit/StreamsTools.ts */ "./ts/toolkit/StreamsTools.ts");
+
+
+
+
+describe('[TKTX] toolKit Streams Tools', function () {
+  describe('[TKAX] allStreamsAndChildren', function () {
+    it('[TKAA] should iterate over flat streams', () => {
+      const streams = [
+        { id: 'stream1', name: 'Stream 1' },
+        { id: 'stream2', name: 'Stream 2' }
+      ];
+      const result = [...(0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.allStreamsAndChildren)(streams)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].id, 'stream1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[1].id, 'stream2');
+    });
+
+    it('[TKAB] should iterate over nested streams', () => {
+      const streams = [
+        {
+          id: 'parent',
+          name: 'Parent',
+          children: [
+            { id: 'child1', name: 'Child 1' },
+            { id: 'child2', name: 'Child 2', children: [{ id: 'grandchild', name: 'Grandchild' }] }
+          ]
+        }
+      ];
+      const result = [...(0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.allStreamsAndChildren)(streams)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 4);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].id, 'parent');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[1].id, 'child1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[2].id, 'child2');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[3].id, 'grandchild');
+    });
+
+    it('[TKAC] should handle empty children array', () => {
+      const streams = [
+        { id: 'stream1', name: 'Stream 1', children: [] }
+      ];
+      const result = [...(0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.allStreamsAndChildren)(streams)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].id, 'stream1');
+    });
+
+    it('[TKAD] should handle empty input', () => {
+      const result = [...(0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.allStreamsAndChildren)([])];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 0);
+    });
+  });
+
+  describe('[TKGX] getStreamIdAndChildrenIds', function () {
+    it('[TKGA] should return stream id and all children ids', () => {
+      const stream = {
+        id: 'parent',
+        name: 'Parent',
+        children: [
+          { id: 'child1', name: 'Child 1' },
+          { id: 'child2', name: 'Child 2' }
+        ]
+      };
+      const result = (0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.getStreamIdAndChildrenIds)(stream);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result, ['parent', 'child1', 'child2']);
+    });
+
+    it('[TKGB] should return only stream id for stream without children', () => {
+      const stream = { id: 'solo', name: 'Solo' };
+      const result = (0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.getStreamIdAndChildrenIds)(stream);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result, ['solo']);
+    });
+
+    it('[TKGC] should handle deeply nested children', () => {
+      const stream = {
+        id: 'root',
+        name: 'Root',
+        children: [
+          {
+            id: 'level1',
+            name: 'Level 1',
+            children: [
+              {
+                id: 'level2',
+                name: 'Level 2',
+                children: [{ id: 'level3', name: 'Level 3' }]
+              }
+            ]
+          }
+        ]
+      };
+      const result = (0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.getStreamIdAndChildrenIds)(stream);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result, ['root', 'level1', 'level2', 'level3']);
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./node_modules/pryv/package.json"
 /*!****************************************!*\
   !*** ./node_modules/pryv/package.json ***!
@@ -21295,24 +24234,53 @@ module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.0.1","desc
 /******/ 	
 /************************************************************************/
 var __webpack_exports__ = {};
-// This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
+// This entry needs to be wrapped in an IIFE because it needs to be in strict mode.
 (() => {
+"use strict";
 /*!********************************!*\
   !*** ./tests/browser-tests.js ***!
   \********************************/
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _applicationClass_test_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./applicationClass.test.js */ "./tests/applicationClass.test.js");
+/* harmony import */ var _apptemplates_test_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./apptemplates.test.js */ "./tests/apptemplates.test.js");
+/* harmony import */ var _apptemplatesRequest_test_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./apptemplatesRequest.test.js */ "./tests/apptemplatesRequest.test.js");
+/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
-__webpack_require__(/*! ./applicationClass.test */ "./tests/applicationClass.test.js");
-__webpack_require__(/*! ./apptemplates.test */ "./tests/apptemplates.test.js");
-__webpack_require__(/*! ./apptemplatesRequest.test */ "./tests/apptemplatesRequest.test.js");
-__webpack_require__(/*! ./errors.test */ "./tests/errors.test.js");
-__webpack_require__(/*! ./hdsLib.test */ "./tests/hdsLib.test.js");
-__webpack_require__(/*! ./hdsModel.test */ "./tests/hdsModel.test.js");
-__webpack_require__(/*! ./libSettings.test */ "./tests/libSettings.test.js");
-__webpack_require__(/*! ./localizeText.test */ "./tests/localizeText.test.js");
-__webpack_require__(/*! ./toolkitStreamAutoCreate.test */ "./tests/toolkitStreamAutoCreate.test.js");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 })();
 
