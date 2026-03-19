@@ -24,11 +24,6 @@ export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from '
 export type { ProfileKey, ProfileValues } from './settings/HDSProfile.ts';
 export type { ConverterPack, ConversionResult as ConverterConversionResult, ObservationVector, SourceBlock } from './converters/types.ts';
 
-export const model = (() => {
-  console.warn('HDSLib.model is deprecated use getHDSModel() instead');
-  return HDSModelInitAndSingleton.getModel();
-})();
-
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, EuclidianDistanceEngine, HDSLibError };
