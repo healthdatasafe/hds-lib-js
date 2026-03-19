@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-19
+
+### Added
+- Euclidian-distance converter engine (`EuclidianDistanceEngine`) for cross-method vector conversion
+- `HDSModelConverters` on HDSModel with async lazy-load from `{modelBaseUrl}/converters/{itemKey}/pack-latest.json`
+- `convertMethodToEvent()`, `convertEventToMethod()`, `convertMethodToMethod()`
+- Converter-aware shortText formatting with `autoConvert-{itemKey}` setting support
+- `modelUrl` getter on HDSModel
+- 32 converter engine tests
+
 ## [0.1.15] - 2026-03-13
 
 ### Fixed
