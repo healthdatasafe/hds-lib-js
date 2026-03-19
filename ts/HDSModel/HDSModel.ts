@@ -6,6 +6,7 @@ import { HDSModelItemsDefs } from './HDSModel-ItemsDefs.ts';
 import { HDSModelEventTypes } from './HDSModel-EventTypes.ts';
 import { HDSModelDatasources } from './HDSModel-Datasources.ts';
 import { HDSModelConversions } from './HDSModel-Conversions.ts';
+import { HDSModelConverters } from './HDSModel-Converters.ts';
 
 export class HDSModel {
   /**
@@ -46,6 +47,11 @@ export class HDSModel {
 
   get isLoaded (): boolean {
     return !!this.#modelData;
+  }
+
+  /** The URL the model was loaded from */
+  get modelUrl (): string {
+    return this.#modelUrl;
   }
 
   /**
@@ -119,6 +125,14 @@ export class HDSModel {
       this.laziliyLoadedMap.conversions = new HDSModelConversions(this);
     }
     return this.laziliyLoadedMap.conversions;
+  }
+
+  get converters (): HDSModelConverters {
+    if (!this.isLoaded) throwNotLoadedError();
+    if (!this.laziliyLoadedMap.converters) {
+      this.laziliyLoadedMap.converters = new HDSModelConverters(this);
+    }
+    return this.laziliyLoadedMap.converters;
   }
 }
 

@@ -62,6 +62,10 @@ export function eventToShortText (event: any): string | null {
 function formatWithItemDef (event: any, content: any, itemDef: any, model: any): string | null {
   const type = itemDef.data.type;
 
+  if (type === 'convertible') {
+    return formatConvertible(event, content, itemDef, model);
+  }
+
   if (type === 'checkbox') {
     return event.type === 'activity/plain' ? 'Yes' : String(content);
   }
@@ -198,6 +202,58 @@ function formatObject (content: any): string | null {
     if (typeof v === 'number') return String(v);
   }
   return `{${keys.length} fields}`;
+}
+
+/**
+ * Format a convertible event (euclidian-distance converter).
+ * Shows source observation + source method name.
+ * If an autoConvert setting exists, converts to that method instead.
+ */
+function formatConvertible (_event: any, content: any, itemDef: any, model: any): string | null {
+  const ce = itemDef.data['converter-engine'];
+  if (!ce) return formatObject(content);
+
+  const itemKey = ce.models;
+  const source = content?.source;
+  const data = content?.data;
+
+  // If source block exists, show the source observation + method name
+  if (source?.sourceData != null && source?.key) {
+    const sourceLabel = typeof source.sourceData === 'string'
+      ? source.sourceData
+      : typeof source.sourceData === 'number'
+        ? String(source.sourceData)
+        : JSON.stringify(source.sourceData);
+    const truncated = sourceLabel.length > 40 ? sourceLabel.slice(0, 40) + '...' : sourceLabel;
+
+    // Check for autoConvert setting
+    if (HDSSettings.isHooked && data) {
+      const settingKey = `autoConvert-${itemDef.key}`;
+      try {
+        const targetMethod = HDSSettings.get(settingKey as any);
+        if (targetMethod && typeof targetMethod === 'string') {
+          const engine = model.converters?.getEngine(itemKey);
+          if (engine) {
+            const result = engine.fromVector(targetMethod, data);
+            const resultLabel = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
+            return `${resultLabel} (${targetMethod})`;
+          }
+        }
+      } catch { /* setting not found, use default */ }
+    }
+
+    return `${truncated} (${source.key})`;
+  }
+
+  // No source — RAW vector input, show dimension summary
+  if (data && typeof data === 'object') {
+    const dims = Object.entries(data).filter(([_, v]) => typeof v === 'number' && v > 0);
+    if (dims.length === 0) return 'empty';
+    const top = dims.sort(([, a], [, b]) => (b as number) - (a as number)).slice(0, 3);
+    return top.map(([k, v]) => `${k}:${(v as number).toFixed(1)}`).join(' ');
+  }
+
+  return formatObject(content);
 }
 
 function getSymbol (eventType: string, model: any): string | null {
