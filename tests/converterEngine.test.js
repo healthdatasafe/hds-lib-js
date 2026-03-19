@@ -1,20 +1,23 @@
 import { assert } from './test-utils/deps-node.js';
 import { EuclidianDistanceEngine, HDSModelConverters } from '../ts/index.ts';
 
-// Load the cervical-fluid pack from data-model-draft dist
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+const MODEL_BASE_URL = 'https://model.datasafe.dev';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Resolve path to data-model-draft dist (sibling repo in _macro2)
-const macro2Root = path.resolve(__dirname, '../../..');
-const cervicalFluidPack = JSON.parse(
-  fs.readFileSync(path.join(macro2Root, 'data-model-draft/data-model-draft/dist/converters/cervical-fluid/pack-latest.json'), 'utf-8')
-);
-const moodPack = JSON.parse(
-  fs.readFileSync(path.join(macro2Root, 'data-model-draft/data-model-draft/dist/converters/mood/pack-latest.json'), 'utf-8')
-);
+async function fetchPack (itemKey) {
+  const url = `${MODEL_BASE_URL}/converters/${itemKey}/pack-latest.json`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+  return res.json();
+}
+
+// Module-level packs — loaded once, shared across describes
+let cervicalFluidPack;
+let moodPack;
+
+before(async () => {
+  cervicalFluidPack = await fetchPack('cervical-fluid');
+  moodPack = await fetchPack('mood');
+});
 
 describe('[EDEX] EuclidianDistanceEngine', function () {
   let cfEngine;
