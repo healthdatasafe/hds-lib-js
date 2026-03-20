@@ -37,15 +37,30 @@ describe('[ESTX] eventToShortText', () => {
   });
 
   it('[EST6] select with localized option label', () => {
-    const itemDef = model.itemsDefs.forKey('body-vulva-mucus-inspect');
+    const itemDef = model.itemsDefs.forKey('body-vulva-bleeding');
     assert.ok(itemDef, 'itemDef should exist');
     const event = {
-      content: 'clear',
+      content: 0.55,
       streamIds: [itemDef.data.streamId],
       type: itemDef.eventTypes[0]
     };
     const result = eventToShortText(event);
-    assert.equal(result, 'Clear');
+    assert.equal(result, 'Moderate');
+  });
+
+  it('[EST6b] convertible with source block shows source data', () => {
+    const itemDef = model.itemsDefs.forKey('body-vulva-mucus-inspect');
+    assert.ok(itemDef, 'itemDef should exist');
+    const event = {
+      content: {
+        data: { threadiness: 0.4, stretchability: 0.3 },
+        source: { key: 'mira', sourceData: 'Creamy' }
+      },
+      streamIds: [itemDef.data.streamId],
+      type: itemDef.eventTypes[0]
+    };
+    const result = eventToShortText(event);
+    assert.equal(result, 'Creamy (mira)');
   });
 
   it('[EST7] date item returns ISO date string', () => {
