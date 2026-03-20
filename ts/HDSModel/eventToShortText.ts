@@ -215,7 +215,7 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
 
   const itemKey = ce.models;
   const source = content?.source;
-  const data = content?.data;
+  const vectors = content?.vectors;
 
   // If source block exists, show the source observation + method name
   if (source?.sourceData != null && source?.key) {
@@ -227,14 +227,14 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
     const truncated = sourceLabel.length > 40 ? sourceLabel.slice(0, 40) + '...' : sourceLabel;
 
     // Check for autoConvert setting
-    if (HDSSettings.isHooked && data) {
+    if (HDSSettings.isHooked && vectors) {
       const settingKey = `autoConvert-${itemDef.key}`;
       try {
         const targetMethod = HDSSettings.get(settingKey as any);
         if (targetMethod && typeof targetMethod === 'string') {
           const engine = model.converters?.getEngine(itemKey);
           if (engine) {
-            const result = engine.fromVector(targetMethod, data);
+            const result = engine.fromVector(targetMethod, vectors);
             const resultLabel = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
             return `${resultLabel} (${targetMethod})`;
           }
@@ -246,8 +246,8 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
   }
 
   // No source — RAW vector input, show dimension summary
-  if (data && typeof data === 'object') {
-    const dims = Object.entries(data).filter(([_, v]) => typeof v === 'number' && v > 0);
+  if (vectors && typeof vectors === 'object') {
+    const dims = Object.entries(vectors).filter(([_, v]) => typeof v === 'number' && v > 0);
     if (dims.length === 0) return 'empty';
     const top = dims.sort(([, a], [, b]) => (b as number) - (a as number)).slice(0, 3);
     return top.map(([k, v]) => `${k}:${(v as number).toFixed(1)}`).join(' ');

@@ -94,7 +94,7 @@ export class HDSModelConverters {
       type: engine.eventType,
       streamIds: [itemDef.streamId],
       content: {
-        data: vector,
+        vectors: vector,
         source,
       },
     };
@@ -103,7 +103,7 @@ export class HDSModelConverters {
   /**
    * Convert a stored event to a target method observation.
    *
-   * @param event - Pryv event with content.data (the N-D vector)
+   * @param event - Pryv event with content.vectors (the N-D vector)
    * @param targetMethod - target method id
    * @returns { data, matchDistance }
    */
@@ -111,9 +111,9 @@ export class HDSModelConverters {
     const itemKey = await this.#findItemKeyForEvent(event);
     const engine = await this.ensureEngine(itemKey);
 
-    const vector: ObservationVector = event.content?.data;
+    const vector: ObservationVector = event.content?.vectors;
     if (!vector || typeof vector !== 'object') {
-      throw new Error(`Event content.data is not a valid vector: ${JSON.stringify(event.content)}`);
+      throw new Error(`Event content.vectors is not a valid vector: ${JSON.stringify(event.content)}`);
     }
 
     return engine.fromVector(targetMethod, vector);

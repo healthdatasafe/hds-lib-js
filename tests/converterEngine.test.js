@@ -224,8 +224,8 @@ describe('[MCVX] HDSModelConverters with loadPack', function () {
     const event = await converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
     assert.strictEqual(event.type, 'vulva-mucus-inspect/9d-vector');
     assert.deepStrictEqual(event.streamIds, ['body-vulva-mucus-inspect']);
-    assert.ok(event.content.data, 'should have data');
-    assert.strictEqual(event.content.data.threadiness, 0.4);
+    assert.ok(event.content.vectors, 'should have vectors');
+    assert.strictEqual(event.content.vectors.threadiness, 0.4);
     assert.ok(event.content.source, 'should have source');
     assert.strictEqual(event.content.source.key, 'mira');
     assert.strictEqual(event.content.source.sourceData, 'Creamy');
@@ -255,7 +255,7 @@ describe('[MCVX] HDSModelConverters with loadPack', function () {
     const event = await converters.convertMethodToEvent('mood', 'mira', 'Sad');
     assert.strictEqual(event.type, 'mood/5d-vectors');
     assert.deepStrictEqual(event.streamIds, ['wellbeing-mood']);
-    assert.strictEqual(event.content.data.valence, 0.15);
+    assert.strictEqual(event.content.vectors.valence, 0.15);
     assert.strictEqual(event.content.source.key, 'mira');
     assert.strictEqual(event.content.source.sourceData, 'Sad');
   });
