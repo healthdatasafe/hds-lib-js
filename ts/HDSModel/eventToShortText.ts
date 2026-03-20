@@ -273,7 +273,7 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
   if (HDSSettings.isHooked && vectors) {
     try {
       const settingKey = `autoConvert-${itemDef.key}`;
-      const targetMethod = HDSSettings.get(settingKey as any);
+      const targetMethod = HDSSettings.get(settingKey);
       if (targetMethod && typeof targetMethod === 'string') {
         // Skip conversion if target method equals source method
         if (source?.key === targetMethod && sourceLabel) {

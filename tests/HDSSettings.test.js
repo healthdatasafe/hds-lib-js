@@ -202,3 +202,121 @@ describe('[STPS] SETTING_TYPES', () => {
     assert.strictEqual(SETTING_TYPES.displayName, 'contact/display-name');
   });
 });
+
+describe('[HDSD] HDSSettings dynamic settings', function () {
+  afterEach(() => {
+    HDSSettings.unhook();
+  });
+
+  it('[HDSD1] _testInject and get work for dynamic keys', () => {
+    HDSSettings._testInject('autoConvert-wellbeing-mood', 'billings');
+    assert.strictEqual(HDSSettings.get('autoConvert-wellbeing-mood'), 'billings');
+    assert.strictEqual(HDSSettings.isHooked, true);
+  });
+
+  it('[HDSD2] _testClear removes dynamic key', () => {
+    HDSSettings._testInject('autoConvert-wellbeing-mood', 'mira');
+    HDSSettings._testClear('autoConvert-wellbeing-mood');
+    assert.strictEqual(HDSSettings.get('autoConvert-wellbeing-mood'), undefined);
+  });
+
+  it('[HDSD3] getDynamic returns all settings with prefix', () => {
+    HDSSettings._testInject('autoConvert-wellbeing-mood', 'billings');
+    HDSSettings._testInject('autoConvert-body-vulva-mucus-inspect', 'appleHealth');
+    const all = HDSSettings.getDynamic('autoConvert-');
+    assert.strictEqual(all['wellbeing-mood'], 'billings');
+    assert.strictEqual(all['body-vulva-mucus-inspect'], 'appleHealth');
+  });
+
+  it('[HDSD4] unhook clears dynamic settings', () => {
+    HDSSettings._testInject('autoConvert-wellbeing-mood', 'billings');
+    HDSSettings.unhook();
+    assert.strictEqual(HDSSettings.get('autoConvert-wellbeing-mood'), undefined);
+    assert.deepStrictEqual(HDSSettings.getDynamic('autoConvert-'), {});
+  });
+
+  it('[HDSD5] load reads dynamic settings from server events', async () => {
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [
+          { id: 'ev-ac1', type: 'settings/auto-convert', content: { itemKey: 'wellbeing-mood', method: 'billings' } },
+          { id: 'ev-ac2', type: 'settings/auto-convert', content: { itemKey: 'body-vulva-mucus-inspect', method: 'appleHealth' } },
+          { id: 'ev-t', type: 'settings/theme', content: 'dark' },
+        ]
+      })
+    });
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+    assert.strictEqual(HDSSettings.get('autoConvert-wellbeing-mood'), 'billings');
+    assert.strictEqual(HDSSettings.get('autoConvert-body-vulva-mucus-inspect'), 'appleHealth');
+    assert.strictEqual(HDSSettings.get('theme'), 'dark');
+  });
+
+  it('[HDSD6] setDynamic creates new event', async () => {
+    const conn = createMockConnection();
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+
+    await HDSSettings.setDynamic('autoConvert-wellbeing-mood', 'billings');
+    assert.strictEqual(HDSSettings.get('autoConvert-wellbeing-mood'), 'billings');
+
+    const createCall = conn.apiCalls.find(c =>
+      c.method === 'events.create' && c.params.type === 'settings/auto-convert'
+    );
+    assert.ok(createCall, 'Should have called events.create');
+    assert.strictEqual(createCall.params.content.itemKey, 'wellbeing-mood');
+    assert.strictEqual(createCall.params.content.method, 'billings');
+  });
+
+  it('[HDSD7] setDynamic updates existing event', async () => {
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [
+          { id: 'ev-ac-mood', type: 'settings/auto-convert', content: { itemKey: 'wellbeing-mood', method: 'billings' } }
+        ]
+      })
+    });
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+    assert.strictEqual(HDSSettings.get('autoConvert-wellbeing-mood'), 'billings');
+
+    await HDSSettings.setDynamic('autoConvert-wellbeing-mood', 'mira');
+    assert.strictEqual(HDSSettings.get('autoConvert-wellbeing-mood'), 'mira');
+
+    const updateCall = conn.apiCalls.find(c => c.method === 'events.update');
+    assert.ok(updateCall, 'Should have called events.update');
+    assert.strictEqual(updateCall.params.id, 'ev-ac-mood');
+    assert.strictEqual(updateCall.params.update.content.method, 'mira');
+  });
+
+  it('[HDSD8] setDynamic with null deletes setting', async () => {
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [
+          { id: 'ev-ac-mood', type: 'settings/auto-convert', content: { itemKey: 'wellbeing-mood', method: 'billings' } }
+        ]
+      })
+    });
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+
+    await HDSSettings.setDynamic('autoConvert-wellbeing-mood', null);
+    assert.strictEqual(HDSSettings.get('autoConvert-wellbeing-mood'), undefined);
+
+    const deleteCall = conn.apiCalls.find(c => c.method === 'events.delete');
+    assert.ok(deleteCall, 'Should have called events.delete');
+    assert.strictEqual(deleteCall.params.id, 'ev-ac-mood');
+  });
+
+  it('[HDSD9] setDynamic throws for unknown prefix', async () => {
+    const conn = createMockConnection();
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+    await assert.rejects(
+      () => HDSSettings.setDynamic('unknownPrefix-foo', 'bar'),
+      /Unknown dynamic setting prefix/
+    );
+  });
+
+  it('[HDSD10] setDynamic throws when not hooked', async () => {
+    await assert.rejects(
+      () => HDSSettings.setDynamic('autoConvert-wellbeing-mood', 'billings'),
+      /hookToApplication|hookToConnection/
+    );
+  });
+});

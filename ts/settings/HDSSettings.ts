@@ -14,6 +14,14 @@ export const SETTING_TYPES = {
   displayName: 'contact/display-name',
 } as const;
 
+/**
+ * Dynamic setting prefixes — one event per key, keyed by content.itemKey.
+ * Event type is shared for all settings with the same prefix.
+ */
+const DYNAMIC_PREFIXES: Record<string, { eventType: string; contentKey: string; contentValue: string }> = {
+  'autoConvert-': { eventType: 'settings/auto-convert', contentKey: 'itemKey', contentValue: 'method' },
+};
+
 export type SettingKey = keyof typeof SETTING_TYPES;
 
 export type DateFormat = 'DD.MM.YYYY' | 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'YYYY-MM-DD';
@@ -70,6 +78,16 @@ function applySideEffects (values: SettingsValues, key: SettingKey): void {
   }
 }
 
+/** Find the dynamic prefix config for a key, or null */
+function findDynamicPrefix (key: string): { prefix: string; eventType: string; contentKey: string; contentValue: string; suffix: string } | null {
+  for (const [prefix, config] of Object.entries(DYNAMIC_PREFIXES)) {
+    if (key.startsWith(prefix)) {
+      return { prefix, ...config, suffix: key.slice(prefix.length) };
+    }
+  }
+  return null;
+}
+
 /** @internal */
 let _connection: pryv.Connection | null = null;
 /** @internal */
@@ -78,6 +96,10 @@ let _streamId: string | null = null;
 let _cache: Partial<Record<SettingKey, any>> = {};
 /** @internal */
 let _values: SettingsValues = { ...DEFAULTS };
+/** @internal — dynamic settings: key → value */
+let _dynamicValues: Record<string, any> = {};
+/** @internal — dynamic settings: key → cached event */
+let _dynamicCache: Record<string, any> = {};
 /** @internal */
 let _hooked = false;
 
@@ -87,18 +109,38 @@ async function load (): Promise<void> {
   const browser = browserDefaults();
   _values = { ...DEFAULTS, ...browser };
   _cache = {};
+  _dynamicValues = {};
+  _dynamicCache = {};
+
+  // Collect all event types to fetch (typed + dynamic)
+  const typedEventTypes = Object.values(SETTING_TYPES) as string[];
+  const dynamicEventTypes = Object.values(DYNAMIC_PREFIXES).map(c => c.eventType);
+  const allTypes = [...typedEventTypes, ...dynamicEventTypes];
 
   const settingsEvents: any[] = await _connection.apiOne(
     'events.get',
-    { streams: [_streamId], types: Object.values(SETTING_TYPES), limit: 100 },
+    { streams: [_streamId], types: allTypes, limit: 200 },
     'events'
   );
 
   for (const event of settingsEvents) {
+    // Try typed settings first
     const key = keyForType(event.type);
     if (key && !_cache[key]) {
       _cache[key] = event;
       (_values as any)[key] = event.content;
+      continue;
+    }
+
+    // Try dynamic settings
+    for (const [prefix, config] of Object.entries(DYNAMIC_PREFIXES)) {
+      if (event.type === config.eventType && event.content?.[config.contentKey]) {
+        const dynKey = prefix + event.content[config.contentKey];
+        if (!_dynamicCache[dynKey]) {
+          _dynamicCache[dynKey] = event;
+          _dynamicValues[dynKey] = event.content[config.contentValue];
+        }
+      }
     }
   }
 
@@ -109,13 +151,16 @@ async function load (): Promise<void> {
 /**
  * HDSSettings — singleton managing user settings as individual Pryv events.
  *
- * Each setting is stored as its own event with a specific type
- * (e.g. `settings/preferredLocales`) in the application's baseStream.
+ * Supports two kinds of settings:
+ * - **Typed settings**: fixed keys (theme, dateFormat, etc.) with specific event types.
+ * - **Dynamic settings**: prefix-based keys (autoConvert-{itemKey}) stored as events
+ *   with a shared event type and keyed by content field.
  *
  * Usage:
  *   await HDSSettings.hookToApplication(app);
  *   const locale = HDSSettings.get('preferredLocales');
  *   await HDSSettings.set('theme', 'dark');
+ *   await HDSSettings.setDynamic('autoConvert-wellbeing-mood', 'billings');
  */
 const HDSSettings = {
 
@@ -139,21 +184,37 @@ const HDSSettings = {
   },
 
   /**
-   * Get the current value for a setting.
+   * Get the current value for a typed setting.
+   * Also checks dynamic settings for prefix-based keys (e.g. 'autoConvert-wellbeing-mood').
    */
-  get<K extends SettingKey> (key: K): SettingsValues[K] {
-    return _values[key];
+  get (key: string): any {
+    if (key in _dynamicValues) return _dynamicValues[key];
+    return (_values as any)[key];
   },
 
   /**
-   * Get all current settings values.
+   * Get all current typed settings values.
    */
   getAll (): Readonly<SettingsValues> {
     return { ..._values };
   },
 
   /**
-   * Set a setting value — persists to HDS server and updates cache.
+   * Get all dynamic settings with a given prefix.
+   * Returns a map of suffix → value (e.g. { 'wellbeing-mood': 'billings' }).
+   */
+  getDynamic (prefix: string): Record<string, any> {
+    const result: Record<string, any> = {};
+    for (const [key, value] of Object.entries(_dynamicValues)) {
+      if (key.startsWith(prefix)) {
+        result[key.slice(prefix.length)] = value;
+      }
+    }
+    return result;
+  },
+
+  /**
+   * Set a typed setting value — persists to HDS server and updates cache.
    */
   async set<K extends SettingKey> (key: K, value: SettingsValues[K]): Promise<void> {
     if (!_connection || !_streamId) {
@@ -184,6 +245,52 @@ const HDSSettings = {
   },
 
   /**
+   * Set a dynamic setting value — persists to HDS server.
+   * Key must match a known prefix (e.g. 'autoConvert-wellbeing-mood').
+   * Pass null to delete the setting.
+   */
+  async setDynamic (key: string, value: any): Promise<void> {
+    if (!_connection || !_streamId) {
+      throw new Error('HDSSettings: call hookToApplication() or hookToConnection() first');
+    }
+
+    const dp = findDynamicPrefix(key);
+    if (!dp) throw new Error(`Unknown dynamic setting prefix for key: "${key}"`);
+
+    const existing = _dynamicCache[key];
+
+    if (value === null || value === undefined) {
+      // Delete
+      if (existing) {
+        await _connection.apiOne('events.delete', { id: existing.id }, 'eventDeletion');
+        delete _dynamicCache[key];
+        delete _dynamicValues[key];
+      }
+      return;
+    }
+
+    const content = { [dp.contentKey]: dp.suffix, [dp.contentValue]: value };
+
+    if (existing) {
+      const updated = await _connection.apiOne(
+        'events.update',
+        { id: existing.id, update: { content } },
+        'event'
+      );
+      _dynamicCache[key] = updated;
+    } else {
+      const created = await _connection.apiOne(
+        'events.create',
+        { streamIds: [_streamId], type: dp.eventType, content },
+        'event'
+      );
+      _dynamicCache[key] = created;
+    }
+
+    _dynamicValues[key] = value;
+  },
+
+  /**
    * Whether settings have been loaded from the server.
    */
   get isHooked (): boolean {
@@ -205,15 +312,21 @@ const HDSSettings = {
     _streamId = null;
     _cache = {};
     _values = { ...DEFAULTS };
+    _dynamicValues = {};
+    _dynamicCache = {};
     _hooked = false;
   },
 
   /**
    * @internal Test-only: inject a setting value and mark as hooked.
-   * Allows testing code paths that depend on HDSSettings without a Pryv connection.
+   * Works for both typed and dynamic keys.
    */
   _testInject (key: string, value: any): void {
-    (_values as any)[key] = value;
+    if (findDynamicPrefix(key)) {
+      _dynamicValues[key] = value;
+    } else {
+      (_values as any)[key] = value;
+    }
     _hooked = true;
   },
 
@@ -221,7 +334,11 @@ const HDSSettings = {
    * @internal Test-only: remove an injected setting.
    */
   _testClear (key: string): void {
-    delete (_values as any)[key];
+    if (findDynamicPrefix(key)) {
+      delete _dynamicValues[key];
+    } else {
+      delete (_values as any)[key];
+    }
   },
 };
 
