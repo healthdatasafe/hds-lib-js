@@ -10,7 +10,7 @@
  */
 
 import type {
-  ObservationVector, DimensionWeights, MethodDef, ComponentDef,
+  ObservationVector, DimensionWeights, DimensionDef, MethodDef, ComponentDef, ComponentOption,
   MethodConverter, ConverterPack, ConversionResult,
 } from './types.ts';
 
@@ -212,12 +212,39 @@ function createConverter (def: MethodDef, dims: readonly string[], w: DimensionW
   return isAssembly ? buildAssemblyConverter(def, dims, w) : buildLookupConverter(def, dims, w);
 }
 
+/** Build a virtual '_raw' method from dimension stops in the converter config */
+function buildRawMethod (dimensions: Record<string, DimensionDef>, dimensionNames: string[]): MethodDef {
+  const components: ComponentDef[] = [];
+  for (const dimName of dimensionNames) {
+    const dim = dimensions[dimName];
+    if (!dim?.stops?.length) continue;
+    const options: ComponentOption[] = dim.stops.map(stop => ({
+      value: stop.value,
+      label: stop.label,
+      vector: { [dimName]: stop.value },
+    }));
+    components.push({
+      field: dimName,
+      label: dim.shortLabel || dim.label,
+      options,
+    });
+  }
+  return {
+    methodId: '_raw',
+    order: 0,
+    name: { en: 'Raw dimensions', fr: 'Dimensions brutes' },
+    description: { en: 'Auto-generated from dimension stops', fr: 'Auto-généré depuis les paliers de dimensions' },
+    components,
+  };
+}
+
 // ─── Engine class ───────────────────────────────────────────────────────────
 
 export class EuclidianDistanceEngine {
   readonly itemKey: string;
   readonly eventType: string;
   readonly dimensionNames: string[];
+  readonly dimensions: Record<string, DimensionDef>;
   readonly weights: DimensionWeights;
   readonly converterVersion: string;
 
@@ -230,6 +257,7 @@ export class EuclidianDistanceEngine {
     this.eventType = pack.eventType;
     this.converterVersion = pack.converterVersion;
     this.dimensionNames = pack.dimensionNames;
+    this.dimensions = pack.dimensions;
 
     // Build weights from dimensions
     this.weights = {};
@@ -242,6 +270,12 @@ export class EuclidianDistanceEngine {
       this._methodDefs[def.methodId] = def;
       this._converters[def.methodId] = createConverter(def, this.dimensionNames, this.weights);
     }
+
+    // Generate _raw virtual method from dimension stops
+    const rawDef = buildRawMethod(pack.dimensions, this.dimensionNames);
+    this._methodDefs[rawDef.methodId] = rawDef;
+    this._converters[rawDef.methodId] = createConverter(rawDef, this.dimensionNames, this.weights);
+
     this._methodIds = pack.methods
       .slice()
       .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))

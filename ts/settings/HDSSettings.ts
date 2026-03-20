@@ -207,6 +207,22 @@ const HDSSettings = {
     _values = { ...DEFAULTS };
     _hooked = false;
   },
+
+  /**
+   * @internal Test-only: inject a setting value and mark as hooked.
+   * Allows testing code paths that depend on HDSSettings without a Pryv connection.
+   */
+  _testInject (key: string, value: any): void {
+    (_values as any)[key] = value;
+    _hooked = true;
+  },
+
+  /**
+   * @internal Test-only: remove an injected setting.
+   */
+  _testClear (key: string): void {
+    delete (_values as any)[key];
+  },
 };
 
 export { HDSSettings };

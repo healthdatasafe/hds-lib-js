@@ -27,6 +27,19 @@ export function formatEventDate (timeSec: number): string {
 }
 
 /**
+ * Format a Unix timestamp (seconds) as a date + time string.
+ * Used for checkbox events where the event time IS the data.
+ */
+export function formatEventDateTime (timeSec: number): string {
+  const d = new Date(timeSec * 1000);
+  const hours = d.getHours();
+  const minutes = d.getMinutes();
+  // If time is midnight (00:00), show date only — likely no meaningful time
+  if (hours === 0 && minutes === 0) return formatEventDate(timeSec);
+  return formatEventDate(timeSec) + ' ' + pad(hours) + ':' + pad(minutes);
+}
+
+/**
  * Convert an event's content to a short human-readable string.
  * Resolves itemDef from the model (streamId + eventType match).
  *
@@ -47,7 +60,7 @@ export function eventToShortText (event: any): string | null {
   if (itemDef) {
     // For checkbox/date items, content may be null — the event time IS the data
     if (content == null && itemDef.data.type === 'checkbox') {
-      return formatEventDate(event.time);
+      return formatEventDateTime(event.time);
     }
     if (content == null && itemDef.data.type === 'date') {
       return formatEventDate(event.time);
@@ -120,7 +133,27 @@ function formatFallback (event: any, content: any, model: any): string | null {
   return String(content);
 }
 
+const TEST_RESULT_LABELS = {
+  positive: { en: 'Positive', fr: 'Positif', es: 'Positivo' },
+  negative: { en: 'Negative', fr: 'Négatif', es: 'Negativo' },
+  indeterminate: { en: 'Indeterminate', fr: 'Indéterminé', es: 'Indeterminado' },
+};
+
+function formatTestResult (content: number): string {
+  if (content === 0) return localizeText(TEST_RESULT_LABELS.indeterminate) || 'Indeterminate';
+  const label = content > 0
+    ? localizeText(TEST_RESULT_LABELS.positive) || 'Positive'
+    : localizeText(TEST_RESULT_LABELS.negative) || 'Negative';
+  // Exact -1, 0, 1: label only. Otherwise: label + percentage
+  if (content === 1 || content === -1) return label;
+  const pct = Math.round(Math.abs(content) * 100);
+  return `${label} ${pct}%`;
+}
+
 function formatNumber (eventType: string, content: number, model: any): string {
+  if (eventType === 'test-result/scale') {
+    return formatTestResult(content);
+  }
   if (HDSSettings.isHooked) {
     const system = HDSSettings.get('unitSystem');
     const result = model.conversions.convert(eventType, content, system);
@@ -191,6 +224,15 @@ function formatObject (content: any): string | null {
     const dl = content.drug.label;
     return typeof dl === 'string' ? dl : (localizeText(dl) || null);
   }
+  // medication/basic composite: { name, doseValue, doseUnit, route }
+  if (content.name && typeof content.name === 'string') {
+    const parts: string[] = [];
+    if (content.doseValue) {
+      parts.push(`${content.doseValue}${content.doseUnit ? ' ' + content.doseUnit : ''}`);
+    }
+    if (content.route) parts.push(content.route);
+    return parts.length > 0 ? `${content.name} — ${parts.join(', ')}` : content.name;
+  }
   if (content.value != null) return String(content.value);
   // Last resort: count keys
   const keys = Object.keys(content);
@@ -206,8 +248,12 @@ function formatObject (content: any): string | null {
 
 /**
  * Format a convertible event (euclidian-distance converter).
- * Shows source observation + source method name.
- * If an autoConvert setting exists, converts to that method instead.
+ *
+ * Without autoConvert setting: show sourceData from the source method.
+ * With autoConvert setting (different from source method): convert vector to target method, show:
+ *   "targetResult (sourceData) 85%" — confidence = round((1 - matchDistance) * 100)
+ *   When 100%, omit the percentage.
+ * No source: show dimension summary using localized stop labels from converter config.
  */
 function formatConvertible (_event: any, content: any, itemDef: any, model: any): string | null {
   const ce = itemDef.data['converter-engine'];
@@ -216,44 +262,152 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
   const itemKey = ce.models;
   const source = content?.source;
   const vectors = content?.vectors;
+  const engine = model.converters?.getEngine(itemKey);
 
-  // If source block exists, show the source observation + method name
-  if (source?.sourceData != null && source?.key) {
-    const sourceLabel = typeof source.sourceData === 'string'
-      ? source.sourceData
-      : typeof source.sourceData === 'number'
-        ? String(source.sourceData)
-        : JSON.stringify(source.sourceData);
-    const truncated = sourceLabel.length > 40 ? sourceLabel.slice(0, 40) + '...' : sourceLabel;
+  const sourceLabel = source?.sourceData != null && engine
+    ? resolveObservationLabel(engine, source.key, source.sourceData)
+    : formatSourceLabel(source);
+  const sourceMethodName = getMethodName(engine, source?.key);
 
-    // Check for autoConvert setting
-    if (HDSSettings.isHooked && vectors) {
+  // Check for autoConvert setting
+  if (HDSSettings.isHooked && vectors) {
+    try {
       const settingKey = `autoConvert-${itemDef.key}`;
-      try {
-        const targetMethod = HDSSettings.get(settingKey as any);
-        if (targetMethod && typeof targetMethod === 'string') {
-          const engine = model.converters?.getEngine(itemKey);
-          if (engine) {
-            const result = engine.fromVector(targetMethod, vectors);
-            const resultLabel = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-            return `${resultLabel} (${targetMethod})`;
-          }
+      const targetMethod = HDSSettings.get(settingKey as any);
+      if (targetMethod && typeof targetMethod === 'string') {
+        // Skip conversion if target method equals source method
+        if (source?.key === targetMethod && sourceLabel) {
+          return `${sourceLabel} (${sourceMethodName})`;
         }
-      } catch { /* setting not found, use default */ }
-    }
-
-    return `${truncated} (${source.key})`;
+        if (engine) {
+          const result = engine.fromVector(targetMethod, vectors);
+          const resultLabel = resolveObservationLabel(engine, targetMethod, result.data);
+          const targetMethodName = getMethodName(engine, targetMethod);
+          const confidence = Math.round((1 - result.matchDistance) * 100);
+          const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
+          if (sourceMethodName && sourceLabel) {
+            return `${resultLabel} (${targetMethodName} <- ${sourceMethodName}${confStr})`;
+          }
+          return `${resultLabel} (${targetMethodName}${confStr})`;
+        }
+      }
+    } catch { /* setting not found or engine not loaded, fall through */ }
   }
 
-  // No source — RAW vector input, show dimension summary
+  // No autoConvert: show source observation + method name
+  if (sourceLabel) {
+    return `${sourceLabel} (${sourceMethodName})`;
+  }
+
+  // No source — RAW vector input, convert via _raw virtual method
+  if (vectors && typeof vectors === 'object' && engine) {
+    try {
+      const result = engine.fromVector('_raw', vectors);
+      const resultLabel = resolveObservationLabel(engine, '_raw', result.data);
+      const confidence = Math.round((1 - result.matchDistance) * 100);
+      const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
+      return `${resultLabel}${confStr}`;
+    } catch { /* fall through */ }
+  }
+  // Fallback: raw dimension summary
   if (vectors && typeof vectors === 'object') {
-    const dims = Object.entries(vectors).filter(([_, v]) => typeof v === 'number' && v > 0);
-    if (dims.length === 0) return 'empty';
-    const top = dims.sort(([, a], [, b]) => (b as number) - (a as number)).slice(0, 3);
-    return top.map(([k, v]) => `${k}:${(v as number).toFixed(1)}`).join(' ');
+    return formatVectorSummary(vectors, itemKey, model);
   }
 
   return formatObject(content);
+}
+
+/** Get the localized method name from the engine, fallback to methodId */
+function getMethodName (engine: any, methodId: string | undefined): string {
+  if (!methodId) return '?';
+  const def = engine?.getMethodDef(methodId);
+  if (def?.name) {
+    return localizeText(def.name) || methodId;
+  }
+  return methodId;
+}
+
+/**
+ * Resolve an observation value to its localized label from the method definition.
+ * For single-component methods: looks up the value in the component options.
+ * For multi-component methods (assembly): resolves each field's value to its option label.
+ * Falls back to String(data) if no label found.
+ */
+function resolveObservationLabel (engine: any, methodId: string, data: any): string {
+  const def = engine?.getMethodDef(methodId);
+  if (!def?.components) return typeof data === 'string' ? data : JSON.stringify(data);
+
+  if (typeof data === 'object' && data !== null) {
+    // Multi-component: resolve each field
+    const parts: string[] = [];
+    for (const comp of def.components) {
+      const val = data[comp.field];
+      if (val === undefined) continue;
+      const opt = comp.options.find((o: any) => o.value === val);
+      if (opt?.label) {
+        parts.push(localizeText(opt.label) || String(val));
+      } else {
+        parts.push(String(val));
+      }
+    }
+    return parts.join(', ');
+  }
+
+  // Single-component: look up in first component's options
+  for (const comp of def.components) {
+    const opt = comp.options.find((o: any) => o.value === data);
+    if (opt?.label) {
+      return localizeText(opt.label) || String(data);
+    }
+  }
+  return String(data);
+}
+
+/**
+ * Format a vector as human-readable summary using dimension stop labels.
+ * Used as fallback when _raw method is not available, and for rendering
+ * object results from autoConvert (e.g. hds method returns vector objects).
+ */
+function formatVectorSummary (vectors: any, itemKey: string, model: any): string {
+  const engine = model.converters?.getEngine(itemKey);
+  const dims = Object.entries(vectors).filter(([_, v]) => typeof v === 'number');
+  if (dims.length === 0) return 'empty';
+
+  // Sort by weight (most important first)
+  const sorted = dims.sort(([a], [b]) => {
+    const wa = engine?.weights[a] ?? 0;
+    const wb = engine?.weights[b] ?? 0;
+    return wb - wa;
+  });
+
+  const parts: string[] = [];
+  for (const [dimName, value] of sorted.slice(0, 3)) {
+    const dimDef = engine?.dimensions?.[dimName];
+    if (dimDef?.stops) {
+      const stops = dimDef.stops;
+      let nearest = stops[0];
+      for (const stop of stops) {
+        if (Math.abs(stop.value - (value as number)) < Math.abs(nearest.value - (value as number))) {
+          nearest = stop;
+        }
+      }
+      parts.push(localizeText(nearest.label) || dimName);
+    } else {
+      parts.push(`${dimName}:${(value as number).toFixed(1)}`);
+    }
+  }
+  return parts.join(', ');
+}
+
+function formatSourceLabel (source: any): string | null {
+  if (!source?.sourceData) return null;
+  const raw = source.sourceData;
+  const label = typeof raw === 'string'
+    ? raw
+    : typeof raw === 'number'
+      ? String(raw)
+      : JSON.stringify(raw);
+  return label.length > 40 ? label.slice(0, 40) + '...' : label;
 }
 
 function getSymbol (eventType: string, model: any): string | null {

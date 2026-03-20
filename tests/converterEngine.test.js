@@ -274,4 +274,41 @@ describe('[MCVX] HDSModelConverters with loadPack', function () {
       converters.loadPack({ engine: 'neural-network', itemKey: 'test', methods: [] });
     }, /Unknown converter engine/);
   });
+
+  it('[MCVX10] creighton→mira round-trip conversions', async () => {
+    const pairs = [
+      ['0', 'No discharge'], ['6', 'Sticky'], ['8P', 'Creamy'], ['10KL', 'Raw Egg White'],
+    ];
+    const engine = converters.getEngine('cervical-fluid');
+    for (const [cr, mira] of pairs) {
+      const event = await converters.convertMethodToEvent('cervical-fluid', 'creighton', cr);
+      const result = engine.fromVector('mira', event.content.vectors);
+      assert.strictEqual(result.data, mira, `Creighton ${cr} → expected ${mira}, got ${result.data}`);
+    }
+  });
+
+  it('[MCVX11] _raw virtual method is auto-generated', async () => {
+    const moodEngine = converters.getEngine('mood');
+    const cfEngine = converters.getEngine('cervical-fluid');
+    assert.ok(moodEngine.getMethodDef('_raw'), '_raw should exist for mood');
+    assert.ok(cfEngine.getMethodDef('_raw'), '_raw should exist for cervical-fluid');
+    assert.strictEqual(moodEngine.getMethodDef('_raw').name.en, 'Raw dimensions');
+  });
+
+  it('[MCVX12] _raw fromVector returns object with stop labels', async () => {
+    const engine = converters.getEngine('mood');
+    const result = engine.fromVector('_raw', { valence: 0.5, arousal: 0.5, dominance: 0.5, socialOrientation: 0.5, temporalFocus: 0.5 });
+    // Exact stops → distance 0
+    assert.strictEqual(result.matchDistance, 0);
+    assert.strictEqual(typeof result.data, 'object');
+    assert.strictEqual(result.data.valence, 0.5);
+  });
+
+  it('[MCVX13] _raw fromVector with non-exact values has non-zero distance', async () => {
+    const engine = converters.getEngine('mood');
+    const result = engine.fromVector('_raw', { valence: 0.8, arousal: 0.2, dominance: 0.7, socialOrientation: 0.5, temporalFocus: 0.3 });
+    assert.ok(result.matchDistance > 0, `Expected non-zero distance, got ${result.matchDistance}`);
+    const confidence = Math.round((1 - result.matchDistance) * 100);
+    assert.ok(confidence > 80 && confidence < 100, `Expected partial confidence, got ${confidence}%`);
+  });
 });
