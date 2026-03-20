@@ -19,7 +19,8 @@ export const SETTING_TYPES = {
  * Event type is shared for all settings with the same prefix.
  */
 const DYNAMIC_PREFIXES: Record<string, { eventType: string; contentKey: string; contentValue: string }> = {
-  'autoConvert-': { eventType: 'settings/auto-convert', contentKey: 'itemKey', contentValue: 'method' },
+  'converter-auto-': { eventType: 'settings/converter-auto', contentKey: 'itemKey', contentValue: 'method' },
+  'converter-default-': { eventType: 'settings/converter-default', contentKey: 'itemKey', contentValue: 'method' },
 };
 
 export type SettingKey = keyof typeof SETTING_TYPES;
@@ -153,14 +154,14 @@ async function load (): Promise<void> {
  *
  * Supports two kinds of settings:
  * - **Typed settings**: fixed keys (theme, dateFormat, etc.) with specific event types.
- * - **Dynamic settings**: prefix-based keys (autoConvert-{itemKey}) stored as events
+ * - **Dynamic settings**: prefix-based keys (converter-auto-{itemKey}) stored as events
  *   with a shared event type and keyed by content field.
  *
  * Usage:
  *   await HDSSettings.hookToApplication(app);
  *   const locale = HDSSettings.get('preferredLocales');
  *   await HDSSettings.set('theme', 'dark');
- *   await HDSSettings.setDynamic('autoConvert-wellbeing-mood', 'billings');
+ *   await HDSSettings.setDynamic('converter-auto-wellbeing-mood', 'billings');
  */
 const HDSSettings = {
 
@@ -185,7 +186,7 @@ const HDSSettings = {
 
   /**
    * Get the current value for a typed setting.
-   * Also checks dynamic settings for prefix-based keys (e.g. 'autoConvert-wellbeing-mood').
+   * Also checks dynamic settings for prefix-based keys (e.g. 'converter-auto-wellbeing-mood').
    */
   get (key: string): any {
     if (key in _dynamicValues) return _dynamicValues[key];
@@ -246,7 +247,7 @@ const HDSSettings = {
 
   /**
    * Set a dynamic setting value — persists to HDS server.
-   * Key must match a known prefix (e.g. 'autoConvert-wellbeing-mood').
+   * Key must match a known prefix (e.g. 'converter-auto-wellbeing-mood').
    * Pass null to delete the setting.
    */
   async setDynamic (key: string, value: any): Promise<void> {
