@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-23
+
+### Added
+- Unified preferred representation API (`HDSModel-Preferred.ts`)
+  - `getPreferredInput(itemKey)` / `getPreferredDisplay(itemKey)` — works for both variation and converter items
+  - Standalone functions exported from lib
+- Dynamic settings with prefix pattern: `preferred-display-{itemKey}`, `preferred-input-{itemKey}`
+  - Stored as individual Pryv events (`settings/preferred-display`, `settings/preferred-input`)
+  - `HDSSettings.setDynamic()` / `getDynamic()` API
+- `_raw` virtual method auto-generated from dimension stops at converter engine load
+- `resolveObservationLabel()` — localized labels from method definitions for converter results
+- `HDSSettings._testInject()` / `_testClear()` for test-only settings injection
+- `formatEventDateTime()` — date+time for checkbox events (skips time if midnight)
+- test-result/scale formatting: Positive/Negative/Indeterminate + percentage (localizable)
+- 12 preferred API tests, 15 convertible shortText tests
+
+### Changed
+- Convertible event content: `data` → `vectors` for clarity (Plan 22)
+- eventToShortText convertible display: `sourceData (Method Name)` format
+- autoConvert display: `result (target <- source %)` with confidence percentage
+- `HDSSettings.get()` now checks dynamic settings first
+- Renamed settings prefixes: `converter-auto-` → `preferred-display-`, `converter-default-` → `preferred-input-`
+
 ## [0.2.0] - 2026-03-19
 
 ### Added
