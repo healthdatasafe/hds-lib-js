@@ -419,14 +419,14 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22b] autoConvert same method — shows sourceData + method name (no conversion)', async () => {
-      HDSSettings._testInject('converter-auto-wellbeing-mood', 'mira');
+      HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
       const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
       event.time = Date.now() / 1000;
       assert.equal(eventToShortText(event), 'Happy (Mira)');
     });
 
     it('[EST22c] autoConvert mood mira→hds — shows stop labels with target <- source', async () => {
-      HDSSettings._testInject('converter-auto-wellbeing-mood', 'hds');
+      HDSSettings._testInject('preferred-display-wellbeing-mood', 'hds');
       const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
       event.time = Date.now() / 1000;
       const result = eventToShortText(event);
@@ -436,7 +436,7 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22d] autoConvert cervical fluid mira→appleHealth — localized label + perfect match', async () => {
-      HDSSettings._testInject('converter-auto-body-vulva-mucus-inspect', 'appleHealth');
+      HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
       const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
       event.time = Date.now() / 1000;
       // "creamy" value should resolve to "Creamy" label from appleHealth method
@@ -444,7 +444,7 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22e] autoConvert cervical fluid mira→billings — localized label + partial match', async () => {
-      HDSSettings._testInject('converter-auto-body-vulva-mucus-inspect', 'billings');
+      HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'billings');
       const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Watery');
       event.time = Date.now() / 1000;
       const result = eventToShortText(event);
@@ -455,7 +455,7 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22f] autoConvert raw vector (no source) — shows result + target name', async () => {
-      HDSSettings._testInject('converter-auto-wellbeing-mood', 'mira');
+      HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
       const event = {
         content: { vectors: { valence: 0.8, arousal: 0.2, dominance: 0.7, socialOrientation: 0.5, temporalFocus: 0.3 } },
         streamIds: ['wellbeing-mood'],
@@ -468,7 +468,7 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22g] all cervical fluid mira→appleHealth labels are capitalized', async () => {
-      HDSSettings._testInject('converter-auto-body-vulva-mucus-inspect', 'appleHealth');
+      HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
       const pairs = [
         ['No discharge', 'Dry'], ['Dry', 'Dry'], ['Sticky', 'Sticky'],
         ['Creamy', 'Creamy'], ['Watery', 'Watery'], ['Raw Egg White', 'Egg White'],

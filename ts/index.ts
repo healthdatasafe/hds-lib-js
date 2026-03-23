@@ -15,6 +15,7 @@ import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings.ts';
 import { HDSProfile, PROFILE_FIELDS } from './settings/HDSProfile.ts';
 import { HDSModelConversions } from './HDSModel/HDSModel-Conversions.ts';
 import { HDSModelConverters } from './HDSModel/HDSModel-Converters.ts';
+import { HDSModelPreferred, getPreferredInput, getPreferredDisplay } from './HDSModel/HDSModel-Preferred.ts';
 import { EuclidianDistanceEngine } from './converters/EuclidianDistanceEngine.ts';
 import { HDSLibError } from './errors.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
@@ -23,10 +24,11 @@ export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
 export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from './settings/HDSSettings.ts';
 export type { ProfileKey, ProfileValues } from './settings/HDSProfile.ts';
 export type { ConverterPack, ConversionResult as ConverterConversionResult, ObservationVector, SourceBlock } from './converters/types.ts';
+export type { PreferredConfig } from './HDSModel/HDSModel-Preferred.ts';
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, EuclidianDistanceEngine, HDSLibError };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, EuclidianDistanceEngine, HDSLibError };
 
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
 const HDSLib = {

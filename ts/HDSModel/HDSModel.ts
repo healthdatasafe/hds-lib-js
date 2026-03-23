@@ -7,6 +7,7 @@ import { HDSModelEventTypes } from './HDSModel-EventTypes.ts';
 import { HDSModelDatasources } from './HDSModel-Datasources.ts';
 import { HDSModelConversions } from './HDSModel-Conversions.ts';
 import { HDSModelConverters } from './HDSModel-Converters.ts';
+import { HDSModelPreferred } from './HDSModel-Preferred.ts';
 
 export class HDSModel {
   /**
@@ -133,6 +134,14 @@ export class HDSModel {
       this.laziliyLoadedMap.converters = new HDSModelConverters(this);
     }
     return this.laziliyLoadedMap.converters;
+  }
+
+  get preferred (): HDSModelPreferred {
+    if (!this.isLoaded) throwNotLoadedError();
+    if (!this.laziliyLoadedMap.preferred) {
+      this.laziliyLoadedMap.preferred = new HDSModelPreferred(this);
+    }
+    return this.laziliyLoadedMap.preferred;
   }
 }
 

@@ -209,45 +209,45 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
   });
 
   it('[HDSD1] _testInject and get work for dynamic keys', () => {
-    HDSSettings._testInject('converter-auto-wellbeing-mood', 'billings');
-    assert.strictEqual(HDSSettings.get('converter-auto-wellbeing-mood'), 'billings');
+    HDSSettings._testInject('preferred-display-wellbeing-mood', 'billings');
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
     assert.strictEqual(HDSSettings.isHooked, true);
   });
 
   it('[HDSD2] _testClear removes dynamic key', () => {
-    HDSSettings._testInject('converter-auto-wellbeing-mood', 'mira');
-    HDSSettings._testClear('converter-auto-wellbeing-mood');
-    assert.strictEqual(HDSSettings.get('converter-auto-wellbeing-mood'), undefined);
+    HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
+    HDSSettings._testClear('preferred-display-wellbeing-mood');
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), undefined);
   });
 
   it('[HDSD3] getDynamic returns all settings with prefix', () => {
-    HDSSettings._testInject('converter-auto-wellbeing-mood', 'billings');
-    HDSSettings._testInject('converter-auto-body-vulva-mucus-inspect', 'appleHealth');
-    const all = HDSSettings.getDynamic('converter-auto-');
+    HDSSettings._testInject('preferred-display-wellbeing-mood', 'billings');
+    HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+    const all = HDSSettings.getDynamic('preferred-display-');
     assert.strictEqual(all['wellbeing-mood'], 'billings');
     assert.strictEqual(all['body-vulva-mucus-inspect'], 'appleHealth');
   });
 
   it('[HDSD4] unhook clears dynamic settings', () => {
-    HDSSettings._testInject('converter-auto-wellbeing-mood', 'billings');
+    HDSSettings._testInject('preferred-display-wellbeing-mood', 'billings');
     HDSSettings.unhook();
-    assert.strictEqual(HDSSettings.get('converter-auto-wellbeing-mood'), undefined);
-    assert.deepStrictEqual(HDSSettings.getDynamic('converter-auto-'), {});
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), undefined);
+    assert.deepStrictEqual(HDSSettings.getDynamic('preferred-display-'), {});
   });
 
   it('[HDSD5] load reads dynamic settings from server events', async () => {
     const conn = createMockConnection({
       'events.get': () => ({
         events: [
-          { id: 'ev-ac1', type: 'settings/converter-auto', content: { itemKey: 'wellbeing-mood', method: 'billings' } },
-          { id: 'ev-ac2', type: 'settings/converter-auto', content: { itemKey: 'body-vulva-mucus-inspect', method: 'appleHealth' } },
+          { id: 'ev-ac1', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } },
+          { id: 'ev-ac2', type: 'settings/preferred-display', content: { itemKey: 'body-vulva-mucus-inspect', value: 'appleHealth' } },
           { id: 'ev-t', type: 'settings/theme', content: 'dark' },
         ]
       })
     });
     await HDSSettings.hookToConnection(conn, 'test-stream');
-    assert.strictEqual(HDSSettings.get('converter-auto-wellbeing-mood'), 'billings');
-    assert.strictEqual(HDSSettings.get('converter-auto-body-vulva-mucus-inspect'), 'appleHealth');
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
+    assert.strictEqual(HDSSettings.get('preferred-display-body-vulva-mucus-inspect'), 'appleHealth');
     assert.strictEqual(HDSSettings.get('theme'), 'dark');
   });
 
@@ -255,49 +255,49 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
     const conn = createMockConnection();
     await HDSSettings.hookToConnection(conn, 'test-stream');
 
-    await HDSSettings.setDynamic('converter-auto-wellbeing-mood', 'billings');
-    assert.strictEqual(HDSSettings.get('converter-auto-wellbeing-mood'), 'billings');
+    await HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings');
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
 
     const createCall = conn.apiCalls.find(c =>
-      c.method === 'events.create' && c.params.type === 'settings/converter-auto'
+      c.method === 'events.create' && c.params.type === 'settings/preferred-display'
     );
     assert.ok(createCall, 'Should have called events.create');
     assert.strictEqual(createCall.params.content.itemKey, 'wellbeing-mood');
-    assert.strictEqual(createCall.params.content.method, 'billings');
+    assert.strictEqual(createCall.params.content.value, 'billings');
   });
 
   it('[HDSD7] setDynamic updates existing event', async () => {
     const conn = createMockConnection({
       'events.get': () => ({
         events: [
-          { id: 'ev-ac-mood', type: 'settings/converter-auto', content: { itemKey: 'wellbeing-mood', method: 'billings' } }
+          { id: 'ev-ac-mood', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } }
         ]
       })
     });
     await HDSSettings.hookToConnection(conn, 'test-stream');
-    assert.strictEqual(HDSSettings.get('converter-auto-wellbeing-mood'), 'billings');
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
 
-    await HDSSettings.setDynamic('converter-auto-wellbeing-mood', 'mira');
-    assert.strictEqual(HDSSettings.get('converter-auto-wellbeing-mood'), 'mira');
+    await HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'mira');
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), 'mira');
 
     const updateCall = conn.apiCalls.find(c => c.method === 'events.update');
     assert.ok(updateCall, 'Should have called events.update');
     assert.strictEqual(updateCall.params.id, 'ev-ac-mood');
-    assert.strictEqual(updateCall.params.update.content.method, 'mira');
+    assert.strictEqual(updateCall.params.update.content.value, 'mira');
   });
 
   it('[HDSD8] setDynamic with null deletes setting', async () => {
     const conn = createMockConnection({
       'events.get': () => ({
         events: [
-          { id: 'ev-ac-mood', type: 'settings/converter-auto', content: { itemKey: 'wellbeing-mood', method: 'billings' } }
+          { id: 'ev-ac-mood', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } }
         ]
       })
     });
     await HDSSettings.hookToConnection(conn, 'test-stream');
 
-    await HDSSettings.setDynamic('converter-auto-wellbeing-mood', null);
-    assert.strictEqual(HDSSettings.get('converter-auto-wellbeing-mood'), undefined);
+    await HDSSettings.setDynamic('preferred-display-wellbeing-mood', null);
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), undefined);
 
     const deleteCall = conn.apiCalls.find(c => c.method === 'events.delete');
     assert.ok(deleteCall, 'Should have called events.delete');
@@ -315,7 +315,7 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
 
   it('[HDSD10] setDynamic throws when not hooked', async () => {
     await assert.rejects(
-      () => HDSSettings.setDynamic('converter-auto-wellbeing-mood', 'billings'),
+      () => HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings'),
       /hookToApplication|hookToConnection/
     );
   });
