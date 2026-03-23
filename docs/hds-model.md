@@ -5,7 +5,7 @@ title: HDS Model
 
 # HDS Model
 
-The `HDSModel` loads the [HDS data model](https://github.com/healthdatasafe/data-model-draft) and exposes it through lazy-loaded helper classes for items, streams, authorizations, event types, and datasources.
+The `HDSModel` loads the [HDS data model](https://github.com/healthdatasafe/data-model) and exposes it through lazy-loaded helper classes for items, streams, authorizations, event types, and datasources.
 
 ## Initialization
 

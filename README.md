@@ -9,7 +9,7 @@ Generic toolkit for server and web applications — [Health Data Safe](https://g
 
 ## Features
 
-1. **HDS Data Model** — Load and query the [HDS data model](https://github.com/healthdatasafe/data-model-draft): items, streams, authorizations, event types, datasources
+1. **HDS Data Model** — Load and query the [HDS data model](https://github.com/healthdatasafe/data-model): items, streams, authorizations, event types, datasources
 2. **App Templates** — Consent-based data collection and sharing (Manager, Collector, Invite, Client flows)
 3. **HDSSettings** — Per-app user settings (locale, theme, timezone, date format, unit system)
 4. **HDSProfile** — Account-level profile (display name, avatar, date of birth, sex, country)
