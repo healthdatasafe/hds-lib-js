@@ -16,6 +16,7 @@ import { HDSProfile, PROFILE_FIELDS } from './settings/HDSProfile.ts';
 import { HDSModelConversions } from './HDSModel/HDSModel-Conversions.ts';
 import { HDSModelConverters } from './HDSModel/HDSModel-Converters.ts';
 import { HDSModelPreferred, getPreferredInput, getPreferredDisplay } from './HDSModel/HDSModel-Preferred.ts';
+import { HDSModelAppStreams } from './HDSModel/HDSModel-AppStreams.ts';
 import { EuclidianDistanceEngine } from './converters/EuclidianDistanceEngine.ts';
 import { HDSLibError } from './errors.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
@@ -25,10 +26,11 @@ export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from '
 export type { ProfileKey, ProfileValues } from './settings/HDSProfile.ts';
 export type { ConverterPack, ConversionResult as ConverterConversionResult, ObservationVector, SourceBlock } from './converters/types.ts';
 export type { PreferredConfig } from './HDSModel/HDSModel-Preferred.ts';
+export type { AppStreamDef } from './HDSModel/HDSModel-AppStreams.ts';
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, EuclidianDistanceEngine, HDSLibError };
+export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError };
 
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
 const HDSLib = {

@@ -8,6 +8,7 @@ import { HDSModelDatasources } from './HDSModel-Datasources.ts';
 import { HDSModelConversions } from './HDSModel-Conversions.ts';
 import { HDSModelConverters } from './HDSModel-Converters.ts';
 import { HDSModelPreferred } from './HDSModel-Preferred.ts';
+import { HDSModelAppStreams } from './HDSModel-AppStreams.ts';
 
 export class HDSModel {
   /**
@@ -142,6 +143,14 @@ export class HDSModel {
       this.laziliyLoadedMap.preferred = new HDSModelPreferred(this);
     }
     return this.laziliyLoadedMap.preferred;
+  }
+
+  get appStreams (): HDSModelAppStreams {
+    if (!this.isLoaded) throwNotLoadedError();
+    if (!this.laziliyLoadedMap.appStreams) {
+      this.laziliyLoadedMap.appStreams = new HDSModelAppStreams(this);
+    }
+    return this.laziliyLoadedMap.appStreams;
   }
 }
 
