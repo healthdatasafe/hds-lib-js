@@ -425,8 +425,8 @@ describe('[ESTX] eventToShortText', () => {
       assert.equal(eventToShortText(event), 'Happy (Mira)');
     });
 
-    it('[EST22c] autoConvert mood mira→hds — shows stop labels with target <- source', async () => {
-      HDSSettings._testInject('preferred-display-wellbeing-mood', 'hds');
+    it('[EST22c] autoConvert mood mira→_raw — shows stop labels with target <- source', async () => {
+      HDSSettings._testInject('preferred-display-wellbeing-mood', '_raw');
       const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
       event.time = Date.now() / 1000;
       const result = eventToShortText(event);

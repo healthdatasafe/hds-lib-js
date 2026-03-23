@@ -33,8 +33,10 @@ describe('[EDEX] EuclidianDistanceEngine', function () {
       assert.strictEqual(cfEngine.methodIds.length, 11);
     });
 
-    it('[EDEI2] mood engine loads 2 methods', () => {
-      assert.strictEqual(moodEngine.methodIds.length, 2);
+    it('[EDEI2] mood engine loads methods from pack (excludes _raw)', () => {
+      assert.ok(moodEngine.methodIds.length >= 2, `expected at least 2 methods, got ${moodEngine.methodIds.length}`);
+      assert.ok(moodEngine.methodIds.includes('mira'), 'should include mira');
+      assert.ok(!moodEngine.methodIds.includes('_raw'), '_raw should not be in methodIds (auto-generated)');
     });
 
     it('[EDEI3] cervical-fluid has 9 dimensions', () => {
@@ -134,12 +136,12 @@ describe('[EDEX] EuclidianDistanceEngine', function () {
       assert.ok(['dry', 'sticky'].includes(result.data), `expected dry or sticky, got ${result.data}`);
     });
 
-    it('[EDEC7] mood mira Happy → hds produces valid 5D vector', () => {
+    it('[EDEC7] mood mira Happy → _raw produces valid 5D vector', () => {
       const vec = moodEngine.toVector('mira', 'Happy');
       assert.strictEqual(vec.valence, 0.80);
       assert.strictEqual(vec.arousal, 0.60);
-      const result = moodEngine.fromVector('hds', vec);
-      // hds is assembly — result should be an object with 5 fields
+      const result = moodEngine.fromVector('_raw', vec);
+      // _raw is assembly — result should be an object with 5 fields
       assert.ok(result.data, 'should have result data');
     });
   });
@@ -246,7 +248,7 @@ describe('[MCVX] HDSModelConverters with loadPack', function () {
   });
 
   it('[MCVX6] convertMethodToMethod works', async () => {
-    const result = await converters.convertMethodToMethod('mood', 'mira', 'hds', 'Happy');
+    const result = await converters.convertMethodToMethod('mood', 'mira', '_raw', 'Happy');
     assert.ok(result.data, 'should have result');
     assert.ok(result.matchDistance >= 0, 'should have matchDistance');
   });
@@ -292,7 +294,7 @@ describe('[MCVX] HDSModelConverters with loadPack', function () {
     const cfEngine = converters.getEngine('cervical-fluid');
     assert.ok(moodEngine.getMethodDef('_raw'), '_raw should exist for mood');
     assert.ok(cfEngine.getMethodDef('_raw'), '_raw should exist for cervical-fluid');
-    assert.strictEqual(moodEngine.getMethodDef('_raw').name.en, 'Raw dimensions');
+    assert.strictEqual(moodEngine.getMethodDef('_raw').name.en, 'HDS Native');
   });
 
   it('[MCVX12] _raw fromVector returns object with stop labels', async () => {

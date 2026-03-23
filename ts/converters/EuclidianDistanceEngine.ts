@@ -232,8 +232,8 @@ function buildRawMethod (dimensions: Record<string, DimensionDef>, dimensionName
   return {
     methodId: '_raw',
     order: 0,
-    name: { en: 'Raw dimensions', fr: 'Dimensions brutes' },
-    description: { en: 'Auto-generated from dimension stops', fr: 'Auto-généré depuis les paliers de dimensions' },
+    name: { en: 'HDS Native', fr: 'HDS Natif' },
+    description: { en: 'Direct dimensional input using the HDS scale stops.', fr: 'Saisie dimensionnelle directe utilisant les paliers de l\'échelle HDS.' },
     components,
   };
 }
