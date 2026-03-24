@@ -2,6 +2,8 @@ import { HDSLibError } from '../errors.ts';
 import { pryv } from '../patchedPryv.ts';
 import { Application } from './Application.ts';
 import { CollectorClient } from './CollectorClient.ts';
+import { Contact } from './Contact.ts';
+import type { ContactSource } from './interfaces.ts';
 import * as logger from '../logger.ts';
 
 /**
@@ -95,6 +97,87 @@ export class AppClientAccount extends Application {
 
     this.cache.collectorClientsMapInitialized = true;
     return Object.values(this.cache.collectorClientsMap);
+  }
+
+  /**
+   * Get all contacts grouped by remote user.
+   * Combines CollectorClients (person-to-person) and bridge/other accesses.
+   * Multiple forms from the same doctor → one Contact with multiple sources.
+   * Contacts are enriched with CollectorClient instances and access objects.
+   */
+  async getContacts (forceRefresh: boolean = false): Promise<Contact[]> {
+    const collectorClients = await this.getCollectorClients(forceRefresh);
+    const sources: ContactSource[] = [];
+
+    // Collector clients → person contacts
+    for (const cc of collectorClients) {
+      sources.push(cc.toContactSource());
+    }
+
+    // Other accesses (bridges, orphan collectors, custom apps)
+    const allAccesses = await this.connection.apiOne('accesses.get', {}, 'accesses');
+    const collectorAccessNames = new Set(collectorClients.map(cc => cc.key));
+    for (const access of allAccesses) {
+      if (collectorAccessNames.has(access.name)) continue;
+      if (access.type === 'personal') continue;
+
+      // Orphan collector access: has hdsCollectorClient clientData but no matching event
+      const clientData = access.clientData as Record<string, any> | undefined;
+      if (clientData?.hdsCollectorClient) {
+        const evtData = clientData.hdsCollectorClient.eventData;
+        const requestData = evtData?.content?.requesterEventData?.content;
+        const username: string | undefined = evtData?.content?.accessInfo?.user?.username;
+        if (username && requestData) {
+          const chatEnabled = requestData.features?.chat != null;
+          sources.push({
+            remoteUsername: username,
+            displayName: requestData.requester?.name || username,
+            chatStreams: chatEnabled ? { main: `chat-${username}`, incoming: `chat-${username}-in` } : null,
+            appStreamId: (clientData.appStreamId as string) || null,
+            permissions: access.permissions || requestData.permissions || [],
+            status: access.deleted ? 'Deactivated' : 'Active',
+            type: 'collector',
+            accessId: access.id || null
+          });
+          continue;
+        }
+      }
+
+      // Bridge access: has appStreamId
+      const source = Contact.sourceFromAccess(access);
+      if (source.type === 'bridge') {
+        sources.push(source);
+      }
+    }
+
+    // Group sources into contacts
+    const contacts = Contact.groupByContact(sources);
+
+    // Enrich contacts with CollectorClients and access objects
+    const accessById: Record<string, any> = {};
+    for (const access of allAccesses) {
+      accessById[access.id] = access;
+    }
+
+    for (const contact of contacts) {
+      // Match CollectorClients to contacts
+      for (const cc of collectorClients) {
+        if (cc.requesterUsername === contact.remoteUsername) {
+          contact.addCollectorClient(cc);
+          if (cc.accessData?.id && accessById[cc.accessData.id]) {
+            contact.addAccessObject(accessById[cc.accessData.id]);
+          }
+        }
+      }
+      // Add access objects for orphan/bridge sources
+      for (const source of contact.sources) {
+        if (source.accessId && accessById[source.accessId]) {
+          contact.addAccessObject(accessById[source.accessId]);
+        }
+      }
+    }
+
+    return contacts;
   }
 
   /**

@@ -5,4 +5,5 @@ import { Collector } from './Collector.ts';
 import { CollectorClient } from './CollectorClient.ts';
 import { CollectorInvite } from './CollectorInvite.ts';
 import { CollectorRequest } from './CollectorRequest.ts';
-export { AppManagingAccount, AppClientAccount, Application, Collector, CollectorClient, CollectorInvite, CollectorRequest };
+import { Contact } from './Contact.ts';
+export { AppManagingAccount, AppClientAccount, Application, Collector, CollectorClient, CollectorInvite, CollectorRequest, Contact };

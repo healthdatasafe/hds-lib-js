@@ -2,7 +2,7 @@ import { CollectorRequest } from './CollectorRequest.ts';
 import { pryv } from '../patchedPryv.ts';
 import { HDSLibError } from '../errors.ts';
 import * as logger from '../logger.ts';
-import type { CollectorSectionInterface } from './interfaces.ts';
+import type { CollectorSectionInterface, ContactSource } from './interfaces.ts';
 
 /**
  * Client App in relation to an AppManagingAccount/Collector
@@ -62,6 +62,21 @@ export class CollectorClient {
     return {
       chatStreamIncoming: `chat-${this.requesterUsername}-in`,
       chatStreamMain: `chat-${this.requesterUsername}`
+    };
+  }
+
+  /** Convert to ContactSource for Contact grouping */
+  toContactSource (): ContactSource {
+    const chat = this.chatSettings;
+    return {
+      remoteUsername: this.requesterUsername,
+      displayName: this.requestData?.requester?.name || this.requesterUsername,
+      chatStreams: chat ? { main: chat.chatStreamMain, incoming: chat.chatStreamIncoming } : null,
+      appStreamId: this.accessData?.clientData?.appStreamId || null,
+      permissions: this.requestData?.permissions || [],
+      status: this.status,
+      type: 'collector',
+      accessId: this.accessData?.id || null
     };
   }
 
