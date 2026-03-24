@@ -1,6 +1,8 @@
 import ShortUniqueId from 'short-unique-id';
 import { Application } from './Application.ts';
 import { Collector } from './Collector.ts';
+import { Contact } from './Contact.ts';
+import type { ContactSource } from './interfaces.ts';
 
 const collectorIdGenerator = new ShortUniqueId({ dictionary: 'alphanum_lower', length: 7 });
 
@@ -60,6 +62,46 @@ export class AppManagingAccount extends Application {
       collectorsMap[collector.id] = collector;
     }
     this.cache.collectorsMap = collectorsMap;
+  }
+
+  /**
+   * Get all patient contacts grouped by username, across all collectors.
+   * Each Contact may have invites from multiple forms.
+   */
+  async getContacts (forceRefresh: boolean = false): Promise<Contact[]> {
+    const collectors = await this.getCollectors(forceRefresh);
+    const sources: ContactSource[] = [];
+
+    // Collect all invites from all collectors (with error tolerance)
+    const allInvitePairs: Array<{ collector: any; invite: any }> = [];
+    for (const collector of collectors) {
+      try {
+        await collector.init(forceRefresh);
+        const invites = await collector.getInvites(forceRefresh);
+        for (const invite of invites) {
+          sources.push(invite.toContactSource());
+          allInvitePairs.push({ collector, invite });
+        }
+      } catch (e) {
+        // Skip collectors that fail to load (e.g. network issues)
+        console.error('Contact: failed loading collector', collector.name, e);
+      }
+    }
+
+    // Group by patient username
+    const contacts = Contact.groupByContact(sources);
+
+    // Enrich contacts with collector+invite references (no extra API calls — reuse cached invites)
+    for (const contact of contacts) {
+      for (const { collector, invite } of allInvitePairs) {
+        const username = invite.patientUsername;
+        if (username && username === contact.remoteUsername) {
+          contact.addInvite(collector, invite);
+        }
+      }
+    }
+
+    return contacts;
   }
 
   /**

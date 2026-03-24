@@ -1,8 +1,16 @@
 import type { ContactSource, ChatStreams, Permission, CollectorSectionInterface } from './interfaces.ts';
 import type { CollectorClient } from './CollectorClient.ts';
+import type { CollectorInvite } from './CollectorInvite.ts';
+import type { Collector } from './Collector.ts';
 import { HDSModelAppStreams } from '../HDSModel/HDSModel-AppStreams.ts';
 import { getStreamIdAndChildrenIds } from '../toolkit/StreamsTools.ts';
 import { pryv } from '../patchedPryv.ts';
+
+/** Doctor-side: a form invite pair (which collector + which invite) */
+export interface ContactInvite {
+  collector: Collector;
+  invite: CollectorInvite;
+}
 
 /**
  * Groups all accesses/relationships from the same remote user (or service).
@@ -19,8 +27,10 @@ export class Contact {
   displayName: string;
   /** All access sources grouped into this contact */
   sources: ContactSource[];
-  /** CollectorClient instances for collector sources (matched by accessId) */
+  /** CollectorClient instances for collector sources — patient side */
   collectorClients: CollectorClient[];
+  /** Doctor-side: collector+invite pairs for this patient */
+  invites: ContactInvite[];
   /** Raw Pryv access objects for all sources */
   accessObjects: any[];
 
@@ -32,6 +42,7 @@ export class Contact {
     this.displayName = displayName;
     this.sources = [];
     this.collectorClients = [];
+    this.invites = [];
     this.accessObjects = [];
     this.#accessibleStreamIds = null;
   }
@@ -54,6 +65,13 @@ export class Contact {
   addAccessObject (access: any): void {
     if (!this.accessObjects.find((a: any) => a.id === access.id)) {
       this.accessObjects.push(access);
+    }
+  }
+
+  /** Associate a collector+invite pair (doctor side) */
+  addInvite (collector: Collector, invite: CollectorInvite): void {
+    if (!this.invites.find(i => i.invite.key === invite.key)) {
+      this.invites.push({ collector, invite });
     }
   }
 

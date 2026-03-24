@@ -6,4 +6,5 @@ import { CollectorClient } from './CollectorClient.ts';
 import { CollectorInvite } from './CollectorInvite.ts';
 import { CollectorRequest } from './CollectorRequest.ts';
 import { Contact } from './Contact.ts';
+export type { ContactInvite } from './Contact.ts';
 export { AppManagingAccount, AppClientAccount, Application, Collector, CollectorClient, CollectorInvite, CollectorRequest, Contact };
