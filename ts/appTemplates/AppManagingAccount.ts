@@ -72,19 +72,36 @@ export class AppManagingAccount extends Application {
     const collectors = await this.getCollectors(forceRefresh);
     const sources: ContactSource[] = [];
 
-    // Collect all invites from all collectors (with error tolerance)
+    // Collect all invites from all collectors in parallel (with error tolerance + timeout)
     const allInvitePairs: Array<{ collector: any; invite: any }> = [];
-    for (const collector of collectors) {
-      try {
-        await collector.init(forceRefresh);
-        const invites = await collector.getInvites(forceRefresh);
+    const TIMEOUT_MS = 10000;
+
+    const loadCollector = async (collector: any) => {
+      await collector.init(forceRefresh);
+      const invites = await collector.getInvites(forceRefresh);
+      return invites;
+    };
+
+    const results = await Promise.allSettled(
+      collectors.map(async (collector) => {
+        const race = Promise.race([
+          loadCollector(collector),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS))
+        ]);
+        const invites = await race as any[];
+        return { collector, invites };
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        const { collector, invites } = result.value;
         for (const invite of invites) {
           sources.push(invite.toContactSource());
           allInvitePairs.push({ collector, invite });
         }
-      } catch (e) {
-        // Skip collectors that fail to load (e.g. network issues)
-        console.error('Contact: failed loading collector', collector.name, e);
+      } else {
+        console.error('Contact: failed loading collector', result.reason);
       }
     }
 
