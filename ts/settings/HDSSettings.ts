@@ -263,7 +263,7 @@ const HDSSettings = {
     if (value === null || value === undefined) {
       // Delete
       if (existing) {
-        await _connection.apiOne('events.delete', { id: existing.id }, 'eventDeletion');
+        await (_connection as any).apiOne('events.delete', { id: existing.id }, 'eventDeletion');
         delete _dynamicCache[key];
         delete _dynamicValues[key];
       }
