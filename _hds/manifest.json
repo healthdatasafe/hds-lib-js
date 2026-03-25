@@ -1,0 +1,78 @@
+{
+  "appId": null,
+  "type": "lib",
+  "description": "Core HDS library — data model, app templates (Collector, Contact), settings, profile",
+  "produces": {
+    "items": [],
+    "eventTypes": [
+      "request/collector-v1",
+      "request/collector-client-v1",
+      "request/access-update-v1",
+      "response/collector-v1",
+      "invite/collector-v1",
+      "status/collector-v1",
+      "message/hds-chat-v1",
+      "settings/preferred-locales",
+      "settings/theme",
+      "settings/timezone",
+      "settings/date-format",
+      "settings/unit-system",
+      "settings/preferred-display",
+      "settings/preferred-input",
+      "settings/any",
+      "contact/display-name",
+      "contact/name",
+      "contact/surname",
+      "contact/country",
+      "picture/attached",
+      "date/iso-8601",
+      "attributes/biological-sex"
+    ]
+  },
+  "consumes": {
+    "items": [],
+    "eventTypes": [
+      "request/collector-v1",
+      "request/collector-client-v1",
+      "request/access-update-v1",
+      "response/collector-v1",
+      "invite/collector-v1",
+      "status/collector-v1",
+      "message/hds-chat-v1"
+    ]
+  },
+  "streams": [
+    {
+      "id": "applications",
+      "name": "Applications root stream",
+      "children": [
+        {
+          "id": "{baseStreamId}",
+          "name": "Per-app managing stream (dynamic)",
+          "note": "Created by AppManagingAccount, suffixed with collector ID",
+          "children": [
+            { "id": "{collectorId}-archive", "name": "Archived responses" },
+            { "id": "{collectorId}-internal", "name": "Internal collector data" },
+            { "id": "{collectorId}-public", "name": "Public-facing events" },
+            { "id": "{collectorId}-pending", "name": "Pending invites" },
+            { "id": "{collectorId}-inbox", "name": "Responses from patients" },
+            { "id": "{collectorId}-active", "name": "Active patient connections" },
+            { "id": "{collectorId}-error", "name": "Refused/revoked invites" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "profile",
+      "name": "User profile",
+      "children": [
+        { "id": "profile-display-name" },
+        { "id": "profile-avatar" },
+        { "id": "profile-name" },
+        { "id": "profile-date-of-birth" },
+        { "id": "profile-sex" },
+        { "id": "profile-address" }
+      ]
+    }
+  ]
+}
