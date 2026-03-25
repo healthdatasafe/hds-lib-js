@@ -89,8 +89,18 @@ export class Contact {
       for (const p of access.permissions) {
         if (!p.streamId) continue;
         if (p.streamId === '*') {
+          if (!this.isPerson) {
+            // Bridge with wildcard: resolve bridge's own streams from access name
+            // (access.name is typically the bridge's base stream ID, e.g. "bridge-mira")
+            const bridgeStream = access.name ? streamsById[access.name] : null;
+            if (bridgeStream) {
+              const ids = getStreamIdAndChildrenIds(bridgeStream);
+              ids.forEach((id: string) => this.#accessibleStreamIds!.add(id));
+            }
+            continue; // don't add wildcard for bridges
+          }
           this.#accessibleStreamIds.add('*');
-          return; // wildcard covers everything
+          return; // wildcard covers everything for person contacts
         }
         const stream = streamsById[p.streamId];
         if (!stream) continue;
@@ -100,8 +110,26 @@ export class Contact {
     }
   }
 
-  /** Check if an event is in a stream accessible by this contact */
+  /**
+   * Check if an event belongs to this contact's scope.
+   * - Person contacts (doctors): event is in a stream covered by their access permissions
+   * - Bridge/service contacts: event was created by the bridge OR is in the bridge's streams
+   *   (bridges typically have wildcard `*` permissions but should only show their own data)
+   */
   eventIsAccessible (event: pryv.Event): boolean {
+    if (!this.isPerson) {
+      // Bridge/service contacts: check authorship first (fastest)
+      if (this.eventIsFromContact(event)) return true;
+      // Also check if event is in the bridge's own stream tree
+      // (covers data created by older accesses not in previousAccessIds chain)
+      if (this.#accessibleStreamIds && !this.#accessibleStreamIds.has('*') && event.streamIds) {
+        for (const streamId of event.streamIds) {
+          if (this.#accessibleStreamIds.has(streamId)) return true;
+        }
+      }
+      return false;
+    }
+    // Person contacts: filter by stream permissions
     if (!this.#accessibleStreamIds) return false;
     if (this.#accessibleStreamIds.has('*')) return true;
     if (!event.streamIds) return false;
@@ -115,9 +143,12 @@ export class Contact {
   eventIsFromContact (event: pryv.Event): boolean {
     for (const access of this.accessObjects) {
       if (access.id && event.modifiedBy === access.id) return true;
-      // Check previous access IDs from replaced accesses (access update chain)
-      const prevIds = access.clientData?.hdsCollectorClient?.previousAccessIds;
-      if (Array.isArray(prevIds) && prevIds.includes(event.modifiedBy)) return true;
+      // Check previous access IDs from replaced accesses (collector pattern)
+      const collectorPrevIds = access.clientData?.hdsCollectorClient?.previousAccessIds;
+      if (Array.isArray(collectorPrevIds) && collectorPrevIds.includes(event.modifiedBy)) return true;
+      // Check previous access IDs from bridge access recreate pattern
+      const bridgePrevIds = access.clientData?.previousAccessIds;
+      if (Array.isArray(bridgePrevIds) && bridgePrevIds.includes(event.modifiedBy)) return true;
     }
     return false;
   }

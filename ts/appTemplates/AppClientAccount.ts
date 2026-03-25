@@ -131,7 +131,8 @@ export class AppClientAccount extends Application {
     }
 
     // Other accesses (bridges, orphan collectors, custom apps)
-    const allAccesses = await this.connection.apiOne('accesses.get', {}, 'accesses');
+    // Include deletions so bridge contacts can match events created by old (recreated) accesses
+    const allAccesses = await this.connection.apiOne('accesses.get', { includeDeletions: true }, 'accesses');
     const collectorAccessNames = new Set(collectorClients.map(cc => cc.key));
     for (const access of allAccesses) {
       if (collectorAccessNames.has(access.name)) continue;
@@ -189,6 +190,18 @@ export class AppClientAccount extends Application {
       for (const source of contact.sources) {
         if (source.accessId && accessById[source.accessId]) {
           contact.addAccessObject(accessById[source.accessId]);
+        }
+      }
+
+      // For bridge contacts: also add deleted accesses with the same name
+      // so eventIsFromContact can match events created by old (recreated) access IDs
+      if (!contact.isPerson) {
+        const contactAccessNames = new Set(contact.accessObjects.map((a: any) => a.name));
+        for (const access of allAccesses) {
+          if (!access.deleted) continue;
+          if (contactAccessNames.has(access.name) && !contact.accessObjects.some((a: any) => a.id === access.id)) {
+            contact.addAccessObject(access);
+          }
         }
       }
     }
