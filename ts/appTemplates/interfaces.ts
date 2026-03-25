@@ -43,3 +43,32 @@ export interface ContactSource {
   type: ContactSourceType;
   accessId: string | null;
 }
+
+// ---- Access update requests ---- //
+
+export type AccessUpdateAction = 'update-permissions' | 'add-feature' | 'revoke-request';
+
+/**
+ * Content of a `request/access-update-v1` event.
+ * Written by the Requester (doctor) in their public stream.
+ * Read by the Sender (patient) via requesterConnection.
+ */
+export interface AccessUpdateRequestContent {
+  version: 0;
+  /** Matches CollectorClient.key — identifies which access to update */
+  targetAccessName: string;
+  action: AccessUpdateAction;
+  /** New full permission set (not a diff) — what the patient will grant */
+  permissions: Permission[];
+  /** Optional new features to add (e.g. chat) */
+  features?: Record<string, any>;
+  /** Human-readable explanation shown to patient */
+  message?: string;
+}
+
+/** A pending update request attached to a CollectorClient */
+export interface AccessUpdateRequest {
+  /** The event ID on the requester's account */
+  eventId: string;
+  content: AccessUpdateRequestContent;
+}

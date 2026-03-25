@@ -3,6 +3,7 @@ import { HDSLibError } from '../errors.ts';
 import { waitUntilFalse } from '../utils.ts';
 import { CollectorInvite } from './CollectorInvite.ts';
 import * as logger from '../logger.ts';
+import type { Permission, AccessUpdateAction } from './interfaces.ts';
 
 const COLLECTOR_STREAMID_SUFFIXES = {
   archive: 'archive',
@@ -219,6 +220,16 @@ export class Collector {
           updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
           if (responseEvent.content.chat) updateInvite.content.chat = responseEvent.content.chat;
           break;
+        case 'update-accept':
+          // Patient accepted an access update — new apiEndpoint, stays active
+          (updateInvite as any).streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)];
+          updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
+          if (responseEvent.content.chat) updateInvite.content.chat = responseEvent.content.chat;
+          break;
+        case 'update-refuse':
+          // Patient refused the update — invite stays active with current permissions
+          // No stream change, just archive the response
+          break;
         case 'refuse':
           (updateInvite as any).streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.error)];
           updateInvite.content.errorType = 'refused';
@@ -325,6 +336,50 @@ export class Collector {
     if (!newSharingApiEndpoint) throw new HDSLibError('Cannot find apiEndpoint in sharing creation request', { result: access, requestParams: params });
     this.#cache.sharingApiEndpoint = newSharingApiEndpoint;
     return newSharingApiEndpoint;
+  }
+
+  /**
+   * Request an access update for a specific invite.
+   * Creates a `request/access-update-v1` event in the public stream
+   * that the patient will discover via their requesterConnection.
+   *
+   * @param inviteKey - the invite key (CollectorInvite.key)
+   * @param permissions - new full permission set
+   * @param options.action - update action type (default: 'update-permissions')
+   * @param options.features - optional features to add (e.g. { chat: { type: 'user' } })
+   * @param options.message - human-readable explanation for the patient
+   */
+  async requestAccessUpdate (
+    inviteKey: string,
+    permissions: Permission[],
+    options: { action?: AccessUpdateAction, features?: Record<string, any>, message?: string } = {}
+  ): Promise<any> {
+    if (this.statusCode !== Collector.STATUSES.active) {
+      throw new HDSLibError('Collector must be active to request access update');
+    }
+    const invite = await this.getInviteByKey(inviteKey);
+    if (!invite) throw new HDSLibError(`Cannot find invite with key: ${inviteKey}`);
+    if (invite.status !== 'active') throw new HDSLibError(`Invite must be active to request update, current: ${invite.status}`);
+
+    // targetAccessName matches CollectorClient.key on the patient side
+    // which is built from accessInfo: username + ':' + accessName
+    const accessInfo = await invite.checkAndGetAccessInfo();
+    if (!accessInfo) throw new HDSLibError('Cannot get access info for invite — may have been revoked');
+    const targetAccessName = accessInfo.user.username + ':' + accessInfo.name;
+
+    const eventData = {
+      type: 'request/access-update-v1',
+      streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.public)],
+      content: {
+        version: 0,
+        targetAccessName,
+        action: options.action || 'update-permissions',
+        permissions,
+        features: options.features || undefined,
+        message: options.message || undefined
+      }
+    };
+    return await this.appManaging.connection.apiOne('events.create', eventData, 'event');
   }
 
   /**

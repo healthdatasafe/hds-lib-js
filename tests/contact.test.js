@@ -284,6 +284,24 @@ describe('[CTCT] Contact class', function () {
       assert.equal(c.eventIsFromContact({ modifiedBy: 'a2' }), true);
       assert.equal(c.eventIsFromContact({ modifiedBy: 'other' }), false);
     });
+
+    it('[CTAQ2] should match events from previous (replaced) accesses via clientData chain', () => {
+      const c = new Contact('u', 'U');
+      // Current access (after update) carries previousAccessIds
+      c.addAccessObject({
+        id: 'a3-new',
+        clientData: {
+          hdsCollectorClient: {
+            version: 0,
+            previousAccessIds: ['a1-old', 'a2-older']
+          }
+        }
+      });
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'a3-new' }), true);
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1-old' }), true);
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'a2-older' }), true);
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'unknown' }), false);
+    });
   });
 
   // ---- sourceFromAccess (static) ---- //

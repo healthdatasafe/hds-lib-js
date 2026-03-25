@@ -104,9 +104,25 @@ export class AppClientAccount extends Application {
    * Combines CollectorClients (person-to-person) and bridge/other accesses.
    * Multiple forms from the same doctor → one Contact with multiple sources.
    * Contacts are enriched with CollectorClient instances and access objects.
+   * Also checks for pending access update requests on active CollectorClients.
    */
   async getContacts (forceRefresh: boolean = false): Promise<Contact[]> {
     const collectorClients = await this.getCollectorClients(forceRefresh);
+
+    // Check for pending update requests in parallel (with timeout)
+    const activeClients = collectorClients.filter(cc => cc.status === 'Active');
+    if (activeClients.length > 0) {
+      const UPDATE_CHECK_TIMEOUT = 10000;
+      await Promise.allSettled(
+        activeClients.map(cc =>
+          Promise.race([
+            cc.checkForUpdateRequests(),
+            new Promise(resolve => setTimeout(resolve, UPDATE_CHECK_TIMEOUT))
+          ])
+        )
+      );
+    }
+
     const sources: ContactSource[] = [];
 
     // Collector clients → person contacts

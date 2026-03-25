@@ -2,7 +2,7 @@ import { CollectorRequest } from './CollectorRequest.ts';
 import { pryv } from '../patchedPryv.ts';
 import { HDSLibError } from '../errors.ts';
 import * as logger from '../logger.ts';
-import type { CollectorSectionInterface, ContactSource } from './interfaces.ts';
+import type { CollectorSectionInterface, ContactSource, AccessUpdateRequest } from './interfaces.ts';
 
 /**
  * Client App in relation to an AppManagingAccount/Collector
@@ -19,6 +19,8 @@ export class CollectorClient {
   eventData: any;
   accessData: any;
   request: CollectorRequest;
+  /** Pending access update request from the requester, if any */
+  pendingUpdate: AccessUpdateRequest | null = null;
 
   #requesterConnection: pryv.Connection;
 
@@ -355,6 +357,143 @@ export class CollectorClient {
    */
   static keyFromInfo (info) {
     return info.user.username + ':' + info.name;
+  }
+
+  // -------------------- access update requests ------------- //
+
+  /**
+   * Check the requester's public stream for pending access update requests.
+   * Sets this.pendingUpdate if one is found for this client's key.
+   */
+  async checkForUpdateRequests (): Promise<AccessUpdateRequest | null> {
+    if (this.status !== CollectorClient.STATUSES.active) return null;
+    try {
+      const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.public.streamId;
+      const events = await this.requesterConnection.apiOne('events.get', {
+        types: ['request/access-update-v1'],
+        streams: [publicStreamId],
+        limit: 10
+      }, 'events');
+      for (const event of events) {
+        if (event.content?.targetAccessName === this.key) {
+          this.pendingUpdate = { eventId: event.id, content: event.content };
+          return this.pendingUpdate;
+        }
+      }
+    } catch (e) {
+      logger.warn('CollectorClient.checkForUpdateRequests failed', { key: this.key, error: (e as Error).message });
+    }
+    this.pendingUpdate = null;
+    return null;
+  }
+
+  /**
+   * Accept a pending update request: delete old access, create new one with updated permissions,
+   * notify requester via inbox with new apiEndpoint.
+   */
+  async acceptUpdate (): Promise<{ accessData: any, requesterEvent: any } | null> {
+    if (!this.pendingUpdate) throw new HDSLibError('No pending update to accept');
+    if (this.status !== CollectorClient.STATUSES.active) throw new HDSLibError('Can only accept updates on active CollectorClients');
+
+    const update = this.pendingUpdate.content;
+
+    // Build new permissions from the update request
+    const cleanedPermissions = update.permissions.map((p) => {
+      if (p.streamId) return { streamId: p.streamId, level: p.level };
+      return p;
+    });
+
+    // Handle chat feature if requested
+    const responseContent: { apiEndpoint?: string, chat?: any } = {};
+    if (update.features?.chat && !this.hasChatFeature) {
+      const chatStreamMain = `chat-${this.requesterUsername}`;
+      const chatStreamIncoming = `chat-${this.requesterUsername}-in`;
+      const chatStreamsCreateApiCalls = [
+        { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
+        { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
+        { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
+      ];
+      const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
+      streamCreateResults.forEach((r) => {
+        if (r.stream?.id || r.error?.id === 'item-already-exists') return;
+        throw new HDSLibError('Failed creating chat stream', streamCreateResults);
+      });
+      cleanedPermissions.push(
+        { streamId: chatStreamMain, level: 'read' },
+        { streamId: chatStreamIncoming, level: 'manage' }
+      );
+      responseContent.chat = {
+        type: 'user',
+        streamRead: chatStreamMain,
+        streamWrite: chatStreamIncoming
+      };
+    } else if (this.hasChatFeature) {
+      // Preserve existing chat permissions
+      const { chatStreamMain, chatStreamIncoming } = this.chatSettings;
+      cleanedPermissions.push(
+        { streamId: chatStreamMain, level: 'read' },
+        { streamId: chatStreamIncoming, level: 'manage' }
+      );
+    }
+
+    // Collect previous access IDs for event attribution (modifiedBy tracking)
+    const previousAccessIds: string[] = [];
+    if (this.accessData) {
+      if (this.accessData.id) previousAccessIds.push(this.accessData.id);
+      // Chain: carry forward any IDs from the old access's clientData
+      const oldPrevIds = this.accessData.clientData?.hdsCollectorClient?.previousAccessIds;
+      if (Array.isArray(oldPrevIds)) {
+        for (const id of oldPrevIds) {
+          if (!previousAccessIds.includes(id)) previousAccessIds.push(id);
+        }
+      }
+    }
+
+    // Delete old access
+    if (this.accessData && !this.accessData.deleted) {
+      await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
+    }
+
+    // Create new access with updated permissions
+    const accessCreateData = {
+      name: this.key,
+      type: 'shared',
+      permissions: cleanedPermissions,
+      clientData: {
+        hdsCollectorClient: {
+          version: 0,
+          eventData: this.eventData,
+          previousAccessIds
+        }
+      }
+    };
+    const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
+    this.accessData = accessData;
+    if (!this.accessData?.apiEndpoint) throw new HDSLibError('Failed creating updated access', accessData);
+
+    responseContent.apiEndpoint = this.accessData.apiEndpoint;
+
+    // Notify requester via inbox
+    const requesterEvent = await this.#updateRequester('update-accept', responseContent);
+    if (requesterEvent != null) {
+      this.pendingUpdate = null;
+      return { accessData: this.accessData, requesterEvent };
+    }
+    return null;
+  }
+
+  /**
+   * Refuse a pending update request: notify requester via inbox, clear pendingUpdate.
+   */
+  async refuseUpdate (): Promise<{ requesterEvent: any } | null> {
+    if (!this.pendingUpdate) throw new HDSLibError('No pending update to refuse');
+
+    const requesterEvent = await this.#updateRequester('update-refuse', {});
+    if (requesterEvent != null) {
+      this.pendingUpdate = null;
+      return { requesterEvent };
+    }
+    return null;
   }
 
   // -------------------- sections and forms ------------- //

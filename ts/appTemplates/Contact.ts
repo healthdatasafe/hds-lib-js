@@ -111,10 +111,13 @@ export class Contact {
     return false;
   }
 
-  /** Check if an event was created/modified by this contact */
+  /** Check if an event was created/modified by this contact (including replaced accesses) */
   eventIsFromContact (event: pryv.Event): boolean {
     for (const access of this.accessObjects) {
       if (access.id && event.modifiedBy === access.id) return true;
+      // Check previous access IDs from replaced accesses (access update chain)
+      const prevIds = access.clientData?.hdsCollectorClient?.previousAccessIds;
+      if (Array.isArray(prevIds) && prevIds.includes(event.modifiedBy)) return true;
     }
     return false;
   }
@@ -153,6 +156,16 @@ export class Contact {
   /** Whether any form is pending (Incoming) and actionable */
   get isPending (): boolean {
     return this.collectorClients.some(cc => cc.status === 'Incoming');
+  }
+
+  /** Whether any CollectorClient has a pending access update request */
+  get hasPendingUpdate (): boolean {
+    return this.collectorClients.some(cc => cc.pendingUpdate != null);
+  }
+
+  /** CollectorClients with pending update requests */
+  get pendingUpdateClients (): CollectorClient[] {
+    return this.collectorClients.filter(cc => cc.pendingUpdate != null);
   }
 
   /** The pending CollectorClient, if any */
