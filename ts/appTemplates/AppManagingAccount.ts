@@ -142,6 +142,7 @@ export class AppManagingAccount extends Application {
     };
     const stream = await this.connection.apiOne('streams.create', params, 'stream');
     // add new stream to streamCache
+    if (!this.streamData.children) this.streamData.children = [];
     this.streamData.children.push(stream);
     const collector = new Collector(this, stream);
     this.cache.collectorsMap[collector.streamId] = collector;
