@@ -40,20 +40,13 @@ export class AppClientAccount extends Application {
     if (this.cache.collectorClientsMap[collectorClientKey]) {
       const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
       logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
-      if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
-        // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-        throw new HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-        // we might consider reseting() in the future;
-        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+      // Same access, same endpoint — idempotent, return existing
+      if (collectorClient.requesterApiEndpoint === apiEndpoint) {
+        return collectorClient;
       }
-      if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-        throw new HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-        // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-        // we might consider reseting() in the future;
-        // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
-        // return null;
-      }
-      return collectorClient;
+      // Different apiEndpoint or eventId for same key — this shouldn't happen with id-based keys
+      // but handle gracefully by logging and creating new (will get a different key from its own accessInfo)
+      logger.info('AppClient:handleIncomingRequest existing key collision, creating new client');
     }
     // check if comming form hdsCollector
     if (!accessInfo?.clientData?.hdsCollector || (accessInfo.clientData?.hdsCollector as any)?.version !== 0) {

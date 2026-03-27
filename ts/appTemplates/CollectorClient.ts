@@ -356,7 +356,8 @@ export class CollectorClient {
    * @param {PryvAccessInfo} accessInfo
    */
   static keyFromInfo (info) {
-    return info.user.username + ':' + info.name;
+    // Use access id when available (unique per invite), fall back to name for backwards compat
+    return info.user.username + ':' + (info.id || info.name);
   }
 
   // -------------------- access update requests ------------- //

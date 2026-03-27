@@ -221,8 +221,15 @@ async function createAppStreams (app: Application): Promise<void> {
       { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: APPS_ROOT_STREAM } }
     ];
     const streamCreateResult = await app.connection.api(apiCalls);
-    if (streamCreateResult[1].error) throw new Error('Failed creating app streams ' + JSON.stringify(streamCreateResult[1].error));
-    const stream = (streamCreateResult[1] as any).stream;
-    app.cache.streamData = stream;
+    const appStreamResult = streamCreateResult[1] as any;
+    if (appStreamResult.error && appStreamResult.error.id !== 'item-already-exists') {
+      throw new Error('Failed creating app streams ' + JSON.stringify(appStreamResult.error));
+    }
+    if (appStreamResult.stream) {
+      app.cache.streamData = appStreamResult.stream;
+    } else {
+      // Stream already existed — load it
+      await app.loadStreamData();
+    }
   }
 }
