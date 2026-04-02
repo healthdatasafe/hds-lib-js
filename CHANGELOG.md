@@ -2,15 +2,21 @@
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-04-02
+## [0.5.0] - 2026-04-02
 
 ### Added
 - `Contact.incomingCollectorClients` getter — filter CollectorClients by Incoming status
 - `Contact.displayStatus` mapping: Deactivated → Revoked, Incoming → Pending
+- `Collector.requestAccessUpdate()` — doctor-side method to request permission changes from patient
+- `CollectorClient.checkForUpdateRequests()` — patient-side discovery of pending update requests
+- `CollectorClient.acceptUpdate()` / `refuseUpdate()` — patient-side accept/refuse with access recreate
+- `AppClientAccount.getContacts()` scans active CCs for update requests in parallel
+- Bridge access helpers: `getOrCreateBridgeAccess()`, `recreateBridgeAccess()`, `ensureBridgeAccess()`
 
 ### Fixed
 - `CollectorClient.revoke()` handles missing accessData gracefully (skips access deletion)
 - `AppManagingAccount.getContacts(true)` calls `checkInbox()` on each collector to detect patient revoke/refuse responses
+- `requestAccessUpdate` target key uses doctor's sharing access ID (not patient-side access info)
 
 ## [0.3.0] - 2026-03-23
 
