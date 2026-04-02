@@ -78,6 +78,7 @@ export class AppManagingAccount extends Application {
 
     const loadCollector = async (collector: any) => {
       await collector.init(forceRefresh);
+      if (forceRefresh) await collector.checkInbox();
       const invites = await collector.getInvites(forceRefresh);
       return invites;
     };
