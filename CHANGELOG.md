@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-02
+
+### Added
+- `Contact.incomingCollectorClients` getter — filter CollectorClients by Incoming status
+- `Contact.displayStatus` mapping: Deactivated → Revoked, Incoming → Pending
+
+### Fixed
+- `CollectorClient.revoke()` handles missing accessData gracefully (skips access deletion)
+- `AppManagingAccount.getContacts(true)` calls `checkInbox()` on each collector to detect patient revoke/refuse responses
+
 ## [0.3.0] - 2026-03-23
 
 ### Added
