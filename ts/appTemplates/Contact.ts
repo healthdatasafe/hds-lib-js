@@ -184,6 +184,11 @@ export class Contact {
       this.collectorClients[0];
   }
 
+  /** CollectorClients with status Incoming — pending accept/refuse */
+  get incomingCollectorClients (): CollectorClient[] {
+    return this.collectorClients.filter(cc => cc.status === 'Incoming');
+  }
+
   /** Whether any form is pending (Incoming) and actionable */
   get isPending (): boolean {
     return this.collectorClients.some(cc => cc.status === 'Incoming');

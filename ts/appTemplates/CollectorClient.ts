@@ -267,16 +267,15 @@ export class CollectorClient {
   }
 
   async revoke () {
-    if (!this.accessData) {
-      throw new HDSLibError('Cannot revoke if no accessData');
-    }
-    if (this.accessData.deleted && this.status === CollectorClient.STATUSES.deactivated) {
+    if (this.accessData?.deleted && this.status === CollectorClient.STATUSES.deactivated) {
       throw new HDSLibError('Already revoked');
     }
-    // revoke access
-    await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
-    // lazyly flag currentAccess as deleted
-    this.accessData.deleted = Date.now() / 1000;
+    // revoke access if it exists and is not already deleted
+    if (this.accessData && !this.accessData.deleted) {
+      await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
+      // lazily flag currentAccess as deleted
+      this.accessData.deleted = Date.now() / 1000;
+    }
 
     const responseContent = { };
     const requesterEvent = await this.#updateRequester('revoke', responseContent);
