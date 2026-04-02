@@ -362,10 +362,15 @@ export class Collector {
     if (invite.status !== 'active') throw new HDSLibError(`Invite must be active to request update, current: ${invite.status}`);
 
     // targetAccessName matches CollectorClient.key on the patient side
-    // which is built from accessInfo: username + ':' + accessName
-    const accessInfo = await invite.checkAndGetAccessInfo();
-    if (!accessInfo) throw new HDSLibError('Cannot get access info for invite — may have been revoked');
-    const targetAccessName = accessInfo.user.username + ':' + accessInfo.name;
+    // CC key = doctorUsername + ':' + sharingAccessId (from the sharing access info stored in the CC event)
+    const sharingAccessName = 'a-' + this.streamId;
+    const [accesses, myAccessInfo] = await Promise.all([
+      this.appManaging.connection.apiOne('accesses.get', {}, 'accesses'),
+      this.appManaging.connection.accessInfo()
+    ]);
+    const sharingAccess = accesses.find((a) => a.name === sharingAccessName);
+    if (!sharingAccess) throw new HDSLibError('Cannot find sharing access for this collector');
+    const targetAccessName = myAccessInfo.user.username + ':' + sharingAccess.id;
 
     const eventData = {
       type: 'request/access-update-v1',
