@@ -15,7 +15,7 @@ Generic toolkit for server and web applications built for the [Health Data Safe]
 
 1. **Global settings** — Configure service endpoints and localization preferences
 2. **Pryv extensions** — Extends the [Pryv JS library](https://github.com/pryv/lib-js) with Socket.io and Monitor support
-3. **HDS Data Model** — Load and query the [HDS data model](https://github.com/healthdatasafe/data-model-draft) as a singleton: item definitions, streams, authorizations, event types, datasources
+3. **HDS Data Model** — Load and query the [HDS data model](https://github.com/healthdatasafe/data-model) as a singleton: item definitions, streams, authorizations, event types, datasources
 4. **App Templates** — Framework for building consent-based data collection and sharing applications (Manager, Collector, Invite, Client flows)
 5. **Toolkit** — Helpers for stream auto-creation, reminders, duration parsing, and more
 

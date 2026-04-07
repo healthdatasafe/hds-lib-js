@@ -9338,6 +9338,100 @@ exports.HDSItemDef = HDSItemDef;
 
 /***/ },
 
+/***/ "./ts/HDSModel/HDSModel-AppStreams.ts"
+/*!********************************************!*\
+  !*** ./ts/HDSModel/HDSModel-AppStreams.ts ***!
+  \********************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelAppStreams = void 0;
+/**
+ * AppStreams - Extension of HDSModel
+ *
+ * Manages app-contextual stream definitions.
+ * Each app/bridge access declares `clientData.appStreamId` (e.g. "bridge-mira-app").
+ * AppStreams definitions declare sub-streams by suffix (e.g. suffix "notes" → "bridge-mira-app-notes").
+ */
+class HDSModelAppStreams {
+    #model;
+    #defs;
+    constructor(model) {
+        this.#model = model;
+        this.#defs = null;
+    }
+    /** Get all app stream definitions */
+    getAll() {
+        if (!this.#defs) {
+            this.#defs = [];
+            const raw = this.#model.modelData.appStreams || {};
+            for (const [key, def] of Object.entries(raw)) {
+                const d = def;
+                this.#defs.push({
+                    key,
+                    suffix: d.suffix,
+                    eventType: d.eventType,
+                    label: d.label || {},
+                    description: d.description || {},
+                    display: d.display || 'diary',
+                });
+            }
+        }
+        return this.#defs;
+    }
+    /** Get an app stream definition by key (e.g. "notes", "chat") */
+    forKey(key) {
+        return this.getAll().find(d => d.key === key) || null;
+    }
+    /**
+     * Resolve the full stream ID for an app stream definition given an appStreamId.
+     * E.g. resolveStreamId("bridge-mira-app", "notes") → "bridge-mira-app-notes"
+     */
+    resolveStreamId(appStreamId, key) {
+        const def = this.forKey(key);
+        if (!def)
+            return null;
+        return `${appStreamId}-${def.suffix}`;
+    }
+    /**
+     * Resolve all app sub-stream IDs for a given appStreamId.
+     * Returns a map of key → full stream ID.
+     * E.g. resolveAll("bridge-mira-app") → { notes: "bridge-mira-app-notes", chat: "bridge-mira-app-chat" }
+     */
+    resolveAll(appStreamId) {
+        const result = {};
+        for (const def of this.getAll()) {
+            result[def.key] = `${appStreamId}-${def.suffix}`;
+        }
+        return result;
+    }
+    /**
+     * Check if a streamId belongs to an app stream.
+     * Returns the app stream definition key if matched, null otherwise.
+     * E.g. matchStream("bridge-mira-app-notes", "bridge-mira-app") → "notes"
+     */
+    matchStream(streamId, appStreamId) {
+        for (const def of this.getAll()) {
+            if (streamId === `${appStreamId}-${def.suffix}`)
+                return def.key;
+        }
+        return null;
+    }
+    /**
+     * Extract appStreamId from an access's clientData.
+     * Returns null if not set.
+     */
+    static getAppStreamId(access) {
+        return access?.clientData?.appStreamId || null;
+    }
+}
+exports.HDSModelAppStreams = HDSModelAppStreams;
+
+
+/***/ },
+
 /***/ "./ts/HDSModel/HDSModel-Authorizations.ts"
 /*!************************************************!*\
   !*** ./ts/HDSModel/HDSModel-Authorizations.ts ***!
@@ -9548,6 +9642,192 @@ function applyReverseFactor(value, factor) {
 
 /***/ },
 
+/***/ "./ts/HDSModel/HDSModel-Converters.ts"
+/*!********************************************!*\
+  !*** ./ts/HDSModel/HDSModel-Converters.ts ***!
+  \********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelConverters = void 0;
+const EuclidianDistanceEngine_ts_1 = __webpack_require__(/*! ../converters/EuclidianDistanceEngine.js */ "./ts/converters/EuclidianDistanceEngine.ts");
+/**
+ * Converters — Extension of HDSModel
+ *
+ * Lazy-loads converter packs from the model's base URL:
+ *   {modelBaseUrl}/converters/{itemKey}/pack-latest.json
+ *
+ * The main pack.json only contains the converter index (item keys + versions).
+ * Full converter data (dimensions + methods) is fetched on first use and cached.
+ *
+ * All conversion methods are async (first call fetches, subsequent calls are instant).
+ */
+class HDSModelConverters {
+    #model;
+    #engines = {};
+    #pendingLoads = {};
+    #itemKeyByEventType = {};
+    constructor(model) {
+        this.#model = model;
+    }
+    /** List available converter item keys (from the index, may not be loaded yet) */
+    get availableItemKeys() {
+        const converters = this.#model.modelData.converters;
+        return converters ? Object.keys(converters) : [];
+    }
+    /** List loaded converter item keys */
+    get loadedItemKeys() {
+        return Object.keys(this.#engines);
+    }
+    /**
+     * Load a converter pack manually.
+     * Bridges and apps can call this to register packs without fetching from URL.
+     */
+    loadPack(pack) {
+        if (pack.engine !== 'euclidian-distance') {
+            throw new Error(`Unknown converter engine: "${pack.engine}". Only "euclidian-distance" is supported.`);
+        }
+        this.#engines[pack.itemKey] = new EuclidianDistanceEngine_ts_1.EuclidianDistanceEngine(pack);
+        this.#itemKeyByEventType[pack.eventType] = pack.itemKey;
+    }
+    /** Get a loaded engine (returns undefined if not yet loaded) */
+    getEngine(itemKey) {
+        return this.#engines[itemKey];
+    }
+    /**
+     * Ensure a converter engine is loaded for the given item key.
+     * Fetches pack-latest.json on first call, returns cached engine on subsequent calls.
+     */
+    async ensureEngine(itemKey) {
+        if (this.#engines[itemKey])
+            return this.#engines[itemKey];
+        if (this.#pendingLoads[itemKey])
+            return this.#pendingLoads[itemKey];
+        this.#pendingLoads[itemKey] = this.#fetchAndLoadPack(itemKey);
+        try {
+            const engine = await this.#pendingLoads[itemKey];
+            return engine;
+        }
+        finally {
+            delete this.#pendingLoads[itemKey];
+        }
+    }
+    /**
+     * Convert a source method observation into a Pryv event structure.
+     *
+     * @param itemKey - converter item key (e.g. 'cervical-fluid', 'mood')
+     * @param sourceMethod - source method id (e.g. 'mira', 'appleHealth')
+     * @param dataFromSource - raw observation from the source method
+     * @param modelVersion - version of the model definition used (default: engine's version)
+     * @returns Pryv event-like object with type, streamIds, content
+     */
+    async convertMethodToEvent(itemKey, sourceMethod, dataFromSource, modelVersion) {
+        const engine = await this.ensureEngine(itemKey);
+        const itemDef = this.#getItemDef(itemKey);
+        const vector = engine.toVector(sourceMethod, dataFromSource);
+        const source = {
+            key: sourceMethod,
+            sourceData: dataFromSource,
+            engineVersion: engine.converterVersion,
+            modelVersion: modelVersion ?? engine.converterVersion,
+        };
+        return {
+            type: engine.eventType,
+            streamIds: [itemDef.streamId],
+            content: {
+                vectors: vector,
+                source,
+            },
+        };
+    }
+    /**
+     * Convert a stored event to a target method observation.
+     *
+     * @param event - Pryv event with content.vectors (the N-D vector)
+     * @param targetMethod - target method id
+     * @returns { data, matchDistance }
+     */
+    async convertEventToMethod(event, targetMethod) {
+        const itemKey = await this.#findItemKeyForEvent(event);
+        const engine = await this.ensureEngine(itemKey);
+        const vector = event.content?.vectors;
+        if (!vector || typeof vector !== 'object') {
+            throw new Error(`Event content.vectors is not a valid vector: ${JSON.stringify(event.content)}`);
+        }
+        return engine.fromVector(targetMethod, vector);
+    }
+    /**
+     * Convert directly between two methods.
+     *
+     * @param itemKey - converter item key
+     * @param sourceMethod - source method id
+     * @param targetMethod - target method id
+     * @param data - observation in the source method
+     * @returns { data, matchDistance }
+     */
+    async convertMethodToMethod(itemKey, sourceMethod, targetMethod, data) {
+        const engine = await this.ensureEngine(itemKey);
+        return engine.convertMethodToMethod(sourceMethod, targetMethod, data);
+    }
+    // ── Private helpers ─────────────────────────────────────────────────────
+    async #fetchAndLoadPack(itemKey) {
+        // Check the converter index exists
+        const converters = this.#model.modelData.converters;
+        if (!converters?.[itemKey]) {
+            throw new Error(`Unknown converter item key: "${itemKey}". Available: [${this.availableItemKeys.join(', ')}]`);
+        }
+        // Derive URL from model base URL
+        const modelUrl = this.#model.modelUrl;
+        const baseUrl = modelUrl.substring(0, modelUrl.lastIndexOf('/') + 1);
+        const packUrl = `${baseUrl}converters/${itemKey}/pack-latest.json`;
+        const response = await fetch(packUrl);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch converter pack: ${packUrl} (${response.status})`);
+        }
+        const pack = await response.json();
+        if (pack.engine !== 'euclidian-distance') {
+            throw new Error(`Unknown converter engine: "${pack.engine}" in pack for "${itemKey}"`);
+        }
+        const engine = new EuclidianDistanceEngine_ts_1.EuclidianDistanceEngine(pack);
+        this.#engines[itemKey] = engine;
+        this.#itemKeyByEventType[engine.eventType] = itemKey;
+        return engine;
+    }
+    #getItemDef(itemKey) {
+        const items = this.#model.modelData.items;
+        for (const [_key, item] of Object.entries(items)) {
+            const ce = item['converter-engine'];
+            if (ce && ce.models === itemKey) {
+                return item;
+            }
+        }
+        throw new Error(`No itemDef found with converter-engine.models="${itemKey}"`);
+    }
+    async #findItemKeyForEvent(event) {
+        const eventType = event.type;
+        // Check already-loaded engines
+        const cached = this.#itemKeyByEventType[eventType];
+        if (cached)
+            return cached;
+        // Check itemDefs for a matching eventType with converter-engine
+        const items = this.#model.modelData.items;
+        for (const [_key, item] of Object.entries(items)) {
+            if (item.eventType === eventType && item['converter-engine']) {
+                const itemKey = item['converter-engine'].models;
+                await this.ensureEngine(itemKey);
+                return itemKey;
+            }
+        }
+        throw new Error(`No converter found for event type: "${eventType}"`);
+    }
+}
+exports.HDSModelConverters = HDSModelConverters;
+
+
+/***/ },
+
 /***/ "./ts/HDSModel/HDSModel-Datasources.ts"
 /*!*********************************************!*\
   !*** ./ts/HDSModel/HDSModel-Datasources.ts ***!
@@ -9747,6 +10027,463 @@ function loadModelDataByStreamIdEventTypes(model, map) {
 
 /***/ },
 
+/***/ "./ts/HDSModel/HDSModel-Overload.ts"
+/*!******************************************!*\
+  !*** ./ts/HDSModel/HDSModel-Overload.ts ***!
+  \******************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.validateOverload = validateOverload;
+exports.applyOverload = applyOverload;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+/** Fields on an existing itemDef that an overload is allowed to change. */
+const ITEM_MUTABLE_FIELDS = new Set(['label', 'description', 'repeatable', 'reminder', 'devNotes']);
+/** Fields on an existing itemDef that an overload must NOT change. */
+const ITEM_IMMUTABLE_FIELDS = new Set([
+    'type', 'streamId', 'eventType', 'variations', 'options', 'composite', 'datasource', 'converter-engine'
+]);
+/** Fields on an existing setting that an overload must NOT change. */
+const SETTING_IMMUTABLE_FIELDS = new Set(['type', 'eventType']);
+/** Fields on an existing datasource that an overload must NOT change. */
+const DATASOURCE_IMMUTABLE_FIELDS = new Set(['endpoint', 'queryParam', 'resultKey']);
+/**
+ * Validate an overload against the current modelData.
+ * Throws HDSLibError listing every forbidden change attempted.
+ *
+ * Note: this only enforces the policy table. It does NOT re-run the data-model
+ * AJV schema. Apps that want full schema validation should run AJV against
+ * their overload at build time (see `data-model/data-model/src/schemas/`).
+ */
+function validateOverload(modelData, overload) {
+    const errors = [];
+    // ---- items ----
+    if (overload.items) {
+        for (const [key, overlay] of Object.entries(overload.items)) {
+            const base = modelData.items?.[key];
+            if (!base)
+                continue; // adding a new item is always allowed
+            for (const field of Object.keys(overlay)) {
+                if (ITEM_IMMUTABLE_FIELDS.has(field)) {
+                    errors.push(`item "${key}": cannot override immutable field "${field}"`);
+                }
+                else if (!ITEM_MUTABLE_FIELDS.has(field) && field !== 'version' && field !== 'key') {
+                    errors.push(`item "${key}": unknown overlay field "${field}"`);
+                }
+            }
+        }
+    }
+    // ---- streams ---- (walk overlay tree, compare to flat base index)
+    if (overload.streams) {
+        const baseById = {};
+        indexStreams(modelData.streams || [], baseById);
+        walkOverloadStreams(overload.streams, null, baseById, errors);
+    }
+    // ---- eventTypes ----
+    if (overload.eventTypes?.types) {
+        for (const key of Object.keys(overload.eventTypes.types)) {
+            if (modelData.eventTypes?.types?.[key]) {
+                errors.push(`eventTypes.types["${key}"]: cannot override existing eventType schema`);
+            }
+        }
+    }
+    // extras: any change allowed (additive or override of display hints)
+    // ---- settings ----
+    if (overload.settings) {
+        for (const [key, overlay] of Object.entries(overload.settings)) {
+            const base = modelData.settings?.[key];
+            if (!base)
+                continue;
+            for (const field of Object.keys(overlay)) {
+                if (SETTING_IMMUTABLE_FIELDS.has(field)) {
+                    errors.push(`settings["${key}"]: cannot override immutable field "${field}"`);
+                }
+            }
+        }
+    }
+    // ---- datasources ----
+    if (overload.datasources) {
+        for (const [key, overlay] of Object.entries(overload.datasources)) {
+            const base = modelData.datasources?.[key];
+            if (!base)
+                continue;
+            for (const field of Object.keys(overlay)) {
+                if (DATASOURCE_IMMUTABLE_FIELDS.has(field)) {
+                    errors.push(`datasources["${key}"]: cannot override immutable field "${field}"`);
+                }
+            }
+        }
+    }
+    // appStreams: no immutable fields enforced beyond what consumers expect.
+    // (left as additive/refining only — full schema validation is the app's job)
+    if (errors.length > 0) {
+        throw new errors_ts_1.HDSLibError(`HDSModelOverload validation failed (${errors.length} error${errors.length > 1 ? 's' : ''}):\n  - ` + errors.join('\n  - '), { errors });
+    }
+}
+/**
+ * Merge an overload into mutable modelData IN PLACE.
+ * Caller is responsible for calling `validateOverload` first AND for making
+ * sure `modelData` is still mutable (not yet `deepFreeze`d).
+ *
+ * Merge semantics:
+ *  - items: per-key shallow merge with deep-merge of `label` / `description` /
+ *    `reminder`. Overload wins for any specific language string.
+ *  - streams: tree merge. New nodes are inserted under their parent (which
+ *    must already exist in base or earlier in the overlay). Existing nodes
+ *    get their `name` overlaid and their `children` recursively merged.
+ *  - eventTypes.types: additive only (validator already rejected overrides).
+ *  - eventTypes.extras: per-key shallow merge (overload wins).
+ *  - settings / datasources / appStreams: per-key shallow merge with deep
+ *    merge of localized fields.
+ */
+function applyOverload(modelData, overload) {
+    // ---- items ----
+    if (overload.items) {
+        if (!modelData.items)
+            modelData.items = {};
+        for (const [key, overlay] of Object.entries(overload.items)) {
+            const base = modelData.items[key];
+            if (!base) {
+                modelData.items[key] = { ...overlay };
+            }
+            else {
+                mergeShallowWithLocalized(base, overlay, ['label', 'description', 'reminder']);
+            }
+        }
+    }
+    // ---- streams ----
+    if (overload.streams) {
+        if (!modelData.streams)
+            modelData.streams = [];
+        const baseById = {};
+        indexStreams(modelData.streams, baseById);
+        mergeStreamForest(overload.streams, modelData.streams, baseById, null);
+    }
+    // ---- eventTypes ----
+    if (overload.eventTypes) {
+        if (!modelData.eventTypes)
+            modelData.eventTypes = { types: {}, extras: {} };
+        if (overload.eventTypes.types) {
+            modelData.eventTypes.types = modelData.eventTypes.types || {};
+            for (const [k, v] of Object.entries(overload.eventTypes.types)) {
+                if (!modelData.eventTypes.types[k])
+                    modelData.eventTypes.types[k] = v;
+            }
+        }
+        if (overload.eventTypes.extras) {
+            modelData.eventTypes.extras = modelData.eventTypes.extras || {};
+            for (const [k, v] of Object.entries(overload.eventTypes.extras)) {
+                modelData.eventTypes.extras[k] = { ...(modelData.eventTypes.extras[k] || {}), ...v };
+            }
+        }
+    }
+    // ---- settings ----
+    if (overload.settings) {
+        if (!modelData.settings)
+            modelData.settings = {};
+        for (const [key, overlay] of Object.entries(overload.settings)) {
+            const base = modelData.settings[key];
+            if (!base) {
+                modelData.settings[key] = { ...overlay };
+            }
+            else {
+                mergeShallowWithLocalized(base, overlay, ['label', 'description']);
+            }
+        }
+    }
+    // ---- datasources ----
+    if (overload.datasources) {
+        if (!modelData.datasources)
+            modelData.datasources = {};
+        for (const [key, overlay] of Object.entries(overload.datasources)) {
+            const base = modelData.datasources[key];
+            if (!base) {
+                modelData.datasources[key] = { ...overlay };
+            }
+            else {
+                mergeShallowWithLocalized(base, overlay, ['label', 'description']);
+            }
+        }
+    }
+    // ---- appStreams ----
+    if (overload.appStreams) {
+        if (!modelData.appStreams)
+            modelData.appStreams = {};
+        for (const [key, overlay] of Object.entries(overload.appStreams)) {
+            const base = modelData.appStreams[key];
+            if (!base) {
+                modelData.appStreams[key] = { ...overlay };
+            }
+            else {
+                mergeShallowWithLocalized(base, overlay, ['label', 'description']);
+            }
+        }
+    }
+}
+/**
+ * Shallow-merge `overlay` into `base` IN PLACE, but for the listed
+ * `localizedFields` do a one-level deep merge (so per-language strings can be
+ * added without dropping siblings).
+ */
+function mergeShallowWithLocalized(base, overlay, localizedFields) {
+    for (const [field, value] of Object.entries(overlay)) {
+        if (localizedFields.includes(field) && value && typeof value === 'object' && !Array.isArray(value) &&
+            base[field] && typeof base[field] === 'object' && !Array.isArray(base[field])) {
+            base[field] = { ...base[field], ...value };
+        }
+        else {
+            base[field] = value;
+        }
+    }
+}
+/**
+ * Merge a forest of overlay stream nodes into a base forest.
+ * - existing nodes: overlay `name`, recurse into children
+ * - new nodes: must declare `parentId` that exists somewhere (base or earlier
+ *   in the overlay). Inserted as children of that parent. New roots
+ *   (parentId === null) are appended to the base root list.
+ */
+function mergeStreamForest(overlayNodes, baseRoots, baseById, parentIdFromTreePosition) {
+    for (const overlayNode of overlayNodes) {
+        const existing = baseById[overlayNode.id];
+        if (existing) {
+            if (overlayNode.name !== undefined)
+                existing.name = overlayNode.name;
+            if (overlayNode.children) {
+                if (!existing.children)
+                    existing.children = [];
+                mergeStreamForest(overlayNode.children, baseRoots, baseById, existing.id);
+            }
+            continue;
+        }
+        // New node — figure out where it goes
+        const parentId = overlayNode.parentId !== undefined ? overlayNode.parentId : parentIdFromTreePosition;
+        const newNode = {
+            id: overlayNode.id,
+            name: overlayNode.name,
+            parentId: parentId ?? null
+        };
+        if (parentId == null) {
+            baseRoots.push(newNode);
+        }
+        else {
+            const parent = baseById[parentId];
+            if (!parent) {
+                throw new errors_ts_1.HDSLibError(`HDSModelOverload: stream "${overlayNode.id}" references parentId "${parentId}" which does not exist`, { streamId: overlayNode.id, parentId });
+            }
+            if (!parent.children)
+                parent.children = [];
+            parent.children.push(newNode);
+        }
+        baseById[newNode.id] = newNode;
+        if (overlayNode.children) {
+            newNode.children = [];
+            mergeStreamForest(overlayNode.children, baseRoots, baseById, newNode.id);
+        }
+    }
+}
+/** Build a flat id→node index of an existing (base) stream tree. */
+function indexStreams(streams, out) {
+    for (const s of streams) {
+        out[s.id] = s;
+        if (s.children)
+            indexStreams(s.children, out);
+    }
+}
+/**
+ * Walk an overload stream tree and record any forbidden mutations.
+ * `expectedParentId` is the parentId implied by the overload's tree position
+ * (null at the root level — see `applyOverload` for how new roots are placed).
+ */
+function walkOverloadStreams(nodes, expectedParentId, baseById, errors) {
+    for (const node of nodes) {
+        if (!node.id) {
+            errors.push('streams: every node must have an id');
+            continue;
+        }
+        const base = baseById[node.id];
+        if (base) {
+            // Existing stream: parentId must not change.
+            if (node.parentId !== undefined && node.parentId !== base.parentId) {
+                errors.push(`streams["${node.id}"]: cannot change parentId ("${base.parentId}" → "${node.parentId}")`);
+            }
+            // expectedParentId mismatch (overlay places this node under a different parent than the base)
+            if (expectedParentId !== null && expectedParentId !== base.parentId) {
+                errors.push(`streams["${node.id}"]: cannot reparent (base parentId="${base.parentId}", overlay places under "${expectedParentId}")`);
+            }
+        }
+        if (node.children)
+            walkOverloadStreams(node.children, node.id, baseById, errors);
+    }
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/HDSModel-Preferred.ts"
+/*!*******************************************!*\
+  !*** ./ts/HDSModel/HDSModel-Preferred.ts ***!
+  \*******************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelPreferred = void 0;
+exports.getPreferredInput = getPreferredInput;
+exports.getPreferredDisplay = getPreferredDisplay;
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ../settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+/**
+ * HDSModel-Preferred — Unified API for preferred representations.
+ *
+ * Resolves per-item settings (preferred-input-*, preferred-display-*)
+ * with fallback to global unitSystem for variation items.
+ *
+ * Works for both:
+ * - Variation items (body-weight kg/lb, body-height m/ft)
+ * - Converter items (mood, cervical-fluid)
+ */
+class HDSModelPreferred {
+    #model;
+    constructor(model) {
+        this.#model = model;
+    }
+    /**
+     * Get the preferred input config for an item.
+     * Used by form components to determine what input UI to show.
+     */
+    getPreferredInput(itemKey) {
+        return this.#resolve(itemKey, 'preferred-input-');
+    }
+    /**
+     * Get the preferred display config for an item.
+     * Used by eventToShortText and display components.
+     */
+    getPreferredDisplay(itemKey) {
+        return this.#resolve(itemKey, 'preferred-display-');
+    }
+    #resolve(itemKey, settingPrefix) {
+        const itemDef = this.#model.itemsDefs.forKey(itemKey, false);
+        if (!itemDef)
+            return { type: 'default' };
+        const data = itemDef.data;
+        const perItemSetting = HDSSettings_ts_1.default.isHooked
+            ? HDSSettings_ts_1.default.get(`${settingPrefix}${itemKey}`)
+            : undefined;
+        // ── Variation items ──
+        if (data.variations?.eventType) {
+            const options = data.variations.eventType.options || [];
+            let selectedEventType;
+            // 1. Per-item override
+            if (perItemSetting && typeof perItemSetting === 'string') {
+                const match = options.find((o) => o.value === perItemSetting);
+                if (match)
+                    selectedEventType = perItemSetting;
+            }
+            // 2. Fallback to unitSystem
+            if (!selectedEventType && HDSSettings_ts_1.default.isHooked) {
+                const system = HDSSettings_ts_1.default.get('unitSystem');
+                selectedEventType = this.#resolveVariationFromUnitSystem(data.variations.eventType, system);
+            }
+            // 3. Default: first option
+            if (!selectedEventType) {
+                selectedEventType = options[0]?.value;
+            }
+            const opt = options.find((o) => o.value === selectedEventType);
+            const symbol = this.#getSymbol(selectedEventType);
+            const optLabel = opt?.label ? ((0, localizeText_ts_1.localizeText)(opt.label) || undefined) : undefined;
+            return {
+                type: 'variation',
+                eventType: selectedEventType,
+                symbol: symbol || optLabel,
+            };
+        }
+        // ── Converter items ──
+        if (data['converter-engine']) {
+            const ce = data['converter-engine'];
+            const converterItemKey = ce.models;
+            const engine = this.#model.converters.getEngine(converterItemKey);
+            if (perItemSetting && typeof perItemSetting === 'string') {
+                const methodDef = engine?.getMethodDef(perItemSetting);
+                return {
+                    type: 'converter',
+                    method: perItemSetting,
+                    methodName: methodDef?.name ? ((0, localizeText_ts_1.localizeText)(methodDef.name) || perItemSetting) : perItemSetting,
+                    engine,
+                };
+            }
+            return {
+                type: 'converter',
+                method: null,
+                engine,
+            };
+        }
+        return { type: 'default' };
+    }
+    /**
+     * Resolve variation eventType from unitSystem setting.
+     * Uses the model's conversions data to find which eventType belongs to which unit system.
+     */
+    #resolveVariationFromUnitSystem(variationDef, system) {
+        const options = variationDef.options || [];
+        const conversions = this.#model.modelData.conversions;
+        if (!conversions)
+            return undefined;
+        for (const opt of options) {
+            const eventType = opt.value;
+            const slash = eventType.indexOf('/');
+            if (slash < 0)
+                continue;
+            const category = eventType.substring(0, slash);
+            const unit = eventType.substring(slash + 1);
+            const catDef = conversions[category];
+            if (catDef && catDef[system] === unit) {
+                return eventType;
+            }
+        }
+        return undefined;
+    }
+    #getSymbol(eventType) {
+        if (!eventType)
+            return undefined;
+        try {
+            return this.#model.eventTypes.getEventTypeSymbol(eventType) || undefined;
+        }
+        catch {
+            return undefined;
+        }
+    }
+}
+exports.HDSModelPreferred = HDSModelPreferred;
+// ─── Standalone functions using the model singleton ────────────────────────
+let _preferred = null;
+function getPreferred() {
+    const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    if (!model.isLoaded)
+        throw new Error('Model not loaded');
+    if (!_preferred)
+        _preferred = new HDSModelPreferred(model);
+    return _preferred;
+}
+/** Get the preferred input config for an item (standalone, uses singleton model) */
+function getPreferredInput(itemKey) {
+    return getPreferred().getPreferredInput(itemKey);
+}
+/** Get the preferred display config for an item (standalone, uses singleton model) */
+function getPreferredDisplay(itemKey) {
+    return getPreferred().getPreferredDisplay(itemKey);
+}
+
+
+/***/ },
+
 /***/ "./ts/HDSModel/HDSModel-Streams.ts"
 /*!*****************************************!*\
   !*** ./ts/HDSModel/HDSModel-Streams.ts ***!
@@ -9873,6 +10610,10 @@ const HDSModel_ItemsDefs_ts_1 = __webpack_require__(/*! ./HDSModel-ItemsDefs.js 
 const HDSModel_EventTypes_ts_1 = __webpack_require__(/*! ./HDSModel-EventTypes.js */ "./ts/HDSModel/HDSModel-EventTypes.ts");
 const HDSModel_Datasources_ts_1 = __webpack_require__(/*! ./HDSModel-Datasources.js */ "./ts/HDSModel/HDSModel-Datasources.ts");
 const HDSModel_Conversions_ts_1 = __webpack_require__(/*! ./HDSModel-Conversions.js */ "./ts/HDSModel/HDSModel-Conversions.ts");
+const HDSModel_Converters_ts_1 = __webpack_require__(/*! ./HDSModel-Converters.js */ "./ts/HDSModel/HDSModel-Converters.ts");
+const HDSModel_Preferred_ts_1 = __webpack_require__(/*! ./HDSModel-Preferred.js */ "./ts/HDSModel/HDSModel-Preferred.ts");
+const HDSModel_AppStreams_ts_1 = __webpack_require__(/*! ./HDSModel-AppStreams.js */ "./ts/HDSModel/HDSModel-AppStreams.ts");
+const HDSModel_Overload_ts_1 = __webpack_require__(/*! ./HDSModel-Overload.js */ "./ts/HDSModel/HDSModel-Overload.ts");
 class HDSModel {
     /**
      * JSON definition file URL.
@@ -9906,16 +10647,30 @@ class HDSModel {
     get isLoaded() {
         return !!this.#modelData;
     }
+    /** The URL the model was loaded from */
+    get modelUrl() {
+        return this.#modelUrl;
+    }
     /**
-     * Load model definitions
+     * Load model definitions.
+     *
+     * @param modelUrl - JSON definition URL (defaults to the one set at construct time)
+     * @param overload - Optional {@link HDSModelOverload} merged into the loaded
+     *   model BEFORE freezing. Lets apps add itemDefs / streams / eventTypes /
+     *   settings or refine translations & default `repeatable` values without
+     *   forking the data-model. See `HDSModel-Overload.ts` for the policy.
      */
-    async load(modelUrl = null) {
+    async load(modelUrl = null, overload = null) {
         if (modelUrl) {
             this.#modelUrl = modelUrl;
         }
         const response = await fetch(this.#modelUrl);
         const resultText = await response.text();
         const result = JSON.parse(resultText);
+        if (overload) {
+            (0, HDSModel_Overload_ts_1.validateOverload)(result, overload);
+            (0, HDSModel_Overload_ts_1.applyOverload)(result, overload);
+        }
         this.#modelData = result;
         // add key to items before freezing;
         for (const [key, item] of Object.entries(this.#modelData.items)) {
@@ -9978,6 +10733,30 @@ class HDSModel {
         }
         return this.laziliyLoadedMap.conversions;
     }
+    get converters() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.converters) {
+            this.laziliyLoadedMap.converters = new HDSModel_Converters_ts_1.HDSModelConverters(this);
+        }
+        return this.laziliyLoadedMap.converters;
+    }
+    get preferred() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.preferred) {
+            this.laziliyLoadedMap.preferred = new HDSModel_Preferred_ts_1.HDSModelPreferred(this);
+        }
+        return this.laziliyLoadedMap.preferred;
+    }
+    get appStreams() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.appStreams) {
+            this.laziliyLoadedMap.appStreams = new HDSModel_AppStreams_ts_1.HDSModelAppStreams(this);
+        }
+        return this.laziliyLoadedMap.appStreams;
+    }
 }
 exports.HDSModel = HDSModel;
 function throwNotLoadedError() {
@@ -10017,7 +10796,7 @@ function resetModel() {
 /**
  * Initialized model singleton
  */
-async function initHDSModel() {
+async function initHDSModel(opts = {}) {
     if (!hdsModelInstance) {
         getModel();
     }
@@ -10025,7 +10804,7 @@ async function initHDSModel() {
         const service = new HDSService_ts_1.HDSService();
         const serviceInfo = await service.info();
         hdsModelInstance.assets = serviceInfo.assets;
-        await hdsModelInstance.load(serviceInfo.assets['hds-model']);
+        await hdsModelInstance.load(serviceInfo.assets['hds-model'], opts.overload ?? null);
     }
     return hdsModelInstance;
 }
@@ -10046,6 +10825,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.formatEventDate = formatEventDate;
+exports.formatEventDateTime = formatEventDateTime;
 exports.eventToShortText = eventToShortText;
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
@@ -10072,6 +10852,19 @@ function formatEventDate(timeSec) {
     return d.toISOString().split('T')[0];
 }
 /**
+ * Format a Unix timestamp (seconds) as a date + time string.
+ * Used for checkbox events where the event time IS the data.
+ */
+function formatEventDateTime(timeSec) {
+    const d = new Date(timeSec * 1000);
+    const hours = d.getHours();
+    const minutes = d.getMinutes();
+    // If time is midnight (00:00), show date only — likely no meaningful time
+    if (hours === 0 && minutes === 0)
+        return formatEventDate(timeSec);
+    return formatEventDate(timeSec) + ' ' + pad(hours) + ':' + pad(minutes);
+}
+/**
  * Convert an event's content to a short human-readable string.
  * Resolves itemDef from the model (streamId + eventType match).
  *
@@ -10091,7 +10884,7 @@ function eventToShortText(event) {
     if (itemDef) {
         // For checkbox/date items, content may be null — the event time IS the data
         if (content == null && itemDef.data.type === 'checkbox') {
-            return formatEventDate(event.time);
+            return formatEventDateTime(event.time);
         }
         if (content == null && itemDef.data.type === 'date') {
             return formatEventDate(event.time);
@@ -10106,6 +10899,9 @@ function eventToShortText(event) {
 }
 function formatWithItemDef(event, content, itemDef, model) {
     const type = itemDef.data.type;
+    if (type === 'convertible') {
+        return formatConvertible(event, content, itemDef, model);
+    }
     if (type === 'checkbox') {
         return event.type === 'activity/plain' ? 'Yes' : String(content);
     }
@@ -10147,7 +10943,27 @@ function formatFallback(event, content, model) {
     }
     return String(content);
 }
+const TEST_RESULT_LABELS = {
+    positive: { en: 'Positive', fr: 'Positif', es: 'Positivo' },
+    negative: { en: 'Negative', fr: 'Négatif', es: 'Negativo' },
+    indeterminate: { en: 'Indeterminate', fr: 'Indéterminé', es: 'Indeterminado' },
+};
+function formatTestResult(content) {
+    if (content === 0)
+        return (0, localizeText_ts_1.localizeText)(TEST_RESULT_LABELS.indeterminate) || 'Indeterminate';
+    const label = content > 0
+        ? (0, localizeText_ts_1.localizeText)(TEST_RESULT_LABELS.positive) || 'Positive'
+        : (0, localizeText_ts_1.localizeText)(TEST_RESULT_LABELS.negative) || 'Negative';
+    // Exact -1, 0, 1: label only. Otherwise: label + percentage
+    if (content === 1 || content === -1)
+        return label;
+    const pct = Math.round(Math.abs(content) * 100);
+    return `${label} ${pct}%`;
+}
 function formatNumber(eventType, content, model) {
+    if (eventType === 'test-result/scale') {
+        return formatTestResult(content);
+    }
     if (HDSSettings_ts_1.default.isHooked) {
         const system = HDSSettings_ts_1.default.get('unitSystem');
         const result = model.conversions.convert(eventType, content, system);
@@ -10217,6 +11033,16 @@ function formatObject(content) {
         const dl = content.drug.label;
         return typeof dl === 'string' ? dl : ((0, localizeText_ts_1.localizeText)(dl) || null);
     }
+    // medication/basic composite: { name, doseValue, doseUnit, route }
+    if (content.name && typeof content.name === 'string') {
+        const parts = [];
+        if (content.doseValue) {
+            parts.push(`${content.doseValue}${content.doseUnit ? ' ' + content.doseUnit : ''}`);
+        }
+        if (content.route)
+            parts.push(content.route);
+        return parts.length > 0 ? `${content.name} — ${parts.join(', ')}` : content.name;
+    }
     if (content.value != null)
         return String(content.value);
     // Last resort: count keys
@@ -10232,6 +11058,165 @@ function formatObject(content) {
             return String(v);
     }
     return `{${keys.length} fields}`;
+}
+/**
+ * Format a convertible event (euclidian-distance converter).
+ *
+ * Without autoConvert setting: show sourceData from the source method.
+ * With autoConvert setting (different from source method): convert vector to target method, show:
+ *   "targetResult (sourceData) 85%" — confidence = round((1 - matchDistance) * 100)
+ *   When 100%, omit the percentage.
+ * No source: show dimension summary using localized stop labels from converter config.
+ */
+function formatConvertible(_event, content, itemDef, model) {
+    const ce = itemDef.data['converter-engine'];
+    if (!ce)
+        return formatObject(content);
+    const itemKey = ce.models;
+    const source = content?.source;
+    const vectors = content?.vectors;
+    const engine = model.converters?.getEngine(itemKey);
+    const sourceLabel = source?.sourceData != null && engine
+        ? resolveObservationLabel(engine, source.key, source.sourceData)
+        : formatSourceLabel(source);
+    const sourceMethodName = getMethodName(engine, source?.key);
+    // Check for autoConvert setting
+    if (HDSSettings_ts_1.default.isHooked && vectors) {
+        try {
+            const settingKey = `preferred-display-${itemDef.key}`;
+            const targetMethod = HDSSettings_ts_1.default.get(settingKey);
+            if (targetMethod && typeof targetMethod === 'string') {
+                // Skip conversion if target method equals source method
+                if (source?.key === targetMethod && sourceLabel) {
+                    return `${sourceLabel} (${sourceMethodName})`;
+                }
+                if (engine) {
+                    const result = engine.fromVector(targetMethod, vectors);
+                    const resultLabel = resolveObservationLabel(engine, targetMethod, result.data);
+                    const targetMethodName = getMethodName(engine, targetMethod);
+                    const confidence = Math.round((1 - result.matchDistance) * 100);
+                    const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
+                    if (sourceMethodName && sourceLabel) {
+                        return `${resultLabel} (${targetMethodName} <- ${sourceMethodName}${confStr})`;
+                    }
+                    return `${resultLabel} (${targetMethodName}${confStr})`;
+                }
+            }
+        }
+        catch { /* setting not found or engine not loaded, fall through */ }
+    }
+    // No autoConvert: show source observation + method name
+    if (sourceLabel) {
+        return `${sourceLabel} (${sourceMethodName})`;
+    }
+    // No source — RAW vector input, convert via _raw virtual method
+    if (vectors && typeof vectors === 'object' && engine) {
+        try {
+            const result = engine.fromVector('_raw', vectors);
+            const resultLabel = resolveObservationLabel(engine, '_raw', result.data);
+            const confidence = Math.round((1 - result.matchDistance) * 100);
+            const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
+            return `${resultLabel}${confStr}`;
+        }
+        catch { /* fall through */ }
+    }
+    // Fallback: raw dimension summary
+    if (vectors && typeof vectors === 'object') {
+        return formatVectorSummary(vectors, itemKey, model);
+    }
+    return formatObject(content);
+}
+/** Get the localized method name from the engine, fallback to methodId */
+function getMethodName(engine, methodId) {
+    if (!methodId)
+        return '?';
+    const def = engine?.getMethodDef(methodId);
+    if (def?.name) {
+        return (0, localizeText_ts_1.localizeText)(def.name) || methodId;
+    }
+    return methodId;
+}
+/**
+ * Resolve an observation value to its localized label from the method definition.
+ * For single-component methods: looks up the value in the component options.
+ * For multi-component methods (assembly): resolves each field's value to its option label.
+ * Falls back to String(data) if no label found.
+ */
+function resolveObservationLabel(engine, methodId, data) {
+    const def = engine?.getMethodDef(methodId);
+    if (!def?.components)
+        return typeof data === 'string' ? data : JSON.stringify(data);
+    if (typeof data === 'object' && data !== null) {
+        // Multi-component: resolve each field
+        const parts = [];
+        for (const comp of def.components) {
+            const val = data[comp.field];
+            if (val === undefined)
+                continue;
+            const opt = comp.options.find((o) => o.value === val);
+            if (opt?.label) {
+                parts.push((0, localizeText_ts_1.localizeText)(opt.label) || String(val));
+            }
+            else {
+                parts.push(String(val));
+            }
+        }
+        return parts.join(', ');
+    }
+    // Single-component: look up in first component's options
+    for (const comp of def.components) {
+        const opt = comp.options.find((o) => o.value === data);
+        if (opt?.label) {
+            return (0, localizeText_ts_1.localizeText)(opt.label) || String(data);
+        }
+    }
+    return String(data);
+}
+/**
+ * Format a vector as human-readable summary using dimension stop labels.
+ * Used as fallback when _raw method is not available, and for rendering
+ * object results from autoConvert (e.g. hds method returns vector objects).
+ */
+function formatVectorSummary(vectors, itemKey, model) {
+    const engine = model.converters?.getEngine(itemKey);
+    const dims = Object.entries(vectors).filter(([_, v]) => typeof v === 'number');
+    if (dims.length === 0)
+        return 'empty';
+    // Sort by weight (most important first)
+    const sorted = dims.sort(([a], [b]) => {
+        const wa = engine?.weights[a] ?? 0;
+        const wb = engine?.weights[b] ?? 0;
+        return wb - wa;
+    });
+    const parts = [];
+    for (const [dimName, value] of sorted.slice(0, 3)) {
+        const dimDef = engine?.dimensions?.[dimName];
+        if (dimDef?.stops) {
+            const stops = dimDef.stops;
+            let nearest = stops[0];
+            for (const stop of stops) {
+                if (Math.abs(stop.value - value) < Math.abs(nearest.value - value)) {
+                    nearest = stop;
+                }
+            }
+            parts.push((0, localizeText_ts_1.localizeText)(nearest.label) || dimName);
+        }
+        else {
+            parts.push(`${dimName}:${value.toFixed(1)}`);
+        }
+    }
+    return parts.join(', ');
+}
+function formatSourceLabel(source) {
+    if (!source?.sourceData)
+        return null;
+    const raw = source.sourceData;
+    const label = typeof raw === 'string'
+        ? raw
+        : typeof raw === 'number'
+            ? String(raw)
+            : JSON.stringify(raw);
+    return label.length > 40 ? label.slice(0, 40) + '...' : label;
 }
 function getSymbol(eventType, model) {
     try {
@@ -10276,6 +11261,173 @@ function itemKeyOrDefToDef(model, keyOrDef) {
     if (keyOrDef instanceof HDSItemDef_ts_1.HDSItemDef)
         return keyOrDef;
     return model.itemsDefs.forKey(keyOrDef);
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/overloadExtract.ts"
+/*!****************************************!*\
+  !*** ./ts/HDSModel/overloadExtract.ts ***!
+  \****************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.extractOverloadAsDefinitions = extractOverloadAsDefinitions;
+exports.toYaml = toYaml;
+/**
+ * Convert an {@link HDSModelOverload} into a `{ filepath: content }` map
+ * matching the layout of `data-model/data-model/definitions/`. The result can
+ * be written to disk by the app developer to open a PR upstream.
+ *
+ * Browser-safe: no `fs`, no external deps. The YAML emitter is a small
+ * hand-rolled one tuned for the shapes used by hds data-model definitions.
+ *
+ * Output paths (only emitted for sections present in the overload):
+ *   - `items/<group>.yaml`             — items grouped by streamId prefix
+ *   - `streams/<group>.yaml`           — one file per overload top-level stream
+ *   - `eventTypes/eventTypes-overload.json`
+ *   - `settings/settings.yaml`
+ *   - `datasources/<key>.yaml`
+ *   - `appStreams.yaml`
+ */
+function extractOverloadAsDefinitions(overload) {
+    const out = {};
+    // ---- items: group by streamId prefix (first segment before '-') ----
+    if (overload.items && Object.keys(overload.items).length > 0) {
+        const groups = {};
+        for (const [key, item] of Object.entries(overload.items)) {
+            const streamId = item.streamId || key;
+            const group = streamId.split('-')[0];
+            if (!groups[group])
+                groups[group] = {};
+            groups[group][key] = item;
+        }
+        for (const [group, dict] of Object.entries(groups)) {
+            out[`items/${group}.yaml`] = toYaml(dict);
+        }
+    }
+    // ---- streams: one file per top-level overload node, named after its id ----
+    if (overload.streams && overload.streams.length > 0) {
+        for (const node of overload.streams) {
+            out[`streams/${node.id}.yaml`] = toYaml(node);
+        }
+    }
+    // ---- eventTypes: single JSON file (matches existing eventTypes-hds.json shape) ----
+    if (overload.eventTypes && (overload.eventTypes.types || overload.eventTypes.extras)) {
+        out['eventTypes/eventTypes-overload.json'] = JSON.stringify(overload.eventTypes, null, 2) + '\n';
+    }
+    // ---- settings: single YAML file ----
+    if (overload.settings && Object.keys(overload.settings).length > 0) {
+        out['settings/settings.yaml'] = toYaml(overload.settings);
+    }
+    // ---- datasources: one file per key ----
+    if (overload.datasources) {
+        for (const [key, def] of Object.entries(overload.datasources)) {
+            out[`datasources/${key}.yaml`] = toYaml({ [key]: def });
+        }
+    }
+    // ---- appStreams: single YAML file ----
+    if (overload.appStreams && Object.keys(overload.appStreams).length > 0) {
+        out['appStreams.yaml'] = toYaml(overload.appStreams);
+    }
+    return out;
+}
+// ---------- tiny YAML emitter ----------
+/**
+ * Serialize a JS value to YAML. Handles the subset used by hds data-model
+ * definitions: dicts, lists, strings, numbers, booleans, null.
+ * Indentation is 2 spaces. Strings are single-quoted only when they contain
+ * characters that would otherwise be ambiguous.
+ */
+function toYaml(value) {
+    return emit(value, 0, false) + '\n';
+}
+function emit(value, indent, inArray) {
+    if (value === null || value === undefined)
+        return 'null';
+    if (typeof value === 'boolean')
+        return value ? 'true' : 'false';
+    if (typeof value === 'number')
+        return String(value);
+    if (typeof value === 'string')
+        return formatString(value);
+    const pad = '  '.repeat(indent);
+    if (Array.isArray(value)) {
+        if (value.length === 0)
+            return '[]';
+        const lines = [];
+        for (const item of value) {
+            if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+                // dict item — first key on the same line as the dash
+                const entries = Object.entries(item);
+                if (entries.length === 0) {
+                    lines.push(`${pad}- {}`);
+                    continue;
+                }
+                const [firstKey, firstVal] = entries[0];
+                lines.push(`${pad}- ${formatKeyValue(firstKey, firstVal, indent + 1, true)}`);
+                for (let i = 1; i < entries.length; i++) {
+                    const [k, v] = entries[i];
+                    lines.push(`${pad}  ${formatKeyValue(k, v, indent + 1, false)}`);
+                }
+            }
+            else {
+                lines.push(`${pad}- ${emit(item, indent + 1, true)}`);
+            }
+        }
+        return (inArray ? '\n' : '') + lines.join('\n');
+    }
+    if (typeof value === 'object') {
+        const entries = Object.entries(value);
+        if (entries.length === 0)
+            return '{}';
+        const lines = [];
+        for (const [k, v] of entries) {
+            lines.push(`${pad}${formatKeyValue(k, v, indent, false)}`);
+        }
+        // when nested, we want a leading newline so the parent "key:" is on its own line
+        return (indent > 0 || inArray ? '\n' : '') + lines.join('\n');
+    }
+    return String(value);
+}
+function formatKeyValue(key, value, indent, firstInArrayItem) {
+    const safeKey = /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key) ? key : `'${key.replace(/'/g, "''")}'`;
+    if (value === null || value === undefined)
+        return `${safeKey}: null`;
+    if (typeof value === 'boolean' || typeof value === 'number')
+        return `${safeKey}: ${emit(value, indent, false)}`;
+    if (typeof value === 'string')
+        return `${safeKey}: ${formatString(value)}`;
+    if (Array.isArray(value)) {
+        if (value.length === 0)
+            return `${safeKey}: []`;
+        return `${safeKey}:\n${emit(value, indent, false)}`;
+    }
+    if (typeof value === 'object') {
+        if (Object.keys(value).length === 0)
+            return `${safeKey}: {}`;
+        const inner = emit(value, indent + 1, firstInArrayItem);
+        // emit() returns leading "\n" for nested dicts when indent>0 — strip & re-add
+        return `${safeKey}:${inner.startsWith('\n') ? inner : '\n' + inner}`;
+    }
+    return `${safeKey}: ${String(value)}`;
+}
+/** Quote a string only when needed (contains YAML special chars or is empty/numeric-looking). */
+function formatString(s) {
+    if (s === '')
+        return "''";
+    // Always quote if it could be misread as null/boolean/number/special
+    if (/^(true|false|null|yes|no|on|off|~)$/i.test(s))
+        return `'${s.replace(/'/g, "''")}'`;
+    if (/^-?\d+(\.\d+)?$/.test(s))
+        return `'${s.replace(/'/g, "''")}'`;
+    if (/[:#&*!|>'"%@`{}[\],?\n]/.test(s) || s.startsWith('-') || s.startsWith(' ') || s.endsWith(' ')) {
+        return `'${s.replace(/'/g, "''")}'`;
+    }
+    return s;
 }
 
 
@@ -10790,6 +11942,7 @@ const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTemplates/Application.ts");
 const CollectorClient_ts_1 = __webpack_require__(/*! ./CollectorClient.js */ "./ts/appTemplates/CollectorClient.ts");
+const Contact_ts_1 = __webpack_require__(/*! ./Contact.js */ "./ts/appTemplates/Contact.ts");
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 /**
  * - applications
@@ -10821,20 +11974,13 @@ class AppClientAccount extends Application_ts_1.Application {
         if (this.cache.collectorClientsMap[collectorClientKey]) {
             const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
             logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
-            if (collectorClient.requesterApiEndpoint !== apiEndpoint) {
-                // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-                throw new errors_ts_1.HDSLibError('Found existing collectorClient with a different apiEndpoint', { actual: collectorClient.requesterApiEndpoint, incoming: apiEndpoint });
-                // we might consider reseting() in the future;
-                // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
+            // Same access, same endpoint — idempotent, return existing
+            if (collectorClient.requesterApiEndpoint === apiEndpoint) {
+                return collectorClient;
             }
-            if (incomingEventId && collectorClient.requesterEventId !== incomingEventId) {
-                throw new errors_ts_1.HDSLibError('Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-                // console.log('⚠️⚠️⚠️⚠️ RESET! Found existing collectorClient with a different eventId', { actual: collectorClient.requesterEventId, incoming: incomingEventId });
-                // we might consider reseting() in the future;
-                // return await collectorClient.reset(apiEndpoint, incomingEventId, accessInfo);
-                // return null;
-            }
-            return collectorClient;
+            // Different apiEndpoint or eventId for same key — this shouldn't happen with id-based keys
+            // but handle gracefully by logging and creating new (will get a different key from its own accessInfo)
+            logger.info('AppClient:handleIncomingRequest existing key collision, creating new client');
         }
         // check if comming form hdsCollector
         if (!accessInfo?.clientData?.hdsCollector || accessInfo.clientData?.hdsCollector?.version !== 0) {
@@ -10879,6 +12025,103 @@ class AppClientAccount extends Application_ts_1.Application {
         return Object.values(this.cache.collectorClientsMap);
     }
     /**
+     * Get all contacts grouped by remote user.
+     * Combines CollectorClients (person-to-person) and bridge/other accesses.
+     * Multiple forms from the same doctor → one Contact with multiple sources.
+     * Contacts are enriched with CollectorClient instances and access objects.
+     * Also checks for pending access update requests on active CollectorClients.
+     */
+    async getContacts(forceRefresh = false) {
+        const collectorClients = await this.getCollectorClients(forceRefresh);
+        // Check for pending update requests in parallel (with timeout)
+        const activeClients = collectorClients.filter(cc => cc.status === 'Active');
+        if (activeClients.length > 0) {
+            const UPDATE_CHECK_TIMEOUT = 10000;
+            await Promise.allSettled(activeClients.map(cc => Promise.race([
+                cc.checkForUpdateRequests(),
+                new Promise(resolve => setTimeout(resolve, UPDATE_CHECK_TIMEOUT))
+            ])));
+        }
+        const sources = [];
+        // Collector clients → person contacts
+        for (const cc of collectorClients) {
+            sources.push(cc.toContactSource());
+        }
+        // Other accesses (bridges, orphan collectors, custom apps)
+        // Include deletions so bridge contacts can match events created by old (recreated) accesses
+        const allAccesses = await this.connection.apiOne('accesses.get', { includeDeletions: true }, 'accesses');
+        const collectorAccessNames = new Set(collectorClients.map(cc => cc.key));
+        for (const access of allAccesses) {
+            if (collectorAccessNames.has(access.name))
+                continue;
+            if (access.type === 'personal')
+                continue;
+            // Orphan collector access: has hdsCollectorClient clientData but no matching event
+            const clientData = access.clientData;
+            if (clientData?.hdsCollectorClient) {
+                const evtData = clientData.hdsCollectorClient.eventData;
+                const requestData = evtData?.content?.requesterEventData?.content;
+                const username = evtData?.content?.accessInfo?.user?.username;
+                if (username && requestData) {
+                    const chatEnabled = requestData.features?.chat != null;
+                    sources.push({
+                        remoteUsername: username,
+                        displayName: requestData.requester?.name || username,
+                        chatStreams: chatEnabled ? { main: `chat-${username}`, incoming: `chat-${username}-in` } : null,
+                        appStreamId: clientData.appStreamId || null,
+                        permissions: access.permissions || requestData.permissions || [],
+                        status: access.deleted ? 'Deactivated' : 'Active',
+                        type: 'collector',
+                        accessId: access.id || null
+                    });
+                    continue;
+                }
+            }
+            // Bridge access: has appStreamId
+            const source = Contact_ts_1.Contact.sourceFromAccess(access);
+            if (source.type === 'bridge') {
+                sources.push(source);
+            }
+        }
+        // Group sources into contacts
+        const contacts = Contact_ts_1.Contact.groupByContact(sources);
+        // Enrich contacts with CollectorClients and access objects
+        const accessById = {};
+        for (const access of allAccesses) {
+            accessById[access.id] = access;
+        }
+        for (const contact of contacts) {
+            // Match CollectorClients to contacts
+            for (const cc of collectorClients) {
+                if (cc.requesterUsername === contact.remoteUsername) {
+                    contact.addCollectorClient(cc);
+                    if (cc.accessData?.id && accessById[cc.accessData.id]) {
+                        contact.addAccessObject(accessById[cc.accessData.id]);
+                    }
+                }
+            }
+            // Add access objects for orphan/bridge sources
+            for (const source of contact.sources) {
+                if (source.accessId && accessById[source.accessId]) {
+                    contact.addAccessObject(accessById[source.accessId]);
+                }
+            }
+            // For bridge contacts: also add deleted accesses with the same name
+            // so eventIsFromContact can match events created by old (recreated) access IDs
+            if (!contact.isPerson) {
+                const contactAccessNames = new Set(contact.accessObjects.map((a) => a.name));
+                for (const access of allAccesses) {
+                    if (!access.deleted)
+                        continue;
+                    if (contactAccessNames.has(access.name) && !contact.accessObjects.some((a) => a.id === access.id)) {
+                        contact.addAccessObject(access);
+                    }
+                }
+            }
+        }
+        return contacts;
+    }
+    /**
      * - Check connection validity
      * - Make sure stream structure exists
      */
@@ -10907,6 +12150,7 @@ exports.AppManagingAccount = void 0;
 const short_unique_id_1 = __importDefault(__webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js"));
 const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTemplates/Application.ts");
 const Collector_ts_1 = __webpack_require__(/*! ./Collector.js */ "./ts/appTemplates/Collector.ts");
+const Contact_ts_1 = __webpack_require__(/*! ./Contact.js */ "./ts/appTemplates/Contact.ts");
 const collectorIdGenerator = new short_unique_id_1.default({ dictionary: 'alphanum_lower', length: 7 });
 /**
  * App which manages Collectors
@@ -10964,6 +12208,56 @@ class AppManagingAccount extends Application_ts_1.Application {
         this.cache.collectorsMap = collectorsMap;
     }
     /**
+     * Get all patient contacts grouped by username, across all collectors.
+     * Each Contact may have invites from multiple forms.
+     */
+    async getContacts(forceRefresh = false) {
+        const collectors = await this.getCollectors(forceRefresh);
+        const sources = [];
+        // Collect all invites from all collectors in parallel (with error tolerance + timeout)
+        const allInvitePairs = [];
+        const TIMEOUT_MS = 10000;
+        const loadCollector = async (collector) => {
+            await collector.init(forceRefresh);
+            if (forceRefresh)
+                await collector.checkInbox();
+            const invites = await collector.getInvites(forceRefresh);
+            return invites;
+        };
+        const results = await Promise.allSettled(collectors.map(async (collector) => {
+            const race = Promise.race([
+                loadCollector(collector),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS))
+            ]);
+            const invites = await race;
+            return { collector, invites };
+        }));
+        for (const result of results) {
+            if (result.status === 'fulfilled') {
+                const { collector, invites } = result.value;
+                for (const invite of invites) {
+                    sources.push(invite.toContactSource());
+                    allInvitePairs.push({ collector, invite });
+                }
+            }
+            else {
+                console.error('Contact: failed loading collector', result.reason);
+            }
+        }
+        // Group by patient username
+        const contacts = Contact_ts_1.Contact.groupByContact(sources);
+        // Enrich contacts with collector+invite references (no extra API calls — reuse cached invites)
+        for (const contact of contacts) {
+            for (const { collector, invite } of allInvitePairs) {
+                const username = invite.patientUsername;
+                if (username && username === contact.remoteUsername) {
+                    contact.addInvite(collector, invite);
+                }
+            }
+        }
+        return contacts;
+    }
+    /**
      * Create an initialized Collector
      */
     async createCollector(name) {
@@ -10983,6 +12277,8 @@ class AppManagingAccount extends Application_ts_1.Application {
         };
         const stream = await this.connection.apiOne('streams.create', params, 'stream');
         // add new stream to streamCache
+        if (!this.streamData.children)
+            this.streamData.children = [];
         this.streamData.children.push(stream);
         const collector = new Collector_ts_1.Collector(this, stream);
         this.cache.collectorsMap[collector.streamId] = collector;
@@ -11205,10 +12501,17 @@ async function createAppStreams(app) {
             { method: 'streams.create', params: { id: app.baseStreamId, name: app.appName, parentId: APPS_ROOT_STREAM } }
         ];
         const streamCreateResult = await app.connection.api(apiCalls);
-        if (streamCreateResult[1].error)
-            throw new Error('Failed creating app streams ' + JSON.stringify(streamCreateResult[1].error));
-        const stream = streamCreateResult[1].stream;
-        app.cache.streamData = stream;
+        const appStreamResult = streamCreateResult[1];
+        if (appStreamResult.error && appStreamResult.error.id !== 'item-already-exists') {
+            throw new Error('Failed creating app streams ' + JSON.stringify(appStreamResult.error));
+        }
+        if (appStreamResult.stream) {
+            app.cache.streamData = appStreamResult.stream;
+        }
+        else {
+            // Stream already existed — load it
+            await app.loadStreamData();
+        }
     }
 }
 
@@ -11460,6 +12763,17 @@ class Collector {
                     if (responseEvent.content.chat)
                         updateInvite.content.chat = responseEvent.content.chat;
                     break;
+                case 'update-accept':
+                    // Patient accepted an access update — new apiEndpoint, stays active
+                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.active)];
+                    updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
+                    if (responseEvent.content.chat)
+                        updateInvite.content.chat = responseEvent.content.chat;
+                    break;
+                case 'update-refuse':
+                    // Patient refused the update — invite stays active with current permissions
+                    // No stream change, just archive the response
+                    break;
                 case 'refuse':
                     updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
                     updateInvite.content.errorType = 'refused';
@@ -11565,6 +12879,51 @@ class Collector {
             throw new errors_ts_1.HDSLibError('Cannot find apiEndpoint in sharing creation request', { result: access, requestParams: params });
         this.#cache.sharingApiEndpoint = newSharingApiEndpoint;
         return newSharingApiEndpoint;
+    }
+    /**
+     * Request an access update for a specific invite.
+     * Creates a `request/access-update-v1` event in the public stream
+     * that the patient will discover via their requesterConnection.
+     *
+     * @param inviteKey - the invite key (CollectorInvite.key)
+     * @param permissions - new full permission set
+     * @param options.action - update action type (default: 'update-permissions')
+     * @param options.features - optional features to add (e.g. { chat: { type: 'user' } })
+     * @param options.message - human-readable explanation for the patient
+     */
+    async requestAccessUpdate(inviteKey, permissions, options = {}) {
+        if (this.statusCode !== _a.STATUSES.active) {
+            throw new errors_ts_1.HDSLibError('Collector must be active to request access update');
+        }
+        const invite = await this.getInviteByKey(inviteKey);
+        if (!invite)
+            throw new errors_ts_1.HDSLibError(`Cannot find invite with key: ${inviteKey}`);
+        if (invite.status !== 'active')
+            throw new errors_ts_1.HDSLibError(`Invite must be active to request update, current: ${invite.status}`);
+        // targetAccessName matches CollectorClient.key on the patient side
+        // CC key = doctorUsername + ':' + sharingAccessId (from the sharing access info stored in the CC event)
+        const sharingAccessName = 'a-' + this.streamId;
+        const [accesses, myAccessInfo] = await Promise.all([
+            this.appManaging.connection.apiOne('accesses.get', {}, 'accesses'),
+            this.appManaging.connection.accessInfo()
+        ]);
+        const sharingAccess = accesses.find((a) => a.name === sharingAccessName);
+        if (!sharingAccess)
+            throw new errors_ts_1.HDSLibError('Cannot find sharing access for this collector');
+        const targetAccessName = myAccessInfo.user.username + ':' + sharingAccess.id;
+        const eventData = {
+            type: 'request/access-update-v1',
+            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.public)],
+            content: {
+                version: 0,
+                targetAccessName,
+                action: options.action || 'update-permissions',
+                permissions,
+                features: options.features || undefined,
+                message: options.message || undefined
+            }
+        };
+        return await this.appManaging.connection.apiOne('events.create', eventData, 'event');
     }
     /**
      * @private
@@ -11741,6 +13100,8 @@ class CollectorClient {
     eventData;
     accessData;
     request;
+    /** Pending access update request from the requester, if any */
+    pendingUpdate = null;
     #requesterConnection;
     /** @property {String} - identified within user's account - can be used to retrieve a Collector Client from an app */
     get key() {
@@ -11776,6 +13137,20 @@ class CollectorClient {
         return {
             chatStreamIncoming: `chat-${this.requesterUsername}-in`,
             chatStreamMain: `chat-${this.requesterUsername}`
+        };
+    }
+    /** Convert to ContactSource for Contact grouping */
+    toContactSource() {
+        const chat = this.chatSettings;
+        return {
+            remoteUsername: this.requesterUsername,
+            displayName: this.requestData?.requester?.name || this.requesterUsername,
+            chatStreams: chat ? { main: chat.chatStreamMain, incoming: chat.chatStreamIncoming } : null,
+            appStreamId: this.accessData?.clientData?.appStreamId || null,
+            permissions: this.requestData?.permissions || [],
+            status: this.status,
+            type: 'collector',
+            accessId: this.accessData?.id || null
         };
     }
     /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
@@ -11957,16 +13332,15 @@ class CollectorClient {
         return null;
     }
     async revoke() {
-        if (!this.accessData) {
-            throw new errors_ts_1.HDSLibError('Cannot revoke if no accessData');
-        }
-        if (this.accessData.deleted && this.status === _a.STATUSES.deactivated) {
+        if (this.accessData?.deleted && this.status === _a.STATUSES.deactivated) {
             throw new errors_ts_1.HDSLibError('Already revoked');
         }
-        // revoke access
-        await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
-        // lazyly flag currentAccess as deleted
-        this.accessData.deleted = Date.now() / 1000;
+        // revoke access if it exists and is not already deleted
+        if (this.accessData && !this.accessData.deleted) {
+            await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
+            // lazily flag currentAccess as deleted
+            this.accessData.deleted = Date.now() / 1000;
+        }
         const responseContent = {};
         const requesterEvent = await this.#updateRequester('revoke', responseContent);
         if (requesterEvent != null) {
@@ -12042,7 +13416,137 @@ class CollectorClient {
      * @param {PryvAccessInfo} accessInfo
      */
     static keyFromInfo(info) {
-        return info.user.username + ':' + info.name;
+        // Use access id when available (unique per invite), fall back to name for backwards compat
+        return info.user.username + ':' + (info.id || info.name);
+    }
+    // -------------------- access update requests ------------- //
+    /**
+     * Check the requester's public stream for pending access update requests.
+     * Sets this.pendingUpdate if one is found for this client's key.
+     */
+    async checkForUpdateRequests() {
+        if (this.status !== _a.STATUSES.active)
+            return null;
+        try {
+            const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.public.streamId;
+            const events = await this.requesterConnection.apiOne('events.get', {
+                types: ['request/access-update-v1'],
+                streams: [publicStreamId],
+                limit: 10
+            }, 'events');
+            for (const event of events) {
+                if (event.content?.targetAccessName === this.key) {
+                    this.pendingUpdate = { eventId: event.id, content: event.content };
+                    return this.pendingUpdate;
+                }
+            }
+        }
+        catch (e) {
+            logger.warn('CollectorClient.checkForUpdateRequests failed', { key: this.key, error: e.message });
+        }
+        this.pendingUpdate = null;
+        return null;
+    }
+    /**
+     * Accept a pending update request: delete old access, create new one with updated permissions,
+     * notify requester via inbox with new apiEndpoint.
+     */
+    async acceptUpdate() {
+        if (!this.pendingUpdate)
+            throw new errors_ts_1.HDSLibError('No pending update to accept');
+        if (this.status !== _a.STATUSES.active)
+            throw new errors_ts_1.HDSLibError('Can only accept updates on active CollectorClients');
+        const update = this.pendingUpdate.content;
+        // Build new permissions from the update request
+        const cleanedPermissions = update.permissions.map((p) => {
+            if (p.streamId)
+                return { streamId: p.streamId, level: p.level };
+            return p;
+        });
+        // Handle chat feature if requested
+        const responseContent = {};
+        if (update.features?.chat && !this.hasChatFeature) {
+            const chatStreamMain = `chat-${this.requesterUsername}`;
+            const chatStreamIncoming = `chat-${this.requesterUsername}-in`;
+            const chatStreamsCreateApiCalls = [
+                { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
+                { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
+                { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
+            ];
+            const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
+            streamCreateResults.forEach((r) => {
+                if (r.stream?.id || r.error?.id === 'item-already-exists')
+                    return;
+                throw new errors_ts_1.HDSLibError('Failed creating chat stream', streamCreateResults);
+            });
+            cleanedPermissions.push({ streamId: chatStreamMain, level: 'read' }, { streamId: chatStreamIncoming, level: 'manage' });
+            responseContent.chat = {
+                type: 'user',
+                streamRead: chatStreamMain,
+                streamWrite: chatStreamIncoming
+            };
+        }
+        else if (this.hasChatFeature) {
+            // Preserve existing chat permissions
+            const { chatStreamMain, chatStreamIncoming } = this.chatSettings;
+            cleanedPermissions.push({ streamId: chatStreamMain, level: 'read' }, { streamId: chatStreamIncoming, level: 'manage' });
+        }
+        // Collect previous access IDs for event attribution (modifiedBy tracking)
+        const previousAccessIds = [];
+        if (this.accessData) {
+            if (this.accessData.id)
+                previousAccessIds.push(this.accessData.id);
+            // Chain: carry forward any IDs from the old access's clientData
+            const oldPrevIds = this.accessData.clientData?.hdsCollectorClient?.previousAccessIds;
+            if (Array.isArray(oldPrevIds)) {
+                for (const id of oldPrevIds) {
+                    if (!previousAccessIds.includes(id))
+                        previousAccessIds.push(id);
+                }
+            }
+        }
+        // Delete old access
+        if (this.accessData && !this.accessData.deleted) {
+            await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
+        }
+        // Create new access with updated permissions
+        const accessCreateData = {
+            name: this.key,
+            type: 'shared',
+            permissions: cleanedPermissions,
+            clientData: {
+                hdsCollectorClient: {
+                    version: 0,
+                    eventData: this.eventData,
+                    previousAccessIds
+                }
+            }
+        };
+        const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
+        this.accessData = accessData;
+        if (!this.accessData?.apiEndpoint)
+            throw new errors_ts_1.HDSLibError('Failed creating updated access', accessData);
+        responseContent.apiEndpoint = this.accessData.apiEndpoint;
+        // Notify requester via inbox
+        const requesterEvent = await this.#updateRequester('update-accept', responseContent);
+        if (requesterEvent != null) {
+            this.pendingUpdate = null;
+            return { accessData: this.accessData, requesterEvent };
+        }
+        return null;
+    }
+    /**
+     * Refuse a pending update request: notify requester via inbox, clear pendingUpdate.
+     */
+    async refuseUpdate() {
+        if (!this.pendingUpdate)
+            throw new errors_ts_1.HDSLibError('No pending update to refuse');
+        const requesterEvent = await this.#updateRequester('update-refuse', {});
+        if (requesterEvent != null) {
+            this.pendingUpdate = null;
+            return { requesterEvent };
+        }
+        return null;
     }
     // -------------------- sections and forms ------------- //
     getSections() {
@@ -12177,6 +13681,37 @@ class CollectorInvite {
     }
     get displayName() {
         return this.eventData.content.name;
+    }
+    /** Extract patient username from apiEndpoint (only available for active invites) */
+    get patientUsername() {
+        if (this.status !== 'active')
+            return null;
+        try {
+            const endpoint = this.eventData.content.apiEndpoint;
+            if (!endpoint)
+                return null;
+            // apiEndpoint format: https://token@host/username/
+            const url = new URL(endpoint.replace(/\/\/[^@]+@/, '//'));
+            const path = url.pathname.replace(/^\/|\/$/g, '');
+            return path || null;
+        }
+        catch {
+            return null;
+        }
+    }
+    /** Convert to ContactSource for Contact grouping (doctor side) */
+    toContactSource() {
+        const chat = this.hasChat ? this.chatSettings : null;
+        return {
+            remoteUsername: this.patientUsername,
+            displayName: this.displayName || this.patientUsername || 'Unknown',
+            chatStreams: chat ? { main: chat.streamRead, incoming: chat.streamWrite } : null,
+            appStreamId: null,
+            permissions: [],
+            status: this.status,
+            type: 'collector',
+            accessId: this.key
+        };
     }
     constructor(collector, eventData) {
         if (eventData.type !== 'invite/collector-v1')
@@ -12590,6 +14125,341 @@ function vo0ToV1(v0Data) {
 
 /***/ },
 
+/***/ "./ts/appTemplates/Contact.ts"
+/*!************************************!*\
+  !*** ./ts/appTemplates/Contact.ts ***!
+  \************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Contact = void 0;
+const HDSModel_AppStreams_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModel-AppStreams.js */ "./ts/HDSModel/HDSModel-AppStreams.ts");
+const StreamsTools_ts_1 = __webpack_require__(/*! ../toolkit/StreamsTools.js */ "./ts/toolkit/StreamsTools.ts");
+/**
+ * Groups all accesses/relationships from the same remote user (or service).
+ *
+ * A Contact represents a person (doctor, researcher) or service (bridge)
+ * that has one or more accesses on the current user's account.
+ * Multiple forms from the same doctor → one Contact with multiple sources.
+ * Each bridge → one Contact per bridge.
+ */
+class Contact {
+    /** Remote user's Pryv username. null for bridge/service contacts. */
+    remoteUsername;
+    /** Display name (from first source, can be overridden) */
+    displayName;
+    /** All access sources grouped into this contact */
+    sources;
+    /** CollectorClient instances for collector sources — patient side */
+    collectorClients;
+    /** Doctor-side: collector+invite pairs for this patient */
+    invites;
+    /** Raw Pryv access objects for all sources */
+    accessObjects;
+    /** Cached set of accessible stream IDs (built by initStreamCache) */
+    #accessibleStreamIds;
+    constructor(remoteUsername, displayName) {
+        this.remoteUsername = remoteUsername;
+        this.displayName = displayName;
+        this.sources = [];
+        this.collectorClients = [];
+        this.invites = [];
+        this.accessObjects = [];
+        this.#accessibleStreamIds = null;
+    }
+    addSource(source) {
+        this.sources.push(source);
+        if (this.displayName === this.remoteUsername && source.displayName !== source.remoteUsername) {
+            this.displayName = source.displayName;
+        }
+    }
+    /** Associate a CollectorClient with this contact */
+    addCollectorClient(cc) {
+        if (!this.collectorClients.includes(cc)) {
+            this.collectorClients.push(cc);
+        }
+    }
+    /** Associate a raw access object with this contact */
+    addAccessObject(access) {
+        if (!this.accessObjects.find((a) => a.id === access.id)) {
+            this.accessObjects.push(access);
+        }
+    }
+    /** Associate a collector+invite pair (doctor side) */
+    addInvite(collector, invite) {
+        if (!this.invites.find(i => i.invite.key === invite.key)) {
+            this.invites.push({ collector, invite });
+        }
+    }
+    // ---- Stream cache & event filtering ---- //
+    /**
+     * Build the accessible stream IDs cache from all access permissions.
+     * @param streamsById - map of streamId → stream object (with children) from the account
+     */
+    initStreamCache(streamsById) {
+        this.#accessibleStreamIds = new Set();
+        for (const access of this.accessObjects) {
+            if (access.deleted)
+                continue;
+            if (!access.permissions)
+                continue;
+            for (const p of access.permissions) {
+                if (!p.streamId)
+                    continue;
+                if (p.streamId === '*') {
+                    if (!this.isPerson) {
+                        // Bridge with wildcard: resolve bridge's own streams from access name
+                        // (access.name is typically the bridge's base stream ID, e.g. "bridge-mira")
+                        const bridgeStream = access.name ? streamsById[access.name] : null;
+                        if (bridgeStream) {
+                            const ids = (0, StreamsTools_ts_1.getStreamIdAndChildrenIds)(bridgeStream);
+                            ids.forEach((id) => this.#accessibleStreamIds.add(id));
+                        }
+                        continue; // don't add wildcard for bridges
+                    }
+                    this.#accessibleStreamIds.add('*');
+                    return; // wildcard covers everything for person contacts
+                }
+                const stream = streamsById[p.streamId];
+                if (!stream)
+                    continue;
+                const ids = (0, StreamsTools_ts_1.getStreamIdAndChildrenIds)(stream);
+                ids.forEach((id) => this.#accessibleStreamIds.add(id));
+            }
+        }
+    }
+    /**
+     * Check if an event belongs to this contact's scope.
+     * - Person contacts (doctors): event is in a stream covered by their access permissions
+     * - Bridge/service contacts: event was created by the bridge OR is in the bridge's streams
+     *   (bridges typically have wildcard `*` permissions but should only show their own data)
+     */
+    eventIsAccessible(event) {
+        if (!this.isPerson) {
+            // Bridge/service contacts: check authorship first (fastest)
+            if (this.eventIsFromContact(event))
+                return true;
+            // Also check if event is in the bridge's own stream tree
+            // (covers data created by older accesses not in previousAccessIds chain)
+            if (this.#accessibleStreamIds && !this.#accessibleStreamIds.has('*') && event.streamIds) {
+                for (const streamId of event.streamIds) {
+                    if (this.#accessibleStreamIds.has(streamId))
+                        return true;
+                }
+            }
+            return false;
+        }
+        // Person contacts: filter by stream permissions
+        if (!this.#accessibleStreamIds)
+            return false;
+        if (this.#accessibleStreamIds.has('*'))
+            return true;
+        if (!event.streamIds)
+            return false;
+        for (const streamId of event.streamIds) {
+            if (this.#accessibleStreamIds.has(streamId))
+                return true;
+        }
+        return false;
+    }
+    /** Check if an event was created/modified by this contact (including replaced accesses) */
+    eventIsFromContact(event) {
+        for (const access of this.accessObjects) {
+            if (access.id && event.modifiedBy === access.id)
+                return true;
+            // Check previous access IDs from replaced accesses (collector pattern)
+            const collectorPrevIds = access.clientData?.hdsCollectorClient?.previousAccessIds;
+            if (Array.isArray(collectorPrevIds) && collectorPrevIds.includes(event.modifiedBy))
+                return true;
+            // Check previous access IDs from bridge access recreate pattern
+            const bridgePrevIds = access.clientData?.previousAccessIds;
+            if (Array.isArray(bridgePrevIds) && bridgePrevIds.includes(event.modifiedBy))
+                return true;
+        }
+        return false;
+    }
+    /** Determine chat event source: 'me', 'contact', or 'unknown' */
+    chatEventInfos(event) {
+        for (const cc of this.collectorClients) {
+            if (!cc.hasChatFeature)
+                continue;
+            const infos = cc.chatEventInfos(event);
+            if (infos.source === 'me')
+                return { source: 'me' };
+            if (infos.source === 'requester')
+                return { source: 'contact' };
+        }
+        return { source: 'unknown' };
+    }
+    /** Post a chat message via the connection */
+    async chatPost(connection, content) {
+        const chat = this.chatStreams;
+        if (!chat)
+            throw new Error('Cannot chat with this contact — no chat streams');
+        const newEvent = {
+            type: 'message/hds-chat-v1',
+            streamIds: [chat.main],
+            content
+        };
+        return await connection.apiOne('events.create', newEvent, 'event');
+    }
+    // ---- CollectorClient helpers ---- //
+    /** Primary collectorClient (first active, or first available) */
+    get primaryCollectorClient() {
+        return this.collectorClients.find(cc => cc.status === 'Active') ||
+            this.collectorClients[0];
+    }
+    /** CollectorClients with status Incoming — pending accept/refuse */
+    get incomingCollectorClients() {
+        return this.collectorClients.filter(cc => cc.status === 'Incoming');
+    }
+    /** Whether any form is pending (Incoming) and actionable */
+    get isPending() {
+        return this.collectorClients.some(cc => cc.status === 'Incoming');
+    }
+    /** Whether any CollectorClient has a pending access update request */
+    get hasPendingUpdate() {
+        return this.collectorClients.some(cc => cc.pendingUpdate != null);
+    }
+    /** CollectorClients with pending update requests */
+    get pendingUpdateClients() {
+        return this.collectorClients.filter(cc => cc.pendingUpdate != null);
+    }
+    /** The pending CollectorClient, if any */
+    get pendingCollectorClient() {
+        return this.collectorClients.find(cc => cc.status === 'Incoming');
+    }
+    /** Accept the pending invite */
+    async acceptPendingInvite() {
+        const cc = this.pendingCollectorClient;
+        if (!cc)
+            throw new Error('No pending invite to accept');
+        return await cc.accept();
+    }
+    /** Refuse the pending invite */
+    async refusePendingInvite() {
+        const cc = this.pendingCollectorClient;
+        if (!cc)
+            throw new Error('No pending invite to refuse');
+        return await cc.refuse();
+    }
+    /** Aggregated form sections from all active CollectorClients */
+    get formSections() {
+        const sections = [];
+        for (const cc of this.collectorClients) {
+            if (cc.status !== 'Active')
+                continue;
+            try {
+                const s = cc.getSections();
+                if (s)
+                    sections.push(...s);
+            }
+            catch { /* ignore */ }
+        }
+        return sections;
+    }
+    /** Overall status: Active > Incoming > first source status */
+    get status() {
+        if (this.sources.some(s => s.status === 'Active' || s.status === 'active'))
+            return 'Active';
+        if (this.sources.some(s => s.status === 'Incoming'))
+            return 'Incoming';
+        return this.sources[0]?.status || null;
+    }
+    // ---- Existing getters ---- //
+    /** Chat streams from any source that has chat enabled */
+    get chatStreams() {
+        for (const source of this.sources) {
+            if (source.chatStreams)
+                return source.chatStreams;
+        }
+        return null;
+    }
+    get hasChat() {
+        return this.chatStreams !== null;
+    }
+    get appStreamIds() {
+        const ids = [];
+        for (const source of this.sources) {
+            if (source.appStreamId && !ids.includes(source.appStreamId)) {
+                ids.push(source.appStreamId);
+            }
+        }
+        return ids;
+    }
+    get allPermissions() {
+        const seen = new Set();
+        const result = [];
+        for (const source of this.sources) {
+            if (source.status === 'Deactivated' || source.status === 'Refused')
+                continue;
+            for (const perm of source.permissions) {
+                const key = `${perm.streamId}:${perm.level}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    result.push(perm);
+                }
+            }
+        }
+        return result;
+    }
+    get isActive() {
+        return this.sources.some(s => s.status === 'Active' || s.status === 'active');
+    }
+    get isPerson() {
+        return this.remoteUsername !== null;
+    }
+    get collectorSources() {
+        return this.sources.filter(s => s.type === 'collector');
+    }
+    get bridgeSources() {
+        return this.sources.filter(s => s.type === 'bridge');
+    }
+    get accessIds() {
+        return this.sources.map(s => s.accessId).filter((id) => id !== null);
+    }
+    // ---- Static helpers ---- //
+    static sourceFromAccess(access) {
+        const appStreamId = HDSModel_AppStreams_ts_1.HDSModelAppStreams.getAppStreamId(access);
+        return {
+            remoteUsername: null,
+            displayName: access.name || 'Unknown',
+            chatStreams: null,
+            appStreamId,
+            permissions: access.permissions || [],
+            status: access.deleted ? 'Deleted' : 'active',
+            type: appStreamId ? 'bridge' : 'other',
+            accessId: access.id || null
+        };
+    }
+    static groupByContact(sources) {
+        const byUsername = new Map();
+        const standalone = [];
+        for (const source of sources) {
+            if (source.remoteUsername) {
+                let contact = byUsername.get(source.remoteUsername);
+                if (!contact) {
+                    contact = new Contact(source.remoteUsername, source.displayName);
+                    byUsername.set(source.remoteUsername, contact);
+                }
+                contact.addSource(source);
+            }
+            else {
+                const contact = new Contact(null, source.displayName);
+                contact.addSource(source);
+                standalone.push(contact);
+            }
+        }
+        return [...byUsername.values(), ...standalone];
+    }
+}
+exports.Contact = Contact;
+
+
+/***/ },
+
 /***/ "./ts/appTemplates/appTemplates.ts"
 /*!*****************************************!*\
   !*** ./ts/appTemplates/appTemplates.ts ***!
@@ -12599,7 +14469,7 @@ function vo0ToV1(v0Data) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CollectorRequest = exports.CollectorInvite = exports.CollectorClient = exports.Collector = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = void 0;
+exports.Contact = exports.CollectorRequest = exports.CollectorInvite = exports.CollectorClient = exports.Collector = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.ensureBridgeAccess = exports.recreateBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
 const AppManagingAccount_ts_1 = __webpack_require__(/*! ./AppManagingAccount.js */ "./ts/appTemplates/AppManagingAccount.ts");
 Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_ts_1.AppManagingAccount; } }));
 const AppClientAccount_ts_1 = __webpack_require__(/*! ./AppClientAccount.js */ "./ts/appTemplates/AppClientAccount.ts");
@@ -12614,6 +14484,564 @@ const CollectorInvite_ts_1 = __webpack_require__(/*! ./CollectorInvite.js */ "./
 Object.defineProperty(exports, "CollectorInvite", ({ enumerable: true, get: function () { return CollectorInvite_ts_1.CollectorInvite; } }));
 const CollectorRequest_ts_1 = __webpack_require__(/*! ./CollectorRequest.js */ "./ts/appTemplates/CollectorRequest.ts");
 Object.defineProperty(exports, "CollectorRequest", ({ enumerable: true, get: function () { return CollectorRequest_ts_1.CollectorRequest; } }));
+const Contact_ts_1 = __webpack_require__(/*! ./Contact.js */ "./ts/appTemplates/Contact.ts");
+Object.defineProperty(exports, "Contact", ({ enumerable: true, get: function () { return Contact_ts_1.Contact; } }));
+var bridgeAccess_ts_1 = __webpack_require__(/*! ./bridgeAccess.js */ "./ts/appTemplates/bridgeAccess.ts");
+Object.defineProperty(exports, "getOrCreateBridgeAccess", ({ enumerable: true, get: function () { return bridgeAccess_ts_1.getOrCreateBridgeAccess; } }));
+Object.defineProperty(exports, "recreateBridgeAccess", ({ enumerable: true, get: function () { return bridgeAccess_ts_1.recreateBridgeAccess; } }));
+Object.defineProperty(exports, "ensureBridgeAccess", ({ enumerable: true, get: function () { return bridgeAccess_ts_1.ensureBridgeAccess; } }));
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/bridgeAccess.ts"
+/*!*****************************************!*\
+  !*** ./ts/appTemplates/bridgeAccess.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getOrCreateBridgeAccess = getOrCreateBridgeAccess;
+exports.recreateBridgeAccess = recreateBridgeAccess;
+exports.ensureBridgeAccess = ensureBridgeAccess;
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+/**
+ * Get or create a bridge access on a user's account.
+ * Looks up by name; if found, returns existing. If not, creates new.
+ *
+ * @param connection - Pryv connection to the user's account (personal token)
+ * @param options - access configuration
+ */
+async function getOrCreateBridgeAccess(connection, options) {
+    const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
+    const existing = accesses.find((a) => a.name === options.name);
+    if (existing) {
+        return {
+            apiEndpoint: existing.apiEndpoint,
+            accessId: existing.id,
+            created: false,
+            recreated: false
+        };
+    }
+    const access = await connection.apiOne('accesses.create', {
+        name: options.name,
+        permissions: options.permissions,
+        clientData: options.clientData || {}
+    }, 'access');
+    return {
+        apiEndpoint: access.apiEndpoint,
+        accessId: access.id,
+        created: true,
+        recreated: false
+    };
+}
+/**
+ * Recreate a bridge access with updated permissions/clientData.
+ * Deletes the old access and creates a new one, carrying forward previousAccessIds
+ * so that events created under old accesses are still attributable.
+ *
+ * @param connection - Pryv connection to the user's account (personal token)
+ * @param options - new access configuration
+ */
+async function recreateBridgeAccess(connection, options) {
+    const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
+    const existing = accesses.find((a) => a.name === options.name);
+    // Build previousAccessIds chain
+    const previousAccessIds = [];
+    if (existing) {
+        if (existing.id)
+            previousAccessIds.push(existing.id);
+        const oldPrevIds = existing.clientData?.previousAccessIds;
+        if (Array.isArray(oldPrevIds)) {
+            for (const id of oldPrevIds) {
+                if (!previousAccessIds.includes(id))
+                    previousAccessIds.push(id);
+            }
+        }
+        // Delete old access
+        await connection.apiOne('accesses.delete', { id: existing.id }, 'accessDeletion');
+        logger.info('Deleted old bridge access for recreation', { name: options.name, oldId: existing.id });
+    }
+    // Merge previousAccessIds into clientData
+    const clientData = {
+        ...options.clientData,
+        previousAccessIds: previousAccessIds.length > 0 ? previousAccessIds : undefined
+    };
+    const access = await connection.apiOne('accesses.create', {
+        name: options.name,
+        permissions: options.permissions,
+        clientData
+    }, 'access');
+    return {
+        apiEndpoint: access.apiEndpoint,
+        accessId: access.id,
+        created: true,
+        recreated: existing != null
+    };
+}
+/**
+ * Get or create a bridge access, with optional permission update detection.
+ * If the access exists but permissions differ, recreates it with the new permissions
+ * while preserving previousAccessIds for event attribution.
+ *
+ * @param connection - Pryv connection to the user's account (personal token)
+ * @param options - access configuration
+ * @param options.updateIfDifferent - if true, recreate when permissions differ (default: false)
+ */
+async function ensureBridgeAccess(connection, options) {
+    const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
+    const existing = accesses.find((a) => a.name === options.name);
+    if (existing) {
+        // Check if permissions match
+        if (options.updateIfDifferent && !permissionsMatch(existing.permissions, options.permissions)) {
+            logger.info('Bridge access permissions differ, recreating', { name: options.name });
+            // Can't re-fetch — pass existing directly to avoid double API call
+            return await _recreateFromExisting(connection, existing, options);
+        }
+        return {
+            apiEndpoint: existing.apiEndpoint,
+            accessId: existing.id,
+            created: false,
+            recreated: false
+        };
+    }
+    const access = await connection.apiOne('accesses.create', {
+        name: options.name,
+        permissions: options.permissions,
+        clientData: options.clientData || {}
+    }, 'access');
+    return {
+        apiEndpoint: access.apiEndpoint,
+        accessId: access.id,
+        created: true,
+        recreated: false
+    };
+}
+/** @private recreate from an already-fetched existing access */
+async function _recreateFromExisting(connection, existing, options) {
+    const previousAccessIds = [];
+    if (existing.id)
+        previousAccessIds.push(existing.id);
+    const oldPrevIds = existing.clientData?.previousAccessIds;
+    if (Array.isArray(oldPrevIds)) {
+        for (const id of oldPrevIds) {
+            if (!previousAccessIds.includes(id))
+                previousAccessIds.push(id);
+        }
+    }
+    await connection.apiOne('accesses.delete', { id: existing.id }, 'accessDeletion');
+    const clientData = {
+        ...options.clientData,
+        previousAccessIds: previousAccessIds.length > 0 ? previousAccessIds : undefined
+    };
+    const access = await connection.apiOne('accesses.create', {
+        name: options.name,
+        permissions: options.permissions,
+        clientData
+    }, 'access');
+    return {
+        apiEndpoint: access.apiEndpoint,
+        accessId: access.id,
+        created: true,
+        recreated: true
+    };
+}
+/** Compare two permission arrays (order-independent) */
+function permissionsMatch(a, b) {
+    if (!a || !b)
+        return false;
+    if (a.length !== b.length)
+        return false;
+    const normalize = (p) => `${p.streamId || ''}:${p.level || ''}:${p.feature || ''}:${p.setting || ''}`;
+    const setA = new Set(a.map(normalize));
+    const setB = new Set(b.map(normalize));
+    if (setA.size !== setB.size)
+        return false;
+    for (const item of setA) {
+        if (!setB.has(item))
+            return false;
+    }
+    return true;
+}
+
+
+/***/ },
+
+/***/ "./ts/converters/EuclidianDistanceEngine.ts"
+/*!**************************************************!*\
+  !*** ./ts/converters/EuclidianDistanceEngine.ts ***!
+  \**************************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * Generic Euclidian Distance Converter Engine.
+ *
+ * Loads a converter pack (dimensions + methods) and provides:
+ * - toVector(methodId, observation) → N-D vector
+ * - fromVector(methodId, vector) → { observation, distance }
+ * - convertMethodToMethod(fromId, toId, observation) → { data, matchDistance }
+ *
+ * No domain-specific logic — works with any set of dimensions and methods.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.EuclidianDistanceEngine = void 0;
+// ─── Vector math ────────────────────────────────────────────────────────────
+function zeroVector(dims) {
+    const v = {};
+    for (const d of dims)
+        v[d] = 0;
+    return v;
+}
+function vec(partial, dims) {
+    return { ...zeroVector(dims), ...partial };
+}
+function clampVector(v, dims) {
+    const r = { ...v };
+    for (const d of dims)
+        r[d] = Math.max(0, Math.min(1, r[d]));
+    return r;
+}
+function weightedDistance(a, b, dims, w) {
+    let sum = 0;
+    for (const d of dims) {
+        const diff = a[d] - b[d];
+        sum += w[d] * diff * diff;
+    }
+    return Math.sqrt(sum);
+}
+function findClosest(vector, vocab, dims, w) {
+    let best = vocab[0];
+    let bestDist = Infinity;
+    for (const entry of vocab) {
+        const d = weightedDistance(vector, entry.vector, dims, w);
+        if (d < bestDist) {
+            bestDist = d;
+            best = entry;
+        }
+    }
+    return { observation: best.observation, distance: bestDist };
+}
+function valuesEqual(a, b, ci) {
+    if (a === b)
+        return true;
+    if (ci && typeof a === 'string' && typeof b === 'string')
+        return a.toUpperCase() === b.toUpperCase();
+    return false;
+}
+function inferDims(comp, dims) {
+    const s = new Set();
+    for (const opt of comp.options)
+        for (const k of Object.keys(opt.vector))
+            s.add(k);
+    return dims.filter(d => s.has(d));
+}
+function buildLookupConverter(def, dims, w) {
+    const comps = def.components;
+    const ci = def.caseInsensitive ?? false;
+    const single = comps.length === 1;
+    let vocabulary;
+    if (single && !def.observations) {
+        vocabulary = comps[0].options.map(o => ({ observation: o.value, vector: vec(o.vector, dims) }));
+    }
+    else if (def.observations) {
+        vocabulary = def.observations.map(o => ({ observation: single ? o.select[comps[0].field] : { ...o.select }, vector: vec(o.vector, dims) }));
+    }
+    else {
+        throw new Error(`lookup method "${def.methodId}" with ${comps.length} components requires observations[]`);
+    }
+    return {
+        methodId: def.methodId,
+        toVector(observation) {
+            let entry;
+            if (single) {
+                entry = vocabulary.find(e => valuesEqual(e.observation, observation, ci));
+            }
+            else {
+                const obs = observation;
+                entry = vocabulary.find(e => {
+                    const eo = e.observation;
+                    return comps.every(c => valuesEqual(eo[c.field], obs[c.field], ci));
+                });
+            }
+            if (!entry)
+                throw new Error(`Unknown ${def.methodId} observation: ${JSON.stringify(observation)}`);
+            return entry.vector;
+        },
+        fromVector(vector) {
+            return findClosest(vector, vocabulary, dims, w).observation;
+        },
+        allObservations() {
+            return vocabulary.map(e => e.observation);
+        },
+    };
+}
+function buildAssemblyConverter(def, dims, w) {
+    const comps = def.components;
+    const single = comps.length === 1;
+    function findOption(comp, value) {
+        return comp.options.find(o => {
+            if (o.value === value)
+                return true;
+            if (typeof o.value === 'string' && typeof value === 'string')
+                return o.value.toLowerCase() === value.trim().toLowerCase();
+            return false;
+        });
+    }
+    function toVector(observation) {
+        const result = zeroVector(dims);
+        for (const comp of comps) {
+            const obsValue = single ? observation : observation[comp.field];
+            const value = obsValue !== undefined ? obsValue : (comp.options[0].value ?? null);
+            const opt = findOption(comp, value);
+            if (!opt && value !== null && value !== undefined) {
+                throw new Error(`Unknown ${comp.field} value: "${value}". Valid: ${comp.options.map(o => String(o.value)).join(', ')}`);
+            }
+            if (!opt)
+                continue;
+            for (const dim of dims) {
+                const v = opt.vector[dim];
+                if (v === undefined)
+                    continue;
+                const merge = opt.vectorMerge?.[dim] ?? 'sum';
+                if (merge === 'override')
+                    result[dim] = v;
+                else if (merge === 'max')
+                    result[dim] = Math.max(result[dim], v);
+                else
+                    result[dim] += v;
+            }
+        }
+        return clampVector(result, dims);
+    }
+    // Check if per-component matching is safe
+    const allHaveDims = comps.every(c => inferDims(c, dims).length > 0);
+    const hasOverride = comps.some(c => c.options.some(o => o.vectorMerge && Object.values(o.vectorMerge).includes('override')));
+    let dimsOverlap = false;
+    if (allHaveDims) {
+        const seen = new Set();
+        for (const c of comps) {
+            for (const d of inferDims(c, dims)) {
+                if (seen.has(d)) {
+                    dimsOverlap = true;
+                    break;
+                }
+                seen.add(d);
+            }
+            if (dimsOverlap)
+                break;
+        }
+    }
+    const useDescriptive = allHaveDims && !hasOverride && !dimsOverlap;
+    function descriptiveFromVector(vector) {
+        const result = {};
+        for (const comp of comps) {
+            const cd = inferDims(comp, dims);
+            let bestWord = comp.options[0].value;
+            let bestDist = Infinity;
+            for (const opt of comp.options) {
+                let dist = 0;
+                for (const d of cd) {
+                    const diff = vector[d] - (opt.vector[d] ?? 0);
+                    dist += diff * diff;
+                }
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestWord = opt.value;
+                }
+            }
+            result[comp.field] = bestWord;
+        }
+        return single ? result[comps[0].field] : result;
+    }
+    let _cachedVocab = null;
+    function getVocabulary() {
+        if (_cachedVocab)
+            return _cachedVocab;
+        const result = [];
+        const indices = comps.map(() => 0);
+        while (true) {
+            const obs = single ? comps[0].options[indices[0]].value : Object.fromEntries(comps.map((c, i) => [c.field, c.options[indices[i]].value]));
+            result.push({ observation: obs, vector: toVector(obs) });
+            let carry = true;
+            for (let i = comps.length - 1; i >= 0 && carry; i--) {
+                indices[i]++;
+                if (indices[i] < comps[i].options.length)
+                    carry = false;
+                else
+                    indices[i] = 0;
+            }
+            if (carry)
+                break;
+        }
+        return (_cachedVocab = result);
+    }
+    return {
+        methodId: def.methodId,
+        toVector,
+        fromVector(vector) {
+            if (useDescriptive)
+                return descriptiveFromVector(vector);
+            return findClosest(vector, getVocabulary(), dims, w).observation;
+        },
+        allObservations() {
+            if (useDescriptive) {
+                const base = {};
+                for (const comp of comps)
+                    base[comp.field] = comp.options[0].value;
+                const result = [single ? base[comps[0].field] : { ...base }];
+                for (const comp of comps) {
+                    for (const opt of comp.options) {
+                        if (opt.value !== comp.options[0].value) {
+                            const variant = { ...base, [comp.field]: opt.value };
+                            result.push(single ? variant[comps[0].field] : variant);
+                        }
+                    }
+                }
+                return result;
+            }
+            return getVocabulary().map(e => e.observation);
+        },
+    };
+}
+function createConverter(def, dims, w) {
+    const isAssembly = def.components.length > 1 && !def.observations;
+    return isAssembly ? buildAssemblyConverter(def, dims, w) : buildLookupConverter(def, dims, w);
+}
+/** Build a virtual '_raw' method from dimension stops in the converter config */
+function buildRawMethod(dimensions, dimensionNames) {
+    const components = [];
+    for (const dimName of dimensionNames) {
+        const dim = dimensions[dimName];
+        if (!dim?.stops?.length)
+            continue;
+        const options = dim.stops.map(stop => ({
+            value: stop.value,
+            label: stop.label,
+            vector: { [dimName]: stop.value },
+        }));
+        components.push({
+            field: dimName,
+            label: dim.shortLabel || dim.label,
+            options,
+        });
+    }
+    return {
+        methodId: '_raw',
+        order: 0,
+        name: { en: 'HDS Native', fr: 'HDS Natif' },
+        description: { en: 'Direct dimensional input using the HDS scale stops.', fr: 'Saisie dimensionnelle directe utilisant les paliers de l\'échelle HDS.' },
+        components,
+    };
+}
+// ─── Engine class ───────────────────────────────────────────────────────────
+class EuclidianDistanceEngine {
+    itemKey;
+    eventType;
+    dimensionNames;
+    dimensions;
+    weights;
+    converterVersion;
+    _converters = {};
+    _methodDefs = {};
+    _methodIds = [];
+    constructor(pack) {
+        this.itemKey = pack.itemKey;
+        this.eventType = pack.eventType;
+        this.converterVersion = pack.converterVersion;
+        this.dimensionNames = pack.dimensionNames;
+        this.dimensions = pack.dimensions;
+        // Build weights from dimensions
+        this.weights = {};
+        for (const dim of this.dimensionNames) {
+            this.weights[dim] = pack.dimensions[dim]?.weight ?? 0;
+        }
+        // Build converters for each method
+        for (const def of pack.methods) {
+            this._methodDefs[def.methodId] = def;
+            this._converters[def.methodId] = createConverter(def, this.dimensionNames, this.weights);
+        }
+        // Generate _raw virtual method from dimension stops
+        const rawDef = buildRawMethod(pack.dimensions, this.dimensionNames);
+        this._methodDefs[rawDef.methodId] = rawDef;
+        this._converters[rawDef.methodId] = createConverter(rawDef, this.dimensionNames, this.weights);
+        this._methodIds = pack.methods
+            .slice()
+            .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+            .map(d => d.methodId);
+    }
+    get methodIds() { return this._methodIds; }
+    getMethodDef(methodId) {
+        return this._methodDefs[methodId];
+    }
+    /** Convert an observation from a source method to an N-D vector */
+    toVector(methodId, observation) {
+        const c = this._converters[methodId];
+        if (!c)
+            throw new Error(`Unknown method: "${methodId}" in converter "${this.itemKey}"`);
+        return c.toVector(observation);
+    }
+    /** Find the closest observation in a target method for a given vector */
+    fromVector(methodId, vector) {
+        const c = this._converters[methodId];
+        if (!c)
+            throw new Error(`Unknown method: "${methodId}" in converter "${this.itemKey}"`);
+        const obs = c.fromVector(vector);
+        const obsVec = c.toVector(obs);
+        const dist = weightedDistance(vector, obsVec, this.dimensionNames, this.weights);
+        return { data: obs, matchDistance: dist };
+    }
+    /** Convert between two methods */
+    convertMethodToMethod(fromMethodId, toMethodId, observation) {
+        const vector = this.toVector(fromMethodId, observation);
+        return this.fromVector(toMethodId, vector);
+    }
+    /** Weighted Euclidean distance between two vectors */
+    distance(a, b) {
+        return weightedDistance(a, b, this.dimensionNames, this.weights);
+    }
+    /** Create a zero vector */
+    zeroVector() {
+        return zeroVector(this.dimensionNames);
+    }
+}
+exports.EuclidianDistanceEngine = EuclidianDistanceEngine;
 
 
 /***/ },
@@ -12687,7 +15115,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSLibError = exports.HDSModelConversions = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = exports.model = void 0;
+exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -12724,12 +15152,20 @@ Object.defineProperty(exports, "HDSProfile", ({ enumerable: true, get: function 
 Object.defineProperty(exports, "PROFILE_FIELDS", ({ enumerable: true, get: function () { return HDSProfile_ts_1.PROFILE_FIELDS; } }));
 const HDSModel_Conversions_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Conversions.js */ "./ts/HDSModel/HDSModel-Conversions.ts");
 Object.defineProperty(exports, "HDSModelConversions", ({ enumerable: true, get: function () { return HDSModel_Conversions_ts_1.HDSModelConversions; } }));
+const HDSModel_Converters_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Converters.js */ "./ts/HDSModel/HDSModel-Converters.ts");
+Object.defineProperty(exports, "HDSModelConverters", ({ enumerable: true, get: function () { return HDSModel_Converters_ts_1.HDSModelConverters; } }));
+const HDSModel_Preferred_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Preferred.js */ "./ts/HDSModel/HDSModel-Preferred.ts");
+Object.defineProperty(exports, "HDSModelPreferred", ({ enumerable: true, get: function () { return HDSModel_Preferred_ts_1.HDSModelPreferred; } }));
+Object.defineProperty(exports, "getPreferredInput", ({ enumerable: true, get: function () { return HDSModel_Preferred_ts_1.getPreferredInput; } }));
+Object.defineProperty(exports, "getPreferredDisplay", ({ enumerable: true, get: function () { return HDSModel_Preferred_ts_1.getPreferredDisplay; } }));
+const HDSModel_AppStreams_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-AppStreams.js */ "./ts/HDSModel/HDSModel-AppStreams.ts");
+Object.defineProperty(exports, "HDSModelAppStreams", ({ enumerable: true, get: function () { return HDSModel_AppStreams_ts_1.HDSModelAppStreams; } }));
+const EuclidianDistanceEngine_ts_1 = __webpack_require__(/*! ./converters/EuclidianDistanceEngine.js */ "./ts/converters/EuclidianDistanceEngine.ts");
+Object.defineProperty(exports, "EuclidianDistanceEngine", ({ enumerable: true, get: function () { return EuclidianDistanceEngine_ts_1.EuclidianDistanceEngine; } }));
 const errors_ts_1 = __webpack_require__(/*! ./errors.js */ "./ts/errors.ts");
 Object.defineProperty(exports, "HDSLibError", ({ enumerable: true, get: function () { return errors_ts_1.HDSLibError; } }));
-exports.model = (() => {
-    console.warn('HDSLib.model is deprecated use getHDSModel() instead');
-    return HDSModelInitAndSingleton.getModel();
-})();
+const overloadExtract_ts_1 = __webpack_require__(/*! ./HDSModel/overloadExtract.js */ "./ts/HDSModel/overloadExtract.ts");
+Object.defineProperty(exports, "extractOverloadAsDefinitions", ({ enumerable: true, get: function () { return overloadExtract_ts_1.extractOverloadAsDefinitions; } }));
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
 exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
@@ -12755,7 +15191,10 @@ const HDSLib = {
     SETTING_TYPES: HDSSettings_ts_1.SETTING_TYPES,
     HDSProfile: HDSProfile_ts_1.HDSProfile,
     PROFILE_FIELDS: HDSProfile_ts_1.PROFILE_FIELDS,
-    HDSModelConversions: HDSModel_Conversions_ts_1.HDSModelConversions
+    HDSModelConversions: HDSModel_Conversions_ts_1.HDSModelConversions,
+    HDSModelConverters: HDSModel_Converters_ts_1.HDSModelConverters,
+    EuclidianDistanceEngine: EuclidianDistanceEngine_ts_1.EuclidianDistanceEngine,
+    extractOverloadAsDefinitions: overloadExtract_ts_1.extractOverloadAsDefinitions
 };
 exports["default"] = HDSLib;
 
@@ -13276,6 +15715,14 @@ exports.SETTING_TYPES = {
     unitSystem: 'settings/unit-system',
     displayName: 'contact/display-name',
 };
+/**
+ * Dynamic setting prefixes — one event per key, keyed by content.itemKey.
+ * Event type is shared for all settings with the same prefix.
+ */
+const DYNAMIC_PREFIXES = {
+    'preferred-display-': { eventType: 'settings/preferred-display', contentKey: 'itemKey', contentValue: 'value' },
+    'preferred-input-': { eventType: 'settings/preferred-input', contentKey: 'itemKey', contentValue: 'value' },
+};
 const DEFAULTS = {
     preferredLocales: ['en'],
     theme: 'light',
@@ -13320,6 +15767,15 @@ function applySideEffects(values, key) {
         catch { /* locale may not be supported — ignore */ }
     }
 }
+/** Find the dynamic prefix config for a key, or null */
+function findDynamicPrefix(key) {
+    for (const [prefix, config] of Object.entries(DYNAMIC_PREFIXES)) {
+        if (key.startsWith(prefix)) {
+            return { prefix, ...config, suffix: key.slice(prefix.length) };
+        }
+    }
+    return null;
+}
 /** @internal */
 let _connection = null;
 /** @internal */
@@ -13328,6 +15784,10 @@ let _streamId = null;
 let _cache = {};
 /** @internal */
 let _values = { ...DEFAULTS };
+/** @internal — dynamic settings: key → value */
+let _dynamicValues = {};
+/** @internal — dynamic settings: key → cached event */
+let _dynamicCache = {};
 /** @internal */
 let _hooked = false;
 async function load() {
@@ -13336,12 +15796,30 @@ async function load() {
     const browser = browserDefaults();
     _values = { ...DEFAULTS, ...browser };
     _cache = {};
-    const settingsEvents = await _connection.apiOne('events.get', { streams: [_streamId], types: Object.values(exports.SETTING_TYPES), limit: 100 }, 'events');
+    _dynamicValues = {};
+    _dynamicCache = {};
+    // Collect all event types to fetch (typed + dynamic)
+    const typedEventTypes = Object.values(exports.SETTING_TYPES);
+    const dynamicEventTypes = Object.values(DYNAMIC_PREFIXES).map(c => c.eventType);
+    const allTypes = [...typedEventTypes, ...dynamicEventTypes];
+    const settingsEvents = await _connection.apiOne('events.get', { streams: [_streamId], types: allTypes, limit: 200 }, 'events');
     for (const event of settingsEvents) {
+        // Try typed settings first
         const key = keyForType(event.type);
         if (key && !_cache[key]) {
             _cache[key] = event;
             _values[key] = event.content;
+            continue;
+        }
+        // Try dynamic settings
+        for (const [prefix, config] of Object.entries(DYNAMIC_PREFIXES)) {
+            if (event.type === config.eventType && event.content?.[config.contentKey]) {
+                const dynKey = prefix + event.content[config.contentKey];
+                if (!_dynamicCache[dynKey]) {
+                    _dynamicCache[dynKey] = event;
+                    _dynamicValues[dynKey] = event.content[config.contentValue];
+                }
+            }
         }
     }
     applySideEffects(_values, 'preferredLocales');
@@ -13350,13 +15828,16 @@ async function load() {
 /**
  * HDSSettings — singleton managing user settings as individual Pryv events.
  *
- * Each setting is stored as its own event with a specific type
- * (e.g. `settings/preferredLocales`) in the application's baseStream.
+ * Supports two kinds of settings:
+ * - **Typed settings**: fixed keys (theme, dateFormat, etc.) with specific event types.
+ * - **Dynamic settings**: prefix-based keys (preferred-display-{itemKey}) stored as events
+ *   with a shared event type and keyed by content field.
  *
  * Usage:
  *   await HDSSettings.hookToApplication(app);
  *   const locale = HDSSettings.get('preferredLocales');
  *   await HDSSettings.set('theme', 'dark');
+ *   await HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings');
  */
 const HDSSettings = {
     /**
@@ -13377,19 +15858,35 @@ const HDSSettings = {
         await load();
     },
     /**
-     * Get the current value for a setting.
+     * Get the current value for a typed setting.
+     * Also checks dynamic settings for prefix-based keys (e.g. 'preferred-display-wellbeing-mood').
      */
     get(key) {
+        if (key in _dynamicValues)
+            return _dynamicValues[key];
         return _values[key];
     },
     /**
-     * Get all current settings values.
+     * Get all current typed settings values.
      */
     getAll() {
         return { ..._values };
     },
     /**
-     * Set a setting value — persists to HDS server and updates cache.
+     * Get all dynamic settings with a given prefix.
+     * Returns a map of suffix → value (e.g. { 'wellbeing-mood': 'billings' }).
+     */
+    getDynamic(prefix) {
+        const result = {};
+        for (const [key, value] of Object.entries(_dynamicValues)) {
+            if (key.startsWith(prefix)) {
+                result[key.slice(prefix.length)] = value;
+            }
+        }
+        return result;
+    },
+    /**
+     * Set a typed setting value — persists to HDS server and updates cache.
      */
     async set(key, value) {
         if (!_connection || !_streamId) {
@@ -13407,6 +15904,39 @@ const HDSSettings = {
         }
         _values[key] = value;
         applySideEffects(_values, key);
+    },
+    /**
+     * Set a dynamic setting value — persists to HDS server.
+     * Key must match a known prefix (e.g. 'preferred-display-wellbeing-mood').
+     * Pass null to delete the setting.
+     */
+    async setDynamic(key, value) {
+        if (!_connection || !_streamId) {
+            throw new Error('HDSSettings: call hookToApplication() or hookToConnection() first');
+        }
+        const dp = findDynamicPrefix(key);
+        if (!dp)
+            throw new Error(`Unknown dynamic setting prefix for key: "${key}"`);
+        const existing = _dynamicCache[key];
+        if (value === null || value === undefined) {
+            // Delete
+            if (existing) {
+                await _connection.apiOne('events.delete', { id: existing.id }, 'eventDeletion');
+                delete _dynamicCache[key];
+                delete _dynamicValues[key];
+            }
+            return;
+        }
+        const content = { [dp.contentKey]: dp.suffix, [dp.contentValue]: value };
+        if (existing) {
+            const updated = await _connection.apiOne('events.update', { id: existing.id, update: { content } }, 'event');
+            _dynamicCache[key] = updated;
+        }
+        else {
+            const created = await _connection.apiOne('events.create', { streamIds: [_streamId], type: dp.eventType, content }, 'event');
+            _dynamicCache[key] = created;
+        }
+        _dynamicValues[key] = value;
     },
     /**
      * Whether settings have been loaded from the server.
@@ -13428,7 +15958,33 @@ const HDSSettings = {
         _streamId = null;
         _cache = {};
         _values = { ...DEFAULTS };
+        _dynamicValues = {};
+        _dynamicCache = {};
         _hooked = false;
+    },
+    /**
+     * @internal Test-only: inject a setting value and mark as hooked.
+     * Works for both typed and dynamic keys.
+     */
+    _testInject(key, value) {
+        if (findDynamicPrefix(key)) {
+            _dynamicValues[key] = value;
+        }
+        else {
+            _values[key] = value;
+        }
+        _hooked = true;
+    },
+    /**
+     * @internal Test-only: remove an injected setting.
+     */
+    _testClear(key) {
+        if (findDynamicPrefix(key)) {
+            delete _dynamicValues[key];
+        }
+        else {
+            delete _values[key];
+        }
     },
 };
 exports.HDSSettings = HDSSettings;
@@ -20418,6 +22974,124 @@ describe('[STPS] SETTING_TYPES', () => {
   });
 });
 
+describe('[HDSD] HDSSettings dynamic settings', function () {
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+  });
+
+  it('[HDSD1] _testInject and get work for dynamic keys', () => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-wellbeing-mood', 'billings');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isHooked, true);
+  });
+
+  it('[HDSD2] _testClear removes dynamic key', () => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testClear('preferred-display-wellbeing-mood');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), undefined);
+  });
+
+  it('[HDSD3] getDynamic returns all settings with prefix', () => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-wellbeing-mood', 'billings');
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+    const all = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.getDynamic('preferred-display-');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all['wellbeing-mood'], 'billings');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all['body-vulva-mucus-inspect'], 'appleHealth');
+  });
+
+  it('[HDSD4] unhook clears dynamic settings', () => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-wellbeing-mood', 'billings');
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), undefined);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.getDynamic('preferred-display-'), {});
+  });
+
+  it('[HDSD5] load reads dynamic settings from server events', async () => {
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [
+          { id: 'ev-ac1', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } },
+          { id: 'ev-ac2', type: 'settings/preferred-display', content: { itemKey: 'body-vulva-mucus-inspect', value: 'appleHealth' } },
+          { id: 'ev-t', type: 'settings/theme', content: 'dark' },
+        ]
+      })
+    });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-body-vulva-mucus-inspect'), 'appleHealth');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'dark');
+  });
+
+  it('[HDSD6] setDynamic creates new event', async () => {
+    const conn = createMockConnection();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
+
+    const createCall = conn.apiCalls.find(c =>
+      c.method === 'events.create' && c.params.type === 'settings/preferred-display'
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(createCall, 'Should have called events.create');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(createCall.params.content.itemKey, 'wellbeing-mood');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(createCall.params.content.value, 'billings');
+  });
+
+  it('[HDSD7] setDynamic updates existing event', async () => {
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [
+          { id: 'ev-ac-mood', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } }
+        ]
+      })
+    });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
+
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'mira');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), 'mira');
+
+    const updateCall = conn.apiCalls.find(c => c.method === 'events.update');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(updateCall, 'Should have called events.update');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(updateCall.params.id, 'ev-ac-mood');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(updateCall.params.update.content.value, 'mira');
+  });
+
+  it('[HDSD8] setDynamic with null deletes setting', async () => {
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [
+          { id: 'ev-ac-mood', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } }
+        ]
+      })
+    });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), undefined);
+
+    const deleteCall = conn.apiCalls.find(c => c.method === 'events.delete');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(deleteCall, 'Should have called events.delete');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(deleteCall.params.id, 'ev-ac-mood');
+  });
+
+  it('[HDSD9] setDynamic throws for unknown prefix', async () => {
+    const conn = createMockConnection();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+      () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('unknownPrefix-foo', 'bar'),
+      /Unknown dynamic setting prefix/
+    );
+  });
+
+  it('[HDSD10] setDynamic throws when not hooked', async () => {
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+      () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings'),
+      /hookToApplication|hookToConnection/
+    );
+  });
+});
+
 
 /***/ },
 
@@ -22091,6 +24765,10 @@ describe('[ERRX] HDSLibError', () => {
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/settings/HDSSettings.ts */ "./ts/settings/HDSSettings.ts");
+
+
 
 
 
@@ -22099,8 +24777,9 @@ const modelURL = 'https://model.datasafe.dev/pack.json';
 describe('[ESTX] eventToShortText', () => {
   let model;
   before(async () => {
-    model = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel(modelURL);
-    await model.load();
+    // Use the singleton so eventToShortText picks up the same model instance
+    model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)();
+    await model.load(modelURL);
   });
 
   it('[EST1] returns null for null event', () => {
@@ -22130,15 +24809,50 @@ describe('[ESTX] eventToShortText', () => {
   });
 
   it('[EST6] select with localized option label', () => {
-    const itemDef = model.itemsDefs.forKey('body-vulva-mucus-inspect');
+    const itemDef = model.itemsDefs.forKey('body-vulva-bleeding');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef, 'itemDef should exist');
     const event = {
-      content: 'clear',
+      content: 0.55,
       streamIds: [itemDef.data.streamId],
       type: itemDef.eventTypes[0]
     };
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Clear');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Moderate');
+  });
+
+  it('[EST6b] convertible with source block shows source data (no autoConvert)', async () => {
+    await model.converters.ensureEngine('cervical-fluid');
+    const itemDef = model.itemsDefs.forKey('body-vulva-mucus-inspect');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef, 'itemDef should exist');
+    const event = {
+      content: {
+        vectors: { threadiness: 0.4, stretchability: 0.3 },
+        source: { key: 'mira', sourceData: 'Creamy', engineVersion: 'v0', modelVersion: 'v0' }
+      },
+      streamIds: [itemDef.data.streamId],
+      type: itemDef.eventTypes[0]
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    // Without autoConvert setting, shows sourceData + localized method name
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Creamy (Mira)');
+  });
+
+  it('[EST6c] convertible without source shows dimension stop labels', async () => {
+    // Load converter engine to get dimension labels
+    await model.converters.ensureEngine('mood');
+    const event = {
+      content: {
+        vectors: { valence: 0.9, arousal: 0.3, dominance: 0.6, socialOrientation: 0, temporalFocus: 0 }
+      },
+      streamIds: ['wellbeing-mood'],
+      type: 'mood/5d-vectors'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    // Top 3 dimensions by weight (valence=0.30, arousal=0.25, dominance=0.20)
+    // nearest stop labels: valence 0.9→"Very pleasant", arousal 0.3→"Calm", dominance 0.6→"Neutral"
+    // _raw method computes confidence from weighted distance to nearest stops
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.startsWith('Very pleasant, Calm, Neutral'), `Expected start, got: ${result}`);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
   });
 
   it('[EST7] date item returns ISO date string', () => {
@@ -22226,11 +24940,21 @@ describe('[ESTX] eventToShortText', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('200'), `Expected 200 in: ${result}`);
   });
 
-  it('[EST16a] checkbox with null content returns date', () => {
+  it('[EST16a] checkbox with null content returns date+time', () => {
     const event = { content: null, streamIds: ['fertility-cycles-start'], type: 'activity/plain', time: 1720000000 };
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a date+time string');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(result), `Expected date+time, got: ${result}`);
+  });
+
+  it('[EST16a2] checkbox at midnight local returns date only', () => {
+    // Midnight local time
+    const d = new Date(2024, 6, 3, 0, 0, 0); // July 3, 2024 00:00 local
+    const midnight = d.getTime() / 1000;
+    const event = { content: null, streamIds: ['fertility-cycles-start'], type: 'activity/plain', time: midnight };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a date string');
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(result), `Expected ISO date, got: ${result}`);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(result), `Expected date only, got: ${result}`);
   });
 
   it('[EST16b] medication with plain string label (not i18n object)', () => {
@@ -22309,6 +25033,238 @@ describe('[ESTX] eventToShortText', () => {
     if (opt) {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('1/3'), `Expected ratio prefix in: ${result}`);
     }
+  });
+
+  it('[EST17a] test-result/scale positive (1)', () => {
+    const event = { content: 1, streamIds: ['fertility-test-opk'], type: 'test-result/scale' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Positive');
+  });
+
+  it('[EST17b] test-result/scale negative (-1)', () => {
+    const event = { content: -1, streamIds: ['fertility-test-opk'], type: 'test-result/scale' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Negative');
+  });
+
+  it('[EST17c] test-result/scale indeterminate (0)', () => {
+    const event = { content: 0, streamIds: ['fertility-test-pregnancy'], type: 'test-result/scale' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Indeterminate');
+  });
+
+  it('[EST17d] test-result/scale partial positive (0.56)', () => {
+    const event = { content: 0.56, streamIds: ['fertility-test-opk'], type: 'test-result/scale' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Positive 56%');
+  });
+
+  it('[EST17e] test-result/scale partial negative (-0.3)', () => {
+    const event = { content: -0.3, streamIds: ['fertility-test-opk'], type: 'test-result/scale' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Negative 30%');
+  });
+
+  it('[EST18] medication/basic composite shows name + dose', () => {
+    const event = {
+      content: { name: 'Ibuprofen', doseValue: 400, doseUnit: 'mg', route: 'oral' },
+      streamIds: ['medication-intake'],
+      type: 'medication/basic'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Ibuprofen — 400 mg, oral');
+  });
+
+  // ─── Convertible: mood ───────────────────────────────────────────
+
+  describe('[EST20] convertible mood', () => {
+    before(async () => {
+      await model.converters.ensureEngine('mood');
+    });
+
+    it('[EST20a] mood from mira source — no autoConvert', async () => {
+      const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
+      event.time = Date.now() / 1000;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Happy (Mira)');
+    });
+
+    it('[EST20b] mood from mira source — various labels', async () => {
+      const expected = {
+        Sad: 'Sad (Mira)',
+        Excited: 'Excited (Mira)',
+        Normal: 'Normal (Mira)',
+        'Anxiety or panic attacks': 'Anxiety or panic attacks (Mira)',
+      };
+      for (const [label, exp] of Object.entries(expected)) {
+        const event = await model.converters.convertMethodToEvent('mood', 'mira', label);
+        event.time = Date.now() / 1000;
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), exp, `Failed for: ${label}`);
+      }
+    });
+
+    it('[EST20c] mood raw vector — uses stop labels sorted by weight + confidence', () => {
+      const event = {
+        content: { vectors: { valence: 1.0, arousal: 0.9, dominance: 0.8, socialOrientation: 0.7, temporalFocus: 0.6 } },
+        streamIds: ['wellbeing-mood'],
+        type: 'mood/5d-vectors'
+      };
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      // valence(w=0.30)→Very pleasant, arousal(w=0.25)→Very energized, dominance(w=0.20)→In control
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.startsWith('Very pleasant, Very energized, In control'), `Expected start, got: ${result}`);
+    });
+
+    it('[EST20d] mood raw vector — neutral baseline is 100% (exact stops)', () => {
+      const event = {
+        content: { vectors: { valence: 0.5, arousal: 0.5, dominance: 0.5, socialOrientation: 0.5, temporalFocus: 0.5 } },
+        streamIds: ['wellbeing-mood'],
+        type: 'mood/5d-vectors'
+      };
+      // All values match exact stops → 100% → no % shown. All 5 dimensions resolved.
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Neutral, Moderate, Neutral, Balanced, Present');
+    });
+
+    it('[EST20e] mood raw vector — depressed shows confidence', () => {
+      const event = {
+        content: { vectors: { valence: 0.1, arousal: 0.1, dominance: 0.1, socialOrientation: 0.2, temporalFocus: 0.1 } },
+        streamIds: ['wellbeing-mood'],
+        type: 'mood/5d-vectors'
+      };
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.startsWith('Very unpleasant, Very calm, Powerless'), `Expected start, got: ${result}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
+    });
+  });
+
+  // ─── Convertible: cervical fluid ─────────────────────────────────
+
+  describe('[EST21] convertible cervical fluid', () => {
+    before(async () => {
+      await model.converters.ensureEngine('cervical-fluid');
+    });
+
+    it('[EST21a] mucus from mira source — no autoConvert', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+      event.time = Date.now() / 1000;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Creamy (Mira)');
+    });
+
+    it('[EST21b] mucus from mira source — various labels', async () => {
+      const labels = ['No discharge', 'Dry', 'Sticky', 'Watery', 'Raw Egg White'];
+      for (const label of labels) {
+        const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', label);
+        event.time = Date.now() / 1000;
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), `${label} (Mira)`, `Failed for: ${label}`);
+      }
+    });
+
+    it('[EST21c] mucus from appleHealth source — label localized', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'appleHealth', 'eggWhite');
+      event.time = Date.now() / 1000;
+      // "eggWhite" value resolves to "Egg White" label
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Egg White (Apple Health)');
+    });
+
+    it('[EST21d] mucus from creighton source — label localized', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'creighton', '10KL');
+      event.time = Date.now() / 1000;
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      // Creighton 10KL has a descriptive label in its method definition
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Creighton Model'), `Expected method name, got: ${result}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('10KL'), `Expected observation value, got: ${result}`);
+    });
+  });
+
+  // ─── Convertible: autoConvert via eventToShortText ──
+
+  describe('[EST22] convertible autoConvert in eventToShortText', () => {
+    before(async () => {
+      await model.converters.ensureEngine('mood');
+      await model.converters.ensureEngine('cervical-fluid');
+    });
+
+    afterEach(() => {
+      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__.unhook();
+    });
+
+    it('[EST22a] no autoConvert — shows sourceData + method name', async () => {
+      const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Excited');
+      event.time = Date.now() / 1000;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Excited (Mira)');
+    });
+
+    it('[EST22b] autoConvert same method — shows sourceData + method name (no conversion)', async () => {
+      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-wellbeing-mood', 'mira');
+      const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
+      event.time = Date.now() / 1000;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Happy (Mira)');
+    });
+
+    it('[EST22c] autoConvert mood mira→_raw — shows stop labels with target <- source', async () => {
+      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-wellbeing-mood', '_raw');
+      const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
+      event.time = Date.now() / 1000;
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Pleasant'), `Expected stop label, got: ${result}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('HDS Native <- Mira'), `Expected target <- source, got: ${result}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
+    });
+
+    it('[EST22d] autoConvert cervical fluid mira→appleHealth — localized label + perfect match', async () => {
+      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+      event.time = Date.now() / 1000;
+      // "creamy" value should resolve to "Creamy" label from appleHealth method
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Creamy (Apple Health <- Mira)');
+    });
+
+    it('[EST22e] autoConvert cervical fluid mira→billings — localized label + partial match', async () => {
+      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-body-vulva-mucus-inspect', 'billings');
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Watery');
+      event.time = Date.now() / 1000;
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      // billings "wetSlippery" value should have a localized label
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!result.includes('wetSlippery'), `Should use label not value, got: ${result}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Billings (BOM) <- Mira'), `Expected target <- source, got: ${result}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
+    });
+
+    it('[EST22f] autoConvert raw vector (no source) — shows result + target name', async () => {
+      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-wellbeing-mood', 'mira');
+      const event = {
+        content: { vectors: { valence: 0.8, arousal: 0.2, dominance: 0.7, socialOrientation: 0.5, temporalFocus: 0.3 } },
+        streamIds: ['wellbeing-mood'],
+        type: 'mood/5d-vectors',
+        time: Date.now() / 1000
+      };
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Mira'), `Expected target method name, got: ${result}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
+    });
+
+    it('[EST22g] all cervical fluid mira→appleHealth labels are capitalized', async () => {
+      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+      const pairs = [
+        ['No discharge', 'Dry'], ['Dry', 'Dry'], ['Sticky', 'Sticky'],
+        ['Creamy', 'Creamy'], ['Watery', 'Watery'], ['Raw Egg White', 'Egg White'],
+      ];
+      for (const [mira, expectedLabel] of pairs) {
+        const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', mira);
+        event.time = Date.now() / 1000;
+        const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.startsWith(expectedLabel), `${mira} → expected "${expectedLabel}...", got: "${result}"`);
+      }
+    });
+
+    it('[EST22h] cervical fluid source labels are localized from method definition', async () => {
+      // appleHealth source "eggWhite" should show as "Egg White" (label), not "eggWhite" (value)
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'appleHealth', 'eggWhite');
+      event.time = Date.now() / 1000;
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Egg White (Apple Health)');
+    });
+
+    it('[EST22i] cervical fluid creighton source shows localized label', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'creighton', '10KL');
+      event.time = Date.now() / 1000;
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      // creighton "10KL" has a label in its method definition
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Creighton Model'), `Expected method name, got: ${result}`);
+    });
   });
 });
 
