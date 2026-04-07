@@ -9,6 +9,7 @@ import { HDSModelConversions } from './HDSModel-Conversions.ts';
 import { HDSModelConverters } from './HDSModel-Converters.ts';
 import { HDSModelPreferred } from './HDSModel-Preferred.ts';
 import { HDSModelAppStreams } from './HDSModel-AppStreams.ts';
+import { applyOverload, validateOverload, type HDSModelOverload } from './HDSModel-Overload.ts';
 
 export class HDSModel {
   /**
@@ -57,15 +58,25 @@ export class HDSModel {
   }
 
   /**
-   * Load model definitions
+   * Load model definitions.
+   *
+   * @param modelUrl - JSON definition URL (defaults to the one set at construct time)
+   * @param overload - Optional {@link HDSModelOverload} merged into the loaded
+   *   model BEFORE freezing. Lets apps add itemDefs / streams / eventTypes /
+   *   settings or refine translations & default `repeatable` values without
+   *   forking the data-model. See `HDSModel-Overload.ts` for the policy.
    */
-  async load (modelUrl: string | null = null): Promise<void> {
+  async load (modelUrl: string | null = null, overload: HDSModelOverload | null = null): Promise<void> {
     if (modelUrl) {
       this.#modelUrl = modelUrl;
     }
     const response = await fetch(this.#modelUrl);
     const resultText = await response.text();
     const result = JSON.parse(resultText);
+    if (overload) {
+      validateOverload(result, overload);
+      applyOverload(result, overload);
+    }
     this.#modelData = result;
     // add key to items before freezing;
     for (const [key, item] of Object.entries(this.#modelData.items)) {
