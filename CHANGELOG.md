@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- `HDSModelOverload` — apps can extend the shared HDS data-model at init time with their own itemDefs, streams, eventTypes, settings, datasources, or appStreams, plus refine translations and default `repeatable` values.
+  - `HDSModel.load(url, overload?)` — merges the overload (after policy validation) before freezing.
+  - `initHDSModel({ overload })` — same hook on the singleton init.
+  - `extractOverloadAsDefinitions(overload)` — converts an overload back into a `{ filepath: content }` map matching the layout under `data-model/data-model/definitions/`, so apps can dump their overload to disk and open a PR upstream. Browser-safe (no `fs`).
+  - Forbidden mutations (changing `parentId` of an existing stream, `type`/schema of an existing eventType, `type`/`streamId`/`eventType` of an existing item, etc.) throw `HDSLibError` listing every violation.
+
 ## [0.5.0] - 2026-04-02
 
 ### Added

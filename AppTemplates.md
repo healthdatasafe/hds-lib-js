@@ -142,3 +142,59 @@ Revoke current request
 
 #### collectorClient.refuse()
 Refuse current request
+
+## Overloading the data model
+
+Apps can extend the shared HDS data-model at init time without forking `data-model`. Pass an `HDSModelOverload` to `initHDSModel()`:
+
+```js
+import { initHDSModel, extractOverloadAsDefinitions } from 'hds-lib';
+
+const overload = {
+  // Add brand new items
+  items: {
+    'mood-happy': {
+      version: 'v1',
+      label: { en: 'Happy', fr: 'Heureux' },
+      description: { en: 'Feeling happy' },
+      streamId: 'mood-happy',
+      eventType: 'activity/plain',
+      type: 'checkbox',
+      repeatable: 'unlimited'
+    },
+    // Refine an existing item: add a translation, override repeatable
+    'body-weight': {
+      label: { fr: 'Poids' },
+      repeatable: 'P1D'
+    }
+  },
+  // Add new streams (must hang under an existing parent — or be a new root)
+  streams: [
+    { id: 'mood', name: 'Mood', parentId: null, children: [
+      { id: 'mood-happy', name: 'Happy' }
+    ]}
+  ],
+  // App-specific settings, eventTypes, datasources, appStreams also supported
+  settings: {
+    fontSize: { eventType: 'settings/font-size', type: 'number', default: 14 }
+  }
+};
+
+await initHDSModel({ overload });
+```
+
+The overload is **validated** before merging — attempting to change the `parentId` of an existing stream, the `type`/schema of an existing eventType, or the `type`/`streamId`/`eventType` of an existing item throws `HDSLibError` listing every violation.
+
+To later contribute your overload upstream, dump it to `data-model/data-model/definitions/`-shaped files:
+
+```js
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+const files = extractOverloadAsDefinitions(overload);
+for (const [path, content] of Object.entries(files)) {
+  mkdirSync(dirname(`./out/${path}`), { recursive: true });
+  writeFileSync(`./out/${path}`, content);
+}
+```
+
+Note: runtime overload validation only enforces the policy table (no AJV schema). For full schema validation, run `data-model/data-model/src/schemas/items.js` AJV against your overload at build time.
