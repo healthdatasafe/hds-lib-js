@@ -96,6 +96,10 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
     return formatDatasource(content);
   }
 
+  if (type === 'slider') {
+    return formatSlider(content, itemDef);
+  }
+
   // number, text, composite, etc.
   if (typeof content === 'number') {
     return formatNumber(event.type, content, model);
@@ -164,6 +168,31 @@ function formatNumber (eventType: string, content: number, model: any): string {
   }
   const symbol = getSymbol(eventType, model);
   return symbol ? `${content} ${symbol}` : String(content);
+}
+
+/**
+ * Format a slider event: applies the item-def's slider.display block
+ * (multiplier / precision / suffix) so the readout matches what the patient
+ * saw when entering the value. Storage is the raw number; display rescales.
+ */
+function formatSlider (content: any, itemDef: any): string {
+  if (typeof content !== 'number') return String(content);
+  const display = itemDef.data?.slider?.display || {};
+  const multiplier: number = typeof display.multiplier === 'number' ? display.multiplier : 1;
+  let precision: number;
+  if (typeof display.precision === 'number') {
+    precision = display.precision;
+  } else if (multiplier >= 10) {
+    precision = 0;
+  } else {
+    const stepStr = String(itemDef.data?.step ?? 1);
+    const dot = stepStr.indexOf('.');
+    precision = dot >= 0 ? Math.min(stepStr.length - dot - 1, 4) : 0;
+  }
+  const scaled = content * multiplier;
+  const text = scaled.toFixed(precision);
+  const suffix = display.suffix ? localizeText(display.suffix) : '';
+  return suffix ? `${text} ${suffix}` : text;
 }
 
 function formatSelect (event: any, content: any, itemDef: any): string {

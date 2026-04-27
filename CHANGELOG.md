@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-27
+
+### Added — itemLabels (per-form label overrides) module
+- `appTemplates.collectItemLabels(itemKey, contacts)` — gathers label overrides for an item across every active CollectorClient, attributing each entry to its source contact + form. Pure data layer; usable by any patient/diary surface, not just the form renderer.
+- `appTemplates.collectItemLabelsFromSections(itemKey, sources, opts?)` — lower-level helper for callers that already have section objects.
+- `appTemplates.getSectionItemLabels(section, itemKey)` — read labels for one item out of one section.
+- New types: `ItemLabels`, `ItemCustomization`, `ItemLabelSource`, `ItemLabelsWithSource`, `CollectItemLabelsOptions` (mirror the `section.itemCustomizations[itemKey].labels` shape; previously duplicated as inline interfaces in hds-forms-js).
+- Tests: `tests/itemLabels.test.js` (deduplication, requireLabels gating, options-map preservation, source attribution).
+
+### Changed — eventToShortText handles slider items
+- `eventToShortText` now formats `type: 'slider'` events using the item def's `slider.display` block (`multiplier`, `precision`, `suffix`). EQ VAS storing `0.73` now renders as `"73 /100"` everywhere events are summarised (diary card, timeline tooltips, etc.). Previously fell through to the generic number path and read `"0.73"`.
+
 ### Added
 - `HDSModelOverload` — apps can extend the shared HDS data-model at init time with their own itemDefs, streams, eventTypes, settings, datasources, or appStreams, plus refine translations and default `repeatable` values.
   - `HDSModel.load(url, overload?)` — merges the overload (after policy validation) before freezing.

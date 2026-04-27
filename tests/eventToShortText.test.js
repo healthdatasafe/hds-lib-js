@@ -249,6 +249,27 @@ describe('[ESTX] eventToShortText', () => {
     assert.equal(result, '42');
   });
 
+  it('[EST15s] slider with display.multiplier+suffix (EQ VAS 0.73 → 73 /100)', () => {
+    const itemDef = model.itemsDefs.forKey('wellbeing-self-rated-health');
+    if (!itemDef || itemDef.data.type !== 'slider') {
+      // Model not yet redeployed with slider — skip rather than fail
+      return;
+    }
+    const event = { content: 0.73, streamIds: ['wellbeing-self-rated-health'], type: 'ratio/proportion' };
+    const result = eventToShortText(event);
+    // Multiplier 100, precision 0 → "73"; suffix "/100" → "73 /100"
+    assert.ok(result === '73 /100' || result === '73', `Expected "73 /100" or "73", got: ${result}`);
+  });
+
+  it('[EST15s2] slider edge cases (min/max)', () => {
+    const itemDef = model.itemsDefs.forKey('wellbeing-self-rated-health');
+    if (!itemDef || itemDef.data.type !== 'slider') return;
+    const min = eventToShortText({ content: 0, streamIds: ['wellbeing-self-rated-health'], type: 'ratio/proportion' });
+    const max = eventToShortText({ content: 1, streamIds: ['wellbeing-self-rated-health'], type: 'ratio/proportion' });
+    assert.ok(min === '0 /100' || min === '0', `min: ${min}`);
+    assert.ok(max === '100 /100' || max === '100', `max: ${max}`);
+  });
+
   it('[EST16] ratio/generic select', () => {
     const itemDef = model.itemsDefs.forKey('body-vulva-wetness-feeling');
     assert.ok(itemDef, 'itemDef should exist');
