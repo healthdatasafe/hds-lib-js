@@ -1,6 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
 import { Contact } from '../ts/appTemplates/Contact.ts';
-import { CollectorClient } from '../ts/appTemplates/CollectorClient.ts';
 
 /**
  * Unit tests for access update request functionality.

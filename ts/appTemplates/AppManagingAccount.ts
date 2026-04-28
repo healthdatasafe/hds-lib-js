@@ -87,7 +87,7 @@ export class AppManagingAccount extends Application {
       collectors.map(async (collector) => {
         const race = Promise.race([
           loadCollector(collector),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS))
+          new Promise((_resolve, reject) => setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS))
         ]);
         const invites = await race as any[];
         return { collector, invites };
