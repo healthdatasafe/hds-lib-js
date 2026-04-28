@@ -1,6 +1,6 @@
 {
   "name": "hds-lib",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Health Data Safe - Library",
   "type": "module",
   "engines": {
@@ -29,10 +29,11 @@
   "exports": {
     ".": {
       "types": "./js/index.d.ts",
-      "import": "./js/index.js",
+      "import": "./ts/index.ts",
       "default": "./js/index.js"
     },
-    "./ts/*": "./ts/*"
+    "./ts/*": "./ts/*",
+    "./js/*": "./js/*"
   },
   "keywords": [
     "HDS",

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-04-28
+
+### Changed — `package.json.exports.import` now points at TS source (Plan 49)
+- `exports[.].import` switched from `./js/index.js` (compiled JS) to `./ts/index.ts` (TS source).
+- Added wildcard subpath export `./js/*` (was already `./ts/*`) for completeness.
+- `default` export still points at `./js/index.js` for non-Vite/CJS consumers.
+
+**Why.** Vite resolves the `import` condition in dev mode. With `import` pointing at compiled JS, live edits to `ts/*.ts` weren't reflected in npm-linked consumers without rebuilding hds-lib-js. Pointing `import` at TS source enables true live cross-repo development. This also avoids the duplicate-singleton bug surfaced by Plan 45 (a downstream lib's pre-built bundle inlining a second copy of `hds-lib`'s `HDSModel`). Production builds and CJS consumers are unaffected (still hit `default`).
+
+Brings `hds-lib` in line with `_claude-memory/conventions.md § Package exports: TS source for bundlers`. See `_plans/49-local-dev-dependency-graph-study/PLAN.md` for the full rationale.
+
 ## [0.7.0] - 2026-04-27
 
 ### Added — itemLabels (per-form label overrides) module
