@@ -2,6 +2,21 @@ import { pryv } from '../patchedPryv.ts';
 import { HDSLibError } from '../errors.ts';
 import type { ContactSource } from './interfaces.ts';
 
+/** Generate a v4-ish UUID. Uses crypto.randomUUID() when available, falls back to a manual impl. */
+function newUuid (): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  // RFC4122-ish v4 fallback
+  const hex = '0123456789abcdef';
+  let s = '';
+  for (let i = 0; i < 36; i++) {
+    if (i === 8 || i === 13 || i === 18 || i === 23) s += '-';
+    else if (i === 14) s += '4';
+    else if (i === 19) s += hex[(Math.random() * 4 | 0) + 8];
+    else s += hex[Math.random() * 16 | 0];
+  }
+  return s;
+}
+
 /**
  * Collector Invite
  * There is one Collector Invite per Collector => Enduser connection
@@ -73,6 +88,73 @@ export class CollectorInvite {
       content
     };
     return await this.connection.apiOne('events.create', newEvent, 'event');
+  }
+
+  // -------------------- system stream (Plan 45) ----------------- //
+  /** Whether this invite has system-stream access (operator → user alerts + user → operator acks). */
+  get hasSystem (): boolean {
+    return this.eventData.content.system != null;
+  }
+
+  /** Stream wiring for the system feature. streamOut is the operator's write target; streamIn is read. */
+  get systemSettings (): { streamOut?: string, streamIn?: string } {
+    return this.eventData.content.system || {};
+  }
+
+  /** Identify the source of a system event. */
+  systemEventInfos (event: pryv.Event): { source: 'me' | 'user' | 'unknown' } {
+    const s = this.systemSettings;
+    if (s.streamOut && event.streamIds.includes(s.streamOut)) return { source: 'me' };
+    if (s.streamIn && event.streamIds.includes(s.streamIn)) return { source: 'user' };
+    return { source: 'unknown' };
+  }
+
+  /**
+   * Post a system alert to the user. Generates ackId if ackRequired and not provided.
+   * Requires `hasSystem === true` and `systemSettings.streamOut` (manage permission).
+   */
+  async systemPostAlert (alert: {
+    level: 'info' | 'warning' | 'critical',
+    title: string,
+    body: string,
+    ackRequired?: boolean,
+    ackId?: string
+  }): Promise<pryv.Event> {
+    const s = this.systemSettings;
+    if (!s.streamOut) throw new HDSLibError('No system streamOut on this invite');
+    const content: any = { level: alert.level, title: alert.title, body: alert.body };
+    if (alert.ackRequired) {
+      content.ackRequired = true;
+      content.ackId = alert.ackId || newUuid();
+    } else if (alert.ackId) {
+      content.ackId = alert.ackId;
+    }
+    const newEvent = {
+      type: 'message/system-alert',
+      streamIds: [s.streamOut],
+      content
+    };
+    return await this.connection.apiOne('events.create', newEvent, 'event');
+  }
+
+  /**
+   * Read system-ack events for this invite, optionally filtered by alert ackId.
+   * Returns events sorted ascending by `created`.
+   */
+  async systemPollAcks (filter: { ackId?: string, limit?: number } = {}): Promise<pryv.Event[]> {
+    const s = this.systemSettings;
+    if (!s.streamIn) throw new HDSLibError('No system streamIn on this invite');
+    const params: any = {
+      streams: [s.streamIn],
+      types: ['message/system-ack'],
+      limit: filter.limit ?? 100,
+      sortAscending: true
+    };
+    const events = await this.connection.apiOne('events.get', params, 'events');
+    if (filter.ackId) {
+      return (events as pryv.Event[]).filter((e: any) => e.content?.ackId === filter.ackId);
+    }
+    return events as pryv.Event[];
   }
 
   /**

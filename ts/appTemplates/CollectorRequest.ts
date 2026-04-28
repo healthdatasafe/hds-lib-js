@@ -9,6 +9,13 @@ type localizableTextLanguages = keyof localizableText;
 declare type PermissionItem = { streamId: string, defaultName: string, level: string };
 declare type PermissionItemLight = { streamId: string, defaultName?: string, level?: string };
 
+/**
+ * Mode-3 reference (Plan 45 §2.9): request access on a pre-existing stream
+ * without provisioning it. The stream's `clientData` declares its typing;
+ * this CollectorRequest does not modify that.
+ */
+export type ExistingStreamRef = { streamId: string, permissions: Array<'read' | 'manage' | 'contribute'>, purpose?: string };
+
 const CURRENT_VERSION = 1;
 
 /**
@@ -32,6 +39,7 @@ export class CollectorRequest {
   #permissions: Array<PermissionItem>;
   #sections: Array<CollectorRequestSection>;
   #features: { chat?: { type: 'usernames' | 'user' } };
+  #existingStreamRefs: Array<ExistingStreamRef>;
 
   #extraContent: any;
   constructor (content: any) {
@@ -42,6 +50,7 @@ export class CollectorRequest {
     this.#permissionsExtra = [];
     this.#sections = [];
     this.#features = {};
+    this.#existingStreamRefs = [];
     this.setContent(content);
   }
 
@@ -152,6 +161,15 @@ export class CollectorRequest {
         throw new HDSLibError('Found unkown features', futureContent.features);
       }
       delete futureContent.features;
+    }
+
+    // -- existingStreamRefs (Plan 45 mode-3)
+    if (futureContent.existingStreamRefs) {
+      this.#existingStreamRefs = [];
+      for (const ref of futureContent.existingStreamRefs) {
+        this.addExistingStreamRef(ref);
+      }
+      delete futureContent.existingStreamRefs;
     }
 
     this.#extraContent = futureContent;
@@ -281,13 +299,42 @@ export class CollectorRequest {
     this.#features.chat = settings;
   }
 
+  // ---------- existingStreamRefs (Plan 45 mode-3) ----------- //
+
+  get existingStreamRefs (): Array<ExistingStreamRef> { return this.#existingStreamRefs; }
+
+  /**
+   * Request access on a pre-existing stream (e.g. account-level `app-system-out` /
+   * `app-system-in`). Typing of inner events is owned by the stream's existing
+   * `clientData`; this CollectorRequest only patches access permissions at acceptance.
+   */
+  addExistingStreamRef (ref: ExistingStreamRef) {
+    if (ref == null || typeof ref !== 'object') throw new HDSLibError('Invalid existingStreamRef', ref);
+    if (typeof ref.streamId !== 'string' || ref.streamId.length === 0) {
+      throw new HDSLibError('existingStreamRef.streamId must be a non-empty string', ref);
+    }
+    if (!Array.isArray(ref.permissions) || ref.permissions.length === 0) {
+      throw new HDSLibError('existingStreamRef.permissions must be a non-empty array', ref);
+    }
+    for (const p of ref.permissions) {
+      if (!['read', 'manage', 'contribute'].includes(p)) {
+        throw new HDSLibError(`Invalid permission level "${p}" in existingStreamRef`, ref);
+      }
+    }
+    this.#existingStreamRefs.push({
+      streamId: ref.streamId,
+      permissions: ref.permissions,
+      ...(ref.purpose != null ? { purpose: ref.purpose } : {})
+    });
+  }
+
   // ---------- sections ------------- //
 
   /**
    * Return Content to comply with initial implementation as an object
    */
   get content () {
-    const content = {
+    const content: any = {
       version: this.version,
       title: this.title,
       consent: this.consent,
@@ -305,6 +352,9 @@ export class CollectorRequest {
       },
       sections: this.sectionsData
     };
+    if (this.#existingStreamRefs.length > 0) {
+      content.existingStreamRefs = this.#existingStreamRefs;
+    }
     Object.assign(content, this.#extraContent);
     return content;
   }

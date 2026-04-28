@@ -196,7 +196,7 @@ export class CollectorClient {
    * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
    */
   async accept (forceAndSkipAccessCreation = false) {
-    const responseContent: { apiEndpoint?: string, chat?: any } = {};
+    const responseContent: { apiEndpoint?: string, chat?: any, system?: any } = {};
     if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
       forceAndSkipAccessCreation = true;
       logger.error('CollectorClient.accept TODO fix accept when access valid');
@@ -239,6 +239,72 @@ export class CollectorClient {
         };
         // ---------- end chat ---------- //
       }
+
+      // ------------- existingStreamRefs (Plan 45 mode-3) ------------------------ //
+      const existingStreamRefs: Array<{ streamId: string, permissions: string[], purpose?: string }> =
+        this.requestData.existingStreamRefs || [];
+      if (existingStreamRefs.length > 0) {
+        // 1. Bootstrap-provision `app-system-*` streams if any ref points there and they don't yet exist.
+        //    (Defensive — `hds-webapp` provisions them at account setup; this safety net handles users
+        //    reaching HDS via an invite without ever opening hds-webapp first.)
+        const needsAppSystem = existingStreamRefs.some((r) =>
+          r.streamId === 'app-system-out' || r.streamId === 'app-system-in'
+        );
+        if (needsAppSystem) {
+          const appSystemBootstrap = [
+            { method: 'streams.create', params: { name: 'System', id: 'app-system' } },
+            {
+              method: 'streams.create',
+              params: {
+                name: 'System out',
+                id: 'app-system-out',
+                parentId: 'app-system',
+                clientData: {
+                  hdsSystemFeature: {
+                    'message/system-alert': { version: 'v1', levels: ['info', 'warning', 'critical'] }
+                  }
+                }
+              }
+            },
+            {
+              method: 'streams.create',
+              params: {
+                name: 'System in',
+                id: 'app-system-in',
+                parentId: 'app-system',
+                clientData: {
+                  hdsSystemFeature: {
+                    'message/system-ack': { version: 'v1' }
+                  }
+                }
+              }
+            }
+          ];
+          const bootstrapResults = await this.app.connection.api(appSystemBootstrap);
+          bootstrapResults.forEach((r) => {
+            if (r.stream?.id || r.error?.id === 'item-already-exists') return;
+            throw new HDSLibError('Failed bootstrapping app-system streams', bootstrapResults);
+          });
+        }
+
+        // 2. Append the requested permissions to the access being granted.
+        for (const ref of existingStreamRefs) {
+          for (const level of ref.permissions) {
+            cleanedPermissions.push({ streamId: ref.streamId, level });
+          }
+        }
+
+        // 3. Surface system-stream wiring on responseContent.system if app-system-* refs are present.
+        const outRef = existingStreamRefs.find((r) => r.streamId === 'app-system-out');
+        const inRef = existingStreamRefs.find((r) => r.streamId === 'app-system-in');
+        if (outRef || inRef) {
+          responseContent.system = {
+            ...(outRef ? { streamOut: 'app-system-out' } : {}),
+            ...(inRef ? { streamIn: 'app-system-in' } : {})
+          };
+        }
+      }
+      // ---------- end existingStreamRefs ---------- //
 
       const accessCreateData = {
         name: this.key,

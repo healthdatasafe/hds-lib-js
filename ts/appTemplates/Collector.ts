@@ -219,12 +219,14 @@ export class Collector {
           (updateInvite as any).streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)];
           updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
           if (responseEvent.content.chat) updateInvite.content.chat = responseEvent.content.chat;
+          if (responseEvent.content.system) updateInvite.content.system = responseEvent.content.system;
           break;
         case 'update-accept':
           // Patient accepted an access update — new apiEndpoint, stays active
           (updateInvite as any).streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)];
           updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
           if (responseEvent.content.chat) updateInvite.content.chat = responseEvent.content.chat;
+          if (responseEvent.content.system) updateInvite.content.system = responseEvent.content.system;
           break;
         case 'update-refuse':
           // Patient refused the update — invite stays active with current permissions

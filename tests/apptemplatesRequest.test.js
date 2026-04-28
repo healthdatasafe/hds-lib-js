@@ -304,4 +304,78 @@ describe('[APRX] appTemplates Requests', function () {
     };
     assert.deepEqual(requestContent, expectedContent);
   });
+
+  describe('[APRES] CollectorRequest existingStreamRefs (Plan 45)', function () {
+    it('[ARES1] should parse existingStreamRefs from content', () => {
+      const request = new CollectorRequest({
+        existingStreamRefs: [
+          { streamId: 'app-system-out', permissions: ['manage'], purpose: 'system-out' },
+          { streamId: 'app-system-in', permissions: ['read'], purpose: 'system-in' }
+        ]
+      });
+      assert.equal(request.existingStreamRefs.length, 2);
+      assert.equal(request.existingStreamRefs[0].streamId, 'app-system-out');
+      assert.deepEqual(request.existingStreamRefs[0].permissions, ['manage']);
+      assert.equal(request.existingStreamRefs[1].streamId, 'app-system-in');
+    });
+
+    it('[ARES2] should serialize existingStreamRefs in content', () => {
+      const request = new CollectorRequest({});
+      request.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['manage'] });
+      assert.ok(request.content.existingStreamRefs);
+      assert.equal(request.content.existingStreamRefs.length, 1);
+      assert.equal(request.content.existingStreamRefs[0].streamId, 'app-system-out');
+    });
+
+    it('[ARES3] should not serialize existingStreamRefs when empty', () => {
+      const request = new CollectorRequest({});
+      assert.equal(request.content.existingStreamRefs, undefined);
+    });
+
+    it('[ARES4] should reject non-string streamId', () => {
+      const request = new CollectorRequest({});
+      try {
+        request.addExistingStreamRef({ streamId: 123, permissions: ['read'] });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.match(e.message, /streamId must be a non-empty string/);
+      }
+    });
+
+    it('[ARES5] should reject empty permissions array', () => {
+      const request = new CollectorRequest({});
+      try {
+        request.addExistingStreamRef({ streamId: 'app-system-out', permissions: [] });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.match(e.message, /permissions must be a non-empty array/);
+      }
+    });
+
+    it('[ARES6] should reject invalid permission level', () => {
+      const request = new CollectorRequest({});
+      try {
+        request.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['admin'] });
+        throw new Error('Should throw error');
+      } catch (e) {
+        assert.match(e.message, /Invalid permission level "admin"/);
+      }
+    });
+
+    it('[ARES7] should accept all three permission levels', () => {
+      const request = new CollectorRequest({});
+      request.addExistingStreamRef({ streamId: 's1', permissions: ['read'] });
+      request.addExistingStreamRef({ streamId: 's2', permissions: ['manage'] });
+      request.addExistingStreamRef({ streamId: 's3', permissions: ['contribute'] });
+      assert.equal(request.existingStreamRefs.length, 3);
+    });
+
+    it('[ARES8] should round-trip through setContent', () => {
+      const r1 = new CollectorRequest({});
+      r1.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['manage'], purpose: 'system' });
+      const content1 = r1.content;
+      const r2 = new CollectorRequest(content1);
+      assert.deepEqual(r2.existingStreamRefs, r1.existingStreamRefs);
+    });
+  });
 });

@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-28
+
+### Added — Plan 45 Phase 3a (system stream MVP slice)
+
+#### `CollectorRequest` (`ts/appTemplates/CollectorRequest.ts`)
+- New top-level field `existingStreamRefs[]` (Plan 45 §2.9 mode-3): request access on pre-existing streams without provisioning. Each ref carries `{ streamId, permissions: ('read'|'manage'|'contribute')[], purpose? }`.
+- New methods: `addExistingStreamRef(ref)` with input validation (rejects non-string streamId, empty permissions, unknown permission levels) and `existingStreamRefs` getter.
+- `content` getter now serializes `existingStreamRefs[]` when non-empty (omitted otherwise — backwards-compatible).
+- New exported type: `ExistingStreamRef`.
+
+#### `CollectorClient` (`ts/appTemplates/CollectorClient.ts`)
+- `accept()` now processes `requestData.existingStreamRefs[]` after the existing chat-stream block:
+  1. **Bootstrap-provision** `app-system` / `app-system-out` / `app-system-in` streams if a ref points at the system pair and the streams don't exist yet. The new streams carry `clientData.hdsSystemFeature` declaring `message/system-alert` (on `out`) and `message/system-ack` (on `in`). Idempotent — `item-already-exists` errors from `streams.create` are tolerated.
+  2. Append the requested permissions to the access being granted.
+  3. Surface system-stream wiring on `responseContent.system = { streamOut?, streamIn? }` when `app-system-*` refs are present.
+
+#### `CollectorInvite` (`ts/appTemplates/CollectorInvite.ts`)
+- New properties: `hasSystem`, `systemSettings` (returns `{ streamOut?, streamIn? }`).
+- New methods (mirroring `chatPost` / `chatEventInfos`):
+  - `systemPostAlert({ level, title, body, ackRequired?, ackId? })` — posts a `message/system-alert` to `streamOut`. Auto-generates a UUID `ackId` when `ackRequired: true` and none supplied.
+  - `systemPollAcks({ ackId?, limit? })` — fetches `message/system-ack` events from `streamIn`, optionally filtered by `ackId`. Returns events sorted ascending by creation time.
+  - `systemEventInfos(event)` — identifies the source of a system event (`'me'`/`'user'`/`'unknown'`).
+
+### Changed — `package.json.exports.import` → TS source (Plan 49)
+- `exports[.].import` switched from `./js/index.js` (compiled JS) to `./ts/index.ts` (TS source). Added wildcard `./js/*` subpath export. `default` still points at compiled JS for non-Vite/CJS consumers.
+- This brings hds-lib in line with `_claude-memory/conventions.md § Package exports: TS source for bundlers` and is the prerequisite for live cross-repo dev (the previous `js/index.js` import path created duplicate-singleton bugs when downstream libs like hds-forms-js re-imported `hds-lib` via `require()`). See `_plans/49-local-dev-dependency-graph-done/PLAN.md` for the full rationale.
+
+### Notes
+- The Plan-45 Phase 3a additions are the **MVP slice** of system-stream support. Full Phase 3 work (custom-fields helpers `resolveStreamCustomField` + `streamCustomFieldToVirtualItem`, the appTemplates loader with Ajv schema, sandbox-prefix enforcement) lands in a follow-up commit.
+- Designed to be consumed by:
+  - **`doctor-dashboard`** Phase 6a — operator UI calling `invite.systemPostAlert(...)` and `invite.systemPollAcks(...)`.
+  - **`hds-webapp`** Phase 7a — patient-side inbox provisioning the `app-system/*` streams at boot (or relying on `CollectorClient`'s bootstrap fallback) and rendering alerts with an Acknowledge button that posts `message/system-ack`.
+- Requires `data-model` ≥ 1.4.0 (the new `message/system-alert` + `message/system-ack` event types).
+- See `_plans/45-custom-fields-appTemplates-paused/spec.md` for the locked design.
+
 ## [0.7.2] - 2026-04-28
 
 ### Added — runtime support for `deprecated: true` itemDefs (Plan 50)
@@ -22,7 +57,7 @@ Contract documented in `data-model/AGENTS.md § "deprecated: true on items"`.
 
 **Why.** Vite resolves the `import` condition in dev mode. With `import` pointing at compiled JS, live edits to `ts/*.ts` weren't reflected in npm-linked consumers without rebuilding hds-lib-js. Pointing `import` at TS source enables true live cross-repo development. This also avoids the duplicate-singleton bug surfaced by Plan 45 (a downstream lib's pre-built bundle inlining a second copy of `hds-lib`'s `HDSModel`). Production builds and CJS consumers are unaffected (still hit `default`).
 
-Brings `hds-lib` in line with `_claude-memory/conventions.md § Package exports: TS source for bundlers`. See `_plans/49-local-dev-dependency-graph-study/PLAN.md` for the full rationale.
+Brings `hds-lib` in line with `_claude-memory/conventions.md § Package exports: TS source for bundlers`. See `_plans/49-local-dev-dependency-graph-done/PLAN.md` for the full rationale.
 
 ## [0.7.0] - 2026-04-27
 
