@@ -133,6 +133,9 @@ export class CollectorRequest {
             section.setItemCustomization(itemKey, customization as Record<string, unknown>);
           }
         }
+        if (Array.isArray(sectionData.customFieldKeys)) {
+          section.setCustomFieldKeys(sectionData.customFieldKeys);
+        }
       }
       delete futureContent.sections;
     }
@@ -435,12 +438,14 @@ class CollectorRequestSection implements CollectorSectionInterface {
   #key: string;
   #itemKeys: Array<string>;
   #itemCustomizations: Record<string, Record<string, unknown>>;
+  #customFieldKeys: Array<string>;
 
   constructor (key: string, type: RequestSectionType) {
     this.#key = key;
     this.#type = type;
     this.#itemKeys = [];
     this.#itemCustomizations = {};
+    this.#customFieldKeys = [];
     this.#name = {
       en: ''
     };
@@ -493,6 +498,19 @@ class CollectorRequestSection implements CollectorSectionInterface {
     return this.#itemCustomizations[key];
   }
 
+  // Plan 45 — section's reference into request.customFields[]
+  get customFieldKeys (): Array<string> { return this.#customFieldKeys; }
+  setCustomFieldKeys (keys: Array<string>) {
+    if (!Array.isArray(keys)) throw new HDSLibError('customFieldKeys must be an array', keys);
+    this.#customFieldKeys = keys.slice();
+  }
+
+  addCustomFieldKey (key: string) {
+    if (typeof key !== 'string' || key.length === 0) throw new HDSLibError('customFieldKey must be a non-empty string', key);
+    if (this.#customFieldKeys.includes(key)) return;
+    this.#customFieldKeys.push(key);
+  }
+
   getData () {
     const data: any = {
       key: this.key,
@@ -502,6 +520,9 @@ class CollectorRequestSection implements CollectorSectionInterface {
     };
     if (Object.keys(this.#itemCustomizations).length > 0) {
       data.itemCustomizations = this.#itemCustomizations;
+    }
+    if (this.#customFieldKeys.length > 0) {
+      data.customFieldKeys = this.#customFieldKeys;
     }
     return data;
   }

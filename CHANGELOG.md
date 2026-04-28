@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-04-28
+
+### Fixed — `CollectorRequestSection` round-trip for `customFieldKeys[]`
+
+`CollectorRequestSection` lacked a `customFieldKeys` field, so the section's reference into `request.customFields[]` was lost on serialize/deserialize. Added private `#customFieldKeys` plus public `customFieldKeys` getter, `setCustomFieldKeys(keys)` and `addCustomFieldKey(key)` setters, parsing in `setContent()` and serialization in `getData()`. Discovered during Phase 6 mcp-chrome smoke test — a template uploaded via `loadTemplate()` had its custom fields surfaced on the request but the per-section pointers dropped.
+
 ## [0.9.0] - 2026-04-28
 
 ### Added — custom fields & template loader (45-custom-fields-appTemplates Phase 3 + 3.5)
