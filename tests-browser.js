@@ -20172,6 +20172,9 @@ class CollectorRequest {
                         section.setItemCustomization(itemKey, customization);
                     }
                 }
+                if (Array.isArray(sectionData.customFieldKeys)) {
+                    section.setCustomFieldKeys(sectionData.customFieldKeys);
+                }
             }
             delete futureContent.sections;
         }
@@ -20438,11 +20441,13 @@ class CollectorRequestSection {
     #key;
     #itemKeys;
     #itemCustomizations;
+    #customFieldKeys;
     constructor(key, type) {
         this.#key = key;
         this.#type = type;
         this.#itemKeys = [];
         this.#itemCustomizations = {};
+        this.#customFieldKeys = [];
         this.#name = {
             en: ''
         };
@@ -20488,6 +20493,20 @@ class CollectorRequestSection {
     getItemCustomization(key) {
         return this.#itemCustomizations[key];
     }
+    // Plan 45 — section's reference into request.customFields[]
+    get customFieldKeys() { return this.#customFieldKeys; }
+    setCustomFieldKeys(keys) {
+        if (!Array.isArray(keys))
+            throw new errors_ts_1.HDSLibError('customFieldKeys must be an array', keys);
+        this.#customFieldKeys = keys.slice();
+    }
+    addCustomFieldKey(key) {
+        if (typeof key !== 'string' || key.length === 0)
+            throw new errors_ts_1.HDSLibError('customFieldKey must be a non-empty string', key);
+        if (this.#customFieldKeys.includes(key))
+            return;
+        this.#customFieldKeys.push(key);
+    }
     getData() {
         const data = {
             key: this.key,
@@ -20497,6 +20516,9 @@ class CollectorRequestSection {
         };
         if (Object.keys(this.#itemCustomizations).length > 0) {
             data.itemCustomizations = this.#itemCustomizations;
+        }
+        if (this.#customFieldKeys.length > 0) {
+            data.customFieldKeys = this.#customFieldKeys;
         }
         return data;
     }
@@ -21259,6 +21281,39 @@ function collectItemLabels(itemKey, contacts, opts = {}) {
  *   const tpl = loadTemplate(jsonObject);   // synchronous; throws on any failure
  *   const tpl = await loadTemplateFromUrl(url);  // fetches then validates
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -21267,10 +21322,13 @@ exports.loadTemplate = loadTemplate;
 exports.loadTemplateFromUrl = loadTemplateFromUrl;
 exports.isCustomFieldDeclaration = isCustomFieldDeclaration;
 exports.isExistingStreamRef = isExistingStreamRef;
-const ajv_1 = __importDefault(__webpack_require__(/*! ajv */ "./node_modules/ajv/dist/ajv.js"));
+const AjvNs = __importStar(__webpack_require__(/*! ajv */ "./node_modules/ajv/dist/ajv.js"));
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const appTemplate_schema_json_1 = __importDefault(__webpack_require__(/*! ./schemas/appTemplate.schema.json */ "./ts/appTemplates/schemas/appTemplate.schema.json"));
-const ajv = new ajv_1.default({ allErrors: true, strict: false });
+// Ajv ships an ESM default + CJS interop. `default` may be the class itself
+// or the namespace depending on bundler. Resolve once at load.
+const Ajv = AjvNs.default ?? AjvNs;
+const ajv = new Ajv({ allErrors: true, strict: false });
 const validate = ajv.compile(appTemplate_schema_json_1.default);
 /** Validate the JSON shape (Ajv) and run cross-field rules. Returns the validated AppTemplate or throws HDSLibError. */
 function loadTemplate(json) {
