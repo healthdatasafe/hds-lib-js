@@ -101,6 +101,15 @@ Every value/type intended for external consumption is exported from [`ts/index.t
 - **`exports.import` MUST point at TS source** (`./ts/index.ts` here). Vite resolves the `import` condition in dev mode; pointing at compiled JS causes downstream libs (hds-forms-js, hds-react-timeline) to inline a second copy of `hds-lib` → duplicate-singleton bug. Verify with `cd _local && npm run verify-live-source`.
 - **Initialization order**: in apps that call `initBoiler(name, configDir)` (server side) or `pryv.Browser.AuthController` (client side), do so **before** any `getHDSModel()` / `HDSSettings` lookup.
 
+### appTemplates — custom fields & system stream (Plan 45)
+
+When extending `appTemplates/` for templates that declare custom fields,
+system-stream features, or any `clientData.hds*Field` declarations, read
+[`ts/appTemplates/CUSTOM-FIELDS-AND-SYSTEM.md`](./ts/appTemplates/CUSTOM-FIELDS-AND-SYSTEM.md)
+first. It covers the `clientData` schemas, parent-chain inheritance, sandbox
+prefix rule, three stream-reference modes, and the helper API
+(`resolveStream*`, `streamCustomFieldToVirtualItem`, `loadTemplate`).
+
 ---
 
 ## When in doubt

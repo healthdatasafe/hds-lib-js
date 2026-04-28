@@ -306,6 +306,63 @@ export class CollectorClient {
       }
       // ---------- end existingStreamRefs ---------- //
 
+      // ------------- customFields (Plan 45 mode-2 — provision-new template-private streams) ---- //
+      // Each declaration provisions {streamId} (and its parent if needed) carrying
+      // clientData.hdsCustomField[<eventType>] = def. Sandbox prefix is re-checked
+      // here as defence-in-depth (loader.ts is the canonical enforcer).
+      const customFields: Array<any> = this.requestData.customFields || [];
+      if (customFields.length > 0) {
+        // 1. Verify sandbox prefix again (defence-in-depth).
+        for (const cf of customFields) {
+          const prefix = cf.def?.templateId ? cf.def.templateId + '-' : null;
+          if (!prefix || !cf.streamId.startsWith(prefix)) {
+            throw new HDSLibError(
+              `customFields[].streamId "${cf.streamId}" violates sandbox prefix (expected to start with "${prefix}")`,
+              cf
+            );
+          }
+        }
+
+        // 2. Build streams.create batch — parents first, then children.
+        // Each unique parentId (default `${templateId}-custom`) is created once.
+        const wantedParents = new Map<string, { id: string, name: string }>();
+        const childCalls: Array<any> = [];
+        for (const cf of customFields) {
+          const parentId = cf.parentId || (cf.def.templateId + '-custom');
+          if (!wantedParents.has(parentId)) {
+            wantedParents.set(parentId, { id: parentId, name: 'Custom' });
+          }
+          childCalls.push({
+            method: 'streams.create',
+            params: {
+              id: cf.streamId,
+              parentId,
+              name: cf.name || cf.def.key,
+              clientData: {
+                hdsCustomField: { [cf.eventType]: cf.def }
+              }
+            }
+          });
+        }
+        const parentCalls = Array.from(wantedParents.values()).map((p) => ({
+          method: 'streams.create',
+          params: { id: p.id, name: p.name }
+        }));
+
+        // 3. Run idempotently — `item-already-exists` is fine.
+        const cfResults = await this.app.connection.api([...parentCalls, ...childCalls]);
+        cfResults.forEach((r) => {
+          if (r.stream?.id || r.error?.id === 'item-already-exists') return;
+          throw new HDSLibError('Failed provisioning customFields streams', cfResults);
+        });
+
+        // 4. Append `contribute` permission so the requester can read submitted events.
+        for (const cf of customFields) {
+          cleanedPermissions.push({ streamId: cf.streamId, level: 'contribute' });
+        }
+      }
+      // ---------- end customFields ---------- //
+
       const accessCreateData = {
         name: this.key,
         type: 'shared',

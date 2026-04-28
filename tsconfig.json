@@ -18,6 +18,7 @@
     "declaration": true,
     "noEmitOnError": false,
     "rewriteRelativeImportExtensions": true,
+    "resolveJsonModule": true,
     "outDir": "js",
     "rootDir": "ts"
   },

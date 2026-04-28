@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hds-lib.datasafe.dev/schemas/appTemplate.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "description", "chat", "sections"],
+  "properties": {
+    "id":          { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$" },
+    "title":       { "$ref": "#/definitions/localizableText" },
+    "description": { "$ref": "#/definitions/localizableText" },
+    "chat":        { "type": "boolean" },
+    "sections":    { "type": "array", "items": { "$ref": "#/definitions/section" } },
+    "customFields":       { "type": "array", "items": { "$ref": "#/definitions/customFieldDeclaration" } },
+    "existingStreamRefs": { "type": "array", "items": { "$ref": "#/definitions/existingStreamRef" } },
+    "license":     { "$ref": "#/definitions/license" }
+  },
+  "definitions": {
+    "localizableText": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object", "additionalProperties": { "type": "string" } }
+      ]
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "name"],
+      "properties": {
+        "key":                { "type": "string" },
+        "type":               { "enum": ["permanent", "recurring"] },
+        "name":               { "$ref": "#/definitions/localizableText" },
+        "itemKeys":           { "type": "array", "items": { "type": "string" } },
+        "itemCustomizations": { "type": "object" },
+        "customFieldKeys":    { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "customFieldDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["streamId", "eventType", "def"],
+      "properties": {
+        "streamId":  { "type": "string" },
+        "eventType": { "enum": ["note/txt", "note/html", "count/generic", "date/iso-8601", "activity/plain"] },
+        "parentId":  { "type": "string" },
+        "name":      { "type": "string" },
+        "def":       { "$ref": "#/definitions/customFieldDef" }
+      }
+    },
+    "customFieldDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "templateId", "key", "label"],
+      "properties": {
+        "version":     { "enum": ["v1"] },
+        "templateId":  { "type": "string" },
+        "key":         { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$" },
+        "label":       { "$ref": "#/definitions/localizableText" },
+        "description": { "$ref": "#/definitions/localizableText" },
+        "section":     { "type": "string" },
+        "required":    { "type": "boolean" },
+        "maxLength":   { "type": "integer", "minimum": 0 },
+        "options":     { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "min":         { "type": "number" },
+        "max":         { "type": "number" },
+        "step":        { "type": "number" },
+        "minDate":     { "type": "string" },
+        "maxDate":     { "type": "string" },
+        "repeatable":  { "type": "string" }
+      }
+    },
+    "existingStreamRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["streamId", "permissions"],
+      "properties": {
+        "streamId":    { "type": "string" },
+        "permissions": { "type": "array", "items": { "enum": ["read", "manage", "contribute"] }, "minItems": 1 },
+        "purpose":     { "type": "string" }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "notice"],
+      "properties": {
+        "name":   { "type": "string" },
+        "url":    { "type": "string", "format": "uri" },
+        "notice": { "$ref": "#/definitions/localizableText" }
+      }
+    }
+  }
+}

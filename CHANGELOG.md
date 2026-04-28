@@ -2,6 +2,92 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-28
+
+### Added — custom fields & template loader (45-custom-fields-appTemplates Phase 3 + 3.5)
+
+#### Type definitions
+- `ts/appTemplates/customFieldTypes.ts` — `HDSCustomField`, `HDSCustomFieldDef`,
+  `CustomFieldEventType` (`note/txt | note/html | count/generic | date/iso-8601 | activity/plain`),
+  `EmptyDef`, `isEmptyDef()` predicate.
+- `ts/appTemplates/systemFeatureTypes.ts` — `HDSSystemFeature`, `HDSSystemAlertDef`,
+  `HDSSystemAckDef`, `SystemMessageType`.
+- `ts/appTemplates/templateTypes.ts` — `AppTemplate`, `AppTemplateSection`,
+  `CustomFieldDeclaration`, `ExistingStreamRef` (canonical home), `StreamPermission`.
+
+#### Resolver helpers (`ts/appTemplates/resolveStream.ts`)
+- `resolveStreamCustomField(streamTreeOrMap, streamId, eventType): HDSCustomFieldDef | null`
+- `resolveStreamCustomFieldDetailed(...): { kind: 'def' | 'optOut' | 'none', def? }`
+- `resolveStreamSystemFeature(...) / resolveStreamSystemFeatureDetailed(...)` — same for `hdsSystemFeature[messageType]`.
+- `streamCustomFieldToVirtualItem(...) → VirtualItemDef | null` — convenience for the form engine.
+- `customFieldDeclarationToVirtualItem(decl) → VirtualItemDef` — compose-time conversion (no streamTree).
+- `buildStreamMap(streamTree)` — pre-built id→stream map for repeated lookups.
+- `VirtualItemDef.eventTemplate()` returns `{ streamIds, type }` so the result slots into
+  hds-forms-js's `formDataToActions` / `prefillFromEvents` pipeline directly.
+
+Inheritance: parent-chain walk, empty `{}` def = explicit opt-out, missing = keep walking,
+root reached = `none` (per design spec §2.4).
+
+#### Template loader (`ts/appTemplates/loader.ts`)
+- `loadTemplate(json) → AppTemplate` — Ajv schema validation + cross-field rules
+  (sandbox prefix, def self-identification, key/streamId suffix consistency,
+  section refs, mode-2/mode-3 collision).
+- `loadTemplateFromUrl(url)` — fetch + load.
+- Type guards: `isCustomFieldDeclaration`, `isExistingStreamRef`.
+- `ts/appTemplates/schemas/appTemplate.schema.json` — JSON-Schema draft-07 covering
+  the full template shape.
+
+#### `CollectorRequest` (`ts/appTemplates/CollectorRequest.ts`)
+- New top-level field `customFields: CustomFieldDeclaration[]` (Plan 45 §2.9 mode-2).
+- `addCustomField(cf)` validates eventType, def.version, sandbox prefix
+  (`streamId.startsWith(def.templateId + '-')`).
+- `content` getter serializes `customFields[]` when non-empty.
+- `setContent` parses `customFields[]` from incoming content.
+
+#### `CollectorClient.accept()`
+- New Mode-2 provisioning block: for each `customFields[i]`, creates the
+  `${templateId}-custom` parent (idempotent on `item-already-exists`) plus the
+  per-field child stream carrying `clientData.hdsCustomField[<eventType>] = def`.
+  Appends `contribute` permission to the granted access. Sandbox prefix
+  re-checked (defence in depth).
+
+#### Documentation (Phase 3.5)
+- `ts/appTemplates/CUSTOM-FIELDS-AND-SYSTEM.md` — canonical developer/agent
+  reference covering both halves end-to-end (12 sections: conceptual overview,
+  `clientData.hdsCustomField` schema with worked example, `clientData.hdsSystemFeature`
+  schema, parent-chain inheritance, validator behaviour, naming convention is
+  soft, helper API, three stream-reference modes, bridge/export discoverability,
+  no-promotion principle, failure modes, cross-references).
+- `AGENTS.md` — cross-link to the new doc.
+
+#### Tests
+- `tests/resolveStream.test.js` — 17 tests (parent-chain walk, opt-out semantics,
+  StreamMap optimization, system-feature resolution, virtual-item conversion).
+- `tests/loader.test.js` — 18 tests (Ajv shape validation, all six cross-field rules,
+  type guards).
+- `tests/apptemplatesRequest.test.js` — +8 customFields tests (parse, serialize,
+  sandbox enforcement, eventType validation, round-trip).
+
+**Net: 43 new tests, all passing. 1 pre-existing failure unchanged.**
+
+#### Form-engine alignment
+- `VirtualItemDef.data.type` uses form-engine type names (`'text' | 'select' | 'number' | 'date'`)
+  so the result is directly consumable by `<HDSFormField>`.
+- `data.options` reshaped to `Array<{ value, label: { en } }>` matching `<Select>`.
+
+#### Public surface (`ts/appTemplates/appTemplates.ts`)
+Added barrel exports: `isEmptyDef`, `loadTemplate`, `loadTemplateFromUrl`,
+`isCustomFieldDeclaration`, `isExistingStreamRef`, `buildStreamMap`,
+`resolveStreamCustomField{Detailed}`, `resolveStreamSystemFeature{Detailed}`,
+`streamCustomFieldToVirtualItem`, `customFieldDeclarationToVirtualItem`,
+plus all new types.
+
+### Dependencies
+- Added `ajv ^8.20.0` for template JSON validation.
+
+### Build
+- `tsconfig.json` — `resolveJsonModule: true` for the schema import.
+
 ## [0.8.0] - 2026-04-28
 
 ### Added — Plan 45 Phase 3a (system stream MVP slice)

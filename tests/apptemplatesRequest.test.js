@@ -378,4 +378,79 @@ describe('[APRX] appTemplates Requests', function () {
       assert.deepEqual(r2.existingStreamRefs, r1.existingStreamRefs);
     });
   });
+
+  describe('[APRCF] CollectorRequest customFields (Plan 45)', function () {
+    function validCf () {
+      return {
+        streamId: 'stormm-woman-custom-flow',
+        eventType: 'note/txt',
+        def: {
+          version: 'v1',
+          templateId: 'stormm-woman',
+          key: 'flow',
+          label: { en: 'Flow' },
+          options: ['light', 'medium', 'heavy']
+        }
+      };
+    }
+
+    it('[ARCF1] should parse customFields from content', () => {
+      const request = new CollectorRequest({ customFields: [validCf()] });
+      assert.equal(request.customFields.length, 1);
+      assert.equal(request.customFields[0].streamId, 'stormm-woman-custom-flow');
+      assert.equal(request.customFields[0].eventType, 'note/txt');
+      assert.equal(request.customFields[0].def.key, 'flow');
+    });
+
+    it('[ARCF2] should serialize customFields in content', () => {
+      const request = new CollectorRequest({});
+      request.addCustomField(validCf());
+      assert.ok(request.content.customFields);
+      assert.equal(request.content.customFields.length, 1);
+    });
+
+    it('[ARCF3] should not serialize customFields when empty', () => {
+      const request = new CollectorRequest({});
+      assert.equal(request.content.customFields, undefined);
+    });
+
+    it('[ARCF4] should reject streamId outside the def.templateId sandbox', () => {
+      const cf = validCf();
+      cf.streamId = 'foreign-stream-flow';
+      const request = new CollectorRequest({});
+      assert.throws(() => request.addCustomField(cf), /sandbox prefix/i);
+    });
+
+    it('[ARCF5] should reject unknown eventType', () => {
+      const cf = validCf();
+      cf.eventType = 'temperature/c';
+      const request = new CollectorRequest({});
+      assert.throws(() => request.addCustomField(cf), /Invalid customField.eventType/);
+    });
+
+    it('[ARCF6] should reject missing def.version', () => {
+      const cf = validCf();
+      delete cf.def.version;
+      const request = new CollectorRequest({});
+      assert.throws(() => request.addCustomField(cf), /version/);
+    });
+
+    it('[ARCF7] should round-trip through setContent', () => {
+      const r1 = new CollectorRequest({});
+      r1.addCustomField(validCf());
+      const content1 = r1.content;
+      const r2 = new CollectorRequest(content1);
+      assert.deepEqual(r2.customFields, r1.customFields);
+    });
+
+    it('[ARCF8] should preserve optional parentId and name', () => {
+      const cf = validCf();
+      cf.parentId = 'stormm-woman-custom';
+      cf.name = 'Flow';
+      const request = new CollectorRequest({});
+      request.addCustomField(cf);
+      assert.equal(request.customFields[0].parentId, 'stormm-woman-custom');
+      assert.equal(request.customFields[0].name, 'Flow');
+    });
+  });
 });

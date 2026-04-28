@@ -3,18 +3,19 @@ import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { validateLocalizableText } from '../localizeText.ts';
 import type { localizableText } from '../localizeText.ts';
 import type { CollectorSectionInterface, RequestSectionType } from './interfaces.ts';
+import type { ExistingStreamRef, CustomFieldDeclaration } from './templateTypes.ts';
+import type { CustomFieldEventType } from './customFieldTypes.ts';
+
+export type { ExistingStreamRef, CustomFieldDeclaration };
+
+const VALID_CUSTOM_FIELD_EVENT_TYPES: CustomFieldEventType[] = [
+  'note/txt', 'note/html', 'count/generic', 'date/iso-8601', 'activity/plain'
+];
 
 type localizableTextLanguages = keyof localizableText;
 
 declare type PermissionItem = { streamId: string, defaultName: string, level: string };
 declare type PermissionItemLight = { streamId: string, defaultName?: string, level?: string };
-
-/**
- * Mode-3 reference (Plan 45 §2.9): request access on a pre-existing stream
- * without provisioning it. The stream's `clientData` declares its typing;
- * this CollectorRequest does not modify that.
- */
-export type ExistingStreamRef = { streamId: string, permissions: Array<'read' | 'manage' | 'contribute'>, purpose?: string };
 
 const CURRENT_VERSION = 1;
 
@@ -40,6 +41,7 @@ export class CollectorRequest {
   #sections: Array<CollectorRequestSection>;
   #features: { chat?: { type: 'usernames' | 'user' } };
   #existingStreamRefs: Array<ExistingStreamRef>;
+  #customFields: Array<CustomFieldDeclaration>;
 
   #extraContent: any;
   constructor (content: any) {
@@ -51,6 +53,7 @@ export class CollectorRequest {
     this.#sections = [];
     this.#features = {};
     this.#existingStreamRefs = [];
+    this.#customFields = [];
     this.setContent(content);
   }
 
@@ -170,6 +173,15 @@ export class CollectorRequest {
         this.addExistingStreamRef(ref);
       }
       delete futureContent.existingStreamRefs;
+    }
+
+    // -- customFields (Plan 45 mode-2 — provision-new template-private streams)
+    if (futureContent.customFields) {
+      this.#customFields = [];
+      for (const cf of futureContent.customFields) {
+        this.addCustomField(cf);
+      }
+      delete futureContent.customFields;
     }
 
     this.#extraContent = futureContent;
@@ -328,6 +340,55 @@ export class CollectorRequest {
     });
   }
 
+  // ---------- customFields (Plan 45 mode-2) ----------- //
+
+  get customFields (): Array<CustomFieldDeclaration> { return this.#customFields; }
+
+  /**
+   * Declare a template-private stream to be provisioned at acceptance with its
+   * `clientData.hdsCustomField[<eventType>]` block. Sandbox prefix is enforced
+   * structurally (streamId must start with `${templateId}-`); cross-template
+   * collisions are rejected by the loader.
+   *
+   * The CollectorRequest itself does not know its enclosing template id (that's
+   * a Collector concern), so we validate against `def.templateId` here as a
+   * defence-in-depth check — `loader.ts` is the canonical enforcer.
+   */
+  addCustomField (cf: CustomFieldDeclaration) {
+    if (cf == null || typeof cf !== 'object') throw new HDSLibError('Invalid customField', cf);
+    if (typeof cf.streamId !== 'string' || cf.streamId.length === 0) {
+      throw new HDSLibError('customField.streamId must be a non-empty string', cf);
+    }
+    if (!VALID_CUSTOM_FIELD_EVENT_TYPES.includes(cf.eventType as any)) {
+      throw new HDSLibError(`Invalid customField.eventType "${cf.eventType}" — must be one of ${VALID_CUSTOM_FIELD_EVENT_TYPES.join(', ')}`, cf);
+    }
+    if (cf.def == null || typeof cf.def !== 'object') {
+      throw new HDSLibError('customField.def must be an object', cf);
+    }
+    if (cf.def.version !== 'v1') {
+      throw new HDSLibError(`Unsupported customField.def.version "${cf.def.version}"`, cf);
+    }
+    if (typeof cf.def.templateId !== 'string' || cf.def.templateId.length === 0) {
+      throw new HDSLibError('customField.def.templateId must be a non-empty string', cf);
+    }
+    if (typeof cf.def.key !== 'string' || cf.def.key.length === 0) {
+      throw new HDSLibError('customField.def.key must be a non-empty string', cf);
+    }
+    if (!cf.streamId.startsWith(cf.def.templateId + '-')) {
+      throw new HDSLibError(
+        `customField.streamId "${cf.streamId}" violates sandbox prefix — must start with "${cf.def.templateId}-"`,
+        cf
+      );
+    }
+    this.#customFields.push({
+      streamId: cf.streamId,
+      eventType: cf.eventType,
+      def: cf.def,
+      ...(cf.parentId != null ? { parentId: cf.parentId } : {}),
+      ...(cf.name != null ? { name: cf.name } : {})
+    });
+  }
+
   // ---------- sections ------------- //
 
   /**
@@ -354,6 +415,9 @@ export class CollectorRequest {
     };
     if (this.#existingStreamRefs.length > 0) {
       content.existingStreamRefs = this.#existingStreamRefs;
+    }
+    if (this.#customFields.length > 0) {
+      content.customFields = this.#customFields;
     }
     Object.assign(content, this.#extraContent);
     return content;
