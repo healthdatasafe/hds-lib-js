@@ -10,7 +10,7 @@ Generic toolkit for server and web applications — [Health Data Safe](https://g
 ## Features
 
 1. **HDS Data Model** — Load and query the [HDS data model](https://github.com/healthdatasafe/data-model): items, streams, authorizations, event types, datasources
-2. **App Templates** — Consent-based data collection and sharing (Manager, Collector, Invite, Client flows)
+2. **App Templates** — Consent-based data collection and sharing (Manager, Collector, Invite, Client flows). Includes the **AppTemplate JSON loader**, **custom-field declarations** (template-private streams via `clientData.hdsCustomField`), and **system-stream messaging** (`message/system-{alert,ack}`). See [`ts/appTemplates/CUSTOM-FIELDS-AND-SYSTEM.md`](./ts/appTemplates/CUSTOM-FIELDS-AND-SYSTEM.md) for the design reference.
 3. **HDSSettings** — Per-app user settings (locale, theme, timezone, date format, unit system)
 4. **HDSProfile** — Account-level profile (display name, avatar, date of birth, sex, country)
 5. **Pryv extensions** — Extends [Pryv JS lib](https://github.com/pryv/lib-js) with Socket.io and Monitor support
