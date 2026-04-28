@@ -34,6 +34,16 @@ export class HDSItemDef {
     return this.#data.repeatable || 'unlimited';
   }
 
+  /**
+   * Whether this item is deprecated. Deprecated items remain readable
+   * (existing events keep validating + rendering) but should not be
+   * surfaced in UIs that let users create new events. See
+   * `data-model/AGENTS.md § "deprecated: true on items"`.
+   */
+  get isDeprecated (): boolean {
+    return this.#data.deprecated === true;
+  }
+
   get reminder (): ReminderConfig | null {
     return this.#data.reminder || null;
   }

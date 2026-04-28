@@ -37,6 +37,41 @@ describe('[MODX] Model', () => {
     }
   });
 
+  // ---------- deprecated --------- //
+  describe('[MDPX] deprecated items', function () {
+    it('[MDPA] isDeprecated getter returns true for items flagged in pack.json', () => {
+      // Three items were marked deprecated under plan 48 / formalised in plan 50.
+      const stretch = model.itemsDefs.forKey('body-vulva-mucus-stretch');
+      const wetness = model.itemsDefs.forKey('body-vulva-wetness-feeling');
+      const charted = model.itemsDefs.forKey('fertility-cycles-charted-count');
+      assert.equal(stretch.isDeprecated, true);
+      assert.equal(wetness.isDeprecated, true);
+      assert.equal(charted.isDeprecated, true);
+    });
+
+    it('[MDPB] isDeprecated getter returns false for non-deprecated items', () => {
+      assert.equal(model.itemsDefs.forKey('body-weight').isDeprecated, false);
+    });
+
+    it('[MDPC] forKey still resolves deprecated items (readers must see them)', () => {
+      const itemDef = model.itemsDefs.forKey('body-vulva-mucus-stretch');
+      assert.ok(itemDef);
+      assert.equal(itemDef.key, 'body-vulva-mucus-stretch');
+    });
+
+    it('[MDPD] getAllActive() excludes deprecated, getAll() includes them', () => {
+      const all = model.itemsDefs.getAll();
+      const active = model.itemsDefs.getAllActive();
+      assert.ok(all.length > active.length, 'active list must be smaller than full list');
+      const activeKeys = new Set(active.map((d) => d.key));
+      assert.equal(activeKeys.has('body-vulva-mucus-stretch'), false);
+      assert.equal(activeKeys.has('body-vulva-wetness-feeling'), false);
+      assert.equal(activeKeys.has('fertility-cycles-charted-count'), false);
+      // sanity — non-deprecated items still in
+      assert.equal(activeKeys.has('body-weight'), true);
+    });
+  });
+
   // ---------- itemDef ------------ //
   describe('[MDVX] itemDef methods', function () {
     it('[MDVA] eventTemplate() returns event template with streamId and type', async () => {

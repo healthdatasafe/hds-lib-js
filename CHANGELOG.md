@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-04-28
+
+### Added — runtime support for `deprecated: true` itemDefs (Plan 50)
+- `HDSItemDef.isDeprecated` getter — `true` when the underlying itemDef has `deprecated: true` in pack.json (set in `data-model` ≥ 1.5.0).
+- `HDSModel.itemsDefs.getAllActive()` — returns every itemDef except deprecated ones. Use this for any UI that lets a user create new data points (form builder item browsers, item picker sheets, the data-model browser default listing).
+- `getAll()`, `forKey()`, `forEvent()` are unchanged: they still return deprecated items so existing events remain readable / renderable.
+
+Tests: `[MDPX]` block in `tests/hdsModel.test.js` — covers the getter on the three currently-flagged items (`body-vulva-mucus-stretch`, `body-vulva-wetness-feeling`, `fertility-cycles-charted-count`), the contrast with non-deprecated items, and the `getAllActive` vs `getAll` invariant.
+
+Contract documented in `data-model/AGENTS.md § "deprecated: true on items"`.
+
 ## [0.7.1] - 2026-04-28
 
 ### Changed — `package.json.exports.import` now points at TS source (Plan 49)

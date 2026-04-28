@@ -29,7 +29,9 @@ export class HDSModelItemsDefs {
   }
 
   /**
-   * get all itemDefs
+   * get all itemDefs (includes deprecated). Use this when reading existing
+   * events: every event must still resolve to an itemDef even if the item
+   * was deprecated.
    */
   getAll (): HDSItemDef[] {
     const res: HDSItemDef[] = [];
@@ -37,6 +39,16 @@ export class HDSModelItemsDefs {
       res.push(this.forKey(key));
     }
     return res;
+  }
+
+  /**
+   * get all non-deprecated itemDefs. Use this for any UI that lets a user
+   * pick an item to create new data points (form builders, item picker
+   * sheets, data-model browser default listing). Deprecated items remain
+   * resolvable via `forKey` / `forEvent` so existing events still render.
+   */
+  getAllActive (): HDSItemDef[] {
+    return this.getAll().filter((itemDef) => !itemDef.isDeprecated);
   }
 
   /**
