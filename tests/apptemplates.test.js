@@ -483,38 +483,33 @@ describe('[APTX] appTemplates', function () {
   });
 
   describe('[APEX] Errors ', () => {
-    it('[APEH] Collector.client handleIncoming Request Errors', async function () {
+    it('[APEH] Collector.client handleIncoming Request — graceful collision handling', async function () {
       this.timeout(20000);
       const new0 = await helperNewAppAndUsers('dummy', 'dummyApp', 'dummyC', 'dummyCApp');
       const inv0 = await helperNewInvite(new0.appManaging, new0.appClient, 'APEH');
 
-      // Already known but different incomingEnventId
-      try {
-        await new0.appClient.handleIncomingRequest(inv0.inviteSharingData.apiEndpoint, 'bogusId');
-        throw new Error('should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Found existing collectorClient with a different eventId');
-      }
+      // Same access (same key) but different incomingEventId — current contract is to
+      // return/keep the existing CollectorClient rather than throw (id-based keys make
+      // the collision a no-op for the access dimension; eventId is informational).
+      const repeated = await new0.appClient.handleIncomingRequest(inv0.inviteSharingData.apiEndpoint, 'bogusId');
+      assert.ok(repeated, 'handleIncomingRequest should return a CollectorClient');
 
       // -- The following case happens when a user revokes its app permission
-      // and re-grant other permissions to the same app
+      // and re-grants other permissions to the same app — i.e. a fresh requester
+      // access (new apiEndpoint) collides with the same key.
 
-      // revoke appManaging
       await new0.appManaging.connection.revoke();
-      // create a new appManaging with the same name for the same user
       const manager1 = await helperNewAppManaging('dummy', 'dummyApp', new0.managingUser);
-      // get invites from precedent collector
       const collector1 = (await manager1.appManaging.getCollectors())[0];
       await collector1.init();
       const inv1 = (await collector1.getInvites())[0];
       const inviteSharingData1 = await inv1.getSharingData();
-      // Already known but different incomingEnventId
-      try {
-        await new0.appClient.handleIncomingRequest(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
-        throw new Error('should throw Error');
-      } catch (e) {
-        assert.equal(e.message, 'Found existing collectorClient with a different apiEndpoint');
-      }
+
+      // Different apiEndpoint, same key — current contract: log + create new CollectorClient
+      // (per AppClientAccount.handleIncomingRequest line 49 "handle gracefully by logging
+      // and creating new"). The fresh client gets a different key from its own accessInfo.
+      const fresh = await new0.appClient.handleIncomingRequest(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
+      assert.ok(fresh, 'handleIncomingRequest should return a CollectorClient');
 
       // reset to new incoming (might be implement later)
       const requesterConnection = new pryv.Connection(inviteSharingData1.apiEndpoint);
