@@ -35,6 +35,34 @@ export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions };
 
+// Plan 45 — top-level type re-exports so consumers can `import type { CustomFieldDeclaration } from 'hds-lib'`.
+export type {
+  CustomFieldEventType,
+  EmptyDef,
+  HDSCustomFieldDef,
+  HDSCustomField
+} from './appTemplates/customFieldTypes.ts';
+export type {
+  SystemMessageType,
+  HDSSystemAlertDef,
+  HDSSystemAckDef,
+  HDSSystemFeature
+} from './appTemplates/systemFeatureTypes.ts';
+export type {
+  StreamPermission,
+  ExistingStreamRef,
+  CustomFieldDeclaration,
+  AppTemplateSection,
+  AppTemplate
+} from './appTemplates/templateTypes.ts';
+export type {
+  CustomFieldResolution,
+  SystemFeatureResolution,
+  ResolutionKind,
+  VirtualItemDef,
+  VirtualItemFieldType
+} from './appTemplates/resolveStream.ts';
+
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
 const HDSLib = {
   getHDSModel,

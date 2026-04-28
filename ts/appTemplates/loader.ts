@@ -17,13 +17,13 @@
 
 import * as AjvNs from 'ajv';
 import type { ErrorObject, ValidateFunction } from 'ajv';
+import { HDSLibError } from '../errors.ts';
+import schema from './schemas/appTemplate.schema.json' with { type: 'json' };
+import type { AppTemplate, CustomFieldDeclaration, ExistingStreamRef } from './templateTypes.ts';
 
 // Ajv ships an ESM default + CJS interop. `default` may be the class itself
 // or the namespace depending on bundler. Resolve once at load.
 const Ajv: any = (AjvNs as any).default ?? AjvNs;
-import { HDSLibError } from '../errors.ts';
-import schema from './schemas/appTemplate.schema.json' with { type: 'json' };
-import type { AppTemplate, CustomFieldDeclaration, ExistingStreamRef } from './templateTypes.ts';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validate: ValidateFunction<AppTemplate> = ajv.compile(schema as any);
