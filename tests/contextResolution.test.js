@@ -116,4 +116,37 @@ describe('[CTXR] Context-via-substream (Plan 46 D3)', () => {
       assert.equal(itemDef.key, 'treatment-basic');
     });
   });
+
+  describe('matchesEvent (D3-aware event matching)', () => {
+    it('[CTXR-L] direct (streamId, eventType) match returns true', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      assert.equal(itemDef.matchesEvent({
+        type: 'treatment/basic',
+        streamIds: ['treatment']
+      }), true);
+    });
+
+    it('[CTXR-M] descendant context resolves via walk-up returns true', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-coded');
+      assert.equal(itemDef.matchesEvent({
+        type: 'treatment/coded-v1',
+        streamIds: ['treatment-fertility']
+      }), true);
+    });
+
+    it('[CTXR-N] cross-tree mismatch returns false', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      assert.equal(itemDef.matchesEvent({
+        type: 'procedure/basic',
+        streamIds: ['procedure-fertility']
+      }), false);
+    });
+
+    it('[CTXR-O] missing streamIds or type returns false', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      assert.equal(itemDef.matchesEvent({}), false);
+      assert.equal(itemDef.matchesEvent({ type: 'treatment/basic' }), false);
+      assert.equal(itemDef.matchesEvent({ streamIds: ['treatment'] }), false);
+    });
+  });
 });

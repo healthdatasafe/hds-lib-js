@@ -109,4 +109,25 @@ export class HDSItemDef {
       throw new Error(`Context streamId "${candidate}" is not a descendant of itemDef "${this.#key}" streamId "${ancestor}"`);
     }
   }
+
+  /**
+   * D3-aware event-matching. Returns true if the given event resolves to
+   * this itemDef via `model.itemsDefs.forEvent(event)` — covering both the
+   * direct (streamId, eventType) match and the closest-ancestor walk-up.
+   *
+   * Useful in form-engine code that needs to check whether an event belongs
+   * to a particular itemDef without re-implementing the resolution rule.
+   * Falls back to plain `(streamId in event.streamIds, type === eventType)`
+   * if the model handle isn't available.
+   */
+  matchesEvent (event: { type?: string; streamIds?: string[] }): boolean {
+    if (!event || event.type == null || !Array.isArray(event.streamIds)) return false;
+    if (this.#model) {
+      const resolved = this.#model.itemsDefs.forEvent(event, false);
+      return resolved !== null && resolved.key === this.#key;
+    }
+    // Fallback: direct match against this itemDef's streamId + eventType.
+    if (!this.eventTypes.includes(event.type)) return false;
+    return event.streamIds.includes(this.#data.streamId);
+  }
 }
