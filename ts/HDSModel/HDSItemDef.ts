@@ -1,4 +1,5 @@
 import { localizeText } from '../localizeText.ts';
+import type { HDSModel } from './HDSModel.ts';
 
 export interface ReminderConfig {
   cooldown?: string;
@@ -11,10 +12,18 @@ export interface ReminderConfig {
 export class HDSItemDef {
   #data: any;
   #key: string;
+  /**
+   * Optional model handle, used to validate descendant streamIds in
+   * `eventTemplate({ context })`. Constructed by HDSModelItemsDefs which has
+   * the model handle available; older callers that build HDSItemDef directly
+   * still work — they just can't use the `context` option.
+   */
+  #model: HDSModel | null;
 
-  constructor (key: string, definitionData: any) {
+  constructor (key: string, definitionData: any, model: HDSModel | null = null) {
     this.#key = key;
     this.#data = definitionData;
+    this.#model = model;
   }
 
   get eventTypes (): string[] {
@@ -60,15 +69,65 @@ export class HDSItemDef {
 
   /**
    * a template event with eventType and streamIds
+   *
+   * @param opts.context — optional context streamId per Plan 46 §2.1 (D3).
+   *   Must equal `this.streamId` or be a descendant. Lets a single itemDef
+   *   registered at e.g. `treatment` produce events placed at `treatment-fertility`,
+   *   `treatment-oncology`, etc., without per-domain item definitions.
+   *   When omitted, falls back to the itemDef's canonical streamId.
+   *   Throws if the context isn't in the itemDef's subtree.
+   *
    * // TODO handle variations
    */
-  eventTemplate (): {
+  eventTemplate (opts: { context?: string } = {}): {
     streamIds: [string];
     type: string;
   } {
+    let chosenStreamId = this.#data.streamId as string;
+    if (opts.context != null && opts.context !== chosenStreamId) {
+      this.#assertDescendantOf(opts.context, chosenStreamId);
+      chosenStreamId = opts.context;
+    }
     return {
-      streamIds: [this.#data.streamId],
+      streamIds: [chosenStreamId],
       type: this.eventTypes[0]
     };
+  }
+
+  /**
+   * Throws if `candidate` is not a descendant of `ancestor` in the model's
+   * stream tree. Requires the model handle (passed at construction).
+   */
+  #assertDescendantOf (candidate: string, ancestor: string): void {
+    if (!this.#model) {
+      throw new Error(`HDSItemDef "${this.#key}" was constructed without a model handle; cannot validate context "${candidate}"`);
+    }
+    // getParentsIds returns ancestors (excluding self). Treat candidate as
+    // valid iff `ancestor` is in its parent chain.
+    const ancestors = this.#model.streams.getParentsIds(candidate, false);
+    if (!ancestors.includes(ancestor)) {
+      throw new Error(`Context streamId "${candidate}" is not a descendant of itemDef "${this.#key}" streamId "${ancestor}"`);
+    }
+  }
+
+  /**
+   * D3-aware event-matching. Returns true if the given event resolves to
+   * this itemDef via `model.itemsDefs.forEvent(event)` — covering both the
+   * direct (streamId, eventType) match and the closest-ancestor walk-up.
+   *
+   * Useful in form-engine code that needs to check whether an event belongs
+   * to a particular itemDef without re-implementing the resolution rule.
+   * Falls back to plain `(streamId in event.streamIds, type === eventType)`
+   * if the model handle isn't available.
+   */
+  matchesEvent (event: { type?: string; streamIds?: string[] }): boolean {
+    if (!event || event.type == null || !Array.isArray(event.streamIds)) return false;
+    if (this.#model) {
+      const resolved = this.#model.itemsDefs.forEvent(event, false);
+      return resolved !== null && resolved.key === this.#key;
+    }
+    // Fallback: direct match against this itemDef's streamId + eventType.
+    if (!this.eventTypes.includes(event.type)) return false;
+    return event.streamIds.includes(this.#data.streamId);
   }
 }

@@ -73,11 +73,21 @@ export class HDSModel {
     const response = await fetch(this.#modelUrl);
     const resultText = await response.text();
     const result = JSON.parse(resultText);
+    this.loadFromObject(result, overload);
+  }
+
+  /**
+   * Load model from an in-memory object (skips fetch). Useful when the
+   * pack.json content is already in memory — tests, embedded apps, or
+   * environments where fetch can't reach the model URL (e.g. Node with a
+   * file:// URL, which Node's fetch does not yet implement).
+   */
+  loadFromObject (data: any, overload: HDSModelOverload | null = null): void {
     if (overload) {
-      validateOverload(result, overload);
-      applyOverload(result, overload);
+      validateOverload(data, overload);
+      applyOverload(data, overload);
     }
-    this.#modelData = result;
+    this.#modelData = data;
     // add key to items before freezing;
     for (const [key, item] of Object.entries(this.#modelData.items)) {
       (item as any).key = key;

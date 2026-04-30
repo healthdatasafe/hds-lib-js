@@ -33,6 +33,14 @@ export interface ItemCustomization {
   repeatable?: string;
   reminder?: Record<string, unknown>;
   labels?: ItemLabels;
+  /**
+   * Plan 46 (D3) — optional context streamId for events created from this
+   * item in this section. Must be `itemDef.streamId` or a descendant; the
+   * itemDef's `eventTemplate({ context })` enforces the constraint.
+   * Lets a single itemDef registered at e.g. `treatment` produce events
+   * placed at `treatment-fertility`, `treatment-oncology`, … per section.
+   */
+  context?: string;
   [key: string]: unknown;
 }
 
