@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-04-30
+
+### Added (plan 46 — context-via-substream resolution + new public API)
+- **`HDSModelItemsDefs.forEvent()`** — when no direct `(streamId, eventType)` match is found across `event.streamIds`, falls back to walking parents from `event.streamIds[0]` looking for a registered itemDef with the matching eventType. Closest ancestor wins. Lets a single itemDef registered at e.g. `treatment` resolve events placed at `treatment-fertility`, `treatment-oncology`, … without per-domain item definitions. Reuses the existing `streams.getParentsIds` chain helper consumed by `HDSModelAuthorizations`.
+- **`HDSItemDef.eventTemplate({ context })`** — optional `context` streamId per Plan 46 §2.1 (D3). Validates context is `itemDef.streamId` or a descendant; emits length-1 `streamIds: [context ?? streamId]`. Throws on context outside the itemDef's subtree.
+- **`HDSItemDef` constructor takes optional `model: HDSModel`** — used by `eventTemplate` to validate descendant streamIds via `model.streams.getParentsIds`. Backward-compatible: callers that build `HDSItemDef` directly without the model still work; they just can't use the `context` option.
+- **`HDSModel.loadFromObject(data, overload?)`** — loads model from an in-memory object, skipping `fetch`. Useful for tests, embedded apps, or environments where `fetch` can't reach the model URL (e.g. Node's `fetch` does not yet implement `file://`). `load()` is reimplemented in terms of `loadFromObject`.
+
+### Notes
+- D3's walk-up is the third application of the same closest-ancestor algorithm in this lib: Plan 45's `resolveStream.ts` (account-level `clientData` lookup) and `HDSModelAuthorizations` (parent-covers-child de-dup) are the existing precedents. D3 applies the algorithm at the data-model itemDef layer.
+- 11 new `[CTXR]` tests in `tests/contextResolution.test.js` exercising the resolution + creation paths plus the legacy multi-streamId case.
+
 ## [0.9.1] - 2026-04-28
 
 ### Fixed — `CollectorRequestSection` round-trip for `customFieldKeys[]`

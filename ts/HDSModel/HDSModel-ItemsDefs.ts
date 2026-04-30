@@ -61,12 +61,22 @@ export class HDSModelItemsDefs {
       if (throwErrorIfNotFound) throw new Error('Cannot find item definition with key: ' + key);
       return null;
     }
-    this.#itemsDefs[key] = new HDSItemDef(key, defData);
+    this.#itemsDefs[key] = new HDSItemDef(key, defData, this.#model);
     return this.#itemsDefs[key];
   }
 
   /**
    * get a definition for an event
+   *
+   * Resolution rule (Plan 46 §2.1 — context-via-substream / D3):
+   *   1. Try direct match on every entry in event.streamIds (legacy: events
+   *      may carry multiple streamIds, e.g. bridge-athenahealth credentials).
+   *   2. If no direct match, walk parents of streamIds[0] looking for a
+   *      matching itemDef. Closest ancestor wins.
+   *
+   * The walk-up reuses `HDSModelStreams.getParentsIds`, the same helper
+   * Authorizations consumes (HDSModel-Authorizations.ts:86) and the same
+   * algorithm Plan 45's resolveStream.ts uses for clientData lookup.
    */
   forEvent (event: any, throwErrorIfNotFound: boolean = true): HDSItemDef | null {
     const candidates: any[] = [];
@@ -74,6 +84,23 @@ export class HDSModelItemsDefs {
       const keyStreamIdEventType = streamId + ':' + event.type;
       const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
       if (candidate) candidates.push(candidate);
+    }
+    if (candidates.length === 0 && event.streamIds && event.streamIds.length > 0) {
+      const primary = event.streamIds[0];
+      // getParentsIds returns root-first ancestors of `primary` (excludes self).
+      // We need closest-ancestor-wins, so iterate leaf-to-root: walk parents
+      // in reverse, then check `primary` is already covered by the direct-match
+      // pass above — so we only need ancestors here.
+      const ancestorsRootFirst = this.#model.streams.getParentsIds(primary, false);
+      for (let i = ancestorsRootFirst.length - 1; i >= 0; i--) {
+        const ancestorId = ancestorsRootFirst[i];
+        const keyStreamIdEventType = ancestorId + ':' + event.type;
+        const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
+        if (candidate) {
+          candidates.push(candidate);
+          break;
+        }
+      }
     }
     if (candidates.length === 0) {
       if (throwErrorIfNotFound) throw new Error('Cannot find definition for event: ' + JSON.stringify(event));
