@@ -218,27 +218,61 @@ function formatSelect (event: any, content: any, itemDef: any): string {
 function formatDatasource (content: any): string | null {
   if (!content || typeof content !== 'object') return String(content);
 
-  // medication/coded-v1: {drug: {label}, intake: {doseValue, doseUnit, route}}
-  // legacy flat: {label, codes, doseValue, doseUnit, route}
-  const label = content.drug?.label || content.label;
+  // Resolve the coded value object across shapes:
+  //   medication/coded-v1   → {drug: {label, codes, ...}, intake: {...}}
+  //   treatment/coded-v1    → {regimen: {label, codes, ...}, count?, notes?}
+  //   procedure/coded-v1    → {procedure: {label, codes, ...}, count?, findings?, notes?}
+  //   medication legacy     → {label, codes, doseValue, doseUnit, route}
+  //   generic datasource    → any object with a property whose value carries a `label`
+  let datasourceObj: any = content.drug ?? content.regimen ?? content.procedure;
+  if (!datasourceObj && content.label) datasourceObj = content;  // legacy flat
+  if (!datasourceObj) {
+    for (const v of Object.values(content)) {
+      if (v && typeof v === 'object' && (v as any).label !== undefined) {
+        datasourceObj = v;
+        break;
+      }
+    }
+  }
+
+  const label = datasourceObj?.label;
   let text: string;
   if (label) {
-    text = typeof label === 'string' ? label : (localizeText(label) || JSON.stringify(content));
+    text = typeof label === 'string' ? label : (localizeText(label) || JSON.stringify(datasourceObj));
   } else {
     text = JSON.stringify(content);
   }
 
-  const intake = content.intake || content;
   const parts: string[] = [];
-  if (intake.doseValue) {
+
+  // Medication intake (new {drug, intake} OR legacy flat with doseValue at top level)
+  const intake = content.intake || (datasourceObj === content ? content : null);
+  if (intake?.doseValue) {
     const unitLabel = intake.doseUnit
       ? intake.doseUnit.replace(/^dose\//, '').replace(/^(mass|volume)\//, '')
       : '';
     parts.push(`${intake.doseValue} ${unitLabel}`.trim());
   }
-  if (intake.route) parts.push(intake.route);
-  if (parts.length > 0) text += ' — ' + parts.join(', ');
+  if (intake?.route) parts.push(intake.route);
 
+  // Treatment / procedure scalars (sibling fields on the event content)
+  if (typeof content.count === 'number' && content.count > 1) {
+    parts.push(`×${content.count}`);
+  }
+  if (Array.isArray(content.findings) && content.findings.length > 0) {
+    const labels = content.findings.slice(0, 2).map((f: any) => {
+      if (typeof f === 'string') return f;
+      if (f?.label) return typeof f.label === 'string' ? f.label : (localizeText(f.label) || null);
+      return null;
+    }).filter(Boolean);
+    if (labels.length > 0) parts.push(labels.join(', '));
+  }
+  if (typeof content.notes === 'string' && content.notes.trim() !== '') {
+    const n = content.notes.trim();
+    parts.push(n.length > 30 ? n.slice(0, 30) + '...' : n);
+  }
+
+  if (parts.length > 0) text += ' — ' + parts.join(', ');
   return text;
 }
 

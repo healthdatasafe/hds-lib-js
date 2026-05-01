@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-01
+
+### Fixed
+- **`eventToShortText` / `formatDatasource`** — generalized so newly added datasource-search items (`treatment/coded-v1` with `regimen`, `procedure/coded-v1` with `procedure`) produce a clean human label instead of a raw JSON dump. The function now resolves the coded value across known shapes (`drug` / `regimen` / `procedure`) and falls back to the first object property carrying a `label`. Appends `×count` when count > 1, the first 1–2 `findings[].label` entries (procedure), and a truncated `notes` string. Existing medication intake (`doseValue` + `doseUnit` + `route`) handling preserved; all 50 existing tests still pass.
+
 ## [0.10.0] - 2026-04-30
 
 ### Added (plan 46 — context-via-substream resolution + new public API)
