@@ -44,6 +44,7 @@ export class MonitorScope {
   private _hasMoreOlder: boolean = false;
   private maxModified: number = 0;
   private stopped: boolean = false;
+  private paused: boolean = false;
 
   constructor (connection: Connection, config: MonitorScopeConfig, callbacks: MonitorScopeCallbacks) {
     this.connection = connection;
@@ -130,7 +131,18 @@ export class MonitorScope {
     if (this.stopped) return;
 
     // Step 3: Start Monitor for real-time updates
-    // modifiedSince trick — initial fetch returns ~nothing
+    await this.attachLiveMonitor();
+  }
+
+  /**
+   * Build + start the live Monitor with the latest `maxModified` so any
+   * events created since the last seen update are caught up via the
+   * `modifiedSince` trick. Used both during initial start() and on
+   * resume() after a pause/visibilitychange cycle.
+   */
+  private async attachLiveMonitor (): Promise<void> {
+    if (this.stopped) return;
+    const toTime = this.config.toTime ?? (Date.now() / 1000);
     const eventsGetScope: any = {
       fromTime: this.config.fromTime,
       toTime,
@@ -160,6 +172,35 @@ export class MonitorScope {
     // Start before adding Socket to avoid race condition
     await this.monitor.start();
     this.monitor.addUpdateMethod(new (pryv as any).Monitor.UpdateMethod.Socket());
+  }
+
+  /**
+   * Pause the live monitor: closes the socket.io transport but preserves
+   * accumulated state (events, streams, oldestLoadedTime, maxModified).
+   * Use when the consumer's view becomes inactive (e.g. browser tab
+   * hidden) so a backgrounded session doesn't keep an open WebSocket.
+   *
+   * Cheap to call repeatedly — no-op if already paused or stopped.
+   */
+  pause (): void {
+    if (this.stopped || this.paused) return;
+    if (this.monitor) {
+      try { this.monitor.stop(); } catch (_) { /* ignore */ }
+      this.monitor = null;
+    }
+    this.paused = true;
+  }
+
+  /**
+   * Resume after a pause: rebuilds the Monitor with the current
+   * `maxModified` so the catch-up `events.get` returns only events
+   * created/changed during the pause. No-op if not paused or already
+   * stopped.
+   */
+  async resume (): Promise<void> {
+    if (this.stopped || !this.paused) return;
+    this.paused = false;
+    await this.attachLiveMonitor();
   }
 
   /**
