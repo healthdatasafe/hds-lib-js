@@ -14,7 +14,7 @@ Generic toolkit for server and web applications — [Health Data Safe](https://g
 3. **HDSSettings** — Per-app user settings (locale, theme, timezone, date format, unit system)
 4. **HDSProfile** — Account-level profile (display name, avatar, date of birth, sex, country)
 5. **Pryv extensions** — Extends [Pryv JS lib](https://github.com/pryv/lib-js) with Socket.io and Monitor support
-6. **Toolkit** — Stream auto-creation, reminders, duration parsing, event formatting
+6. **Toolkit** — Stream auto-creation, reminders, duration parsing, event formatting (`eventToShortText` handles `{drug}` / `{regimen}` / `{procedure}` payload shapes uniformly, with optional `×count`, procedure findings, and truncated notes)
 
 ## Quick start
 
@@ -26,6 +26,10 @@ await HDSLib.initHDSModel();
 
 const model = HDSLib.getHDSModel();
 const weight = model.itemsDefs.forKey('body-weight');
+
+// Resolve the itemDef for an event — walks parent streams for context-via-substream cases
+// (e.g. event on `treatment-fertility` resolves to `treatment-coded` registered at `treatment`).
+const itemDef = model.itemsDefs.forEvent(event);
 ```
 
 ## Dev
