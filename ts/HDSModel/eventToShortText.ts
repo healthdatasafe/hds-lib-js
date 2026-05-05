@@ -201,9 +201,15 @@ function formatSlider (content: any, itemDef: any): string {
 
 /**
  * Format a composite event by walking the itemDef's `composite` block. Only
- * applies when every field is a `select` with options — joins the localised
- * option labels with " · ". Used e.g. for `body-vulva-cervix-position`
- * (`{ height, firmness, openness }` → "High · Soft · Open").
+ * applies when every field is a `select` with options — emits "Field: Label"
+ * for each present field, joined by " · ". The field label uses the
+ * composite entry's localised `label`; the value resolves to the option's
+ * localised label when a discrete match exists, otherwise falls back to the
+ * raw value (e.g. continuous imports stored at non-canonical numeric values).
+ *
+ * Used e.g. for `body-vulva-cervix-position` so tooltips read
+ * "Height: High · Firmness: Soft · Openness: Open" — the dimension is named
+ * even when the imported value falls between option stops.
  *
  * Falls through to `formatObject` for free-form composites (e.g.
  * medication/basic with `name`/`doseValue`/`doseUnit`/`route`) so existing
@@ -222,13 +228,31 @@ function formatComposite (content: any, itemDef: any): string | null {
   for (const field of fieldKeys) {
     const value = content[field];
     if (value === undefined || value === null) continue;
-    const opt = composite[field].options.find((o: any) => o.value === value);
-    if (opt?.label) {
-      const text = typeof opt.label === 'string' ? opt.label : (localizeText(opt.label) || String(value));
-      parts.push(text);
-    } else {
-      parts.push(String(value));
+    const fieldDef = composite[field];
+    const fieldLabel = typeof fieldDef.label === 'string'
+      ? fieldDef.label
+      : (localizeText(fieldDef.label) || field);
+    // Prefer exact option match; for continuous numeric values that fall
+    // between stops (e.g. Mira imports), snap to the nearest option so the
+    // tooltip shows a meaningful label instead of a raw number.
+    let opt = fieldDef.options.find((o: any) => o.value === value);
+    if (!opt && typeof value === 'number') {
+      let nearest: any = null;
+      let bestDist = Infinity;
+      for (const o of fieldDef.options) {
+        if (typeof o.value !== 'number') continue;
+        const d = Math.abs(o.value - value);
+        if (d < bestDist) { bestDist = d; nearest = o; }
+      }
+      opt = nearest;
     }
+    let valueText: string;
+    if (opt?.label) {
+      valueText = typeof opt.label === 'string' ? opt.label : (localizeText(opt.label) || String(value));
+    } else {
+      valueText = String(value);
+    }
+    parts.push(`${fieldLabel}: ${valueText}`);
   }
   return parts.length > 0 ? parts.join(' · ') : formatObject(content);
 }

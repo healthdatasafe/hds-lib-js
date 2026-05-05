@@ -322,14 +322,14 @@ describe('[ESTX] eventToShortText', () => {
     assert.equal(result, 'Ibuprofen — 400 mg, oral');
   });
 
-  it('[EST19] cervix-position composite joins selected option labels', () => {
+  it('[EST19] cervix-position composite labels each field', () => {
     const event = {
       content: { height: 1.0, firmness: 0.0, openness: 0.5 },
       streamIds: ['body-vulva-cervix-position'],
       type: 'cervix-position/3d-vectors'
     };
     const result = eventToShortText(event);
-    assert.equal(result, 'High · Firm · Medium');
+    assert.equal(result, 'Height: High · Firmness: Firm · Openness: Medium');
   });
 
   it('[EST19b] cervix-position composite skips missing fields', () => {
@@ -339,7 +339,27 @@ describe('[ESTX] eventToShortText', () => {
       type: 'cervix-position/3d-vectors'
     };
     const result = eventToShortText(event);
-    assert.equal(result, 'Low');
+    assert.equal(result, 'Height: Low');
+  });
+
+  it('[EST19c] cervix-position composite snaps continuous values to nearest stop', () => {
+    const event = {
+      content: { height: 0.13, firmness: 0.07, openness: 0.02 },
+      streamIds: ['body-vulva-cervix-position'],
+      type: 'cervix-position/3d-vectors'
+    };
+    const result = eventToShortText(event);
+    assert.equal(result, 'Height: Low · Firmness: Firm · Openness: Closed');
+  });
+
+  it('[EST19d] cervix-position composite snaps mid-range to Medium', () => {
+    const event = {
+      content: { height: 0.45, firmness: 0.6 },
+      streamIds: ['body-vulva-cervix-position'],
+      type: 'cervix-position/3d-vectors'
+    };
+    const result = eventToShortText(event);
+    assert.equal(result, 'Height: Medium · Firmness: Medium');
   });
 
   // ─── Convertible: mood ───────────────────────────────────────────
