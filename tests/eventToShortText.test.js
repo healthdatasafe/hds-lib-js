@@ -322,6 +322,26 @@ describe('[ESTX] eventToShortText', () => {
     assert.equal(result, 'Ibuprofen — 400 mg, oral');
   });
 
+  it('[EST19] cervix-position composite joins selected option labels', () => {
+    const event = {
+      content: { height: 1.0, firmness: 0.0, openness: 0.5 },
+      streamIds: ['body-vulva-cervix-position'],
+      type: 'cervix-position/3d-vectors'
+    };
+    const result = eventToShortText(event);
+    assert.equal(result, 'High · Firm · Medium');
+  });
+
+  it('[EST19b] cervix-position composite skips missing fields', () => {
+    const event = {
+      content: { height: 0.0 },
+      streamIds: ['body-vulva-cervix-position'],
+      type: 'cervix-position/3d-vectors'
+    };
+    const result = eventToShortText(event);
+    assert.equal(result, 'Low');
+  });
+
   // ─── Convertible: mood ───────────────────────────────────────────
 
   describe('[EST20] convertible mood', () => {

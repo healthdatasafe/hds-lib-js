@@ -100,6 +100,10 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
     return formatSlider(content, itemDef);
   }
 
+  if (type === 'composite') {
+    return formatComposite(content, itemDef);
+  }
+
   // number, text, composite, etc.
   if (typeof content === 'number') {
     return formatNumber(event.type, content, model);
@@ -193,6 +197,40 @@ function formatSlider (content: any, itemDef: any): string {
   const text = scaled.toFixed(precision);
   const suffix = display.suffix ? localizeText(display.suffix) : '';
   return suffix ? `${text} ${suffix}` : text;
+}
+
+/**
+ * Format a composite event by walking the itemDef's `composite` block. Only
+ * applies when every field is a `select` with options — joins the localised
+ * option labels with " · ". Used e.g. for `body-vulva-cervix-position`
+ * (`{ height, firmness, openness }` → "High · Soft · Open").
+ *
+ * Falls through to `formatObject` for free-form composites (e.g.
+ * medication/basic with `name`/`doseValue`/`doseUnit`/`route`) so existing
+ * shape-specific renderers keep working.
+ */
+function formatComposite (content: any, itemDef: any): string | null {
+  if (!content || typeof content !== 'object') return String(content);
+  const composite = itemDef?.data?.composite;
+  if (!composite) return formatObject(content);
+  const fieldKeys = Object.keys(composite);
+  const allSelectsWithOptions = fieldKeys.length > 0 && fieldKeys.every(k =>
+    composite[k]?.type === 'select' && Array.isArray(composite[k]?.options)
+  );
+  if (!allSelectsWithOptions) return formatObject(content);
+  const parts: string[] = [];
+  for (const field of fieldKeys) {
+    const value = content[field];
+    if (value === undefined || value === null) continue;
+    const opt = composite[field].options.find((o: any) => o.value === value);
+    if (opt?.label) {
+      const text = typeof opt.label === 'string' ? opt.label : (localizeText(opt.label) || String(value));
+      parts.push(text);
+    } else {
+      parts.push(String(value));
+    }
+  }
+  return parts.length > 0 ? parts.join(' · ') : formatObject(content);
 }
 
 function formatSelect (event: any, content: any, itemDef: any): string {
