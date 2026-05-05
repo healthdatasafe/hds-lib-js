@@ -97,6 +97,12 @@ export class AppManagingAccount extends Application {
     for (const result of results) {
       if (result.status === 'fulfilled') {
         const { collector, invites } = result.value;
+        // Active invites need accessInfo loaded before patientUsername / toContactSource can be read.
+        await Promise.allSettled(
+          invites
+            .filter((inv: any) => inv.status === 'active')
+            .map((inv: any) => inv.checkAndGetAccessInfo())
+        );
         for (const invite of invites) {
           sources.push(invite.toContactSource());
           allInvitePairs.push({ collector, invite });

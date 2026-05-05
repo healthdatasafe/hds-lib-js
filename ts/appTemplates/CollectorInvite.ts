@@ -188,19 +188,18 @@ export class CollectorInvite {
     return this.eventData.content.name;
   }
 
-  /** Extract patient username from apiEndpoint (only available for active invites) */
+  /**
+   * Patient username — read from `accessInfo.user.username`.
+   * Topology-agnostic (works for both `dnsLess=true` and `dnsLess=false`).
+   * Requires `checkAndGetAccessInfo()` to have been awaited first; throws otherwise.
+   * Returns `null` when the invite is not `active`.
+   */
   get patientUsername (): string | null {
     if (this.status !== 'active') return null;
-    try {
-      const endpoint = this.eventData.content.apiEndpoint;
-      if (!endpoint) return null;
-      // apiEndpoint format: https://token@host/username/
-      const url = new URL(endpoint.replace(/\/\/[^@]+@/, '//'));
-      const path = url.pathname.replace(/^\/|\/$/g, '');
-      return path || null;
-    } catch {
-      return null;
+    if (this.#accessInfo == null) {
+      throw new HDSLibError('patientUsername requires checkAndGetAccessInfo() to be called first');
     }
+    return this.#accessInfo.user?.username ?? null;
   }
 
   /** Convert to ContactSource for Contact grouping (doctor side) */
