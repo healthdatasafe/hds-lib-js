@@ -130,11 +130,11 @@ describe('[HDSS] HDSSettings', function () {
       assert.deepStrictEqual(updateCall.params.update, { content: 'dark' });
     });
 
-    it('[HDSS-S3] throws when not hooked', async () => {
-      await assert.rejects(
-        () => HDSSettings.set('theme', 'dark'),
-        /hookToApplication|hookToConnection/
-      );
+    it('[HDSS-S3] set without hook is memory-only (no Pryv write, value cached)', async () => {
+      // Reset singleton state — no connection means memory-only mode.
+      // The call must not throw and a subsequent get() must return the value.
+      await HDSSettings.set('theme', 'dark');
+      assert.strictEqual(HDSSettings.get('theme'), 'dark');
     });
 
     it('[HDSS-S4] displayName uses same set/get as other settings', async () => {
@@ -313,10 +313,14 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
     );
   });
 
-  it('[HDSD10] setDynamic throws when not hooked', async () => {
+  it('[HDSD10] setDynamic without hook is memory-only (no Pryv write, value cached)', async () => {
+    // Memory-only mode: no connection, no error, get() reads back the value.
+    await HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings');
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
+    // Unknown prefix still throws.
     await assert.rejects(
-      () => HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings'),
-      /hookToApplication|hookToConnection/
+      () => HDSSettings.setDynamic('not-a-known-prefix', 'foo'),
+      /Unknown dynamic setting prefix/
     );
   });
 });

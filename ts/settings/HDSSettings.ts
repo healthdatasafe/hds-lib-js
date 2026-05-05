@@ -216,10 +216,15 @@ const HDSSettings = {
 
   /**
    * Set a typed setting value — persists to HDS server and updates cache.
+   * When not hooked (no Pryv connection), accepts the value into the
+   * in-memory cache only (memory-only mode — useful for standalone demos
+   * where settings don't need to survive the session).
    */
   async set<K extends SettingKey> (key: K, value: SettingsValues[K]): Promise<void> {
     if (!_connection || !_streamId) {
-      throw new Error('HDSSettings: call hookToApplication() or hookToConnection() first');
+      _values[key] = value;
+      applySideEffects(_values, key);
+      return;
     }
 
     const eventType = SETTING_TYPES[key];
@@ -249,14 +254,21 @@ const HDSSettings = {
    * Set a dynamic setting value — persists to HDS server.
    * Key must match a known prefix (e.g. 'preferred-display-wellbeing-mood').
    * Pass null to delete the setting.
+   * When not hooked (no Pryv connection), accepts the value into the
+   * in-memory map only (memory-only mode — useful for standalone demos).
    */
   async setDynamic (key: string, value: any): Promise<void> {
-    if (!_connection || !_streamId) {
-      throw new Error('HDSSettings: call hookToApplication() or hookToConnection() first');
-    }
-
     const dp = findDynamicPrefix(key);
     if (!dp) throw new Error(`Unknown dynamic setting prefix for key: "${key}"`);
+
+    if (!_connection || !_streamId) {
+      if (value === null || value === undefined) {
+        delete _dynamicValues[key];
+      } else {
+        _dynamicValues[key] = value;
+      }
+      return;
+    }
 
     const existing = _dynamicCache[key];
 
