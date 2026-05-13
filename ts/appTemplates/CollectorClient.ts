@@ -511,12 +511,26 @@ export class CollectorClient {
   }
 
   /**
-   * Accept a pending update request: delete old access, create new one with updated permissions,
-   * notify requester via inbox with new apiEndpoint.
+   * Accept a pending update request: update the access in place via accesses.update
+   * (Plan 66), notify requester via inbox.
+   *
+   * The access id, token and apiEndpoint are preserved across the update; only
+   * the wire id becomes composite (`<base>:<serial>`). The requester does not
+   * need to re-store an apiEndpoint.
+   *
+   * `clientData` is intentionally NOT sent: the server merges (verified empirically
+   * on Plan 66 demo) so existing keys including legacy `hdsCollectorClient.previousAccessIds`
+   * chains stay intact. The current `hdsCollectorClient.eventData` snapshot remains
+   * valid because `this.eventData` is unchanged at update time.
+   *
+   * `StaleAccessIdError` handling: if another writer updated the access between
+   * the load of `pendingUpdate` and now, refetch the access by name and retry
+   * once. Two consecutive stale errors propagate.
    */
   async acceptUpdate (): Promise<{ accessData: any, requesterEvent: any } | null> {
     if (!this.pendingUpdate) throw new HDSLibError('No pending update to accept');
     if (this.status !== CollectorClient.STATUSES.active) throw new HDSLibError('Can only accept updates on active CollectorClients');
+    if (!this.accessData?.id) throw new HDSLibError('No access to update', this.accessData);
 
     const update = this.pendingUpdate.content;
 
@@ -527,7 +541,7 @@ export class CollectorClient {
     });
 
     // Handle chat feature if requested
-    const responseContent: { apiEndpoint?: string, chat?: any } = {};
+    const responseContent: { chat?: any } = {};
     if (update.features?.chat && !this.hasChatFeature) {
       const chatStreamMain = `chat-${this.requesterUsername}`;
       const chatStreamIncoming = `chat-${this.requesterUsername}-in`;
@@ -559,44 +573,30 @@ export class CollectorClient {
       );
     }
 
-    // Collect previous access IDs for event attribution (modifiedBy tracking)
-    const previousAccessIds: string[] = [];
-    if (this.accessData) {
-      if (this.accessData.id) previousAccessIds.push(this.accessData.id);
-      // Chain: carry forward any IDs from the old access's clientData
-      const oldPrevIds = this.accessData.clientData?.hdsCollectorClient?.previousAccessIds;
-      if (Array.isArray(oldPrevIds)) {
-        for (const id of oldPrevIds) {
-          if (!previousAccessIds.includes(id)) previousAccessIds.push(id);
+    // Update access in place. 1-retry on StaleAccessIdError.
+    let attempt = 0;
+    while (true) {
+      try {
+        const updated = await (this.app.connection as any).updateAccess(this.accessData.id, {
+          permissions: cleanedPermissions
+        });
+        this.accessData = updated;
+        break;
+      } catch (e: any) {
+        if (e instanceof (pryv as any).StaleAccessIdError && attempt === 0) {
+          attempt++;
+          // Refetch the access by name (composite serial may have advanced)
+          const accesses = await this.app.connection.apiOne('accesses.get', {}, 'accesses');
+          const fresh = accesses.find((a: any) => a.name === this.key);
+          if (!fresh) throw new HDSLibError('Access disappeared during update', accesses);
+          this.accessData = fresh;
+          continue;
         }
+        throw e;
       }
     }
 
-    // Delete old access
-    if (this.accessData && !this.accessData.deleted) {
-      await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
-    }
-
-    // Create new access with updated permissions
-    const accessCreateData = {
-      name: this.key,
-      type: 'shared',
-      permissions: cleanedPermissions,
-      clientData: {
-        hdsCollectorClient: {
-          version: 0,
-          eventData: this.eventData,
-          previousAccessIds
-        }
-      }
-    };
-    const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
-    this.accessData = accessData;
-    if (!this.accessData?.apiEndpoint) throw new HDSLibError('Failed creating updated access', accessData);
-
-    responseContent.apiEndpoint = this.accessData.apiEndpoint;
-
-    // Notify requester via inbox
+    // Notify requester via inbox. No `apiEndpoint` field — token is preserved.
     const requesterEvent = await this.#updateRequester('update-accept', responseContent);
     if (requesterEvent != null) {
       this.pendingUpdate = null;
