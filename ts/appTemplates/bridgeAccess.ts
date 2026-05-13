@@ -109,7 +109,14 @@ export async function ensureBridgeAccess (
     }
 
     // Update in place. Server merges clientData; we only send our new keys.
-    const updatePayload: Record<string, any> = { permissions: options.permissions };
+    // accesses.update's permissions schema is strict (rejects defaultName / name);
+    // strip to canonical {streamId,level} | {feature,setting} regardless of caller input.
+    const cleanedPermissions = options.permissions.map((p: any) => {
+      if (p.streamId) return { streamId: p.streamId, level: p.level };
+      if (p.feature) return { feature: p.feature, setting: p.setting };
+      return p;
+    });
+    const updatePayload: Record<string, any> = { permissions: cleanedPermissions };
     if (options.clientData != null) updatePayload.clientData = options.clientData;
 
     try {
