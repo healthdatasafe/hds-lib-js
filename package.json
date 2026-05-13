@@ -62,11 +62,11 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
-    "@pryv/monitor": "3.0.3",
-    "@pryv/socket.io": "3.0.3",
+    "@pryv/monitor": "3.1.0",
+    "@pryv/socket.io": "3.1.0",
     "ajv": "^8.20.0",
     "events": "^3.3.0",
-    "pryv": "3.0.4",
+    "pryv": "3.1.0",
     "short-unique-id": "^5.3.2"
   }
 }

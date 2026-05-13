@@ -382,8 +382,8 @@ describe('[APTX] appTemplates', function () {
       assert.equal(invite.errorType, 'revoked');
 
       // check if authorization is revoked
-
-      const res = await invite.connection.accessInfo();
+      // pryv@3.1.0 caches accessInfo per Connection — pass forceRefresh to bypass the cache after revoke
+      const res = await invite.connection.accessInfo(true);
       assert.equal(res.error.id, 'invalid-access-token');
     });
 
