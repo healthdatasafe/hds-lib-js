@@ -302,6 +302,21 @@ describe('[CTCT] Contact class', function () {
       assert.equal(c.eventIsFromContact({ modifiedBy: 'a2-older' }), true);
       assert.equal(c.eventIsFromContact({ modifiedBy: 'unknown' }), false);
     });
+
+    it('[CTAQ3] should match across Plan 66 composite ids (base-only equality)', () => {
+      const c = new Contact('u', 'U');
+      // Updated access serialises as composite `<base>:<serial>` on the wire
+      c.addAccessObject({ id: 'a1:2' });
+      // Event written when the access was at serial 0 (bare cuid)
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1' }), true);
+      // Event written when the access was at serial 1 (composite, lower serial)
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1:1' }), true);
+      // Event written at current serial
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1:2' }), true);
+      // Different base → no match
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'a2' }), false);
+      assert.equal(c.eventIsFromContact({ modifiedBy: 'a2:2' }), false);
+    });
   });
 
   // ---- sourceFromAccess (static) ---- //
