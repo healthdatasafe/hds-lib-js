@@ -160,12 +160,16 @@ export class CollectorInvite {
   /**
    * Check if connection is valid. (only if active)
    * If result is "forbidden" update and set as revoked
-   * @returns accessInfo if valid.
+   *
+   * Caching is delegated to `pryv.Connection.accessInfo()` (per-Connection cache
+   * introduced in pryv@3.1.0). Pass `forceRefresh=true` to bust the cache —
+   * required after operations that invalidate the access (revoke, delete).
+   *
+   * The `#accessInfo` field mirrors the result for the sync `patientUsername` getter.
    */
   async checkAndGetAccessInfo (forceRefresh: boolean = false): Promise<any> {
-    if (!forceRefresh && this.#accessInfo) return this.#accessInfo;
     try {
-      this.#accessInfo = await this.connection.accessInfo();
+      this.#accessInfo = await this.connection.accessInfo(forceRefresh);
       return this.#accessInfo;
     } catch (e: any) {
       this.#accessInfo = null;
