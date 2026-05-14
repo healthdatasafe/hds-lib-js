@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-14
+
+### Plan 58 — `pryv@3.1.0` + `accesses.update` rollout
+
+Bumps `pryv` 3.0.4 → 3.1.0 (matching `@pryv/monitor` and `@pryv/socket.io`). Collapses the Plan 27 "delete-then-create" access-update workaround into a single in-place `accesses.update` call. **Hard-requires a pryv core supporting `accesses.update`** (Plan 66 — deployed to `demo.datasafe.dev` 2026-05-13 and `api.datasafe.dev` 2026-05-14). External self-hosted Pryv.io cores on older versions will receive raw `410` on update calls — caller's responsibility.
+
+### Wire-format change (composite access ids)
+
+After Plan 66, once an access has been updated, its `id` serialises as composite `<base>:<serial>` (`abc:1`, `abc:2`, …). Never-updated accesses still serialise as bare cuids — backward-compatible read path. Equality comparisons against `access.id` must canonicalise via base extraction; see `Contact.eventIsFromContact` for the in-lib example.
+
+### Changed
+
+- **`bridgeAccess.getOrCreateAccess` (Phase 4b)** — `updateIfDifferent && !permissionsMatch` now calls `connection.updateAccess(existing.id, …)` instead of recreating the access. Preserves `apiEndpoint` + `token`. `BridgeAccessResult` exposes `updated: boolean` in place of `recreated`. On `StaleAccessIdError`, refetches and retries once before propagating.
+- **`CollectorClient.acceptUpdate` (Phase 4c)** — replaces the delete+create branch with a single `accesses.update`. The `response/collector-v1` `update-accept` event written to the doctor's inbox no longer carries `apiEndpoint`. Same one-retry-budget on `StaleAccessIdError`.
+- **`Collector.checkInbox` (Phase 4d)** — `update-accept` events are now read as ack-only. Opportunistically migrates legacy events carrying `apiEndpoint` via `events.update` (drops the field). Idempotent; non-fatal on write failure.
+- **`Contact.eventIsFromContact` (Phase 4f)** — base-aware equality via `parseAccessRef(x).base`. An event with bare `modifiedBy: "abc"` now matches an access with composite `id: "abc:3"` (and vice versa). Legacy `previousAccessIds` chain check is also base-aware.
+- **`CollectorInvite.checkAndGetAccessInfo` (Phase 4a)** — drops the manual `#accessInfo` short-circuit and the `forceRefresh` parameter. Delegates to pryv@3.1.0's `Connection.accessInfo()` cache. The `invalid-access-token` → `revokeInvite` side-effect is preserved.
+- **Defensive: strip non-canonical permission fields before `accesses.update`** — Plan 66's server schema is strict on update (rejects `defaultName` / `name` extras present in `accesses.checkApp` responses). `bridgeAccess.ts` strips these before sending.
+
+### Preserved (historical-data read compatibility)
+
+- **`previousAccessIds` chain** — new code never writes `clientData.hdsCollectorClient.previousAccessIds` / `clientData.previousAccessIds`. Existing chains stay intact so `Contact.eventIsFromContact` continues to attribute events authored by ancestor (pre-recreate) accesses.
+- **Legacy `response/collector-v1` events** carrying `apiEndpoint` (Plan 27-era) are read as ack-only + opportunistically rewritten — see Phase 4d.
+
+### Notes for consumers
+
+- `Connection.accessInfo()` cache is **per-`Connection` instance**, not per-apiEndpoint. Server-side handlers that build a fresh `Connection` per request gain nothing.
+- `Connection.updateAccess(id, changes)` translates server-side `409 stale-resource` into a typed `StaleAccessIdError` (exported on the top-level pryv namespace). No auto-retry — callers refetch + reapply.
+
 ## [0.10.1] - 2026-05-01
 
 ### Fixed
