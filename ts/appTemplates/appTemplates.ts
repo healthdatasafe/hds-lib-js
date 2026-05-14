@@ -8,7 +8,7 @@ import { CollectorRequest } from './CollectorRequest.ts';
 import { Contact } from './Contact.ts';
 export type { ContactInvite } from './Contact.ts';
 export type { AccessUpdateRequest, AccessUpdateRequestContent, AccessUpdateAction } from './interfaces.ts';
-export { getOrCreateBridgeAccess, recreateBridgeAccess, ensureBridgeAccess } from './bridgeAccess.ts';
+export { getOrCreateBridgeAccess, ensureBridgeAccess } from './bridgeAccess.ts';
 export type { BridgeAccessOptions, BridgeAccessResult } from './bridgeAccess.ts';
 export {
   getSectionItemLabels,

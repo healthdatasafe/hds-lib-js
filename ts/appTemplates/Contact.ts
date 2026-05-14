@@ -6,6 +6,27 @@ import { HDSModelAppStreams } from '../HDSModel/HDSModel-AppStreams.ts';
 import { getStreamIdAndChildrenIds } from '../toolkit/StreamsTools.ts';
 import { pryv } from '../patchedPryv.ts';
 
+/**
+ * Plan 66 composite-id base extractor. Refs serialise as either bare cuid
+ * (`"abc123"`) for never-updated accesses or composite (`"abc123:3"`) for
+ * updated heads / historical writes. Equality must be on the *base* — an
+ * event's `modifiedBy` may carry a serial different from the current
+ * access head, but it still attributes to the same access chain.
+ *
+ * Returns the input unchanged when `parseAccessRef` is unavailable
+ * (older pryv lib), letting callers keep working under pre-Plan-66 servers.
+ */
+function refBase (ref: string | null | undefined): string | null {
+  if (ref == null) return null;
+  const parse = (pryv as any).utils?.parseAccessRef;
+  if (typeof parse !== 'function') return ref;
+  try {
+    return parse(ref).base;
+  } catch {
+    return null;
+  }
+}
+
 /** Doctor-side: a form invite pair (which collector + which invite) */
 export interface ContactInvite {
   collector: Collector;
@@ -141,14 +162,28 @@ export class Contact {
 
   /** Check if an event was created/modified by this contact (including replaced accesses) */
   eventIsFromContact (event: pryv.Event): boolean {
+    const eventBase = refBase(event.modifiedBy);
+    if (eventBase == null) return false;
     for (const access of this.accessObjects) {
-      if (access.id && event.modifiedBy === access.id) return true;
-      // Check previous access IDs from replaced accesses (collector pattern)
+      // Plan 66: access.id may be composite (`<base>:<serial>`) on updated accesses.
+      // An event's modifiedBy carries the serial active at write time, possibly
+      // different from the current head. Compare on base only.
+      if (refBase(access.id) === eventBase) return true;
+      // Check previous access IDs from replaced accesses (collector pattern, legacy delete+create).
+      // The historical chain stays in clientData even after Plan 58 switches to in-place update.
       const collectorPrevIds = access.clientData?.hdsCollectorClient?.previousAccessIds;
-      if (Array.isArray(collectorPrevIds) && collectorPrevIds.includes(event.modifiedBy)) return true;
-      // Check previous access IDs from bridge access recreate pattern
+      if (Array.isArray(collectorPrevIds)) {
+        for (const prev of collectorPrevIds) {
+          if (refBase(prev) === eventBase) return true;
+        }
+      }
+      // Check previous access IDs from bridge access recreate pattern (legacy)
       const bridgePrevIds = access.clientData?.previousAccessIds;
-      if (Array.isArray(bridgePrevIds) && bridgePrevIds.includes(event.modifiedBy)) return true;
+      if (Array.isArray(bridgePrevIds)) {
+        for (const prev of bridgePrevIds) {
+          if (refBase(prev) === eventBase) return true;
+        }
+      }
     }
     return false;
   }

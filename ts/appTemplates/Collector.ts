@@ -213,6 +213,14 @@ export class Collector {
       };
       updateInvite.content.sourceEventId = responseEvent.id;
 
+      // Plan 58 Phase 4d: legacy update-accept events (pre-Plan-58, delete+create era)
+      // carry an apiEndpoint field that must be adopted (token rotation happened).
+      // New update-accept events omit apiEndpoint (token preserved by accesses.update).
+      // When archiving a legacy event, opportunistically strip apiEndpoint from its
+      // content so the archive stays clean. events.update REPLACES content (not merges),
+      // so the strip is just "write current content minus the field".
+      let stripLegacyApiEndpointFromResponse = false;
+
       // check type of response
       switch (responseEvent.content.type) {
         case 'accept':
@@ -222,9 +230,13 @@ export class Collector {
           if (responseEvent.content.system) updateInvite.content.system = responseEvent.content.system;
           break;
         case 'update-accept':
-          // Patient accepted an access update — new apiEndpoint, stays active
           (updateInvite as any).streamIds = [this.streamIdFor(Collector.STREAMID_SUFFIXES.active)];
-          updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
+          // Legacy events: adopt the rotated apiEndpoint and flag the response for migration.
+          // New events: omit the field; the stored apiEndpoint stays valid in place.
+          if (responseEvent.content.apiEndpoint != null) {
+            updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
+            stripLegacyApiEndpointFromResponse = true;
+          }
           if (responseEvent.content.chat) updateInvite.content.chat = responseEvent.content.chat;
           if (responseEvent.content.system) updateInvite.content.system = responseEvent.content.system;
           break;
@@ -244,6 +256,15 @@ export class Collector {
           throw new HDSLibError(`Unkown or undefined ${responseEvent.content.type}`, responseEvent);
       }
 
+      // Archive update — also strip legacy apiEndpoint when applicable.
+      const responseArchiveUpdate: { streamIds: string[], content?: any } = {
+        streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.archive)]
+      };
+      if (stripLegacyApiEndpointFromResponse) {
+        const { apiEndpoint: _stripped, ...cleanedContent } = responseEvent.content;
+        responseArchiveUpdate.content = cleanedContent;
+      }
+
       // update inviteEvent and archive inbox message
       const apiCalls = [
         {
@@ -257,9 +278,7 @@ export class Collector {
           method: 'events.update',
           params: {
             id: responseEvent.id,
-            update: {
-              streamIds: [this.streamIdFor(Collector.STREAMID_SUFFIXES.archive)]
-            }
+            update: responseArchiveUpdate
           }
         }
       ];
