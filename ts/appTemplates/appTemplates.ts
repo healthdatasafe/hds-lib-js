@@ -6,6 +6,7 @@ import { CollectorClient } from './CollectorClient.ts';
 import { CollectorInvite } from './CollectorInvite.ts';
 import { CollectorRequest } from './CollectorRequest.ts';
 import { CmcCollector } from './CmcCollector.ts';
+import { CmcCollectorClient } from './CmcCollectorClient.ts';
 import { Contact } from './Contact.ts';
 export type { ContactInvite } from './Contact.ts';
 export type { AccessUpdateRequest, AccessUpdateRequestContent, AccessUpdateAction } from './interfaces.ts';
@@ -23,8 +24,9 @@ export type {
   ItemLabelsWithSource,
   CollectItemLabelsOptions
 } from './itemLabels.ts';
-export { AppManagingAccount, AppClientAccount, Application, Collector, CollectorClient, CollectorInvite, CollectorRequest, CmcCollector, Contact };
+export { AppManagingAccount, AppClientAccount, Application, Collector, CollectorClient, CollectorInvite, CollectorRequest, CmcCollector, CmcCollectorClient, Contact };
 export type { CmcRequestParams, CmcRequestResult, CmcRevokeParams } from './CmcCollector.ts';
+export type { CmcAcceptOutcome, CmcAcceptOptions, CmcRefuseOptions, CmcScopeUpdateParams } from './CmcCollectorClient.ts';
 
 // Plan 45 — custom-fields & system-stream resolvers + types.
 export {
