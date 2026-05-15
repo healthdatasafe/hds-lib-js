@@ -3,6 +3,7 @@ import * as settings from './settings.ts';
 import { pryv } from './patchedPryv.ts';
 import { HDSModel } from './HDSModel/HDSModel.ts';
 import * as appTemplates from './appTemplates/appTemplates.ts';
+import * as cmcSystem from './cmc/system.ts';
 import * as logger from './logger.ts';
 import { HDSService } from './HDSService.ts';
 import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton.ts';
@@ -33,7 +34,8 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions };
+export { pryv, settings, HDSService, HDSModel, appTemplates, cmcSystem, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions };
+export type { SystemAlertContent, SystemAckContent, SendSystemEventParams } from './cmc/system.ts';
 
 // Plan 45 — top-level type re-exports so consumers can `import type { CustomFieldDeclaration } from 'hds-lib'`.
 export type {
