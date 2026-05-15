@@ -375,4 +375,60 @@ export class Contact {
 
     return [...byUsername.values(), ...standalone];
   }
+
+  // ---- Plan 59 Phase 4e — CMC reader path ---- //
+
+  /**
+   * Build a `ContactSource` from a CMC data-grant access (the kind minted on
+   * the patient's account by `CmcCollectorClient.acceptCapability`).
+   *
+   * Recognised by `clientData.cmc.role === 'counterparty'`. The remote
+   * identity is read directly from `clientData.cmc.counterparty.{username,host}`.
+   */
+  static sourceFromCmcAccess (access: any): ContactSource | null {
+    const cmc = access?.clientData?.cmc;
+    if (cmc?.role !== 'counterparty') return null;
+    const cp = cmc.counterparty;
+    if (!cp?.username || !cp?.host) return null;
+    return {
+      remoteUsername: cp.username,
+      displayName: access.name || cp.username,
+      chatStreams: null, // Chat is owned by the deferred chat-clinical plan
+      appStreamId: null,
+      permissions: access.permissions || [],
+      status: access.deleted ? 'Deleted' : 'Active',
+      type: 'collector',
+      accessId: access.id || null
+    };
+  }
+
+  /**
+   * Build Contact[] from the patient's full `accesses.get` result, picking
+   * out CMC data-grants and grouping by counterparty username (parallels
+   * the legacy `Collector.collectAccessSources` → `groupByContact` pipeline).
+   *
+   * Strict cutover (Plan 59): once Phase 9 lands, this is the only path.
+   * Until then, callers use this in parallel with the legacy path.
+   */
+  static fromCmcAccesses (accesses: any[]): Contact[] {
+    const sources: ContactSource[] = [];
+    const accessesByContact = new Map<string, any[]>();
+    for (const access of accesses ?? []) {
+      const source = Contact.sourceFromCmcAccess(access);
+      if (source == null) continue;
+      sources.push(source);
+      const key = source.remoteUsername!;
+      if (!accessesByContact.has(key)) accessesByContact.set(key, []);
+      accessesByContact.get(key)!.push(access);
+    }
+    const contacts = Contact.groupByContact(sources);
+    // Attach raw access objects so eventIsFromContact / initStreamCache work.
+    for (const contact of contacts) {
+      const remote = contact.remoteUsername;
+      if (remote == null) continue;
+      const peerAccesses = accessesByContact.get(remote) ?? [];
+      for (const access of peerAccesses) contact.addAccessObject(access);
+    }
+    return contacts;
+  }
 }
