@@ -329,13 +329,14 @@ function mapAcceptErrorToOutcomeKind (err: any): CmcAcceptOutcome['kind'] {
 
 /**
  * Poll the patient's `accesses.get` until the data-grant with our chosen
- * `accessName` materialises (matched by `access.name === accessName`).
+ * `accessName` materialises AND the back-channel handshake has populated
+ * `clientData.cmc.counterparty.remoteChatStreamId` (without it the chat /
+ * collectors stream getters can't resolve).
  *
- * The plugin annotates the resulting access with
- * `clientData.cmc.role === 'counterparty'` and
- * `clientData.cmc.counterparty.{username,host,remoteChatStreamId,...}`.
- * We additionally check `cmc.role` to be defensive against name collisions
- * with non-CMC accesses.
+ * Two-phase wait reflects the plugin's two-phase work:
+ *   1. handleAccept mints the data-grant (clientData.cmc.role='counterparty').
+ *   2. handleIncomingBackChannel populates counterparty.remoteChatStreamId
+ *      (and remoteCollectorStreamId).
  */
 async function waitForDataGrantAccess (
   connection: pryv.Connection,
@@ -347,7 +348,9 @@ async function waitForDataGrantAccess (
     const res = await connection.api([{ method: 'accesses.get', params: { includeDeletions: false } }]);
     const accesses = (res?.[0] as any)?.accesses ?? [];
     const found = accesses.find((a: any) =>
-      a?.name === accessName && a?.clientData?.cmc?.role === 'counterparty');
+      a?.name === accessName &&
+      a?.clientData?.cmc?.role === 'counterparty' &&
+      typeof a?.clientData?.cmc?.counterparty?.remoteChatStreamId === 'string');
     if (found != null) return found;
     await sleep(HANDSHAKE_POLL_INTERVAL_MS);
   }
