@@ -85,8 +85,10 @@ async function helperNewInvite (appManaging, appClient, code, extraFeatures = { 
   const inviteSharingData = await invite.getSharingData();
   assert.equal(inviteSharingData.apiEndpoint, await collector.sharingApiEndpoint());
 
-  // Invitee receives the invite
-  const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+  // Invitee receives the invite (Plan 56: result is a discriminated outcome)
+  const outcome = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+  assert.equal(outcome.kind, 'created', 'expected handleIncomingRequest to mint a new CollectorClient');
+  const collectorClient = outcome.collectorClient;
 
   return { collector, invite, collectorClient, inviteSharingData };
 }

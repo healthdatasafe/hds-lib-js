@@ -86,7 +86,11 @@ export class CollectorClient {
   get status (): string {
     const eventStatus = this.eventData.content.status;
     if (eventStatus === CollectorClient.STATUSES.deactivated || eventStatus === CollectorClient.STATUSES.refused) {
-      if (!this.accessData?.deleted) {
+      // Plan 56 sidecar: terminal-state CCs whose access was correctly deleted
+      // (returned in `accessDeletions`, not `accesses`) have `accessData == null`.
+      // `!undefined?.deleted` evaluated to `true` here previously, mis-logging
+      // "access is still valid" on every contact-list rebuild. Guard explicitly.
+      if (this.accessData && !this.accessData.deleted) {
         logger.error('>> CollectorClient.status TODO check consistency when access is still valid and deactivated or refused', this.accessData);
       }
       return eventStatus;
@@ -109,6 +113,27 @@ export class CollectorClient {
     this.accessData = accessData;
     this.request = new CollectorRequest({});
     this.request.loadFromInviteEvent(eventData.content.requesterEventData);
+  }
+
+  /**
+   * Plan 56 fence: throws if the caller's intended `requesterEventId` doesn't
+   * match the one this CollectorClient is bound to. Caller (e.g. webapp accept
+   * handler) should invoke before any state-mutating operation on this CC when
+   * an incoming `requesterEventId` is in hand, to guarantee a stale invite
+   * URL never silently activates the wrong relationship.
+   *
+   * No-op when `eventId` is `undefined` (cache-prime path that has no incoming
+   * event to compare against).
+   */
+  assertMatchesEventId (eventId: string | undefined): void {
+    if (eventId == null) return;
+    if (eventId !== this.requesterEventId) {
+      throw new HDSLibError('CollectorClient.assertMatchesEventId: stored requesterEventId does not match', {
+        stored: this.requesterEventId,
+        incoming: eventId,
+        key: this.key
+      });
+    }
   }
 
   /**

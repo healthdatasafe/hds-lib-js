@@ -214,7 +214,10 @@ describe('[APTX] appTemplates', function () {
       const myClientUserPermissionsResult = await createUserPermissions(clientUser, permissionsClient, [], appClientName + 'APTI');
 
       const myAppClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, myClientUserPermissionsResult.appApiEndpoint, appClientName);
-      const collectorClient = await myAppClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+      // Plan 56: result is a discriminated outcome
+      const outcome = await myAppClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
+      assert.equal(outcome.kind, 'created');
+      const collectorClient = outcome.collectorClient;
       assert.equal(collectorClient.eventData.streamIds[0], myAppClient.baseStreamId);
       assert.equal(collectorClient.eventData.content.apiEndpoint, inviteSharingData.apiEndpoint);
       assert.equal(collectorClient.eventData.content.requesterEventId, inviteSharingData.eventId);
@@ -488,11 +491,12 @@ describe('[APTX] appTemplates', function () {
       const new0 = await helperNewAppAndUsers('dummy', 'dummyApp', 'dummyC', 'dummyCApp');
       const inv0 = await helperNewInvite(new0.appManaging, new0.appClient, 'APEH');
 
-      // Same access (same key) but different incomingEventId — current contract is to
-      // return/keep the existing CollectorClient rather than throw (id-based keys make
-      // the collision a no-op for the access dimension; eventId is informational).
+      // Plan 56: same access (same key) but different incomingEventId — now
+      // returns `event-mismatch` outcome instead of silently returning existing CC.
       const repeated = await new0.appClient.handleIncomingRequest(inv0.inviteSharingData.apiEndpoint, 'bogusId');
-      assert.ok(repeated, 'handleIncomingRequest should return a CollectorClient');
+      assert.equal(repeated.kind, 'event-mismatch', 'expected event-mismatch outcome on different eventId');
+      assert.equal(repeated.incomingEventId, 'bogusId');
+      assert.ok(repeated.collectorClient, 'outcome carries the existing CollectorClient');
 
       // -- The following case happens when a user revokes its app permission
       // and re-grants other permissions to the same app — i.e. a fresh requester
@@ -505,11 +509,15 @@ describe('[APTX] appTemplates', function () {
       const inv1 = (await collector1.getInvites())[0];
       const inviteSharingData1 = await inv1.getSharingData();
 
-      // Different apiEndpoint, same key — current contract: log + create new CollectorClient
-      // (per AppClientAccount.handleIncomingRequest line 49 "handle gracefully by logging
-      // and creating new"). The fresh client gets a different key from its own accessInfo.
+      // Plan 56: after revoke + new collector, the fresh access has a NEW id →
+      // NEW cache key → `created` (no key collision, as id-based keys make this
+      // case naturally distinct). `key-collision-different-endpoint` would only
+      // fire if the SAME access id had a different apiEndpoint stored against
+      // it — impossible by construction with id-based keys (kept as a defensive
+      // outcome for future schema changes).
       const fresh = await new0.appClient.handleIncomingRequest(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
-      assert.ok(fresh, 'handleIncomingRequest should return a CollectorClient');
+      assert.equal(fresh.kind, 'created', 'expected fresh access to mint a new CollectorClient');
+      assert.ok(fresh.collectorClient);
 
       // reset to new incoming (might be implement later)
       const requesterConnection = new pryv.Connection(inviteSharingData1.apiEndpoint);

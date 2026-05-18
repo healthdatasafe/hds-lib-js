@@ -7,6 +7,23 @@ import type { ContactSource } from './interfaces.ts';
 import * as logger from '../logger.ts';
 
 /**
+ * Plan 56: discriminated outcome of `handleIncomingRequest`. Caller branches
+ * per `kind` for UX (e.g. `created` → success toast; `event-mismatch` →
+ * collision modal; `in-terminal-state` → "previously refused" message).
+ *
+ * Every outcome carries the relevant `CollectorClient` so callers can still
+ * navigate to / display the existing relationship even when no new client was
+ * minted.
+ */
+export type IncomingRequestOutcome =
+  | { kind: 'created'; collectorClient: CollectorClient }
+  | { kind: 'in-incoming'; collectorClient: CollectorClient }
+  | { kind: 'already-active'; collectorClient: CollectorClient }
+  | { kind: 'event-mismatch'; collectorClient: CollectorClient; incomingEventId: string }
+  | { kind: 'in-terminal-state'; collectorClient: CollectorClient; status: 'Refused' | 'Deactivated' }
+  | { kind: 'key-collision-different-endpoint'; collectorClient: CollectorClient };
+
+/**
  * - applications
  *   - [baseStreamId] "Root" stream from this app
  */
@@ -26,36 +43,69 @@ export class AppClientAccount extends Application {
   }
 
   /**
-   * When the app receives a new request for data sharing
+   * When the app receives a new request for data sharing.
+   *
+   * Returns a discriminated outcome (Plan 56) — caller decides per-kind UX.
+   * Never silently activates a stale event against an existing CollectorClient;
+   * never silently dedupes a second invite as if it were the first.
+   *
+   * Branch logic:
+   *   1. Resolve accessInfo for the URL's apiEndpoint, compute the cache key.
+   *   2. If the cache already holds a CC for that key:
+   *      - apiEndpoint mismatch → `key-collision-different-endpoint`.
+   *      - incomingEventId mismatch (the actual reproduction case, see plan 56
+   *        "Concrete reproduction") → `event-mismatch` — caller must not
+   *        auto-activate the existing CC against the new event.
+   *      - Status === Active → `already-active`.
+   *      - Status terminal (Refused / Deactivated) → `in-terminal-state`.
+   *      - Status Incoming / null → `in-incoming`.
+   *   3. Otherwise mint a new CollectorClient and return `created`.
    */
-  async handleIncomingRequest (apiEndpoint: string, incomingEventId?: string): Promise<CollectorClient> {
+  async handleIncomingRequest (apiEndpoint: string, incomingEventId?: string): Promise<IncomingRequestOutcome> {
     // make sure that collectorClientsMap is initialized
     await this.getCollectorClients();
 
     const requesterConnection = new pryv.Connection(apiEndpoint);
     const accessInfo = await requesterConnection.accessInfo();
-    // check if request is known
     const collectorClientKey = CollectorClient.keyFromInfo(accessInfo);
     logger.debug('AppClient:handleIncomingRequest', { collectorClientKey, accessInfo, incomingEventId });
-    if (this.cache.collectorClientsMap[collectorClientKey]) {
-      const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
-      logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
-      // Same access, same endpoint — idempotent, return existing
-      if (collectorClient.requesterApiEndpoint === apiEndpoint) {
-        return collectorClient;
+
+    const existing = this.cache.collectorClientsMap[collectorClientKey];
+    if (existing) {
+      logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient: existing });
+
+      if (existing.requesterApiEndpoint !== apiEndpoint) {
+        logger.info('AppClient:handleIncomingRequest key-collision-different-endpoint', {
+          existing: existing.requesterApiEndpoint, incoming: apiEndpoint
+        });
+        return { kind: 'key-collision-different-endpoint', collectorClient: existing };
       }
-      // Different apiEndpoint or eventId for same key — this shouldn't happen with id-based keys
-      // but handle gracefully by logging and creating new (will get a different key from its own accessInfo)
-      logger.info('AppClient:handleIncomingRequest existing key collision, creating new client');
+
+      if (incomingEventId != null && incomingEventId !== existing.requesterEventId) {
+        logger.info('AppClient:handleIncomingRequest event-mismatch', {
+          existing: existing.requesterEventId, incoming: incomingEventId
+        });
+        return { kind: 'event-mismatch', collectorClient: existing, incomingEventId };
+      }
+
+      const status = existing.status;
+      if (status === CollectorClient.STATUSES.active) {
+        return { kind: 'already-active', collectorClient: existing };
+      }
+      if (status === CollectorClient.STATUSES.refused || status === CollectorClient.STATUSES.deactivated) {
+        return { kind: 'in-terminal-state', collectorClient: existing, status: status as 'Refused' | 'Deactivated' };
+      }
+      // Incoming or null
+      return { kind: 'in-incoming', collectorClient: existing };
     }
-    // check if comming form hdsCollector
+
+    // No existing — mint a fresh CollectorClient
     if (!accessInfo?.clientData?.hdsCollector || (accessInfo.clientData?.hdsCollector as any)?.version !== 0) {
       throw new HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
     }
-    // else create it
     const collectorClient = await CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
     this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
-    return collectorClient;
+    return { kind: 'created', collectorClient };
   }
 
   async getCollectorClientByKey (collectorKey: string): Promise<CollectorClient | undefined> {
