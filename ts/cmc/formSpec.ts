@@ -118,13 +118,88 @@ export async function loadFormSpec (
 }
 
 /**
- * Doctor-side: mirror the snapshotted FormSpec onto the trigger event
- * created by `cmc.createInvite` (Candidate C — Q-F1 lock: `events.update`
- * replaces content, so we read-merge-write).
+ * Doctor-side: mint a CMC invite with the FormSpec snapshot embedded on
+ * the trigger event content at events.create time.
  *
- * @param connection Doctor's master connection.
- * @param triggerEventId The `consent/request-cmc` event id returned by `cmc.createInvite`.
- * @param formSpec Snapshot to embed.
+ * **Critical:** this is the ONLY way to get the snapshot to propagate
+ * to the patient's capability access. The CMC plugin's capability-mint
+ * hook copies the trigger event content into a separate offer event
+ * (under `:_cmc:_internal:offer:<capId>`) AT MINT TIME — once. Later
+ * `events.update` on the trigger event does NOT update the offer event,
+ * so `cmc.readOffer` (which reads the offer event) won't see anything
+ * stamped post-mint. (Verified by `verify-formspec.mjs` 2026-05-21.)
+ *
+ * Therefore we bypass `cmc.createInvite` (which doesn't accept arbitrary
+ * extra content keys) and call `events.create` directly with `hdsFormSpec`
+ * already in content. The capability-mint hook fires inside the
+ * events.create chain, copies the content (including hdsFormSpec) to
+ * the offer event, and stamps capabilityUrl + capabilityAccessId +
+ * capabilityExpiresAt on the returned event.
+ *
+ * @returns the same shape as `cmc.createInvite` for caller compatibility.
+ */
+export async function createInviteWithFormSpec (
+  connection: pryv.Connection,
+  params: {
+    appCode: string;
+    scopeStreamId: string;
+    displayName: string;
+    requestedPermissions: Permission[];
+    formSpec: FormSpec;
+    mode?: 'single-use' | 'open-link';
+    expiresAt?: number;
+    title?: localizableText;
+    description?: localizableText;
+    consent?: localizableText;
+    features?: { chat?: boolean; systemMessaging?: boolean };
+    requesterMeta?: Record<string, any>;
+    to?: string | null;
+  }
+): Promise<{ inviteEventId: string; capabilityUrl: string; mode: string; expiresAt: number | undefined }> {
+  const requesterMeta = Object.assign(
+    { displayName: params.displayName, appId: params.appCode },
+    params.requesterMeta ?? {}
+  );
+  const request: any = {
+    title: params.title ?? params.formSpec.title ?? { en: params.displayName },
+    description: params.description ?? params.formSpec.description ?? { en: '' },
+    consent: params.consent ?? params.formSpec.consent ?? { en: '' },
+    permissions: params.requestedPermissions
+  };
+  if (params.features) request.features = params.features;
+  if (params.expiresAt) request.expiresAt = params.expiresAt;
+  const content: any = {
+    to: params.to === undefined ? null : params.to,
+    capabilityRequested: true,
+    request,
+    requesterMeta,
+    // HDS-extension: snapshot the FormSpec on the trigger event content
+    // so the capability-mint hook copies it into the offer event.
+    hdsFormSpec: params.formSpec
+  };
+  if (params.mode && params.mode !== 'single-use') {
+    content.capability = { mode: params.mode };
+  }
+  const event = await connection.apiOne('events.create', {
+    streamIds: [params.scopeStreamId],
+    type: 'consent/request-cmc',
+    content
+  } as any, 'event') as any;
+  return {
+    inviteEventId: event.id,
+    capabilityUrl: event?.content?.capabilityUrl,
+    mode: event?.content?.capability?.mode ?? params.mode ?? 'single-use',
+    expiresAt: event?.content?.capabilityExpiresAt ?? event?.content?.request?.expiresAt
+  };
+}
+
+/**
+ * @deprecated 2026-05-21 — does NOT propagate to the capability offer event
+ * (the capability-mint hook snapshots content once at mint time). Use
+ * `createInviteWithFormSpec` instead so the snapshot lands at events.create
+ * time and the offer event copies it. Kept only for doctor-side analytics
+ * (the doctor can read the trigger event directly; the patient cannot via
+ * the capability access).
  */
 export async function stampFormSpecOnTriggerEvent (
   connection: pryv.Connection,
@@ -137,7 +212,7 @@ export async function stampFormSpecOnTriggerEvent (
   const mergedContent = { ...(current?.content || {}), hdsFormSpec: formSpec };
   return await connection.apiOne('events.update', {
     id: triggerEventId,
-    update: { content: mergedContent }
+    update: { content: mergedContent } as any
   }, 'event');
 }
 
