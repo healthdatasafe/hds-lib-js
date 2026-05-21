@@ -230,6 +230,17 @@ export class Contact {
         ids.forEach((id: string) => this.#accessibleStreamIds!.add(id));
       }
     }
+    // Plan 59 Phase 5a — also accept chat-stream ids from CMC relationships
+    // (both the local outgoing stream on the patient's account and the
+    // remote incoming stream on the doctor's account). Without this, doctor-
+    // side chat events fetched via back-channel wouldn't pass
+    // eventIsAccessible because they're not under any access permission
+    // entry on the patient's side. Bare add — both streams have at most
+    // one event each per chat message so no children to expand.
+    for (const rel of this.cmcRelationships) {
+      if (rel.localChatStreamId) this.#accessibleStreamIds.add(rel.localChatStreamId);
+      if (rel.remoteChatStreamId) this.#accessibleStreamIds.add(rel.remoteChatStreamId);
+    }
   }
 
   /**
@@ -291,6 +302,24 @@ export class Contact {
 
   /** Determine chat event source: 'me', 'contact', or 'unknown' */
   chatEventInfos (event: pryv.Event): { source: 'me' | 'contact' | 'unknown' } {
+    // Plan 59 Phase 5a — CMC chat-stream identification. The patient's
+    // outgoing chat lives on `<patientScope>:chats:<doctorSlug>`; the
+    // doctor's outgoing chat (incoming for the patient) lives on
+    // `<doctorScope>:chats:<patientSlug>` and is fetched via back-channel.
+    if (event.streamIds) {
+      for (const rel of this.cmcRelationships) {
+        if (!rel.features.chat) continue;
+        for (const sid of event.streamIds) {
+          if (rel.localChatStreamId && sid === rel.localChatStreamId) {
+            return { source: 'me' };
+          }
+          if (rel.remoteChatStreamId && sid === rel.remoteChatStreamId) {
+            return { source: 'contact' };
+          }
+        }
+      }
+    }
+    // Legacy fallback
     for (const cc of this.collectorClients) {
       if (!cc.hasChatFeature) continue;
       const infos = cc.chatEventInfos(event);
