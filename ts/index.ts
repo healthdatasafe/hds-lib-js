@@ -1,6 +1,6 @@
 import { localizeText } from './localizeText.ts';
 import * as settings from './settings.ts';
-import { pryv } from './patchedPryv.ts';
+import { pryv, cmc } from './patchedPryv.ts';
 import { HDSModel } from './HDSModel/HDSModel.ts';
 import * as appTemplates from './appTemplates/appTemplates.ts';
 import * as logger from './logger.ts';
@@ -20,6 +20,7 @@ import { HDSModelAppStreams } from './HDSModel/HDSModel-AppStreams.ts';
 import { EuclidianDistanceEngine } from './converters/EuclidianDistanceEngine.ts';
 import { HDSLibError } from './errors.ts';
 import { extractOverloadAsDefinitions } from './HDSModel/overloadExtract.ts';
+import * as cmcFormSpec from './cmc/formSpec.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
@@ -33,7 +34,8 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions };
+export { pryv, cmc, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec };
+export type { FormSpec } from './cmc/formSpec.ts';
 
 // Plan 45 — top-level type re-exports so consumers can `import type { CustomFieldDeclaration } from 'hds-lib'`.
 export type {
@@ -68,6 +70,7 @@ const HDSLib = {
   getHDSModel,
   initHDSModel,
   pryv,
+  cmc,
   settings,
   HDSService,
   HDSModel,
@@ -89,6 +92,7 @@ const HDSLib = {
   HDSModelConversions,
   HDSModelConverters,
   EuclidianDistanceEngine,
-  extractOverloadAsDefinitions
+  extractOverloadAsDefinitions,
+  cmcFormSpec
 };
 export default HDSLib;

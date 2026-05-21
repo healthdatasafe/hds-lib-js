@@ -39,3 +39,6 @@ export namespace pryv {
   export type PryvError = _PryvTypes.PryvError;
   export type KeyValue = _PryvTypes.KeyValue;
 }
+
+import * as _cmc from '@pryv/cmc';
+export const cmc = _cmc;
