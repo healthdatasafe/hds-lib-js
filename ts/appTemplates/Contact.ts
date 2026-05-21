@@ -5,6 +5,7 @@ import type { Collector } from './Collector.ts';
 import { HDSModelAppStreams } from '../HDSModel/HDSModel-AppStreams.ts';
 import { getStreamIdAndChildrenIds } from '../toolkit/StreamsTools.ts';
 import { pryv, cmc } from '../patchedPryv.ts';
+import type { FormSpec } from '../cmc/formSpec.ts';
 
 // ---- Plan 59 Phase 5a — CMC-shaped Contact types ---- //
 
@@ -40,6 +41,13 @@ export interface CmcCounterpartyAccess {
  * Patient-side accept-event record — what `cmc.listAcceptedRelationships`
  * returns. Used to enrich the access-derived relationship with
  * `acceptedAt` + reconcile against ghost records.
+ *
+ * `hdsFormSpec` is an HDS-extension field, only present when the patient
+ * mirrors the FormSpec snapshot onto their own accept event content
+ * post-accept (see `cmcFormSpec.mirrorFormSpecOnAcceptEvent`).
+ * Consumers fetching accept events directly (raw `events.get`) should
+ * pass `content.hdsFormSpec` through to this field; the SDK's
+ * `cmc.listAcceptedRelationships` does not return it.
  */
 export interface CmcAcceptedRelationship {
   acceptEventId: string;
@@ -50,6 +58,7 @@ export interface CmcAcceptedRelationship {
   features?: { chat?: boolean; systemMessaging?: boolean; system?: boolean };
   backChannelAccessId?: string | null;
   dataGrantAccessId?: string | null;
+  hdsFormSpec?: FormSpec | null;
 }
 
 /**
@@ -82,6 +91,8 @@ export interface CmcRelationship {
   grantedPermissions: Permission[];
   /** Accept timestamp — null if no matching accept event */
   acceptedAt: number | null;
+  /** FormSpec snapshot mirrored onto the accept event content. Null until the resolver lands (FormSpec brief step 5). */
+  hdsFormSpec: FormSpec | null;
 }
 
 /**
@@ -479,6 +490,39 @@ export class Contact {
       }));
   }
 
+  /**
+   * Resolved FormSpec snapshots across all active CMC relationships.
+   * Skips relationships whose accept event hasn't been mirrored yet
+   * (hdsFormSpec === null). One entry per relationship that has a spec.
+   */
+  get cmcFormSpecs (): FormSpec[] {
+    const result: FormSpec[] = [];
+    for (const rel of this.cmcRelationships) {
+      if (rel.hdsFormSpec) result.push(rel.hdsFormSpec);
+    }
+    return result;
+  }
+
+  /**
+   * Aggregated form sections across all active CMC relationships (Tasks
+   * page recurring-task loop reads this). Pulled from each relationship's
+   * resolved FormSpec; empty if no FormSpecs are mirrored yet.
+   */
+  get cmcFormSections (): import('./interfaces.ts').CollectorSectionInterface[] {
+    const sections: import('./interfaces.ts').CollectorSectionInterface[] = [];
+    for (const rel of this.cmcRelationships) {
+      const spec = rel.hdsFormSpec;
+      if (!spec || !Array.isArray(spec.sections)) continue;
+      // FormSpec sections are AppTemplateSection — cast to the legacy
+      // CollectorSectionInterface for consumer compatibility (same shape
+      // up to a couple of optional fields).
+      for (const s of spec.sections) {
+        sections.push(s as unknown as import('./interfaces.ts').CollectorSectionInterface);
+      }
+    }
+    return sections;
+  }
+
   /** Aggregated granted permissions across all active CMC relationships (deduped by streamId:level) */
   get cmcAllPermissions (): Permission[] {
     const seen = new Set<string>();
@@ -588,7 +632,8 @@ export class Contact {
         appCode,
         features,
         grantedPermissions: access.permissions ?? [],
-        acceptedAt: matchingAccept?.acceptedAt ?? null
+        acceptedAt: matchingAccept?.acceptedAt ?? null,
+        hdsFormSpec: matchingAccept?.hdsFormSpec ?? null
       };
       contact.cmcRelationships.push(rel);
       // Also populate the legacy accessObjects slot so existing event-filtering
