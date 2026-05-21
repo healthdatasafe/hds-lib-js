@@ -29,8 +29,8 @@ describe('[CFSP] cmcFormSpec helpers', function () {
     });
 
     it('[CFS02] HDS_NOOP_STREAM_ID + permission match the brief', () => {
-      assert.equal(cmcFormSpec.HDS_NOOP_STREAM_ID, ':hds:noop');
-      assert.deepEqual(cmcFormSpec.HDS_NOOP_PERMISSION, { streamId: ':hds:noop', level: 'read' });
+      assert.equal(cmcFormSpec.HDS_NOOP_STREAM_ID, 'hds-noop');
+      assert.deepEqual(cmcFormSpec.HDS_NOOP_PERMISSION, { streamId: 'hds-noop', level: 'read' });
     });
   });
 
@@ -45,7 +45,7 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       const spec = basicSpec({ permissions: [] });
       const out = cmcFormSpec.deriveCmcPermissions(spec);
       assert.equal(out.length, 1);
-      assert.equal(out[0].streamId, ':hds:noop');
+      assert.equal(out[0].streamId, 'hds-noop');
       assert.equal(out[0].level, 'read');
     });
 
@@ -54,7 +54,7 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       const out = cmcFormSpec.deriveCmcPermissions(spec);
       // All filtered → placeholder injected
       assert.equal(out.length, 1);
-      assert.equal(out[0].streamId, ':hds:noop');
+      assert.equal(out[0].streamId, 'hds-noop');
     });
   });
 

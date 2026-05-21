@@ -37,7 +37,7 @@ import type {
 export const FORM_SPEC_EVENT_TYPE = 'hds:form-spec-v1';
 
 /** The HDS no-op permission stream — see Q-F3/F4 in the FormSpec design brief. */
-export const HDS_NOOP_STREAM_ID = ':hds:noop';
+export const HDS_NOOP_STREAM_ID = 'hds-noop';
 
 /** Permission level used by the chat-only placeholder. Read on an empty stream is a no-op. */
 export const HDS_NOOP_PERMISSION: Permission = { streamId: HDS_NOOP_STREAM_ID, level: 'read' };
@@ -197,12 +197,17 @@ export async function readOfferWithFormSpec (
 /**
  * Derive the `requestedPermissions` array for `cmc.createInvite` from a
  * FormSpec. If the FormSpec has no real permissions (chat-only data set),
- * inject the `:hds:noop` placeholder so the CMC schema's non-empty-
+ * inject the `hds-noop` placeholder so the CMC schema's non-empty-
  * permissions check passes (Q-F4 lock).
  *
  * The placeholder grants `read` on an empty patient-side stream — a
- * functional no-op. The patient's hds-webapp provisions `:hds:noop` at
+ * functional no-op. The patient's hds-webapp provisions `hds-noop` at
  * first launch (Q-F3: patient-only).
+ *
+ * Note: the stream is plain `hds-noop` (no colon prefix) — `:hds:` is
+ * not a registered system-stream namespace on open-pryv.io, so the
+ * api-server's streams.create rejects `:hds:noop` with `invalid-request-
+ * structure`. A regular user stream works fine.
  */
 export function deriveCmcPermissions (formSpec: FormSpec): Permission[] {
   const perms = (formSpec.permissions || []).filter(p => p && p.streamId && p.level);
@@ -211,7 +216,7 @@ export function deriveCmcPermissions (formSpec: FormSpec): Permission[] {
 }
 
 /**
- * Patient-side: provision the `:hds:noop` stream used by the chat-only
+ * Patient-side: provision the `hds-noop` stream used by the chat-only
  * placeholder permission. Idempotent — re-runs OK.
  */
 export async function provisionHdsNoop (connection: pryv.Connection): Promise<void> {
