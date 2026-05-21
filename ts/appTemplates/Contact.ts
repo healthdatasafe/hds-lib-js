@@ -4,7 +4,85 @@ import type { CollectorInvite } from './CollectorInvite.ts';
 import type { Collector } from './Collector.ts';
 import { HDSModelAppStreams } from '../HDSModel/HDSModel-AppStreams.ts';
 import { getStreamIdAndChildrenIds } from '../toolkit/StreamsTools.ts';
-import { pryv } from '../patchedPryv.ts';
+import { pryv, cmc } from '../patchedPryv.ts';
+
+// ---- Plan 59 Phase 5a — CMC-shaped Contact types ---- //
+
+/**
+ * Patient-side "counterparty" access — the data-grant access on the
+ * patient's account, owned by the doctor (or bridge service account).
+ * Carries the back-channel apiEndpoint + remote stream ids in
+ * `clientData.cmc.counterparty.*` once the back-channel handshake
+ * completes (see CMC plugin `handleIncomingBackChannel.ts`).
+ */
+export interface CmcCounterpartyAccess {
+  id: string;
+  apiEndpoint?: string;
+  permissions?: Permission[];
+  deleted?: any;
+  clientData?: {
+    cmc?: {
+      role?: string;
+      appCode?: string;
+      features?: { chat?: boolean; systemMessaging?: boolean; system?: boolean } | null;
+      counterparty?: {
+        username?: string;
+        host?: string;
+        apiEndpoint?: string;
+        remoteChatStreamId?: string;
+        remoteCollectorStreamId?: string;
+      };
+    };
+  };
+}
+
+/**
+ * Patient-side accept-event record — what `cmc.listAcceptedRelationships`
+ * returns. Used to enrich the access-derived relationship with
+ * `acceptedAt` + reconcile against ghost records.
+ */
+export interface CmcAcceptedRelationship {
+  acceptEventId: string;
+  counterparty: { username: string; host: string } | null;
+  appCode: string | null;
+  scopeStreamId: string;
+  acceptedAt: number | null;
+  features?: { chat?: boolean; systemMessaging?: boolean; system?: boolean };
+  backChannelAccessId?: string | null;
+  dataGrantAccessId?: string | null;
+}
+
+/**
+ * One CMC relationship between the patient and a counterparty
+ * (doctor or bridge). Built from the patient's local counterparty
+ * access, optionally enriched with the matching `consent/accept-cmc`
+ * event. A single Contact may hold multiple relationships when the
+ * same counterparty has multiple data sets / forms.
+ */
+export interface CmcRelationship {
+  /** Patient-side counterparty access id (primary key) */
+  accessId: string;
+  /** Accept event id under `:_cmc:apps:hds-patient` — null if no matching event found yet */
+  acceptEventId: string | null;
+  /** Counterparty identity */
+  counterparty: { username: string; host: string };
+  /** Counterparty apiEndpoint — used to read doctor's chat + form-spec. Null until back-channel handshake completes. */
+  counterpartyApiEndpoint: string | null;
+  /** Doctor-side chat stream id (patient reads doctor's outgoing chat from here, via counterparty apiEndpoint) */
+  remoteChatStreamId: string | null;
+  /** Doctor-side collector / form-spec stream id (form-spec template lives under here) */
+  remoteCollectorStreamId: string | null;
+  /** Patient-side outgoing chat stream id — `<patientScope>:chats:<peerSlug>` */
+  localChatStreamId: string;
+  /** App code: `hds-collector`, `hds-bridge-<name>`, etc. */
+  appCode: string;
+  /** Negotiated feature flags */
+  features: { chat: boolean; systemMessaging: boolean };
+  /** Permissions granted to the counterparty (what the doctor can read from patient) */
+  grantedPermissions: Permission[];
+  /** Accept timestamp — null if no matching accept event */
+  acceptedAt: number | null;
+}
 
 /**
  * Plan 66 composite-id base extractor. Refs serialise as either bare cuid
@@ -58,6 +136,15 @@ export class Contact {
   /** Cached set of accessible stream IDs (built by initStreamCache) */
   #accessibleStreamIds: Set<string> | null;
 
+  // ---- Plan 59 Phase 5a — CMC-shaped fields ---- //
+
+  /** CMC counterparty identity — null on legacy-only Contacts */
+  counterparty: { username: string; host: string } | null;
+  /** Person (doctor / researcher) or service (bridge) — derived from app-code prefix */
+  kind: 'person' | 'service' | 'unknown';
+  /** CMC relationship records — one per active data-grant on the patient side */
+  cmcRelationships: CmcRelationship[];
+
   constructor (remoteUsername: string | null, displayName: string) {
     this.remoteUsername = remoteUsername;
     this.displayName = displayName;
@@ -66,6 +153,9 @@ export class Contact {
     this.invites = [];
     this.accessObjects = [];
     this.#accessibleStreamIds = null;
+    this.counterparty = null;
+    this.kind = 'unknown';
+    this.cmcRelationships = [];
   }
 
   addSource (source: ContactSource): void {
@@ -352,6 +442,158 @@ export class Contact {
       type: appStreamId ? 'bridge' : 'other',
       accessId: access.id || null
     };
+  }
+
+  // ---- Plan 59 Phase 5a — CMC getters ---- //
+
+  /** Active CMC relationships exist (at least one counterparty access) */
+  get cmcIsActive (): boolean {
+    return this.cmcRelationships.length > 0;
+  }
+
+  /** Any relationship has chat negotiated */
+  get cmcHasChat (): boolean {
+    return this.cmcRelationships.some(r => r.features.chat);
+  }
+
+  /**
+   * Chat-stream descriptors, one per chat-enabled relationship.
+   *
+   * `read` is the doctor-side stream id (read via `counterpartyApiEndpoint`
+   * — caller must construct a `pryv.Connection(counterpartyApiEndpoint)`).
+   * `write` is the patient-side stream id on the patient's own connection.
+   */
+  get cmcChatStreams (): Array<{
+    read: string | null;
+    write: string;
+    counterpartyApiEndpoint: string | null;
+    accessId: string;
+  }> {
+    return this.cmcRelationships
+      .filter(r => r.features.chat)
+      .map(r => ({
+        read: r.remoteChatStreamId,
+        write: r.localChatStreamId,
+        counterpartyApiEndpoint: r.counterpartyApiEndpoint,
+        accessId: r.accessId
+      }));
+  }
+
+  /** Aggregated granted permissions across all active CMC relationships (deduped by streamId:level) */
+  get cmcAllPermissions (): Permission[] {
+    const seen = new Set<string>();
+    const result: Permission[] = [];
+    for (const rel of this.cmcRelationships) {
+      for (const p of rel.grantedPermissions) {
+        const key = `${p.streamId}:${p.level}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          result.push(p);
+        }
+      }
+    }
+    return result;
+  }
+
+  // ---- Plan 59 Phase 5a — CMC static helpers ---- //
+
+  /**
+   * Person vs service detection from CMC app-code (Q-C1 resolution).
+   * `hds-bridge-*` → service; anything else non-null → person; null → unknown.
+   */
+  static cmcDetectKind (appCode: string | null | undefined): 'person' | 'service' | 'unknown' {
+    if (!appCode) return 'unknown';
+    if (appCode.startsWith('hds-bridge-')) return 'service';
+    return 'person';
+  }
+
+  /**
+   * Build Contacts from the patient's local counterparty accesses.
+   *
+   * The counterparty access (`clientData.cmc.role === 'counterparty'`) is
+   * the source of truth: it carries the counterparty's apiEndpoint +
+   * remote stream ids in `clientData.cmc.counterparty.*`. Accept events
+   * (from `cmc.listAcceptedRelationships`) are used only to enrich
+   * relationships with `acceptedAt` + `acceptEventId`.
+   *
+   * Per Q-C2 (CMC plugin Q-C2 resolution 2026-05-21): stale accept events
+   * whose backing counterparty access has been revoked are simply dropped —
+   * no access → no relationship in the output.
+   *
+   * @param accesses Patient's accesses from `connection.api('accesses.get')`.
+   * @param accepts  Patient's accepted relationships from `cmc.listAcceptedRelationships`.
+   * @param patientScopeStreamId The patient's hds-webapp scope (e.g. `:_cmc:apps:hds-patient`).
+   *                              Used to build the local chat-stream id.
+   */
+  static aggregateCmc (
+    accesses: CmcCounterpartyAccess[],
+    accepts: CmcAcceptedRelationship[],
+    patientScopeStreamId: string
+  ): Contact[] {
+    const byCounterparty = new Map<string, Contact>();
+
+    for (const access of accesses) {
+      if (access.deleted) continue;
+      const cmcData = access.clientData?.cmc;
+      if (cmcData?.role !== 'counterparty') continue;
+      const cp = cmcData.counterparty;
+      if (!cp?.username || !cp?.host) continue;
+
+      const key = `${cp.username.toLowerCase()}@${cp.host.toLowerCase()}`;
+      let contact = byCounterparty.get(key);
+      if (!contact) {
+        contact = new Contact(cp.username, cp.username);
+        contact.counterparty = { username: cp.username, host: cp.host };
+        contact.kind = Contact.cmcDetectKind(cmcData.appCode);
+        byCounterparty.set(key, contact);
+      }
+
+      const appCode = cmcData.appCode || 'unknown';
+      // peerSlug for the LOCAL chat stream — slug of the counterparty.
+      // Use cmc.counterpartySlug to stay aligned with the SDK / plugin
+      // (which canonicalize host casing + strip ports).
+      let peerSlug: string;
+      try {
+        peerSlug = (cmc as any).counterpartySlug({ username: cp.username, host: cp.host });
+      } catch {
+        // Fallback if the SDK helper is missing in some environment — shouldn't happen
+        // in practice, but keeps the aggregator side-effect-free under tests.
+        peerSlug = `${cp.username.toLowerCase()}--${cp.host.toLowerCase().replace(/:\d+$/, '').replace(/\./g, '-')}`;
+      }
+      const localChatStreamId = `${patientScopeStreamId}:chats:${peerSlug}`;
+
+      // Match accept event by (counterparty, appCode). Same counterparty
+      // can have multiple accept events for multiple data sets; we just
+      // need ANY one of them for acceptedAt enrichment.
+      const matchingAccept = accepts.find(a =>
+        a.counterparty?.username?.toLowerCase() === cp.username!.toLowerCase() &&
+        a.counterparty?.host?.toLowerCase() === cp.host!.toLowerCase() &&
+        (a.appCode || 'unknown') === appCode
+      );
+
+      const f = cmcData.features ?? null;
+      const features = {
+        chat: !!f?.chat,
+        systemMessaging: !!(f?.systemMessaging ?? f?.system)
+      };
+
+      const rel: CmcRelationship = {
+        accessId: access.id,
+        acceptEventId: matchingAccept?.acceptEventId ?? null,
+        counterparty: { username: cp.username, host: cp.host },
+        counterpartyApiEndpoint: cp.apiEndpoint ?? null,
+        remoteChatStreamId: cp.remoteChatStreamId ?? null,
+        remoteCollectorStreamId: cp.remoteCollectorStreamId ?? null,
+        localChatStreamId,
+        appCode,
+        features,
+        grantedPermissions: access.permissions ?? [],
+        acceptedAt: matchingAccept?.acceptedAt ?? null
+      };
+      contact.cmcRelationships.push(rel);
+    }
+
+    return Array.from(byCounterparty.values());
   }
 
   static groupByContact (sources: ContactSource[]): Contact[] {
