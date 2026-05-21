@@ -591,6 +591,9 @@ export class Contact {
         acceptedAt: matchingAccept?.acceptedAt ?? null
       };
       contact.cmcRelationships.push(rel);
+      // Also populate the legacy accessObjects slot so existing event-filtering
+      // helpers (initStreamCache + eventIsAccessible) work without further glue.
+      contact.addAccessObject(access);
     }
 
     return Array.from(byCounterparty.values());
