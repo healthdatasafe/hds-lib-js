@@ -21,6 +21,8 @@ import { EuclidianDistanceEngine } from './converters/EuclidianDistanceEngine.ts
 import { HDSLibError } from './errors.ts';
 import { extractOverloadAsDefinitions } from './HDSModel/overloadExtract.ts';
 import * as cmcFormSpec from './cmc/formSpec.ts';
+import * as cmcAppScope from './cmc/appScope.ts';
+import * as cmcConstants from './cmc/constants.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
@@ -34,7 +36,7 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec };
+export { pryv, cmc, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants };
 export type { FormSpec } from './cmc/formSpec.ts';
 
 // Plan 45 — top-level type re-exports so consumers can `import type { CustomFieldDeclaration } from 'hds-lib'`.
@@ -93,6 +95,8 @@ const HDSLib = {
   HDSModelConverters,
   EuclidianDistanceEngine,
   extractOverloadAsDefinitions,
-  cmcFormSpec
+  cmcFormSpec,
+  cmcAppScope,
+  cmcConstants
 };
 export default HDSLib;

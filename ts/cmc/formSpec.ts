@@ -25,6 +25,7 @@
  */
 
 import { pryv } from '../patchedPryv.ts';
+import { CMC_EVENT_TYPES } from './constants.ts';
 import type { Permission } from '../appTemplates/interfaces.ts';
 import type { localizableText } from '../localizeText.ts';
 import type {
@@ -182,7 +183,7 @@ export async function createInviteWithFormSpec (
   }
   const event = await connection.apiOne('events.create', {
     streamIds: [params.scopeStreamId],
-    type: 'consent/request-cmc',
+    type: CMC_EVENT_TYPES.INVITE_TRIGGER,
     content
   } as any, 'event') as any;
   return {
@@ -256,7 +257,7 @@ export async function readOfferWithFormSpec (
   const pryvMod = (opts && opts.pryv) || (pryv as any);
   const cap = new pryvMod.Connection(capabilityUrl);
   const events = await cap.apiOne('events.get', {
-    types: ['consent/request-cmc'],
+    types: [CMC_EVENT_TYPES.INVITE_TRIGGER],
     limit: 1
   }, 'events') as any[];
   if (!events || events.length === 0) {
