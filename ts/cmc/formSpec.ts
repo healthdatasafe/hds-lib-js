@@ -195,29 +195,6 @@ export async function createInviteWithFormSpec (
 }
 
 /**
- * @deprecated 2026-05-21 — does NOT propagate to the capability offer event
- * (the capability-mint hook snapshots content once at mint time). Use
- * `createInviteWithFormSpec` instead so the snapshot lands at events.create
- * time and the offer event copies it. Kept only for doctor-side analytics
- * (the doctor can read the trigger event directly; the patient cannot via
- * the capability access).
- */
-export async function stampFormSpecOnTriggerEvent (
-  connection: pryv.Connection,
-  triggerEventId: string,
-  formSpec: FormSpec
-): Promise<pryv.Event> {
-  const current = await connection.apiOne('events.getOne', {
-    id: triggerEventId
-  }, 'event') as any;
-  const mergedContent = { ...(current?.content || {}), hdsFormSpec: formSpec };
-  return await connection.apiOne('events.update', {
-    id: triggerEventId,
-    update: { content: mergedContent } as any
-  }, 'event');
-}
-
-/**
  * Patient-side: mirror the FormSpec snapshot onto the patient's own
  * `consent/accept-cmc` event content post-accept. Without this the
  * snapshot is unreachable on the patient side (the doctor's trigger
