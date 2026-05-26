@@ -4,6 +4,7 @@ import { waitUntilFalse } from '../utils.ts';
 import { CollectorInvite } from './CollectorInvite.ts';
 import * as logger from '../logger.ts';
 import type { Permission, AccessUpdateAction } from './interfaces.ts';
+import { pryv } from '../patchedPryv.ts';
 
 const COLLECTOR_STREAMID_SUFFIXES = {
   archive: 'archive',
@@ -30,6 +31,17 @@ export class Collector {
   });
 
   appManaging: any;
+
+  /**
+   * Plan 60 B3 — typed accessor for the doctor's master connection.
+   * Lets consumers read `collector.connection` instead of casting through
+   * `appManaging: any`. The underlying `appManaging` field stays `any` to
+   * avoid an upgrade-blocking ripple of strict-typing errors in this legacy
+   * class (the class is queued for deletion in Phase C anyway).
+   */
+  get connection (): pryv.Connection {
+    return this.appManaging.connection;
+  }
   streamId: string;
   name: string;
   #streamData: any;
