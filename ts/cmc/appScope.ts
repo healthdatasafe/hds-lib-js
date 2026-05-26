@@ -1,17 +1,18 @@
 /**
  * Idempotently provision streams under `:_cmc:apps` on a CMC-enabled account.
  *
- * The CMC plugin auto-creates the `:_cmc:apps` parent but does not
- * auto-create the per-app children — each `:_cmc:apps:<appCode>` and its
- * sub-scopes (e.g. `:_cmc:apps:hds-collector:<collectorId>`) need explicit
- * `streams.create` calls. The two error modes are tolerated:
+ * The CMC plugin owns the `:_cmc:apps` namespace. Per-app leaves
+ * (`:_cmc:apps:<appCode>`) are auto-provisioned server-side by the
+ * `cmcAccessProvisionAppScopeHook` (deployed plan-61, 2026-05-26) whenever
+ * `accesses.create` / `accesses.update` references a matching permission;
+ * sub-scopes (`:_cmc:apps:<appCode>:<subPath>`) are not.
  *
- *   - `'item-already-exists'` — the stream is already there (idempotent re-run).
- *   - `'forbidden'` — happens on the appScope when the caller's OAuth-scoped
- *     access has `manage` on `:_cmc:apps:<appCode>` but not on the parent
- *     `:_cmc:apps` (the plugin-managed namespace). In that case the appScope
- *     is typically pre-existing anyway because the CMC plugin auto-provisions
- *     app-scope roots on first invite.
+ * For an OAuth-grant access the client still calls `streams.create` here:
+ * pryv checks parent-permission first (no `manage` on `:_cmc:apps` → returns
+ * `'forbidden'`), so we tolerate that — by the time the access is usable
+ * the upstream hook has already created the leaf. The `'item-already-exists'`
+ * branch covers the personal-token-with-`:_cmc:apps`-manage path (registration
+ * personal tokens have it; bridge-athena's onboarding used to depend on it).
  *
  * Hoisted in Plan 60 B1 from three independent copies that had drifted:
  * `doctor-dashboard/app/cmcDoctor.ts` (canonical, used here),
