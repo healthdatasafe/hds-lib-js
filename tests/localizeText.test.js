@@ -122,5 +122,17 @@ describe('[LOCX] Localization', () => {
         assert.equal(e.message, 'textItems must have an english translation');
       }
     });
+
+    it('[LOLY] empty string `en` is a valid translation (author chose "no text")', () => {
+      // Regression for S-2026-05-26-E: previously `!textItem.en` swallowed
+      // empty strings and threw "textItems must have an english translation",
+      // breaking invite peeks against Chat presets that wrote `consent: { en: "" }`.
+      assert.equal(localizeText({ en: '' }), '');
+      // Less-preferred locale set to `""` should also fall through to en.
+      setPreferredLocales(['fr']);
+      assert.equal(localizeText({ en: 'Hello', fr: '' }), '');
+      assert.equal(localizeText({ en: 'Hello', fr: null }), 'Hello');
+      assert.equal(localizeText({ en: 'Hello', fr: undefined }), 'Hello');
+    });
   });
 });

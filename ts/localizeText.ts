@@ -37,12 +37,18 @@ export function resetPreferredLocales (): void {
 
 /**
  * return the translation of this item considering the setting of preffered language
+ *
+ * Empty strings `""` are valid translations (the author chose "no text"); the
+ * function returns them as-is and falls through to less-preferred locales only
+ * when a translation is genuinely `null`/`undefined`. Only a missing `en` key
+ * throws.
  */
 export function localizeText (textItem: localizableText | null): string | null {
   if (textItem == null) return null;
-  if (!textItem.en) throw new HDSLibError('textItems must have an english translation', { textItem });
+  if (textItem.en == null) throw new HDSLibError('textItems must have an english translation', { textItem });
   for (const l of preferredLocales) {
-    if (textItem[l as keyof localizableText]) return textItem[l as keyof localizableText];
+    const v = textItem[l as keyof localizableText];
+    if (v != null) return v;
   }
   return textItem.en;
 }
