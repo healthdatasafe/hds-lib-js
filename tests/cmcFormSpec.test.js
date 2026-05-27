@@ -70,6 +70,139 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       assert.equal(cmcFormSpec.isChatOnlyFormSpec(undefined), false);
     });
   });
+
+  describe('[CFSR] eventToFormSpecRecord (pure helper)', function () {
+    function eventOn (streamId, content = basicSpec()) {
+      return { id: 'evt-' + streamId, streamIds: [streamId], content };
+    }
+
+    it('[CFS30] extracts collectorId from a hds-collector sub-scope', () => {
+      const rec = cmcFormSpec.eventToFormSpecRecord(eventOn(':_cmc:apps:hds-collector:abc123'));
+      assert.equal(rec.collectorId, 'abc123');
+      assert.equal(rec.formSpec.title.en, 'Hello World');
+      assert.equal(rec.event.id, 'evt-:_cmc:apps:hds-collector:abc123');
+    });
+
+    it('[CFS31] honors a custom appCode parameter', () => {
+      const rec = cmcFormSpec.eventToFormSpecRecord(
+        eventOn(':_cmc:apps:hds-patient:xyz'),
+        'hds-patient'
+      );
+      assert.equal(rec.collectorId, 'xyz');
+    });
+
+    it('[CFS32] picks the matching stream when an event has multiple streamIds', () => {
+      const ev = { id: 'evt', streamIds: ['other-stream', ':_cmc:apps:hds-collector:formA'], content: basicSpec() };
+      const rec = cmcFormSpec.eventToFormSpecRecord(ev);
+      assert.equal(rec.collectorId, 'formA');
+    });
+
+    it('[CFS33] returns the raw streamId when no matching scope marker is found (fallback)', () => {
+      const ev = { id: 'evt', streamIds: ['orphan'], content: basicSpec() };
+      const rec = cmcFormSpec.eventToFormSpecRecord(ev);
+      // extractAppSubScopeSuffix returns the input unchanged when the prefix is missing.
+      assert.equal(rec.collectorId, 'orphan');
+    });
+
+    it('[CFS34] tolerates a missing streamIds array', () => {
+      const ev = { id: 'evt', content: basicSpec() };
+      const rec = cmcFormSpec.eventToFormSpecRecord(ev);
+      assert.equal(rec.collectorId, '');
+    });
+  });
+
+  describe('[CFSL] listFormSpecs', function () {
+    function fakeConnection (events) {
+      const calls = [];
+      const conn = {
+        apiOne (method, params, resultKey) {
+          calls.push({ method, params, resultKey });
+          if (method === 'events.get') return events;
+          throw new Error('unexpected apiOne method ' + method);
+        }
+      };
+      return { conn, calls };
+    }
+
+    it('[CFS40] queries the :_cmc:apps:hds-collector parent stream filtered to hds:form-spec-v1', async () => {
+      const { conn, calls } = fakeConnection([]);
+      await cmcFormSpec.listFormSpecs(conn);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].method, 'events.get');
+      assert.deepEqual(calls[0].params.streams, [':_cmc:apps:hds-collector']);
+      assert.deepEqual(calls[0].params.types, ['hds:form-spec-v1']);
+      assert.equal(calls[0].params.limit, 1000);
+      assert.equal(calls[0].resultKey, 'events');
+    });
+
+    it('[CFS41] maps every returned event to a FormSpecRecord with collectorId set', async () => {
+      const events = [
+        { id: 'e1', streamIds: [':_cmc:apps:hds-collector:form-a'], content: basicSpec({ title: { en: 'Form A' } }) },
+        { id: 'e2', streamIds: [':_cmc:apps:hds-collector:form-b'], content: basicSpec({ title: { en: 'Form B' } }) }
+      ];
+      const { conn } = fakeConnection(events);
+      const records = await cmcFormSpec.listFormSpecs(conn);
+      assert.equal(records.length, 2);
+      assert.deepEqual(records.map(r => r.collectorId), ['form-a', 'form-b']);
+      assert.equal(records[0].formSpec.title.en, 'Form A');
+      assert.equal(records[1].event.id, 'e2');
+    });
+
+    it('[CFS42] returns [] when the api returns null/undefined', async () => {
+      const { conn } = fakeConnection(null);
+      const records = await cmcFormSpec.listFormSpecs(conn);
+      assert.deepEqual(records, []);
+    });
+
+    it('[CFS43] honors a custom appCode opt', async () => {
+      const { conn, calls } = fakeConnection([]);
+      await cmcFormSpec.listFormSpecs(conn, { appCode: 'hds-patient' });
+      assert.deepEqual(calls[0].params.streams, [':_cmc:apps:hds-patient']);
+    });
+
+    it('[CFS44] honors a custom limit opt', async () => {
+      const { conn, calls } = fakeConnection([]);
+      await cmcFormSpec.listFormSpecs(conn, { limit: 50 });
+      assert.equal(calls[0].params.limit, 50);
+    });
+  });
+
+  describe('[CFSG] getFormSpecById', function () {
+    it('[CFS50] returns null when loadFormSpec finds nothing', async () => {
+      const conn = { apiOne: async () => [] };
+      const rec = await cmcFormSpec.getFormSpecById(conn, 'missing');
+      assert.equal(rec, null);
+    });
+
+    it('[CFS51] returns a FormSpecRecord with the requested collectorId when found', async () => {
+      const event = { id: 'evt-xyz', streamIds: [':_cmc:apps:hds-collector:xyz'], content: basicSpec({ title: { en: 'XYZ' } }) };
+      const calls = [];
+      const conn = {
+        apiOne (method, params, resultKey) {
+          calls.push({ method, params, resultKey });
+          return [event];
+        }
+      };
+      const rec = await cmcFormSpec.getFormSpecById(conn, 'xyz');
+      assert.ok(rec);
+      assert.equal(rec.collectorId, 'xyz');
+      assert.equal(rec.formSpec.title.en, 'XYZ');
+      // Verify the underlying loadFormSpec was scoped to the exact sub-scope stream
+      assert.deepEqual(calls[0].params.streams, [':_cmc:apps:hds-collector:xyz']);
+    });
+
+    it('[CFS52] honors a custom appCode opt', async () => {
+      const calls = [];
+      const conn = {
+        apiOne (method, params) {
+          calls.push(params);
+          return [];
+        }
+      };
+      await cmcFormSpec.getFormSpecById(conn, 'foo', { appCode: 'hds-patient' });
+      assert.deepEqual(calls[0].streams, [':_cmc:apps:hds-patient:foo']);
+    });
+  });
 });
 
 describe('[CTFS] Contact.aggregateCmc hdsFormSpec pass-through', function () {

@@ -24,8 +24,8 @@
  * patient's hds-webapp provisions `:hds:noop` on first launch.
  */
 
-import { pryv } from '../patchedPryv.ts';
-import { CMC_EVENT_TYPES } from './constants.ts';
+import { cmc, pryv } from '../patchedPryv.ts';
+import { CMC_APP_CODES, CMC_EVENT_TYPES, appSubScope, extractAppSubScopeSuffix } from './constants.ts';
 import type { Permission } from '../appTemplates/interfaces.ts';
 import type { localizableText } from '../localizeText.ts';
 import type {
@@ -116,6 +116,87 @@ export async function loadFormSpec (
     limit: 1
   }, 'events') as any[];
   return (events && events.length > 0) ? events[0] : null;
+}
+
+/**
+ * A FormSpec persisted on the doctor's `:_cmc:apps:<appCode>:<collectorId>`
+ * scope, paired with the raw event id + the parsed collectorId. Returned by
+ * `listFormSpecs` and `getFormSpecById`.
+ *
+ * Phase C (plan 61): replaces the legacy `Collector` runtime as the doctor-
+ * side data-set handle. Every record is "published" — there is no draft
+ * state in the CMC FormSpec model; `saveFormSpec` writes the canonical event
+ * immediately.
+ */
+export interface FormSpecRecord {
+  /** The collectorId suffix of the scope stream (the doctor's data-set id). */
+  collectorId: string;
+  /** The FormSpec content as authored. */
+  formSpec: FormSpec;
+  /** The raw `hds:form-spec-v1` event (id, modified, etc.). */
+  event: pryv.Event;
+}
+
+/**
+ * Pure helper: lift a raw `hds:form-spec-v1` event onto its scope-stream
+ * `collectorId`. Exported for unit-testing in isolation from the I/O layer.
+ *
+ * @param event   a `hds:form-spec-v1` event read from a `:_cmc:apps:<appCode>:*` stream.
+ * @param appCode defaults to `CMC_APP_CODES.COLLECTOR`.
+ */
+export function eventToFormSpecRecord (
+  event: pryv.Event,
+  appCode: string = CMC_APP_CODES.COLLECTOR
+): FormSpecRecord {
+  const streamIds = ((event as any).streamIds || []) as string[];
+  const marker = ':_cmc:apps:' + appCode + ':';
+  const subScope = streamIds.find(s => s.indexOf(marker) !== -1) ?? streamIds[0] ?? '';
+  const collectorId = extractAppSubScopeSuffix(subScope, appCode);
+  return {
+    collectorId,
+    formSpec: (event as any).content as FormSpec,
+    event
+  };
+}
+
+/**
+ * Doctor-side: list every FormSpec the doctor owns under their
+ * `:_cmc:apps:<appCode>` scope (one per data-set). Every result is
+ * "published" — saveFormSpec writes the canonical event immediately
+ * (no draft state in the CMC model).
+ *
+ * Phase C (plan 61): replaces `appManaging.getCollectors()`.
+ */
+export async function listFormSpecs (
+  connection: pryv.Connection,
+  opts?: { appCode?: string; limit?: number }
+): Promise<FormSpecRecord[]> {
+  const appCode = opts?.appCode ?? CMC_APP_CODES.COLLECTOR;
+  const parentStream = cmc.appScope(appCode);
+  const events = await connection.apiOne('events.get', {
+    streams: [parentStream],
+    types: [FORM_SPEC_EVENT_TYPE],
+    limit: opts?.limit ?? 1000
+  } as any, 'events') as unknown as pryv.Event[];
+  return (events ?? []).map(e => eventToFormSpecRecord(e, appCode));
+}
+
+/**
+ * Doctor-side: load a single FormSpec by its `collectorId`. Returns null
+ * if no FormSpec event exists yet on `:_cmc:apps:<appCode>:<collectorId>`.
+ *
+ * Phase C (plan 61): replaces `appManaging.getCollectorById()`.
+ */
+export async function getFormSpecById (
+  connection: pryv.Connection,
+  collectorId: string,
+  opts?: { appCode?: string }
+): Promise<FormSpecRecord | null> {
+  const appCode = opts?.appCode ?? CMC_APP_CODES.COLLECTOR;
+  const subScope = appSubScope(appCode, collectorId);
+  const event = await loadFormSpec(connection, subScope);
+  if (!event) return null;
+  return eventToFormSpecRecord(event, appCode);
 }
 
 /**
