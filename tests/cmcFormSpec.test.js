@@ -24,8 +24,8 @@ describe('[CFSP] cmcFormSpec helpers', function () {
   }
 
   describe('[CFSC] constants', function () {
-    it('[CFS01] FORM_SPEC_EVENT_TYPE matches the locked Q-F5 name', () => {
-      assert.equal(cmcFormSpec.FORM_SPEC_EVENT_TYPE, 'hds:form-spec-v1');
+    it('[CFS01] FORM_SPEC_EVENT_TYPE is `hds-form-spec/v1` (slash-form per Pryv events.get regex)', () => {
+      assert.equal(cmcFormSpec.FORM_SPEC_EVENT_TYPE, 'hds-form-spec/v1');
     });
 
     it('[CFS02] HDS_NOOP_STREAM_ID + permission match the brief', () => {
@@ -124,13 +124,13 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       return { conn, calls };
     }
 
-    it('[CFS40] queries the :_cmc:apps:hds-collector parent stream filtered to hds:form-spec-v1', async () => {
+    it('[CFS40] queries the :_cmc:apps:hds-collector parent stream filtered to hds-form-spec/v1', async () => {
       const { conn, calls } = fakeConnection([]);
       await cmcFormSpec.listFormSpecs(conn);
       assert.equal(calls.length, 1);
       assert.equal(calls[0].method, 'events.get');
       assert.deepEqual(calls[0].params.streams, [':_cmc:apps:hds-collector']);
-      assert.deepEqual(calls[0].params.types, ['hds:form-spec-v1']);
+      assert.deepEqual(calls[0].params.types, ['hds-form-spec/v1']);
       assert.equal(calls[0].params.limit, 1000);
       assert.equal(calls[0].resultKey, 'events');
     });

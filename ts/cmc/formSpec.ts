@@ -7,7 +7,7 @@
  * derive the CMC `requestedPermissions` and is mirrored as a snapshot
  * onto the per-invite trigger event content (Q-F6 lock: snapshot-frozen).
  *
- * Storage (Q-F5 lock: hds:form-spec-v1):
+ * Storage (Q-F5 lock: hds-form-spec/v1 — slash separator required by Pryv events.get types regex):
  * - **Doctor side**: one canonical template event per data-set, stored
  *   on the doctor's `:_cmc:apps:hds-collector:<collectorId>` scope stream.
  * - **Per-invite snapshot**: doctor's `consent/request-cmc` trigger event
@@ -34,8 +34,19 @@ import type {
   ExistingStreamRef
 } from '../appTemplates/templateTypes.ts';
 
-/** Event type for the canonical FormSpec template event on the doctor side. */
-export const FORM_SPEC_EVENT_TYPE = 'hds:form-spec-v1';
+/**
+ * Event type for the canonical FormSpec template event on the doctor side.
+ *
+ * Must satisfy Pryv's events.get `types` filter regex
+ * `^(series:)?[a-z0-9-]+/(\*|[a-z0-9-]+)$` — i.e. `<category>/<name>` with
+ * `/` (not `:`) separator. Original Plan 59 Phase 5a value was
+ * `'hds:form-spec-v1'` which `events.create` accepted silently but
+ * `events.get` rejected with `invalid-parameters-format` when used in a
+ * types filter; corrected to slash form in plan 61 C1.a verification
+ * (Round 7, 2026-05-27). No production data was migrated — the only
+ * consumer of saveFormSpec was added in C1.a itself.
+ */
+export const FORM_SPEC_EVENT_TYPE = 'hds-form-spec/v1';
 
 /** The HDS no-op permission stream — see Q-F3/F4 in the FormSpec design brief. */
 export const HDS_NOOP_STREAM_ID = 'hds-noop';
@@ -133,15 +144,15 @@ export interface FormSpecRecord {
   collectorId: string;
   /** The FormSpec content as authored. */
   formSpec: FormSpec;
-  /** The raw `hds:form-spec-v1` event (id, modified, etc.). */
+  /** The raw `hds-form-spec/v1` event (id, modified, etc.). */
   event: pryv.Event;
 }
 
 /**
- * Pure helper: lift a raw `hds:form-spec-v1` event onto its scope-stream
+ * Pure helper: lift a raw `hds-form-spec/v1` event onto its scope-stream
  * `collectorId`. Exported for unit-testing in isolation from the I/O layer.
  *
- * @param event   a `hds:form-spec-v1` event read from a `:_cmc:apps:<appCode>:*` stream.
+ * @param event   a `hds-form-spec/v1` event read from a `:_cmc:apps:<appCode>:*` stream.
  * @param appCode defaults to `CMC_APP_CODES.COLLECTOR`.
  */
 export function eventToFormSpecRecord (
