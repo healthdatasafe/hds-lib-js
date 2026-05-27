@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0] - 2026-05-27
+
+### Plan 61 Phase C — legacy collector code deleted
+
+API surface frozen: no more `Collector` / `CollectorClient` / `CollectorInvite` classes, no `AppManagingAccount.createCollector` / `getCollectors` / `getCollectorById`, no `AppClientAccount.handleIncomingRequest` / `getCollectorClients` / `getContacts`, and `Contact` is CMC-only. The CMC path (`@pryv/cmc` + the `cmc*` helpers in this lib — `cmcFormSpec`, `cmcAppScope`, `cmcConstants`) is the only supported flow for doctor-side forms and patient-side relationships.
+
+`CollectorRequest` survives as a pure editor-state class consumed by `hds-forms-js`'s FormBuilder UI (locked via plan 61 Path B).
+
+### BREAKING
+
+- **Deleted classes:** `Collector`, `CollectorClient`, `CollectorInvite`.
+- **Deleted from `Contact`:** `sources`, `collectorClients`, `invites` fields + their `addSource`/`addCollectorClient`/`addInvite` methods. Deleted getters: `primaryCollectorClient`, `incomingCollectorClients`, `isPending`, `hasPendingUpdate`, `pendingUpdateClients`, `pendingCollectorClient`, `acceptPendingInvite`, `refusePendingInvite`, `formSections`, `chatStreams`, `chatPost`, `collectorSources`, `bridgeSources`. Deleted static methods: `Contact.groupByContact`, `Contact.sourceFromAccess`. The `accessObjects` field is kept (used by `initStreamCache` + `eventIsAccessible` + `eventIsFromContact`, populated by `Contact.aggregateCmc`).
+- **Rewritten `Contact` getters (CMC-only):** `status` (derived from `cmcRelationships[].acceptedAt`), `hasChat` (from `cmcRelationships[].features.chat`), `appStreamIds` (distinct `appCode` set), `allPermissions` (alias for `cmcAllPermissions`), `isActive`, `accessIds`.
+- **Deleted from `AppManagingAccount`:** `createCollector`, `createCollectorUnitialized`, `getCollectors`, `getCollectorById`, `getContacts`. Class is now a thin `Application` subclass.
+- **Deleted from `AppClientAccount`:** `handleIncomingRequest`, `getCollectorClientByKey`, `getCollectorClients`, `getContacts`. Class is now a thin `Application` subclass.
+- **Deleted from `interfaces.ts`:** `ContactSource`, `ContactSourceType`, `ChatStreams`, `AccessUpdateAction`, `AccessUpdateRequestContent`, `AccessUpdateRequest`. `Permission`, `RequestSectionType`, `CollectorSectionInterface` are kept.
+- **Deleted from `appTemplates` re-exports:** `Collector`, `CollectorClient`, `CollectorInvite`, `ContactInvite`, `AccessUpdateRequest*`.
+- **`collectItemLabels(itemKey, contacts)`** now walks `contact.cmcRelationships[].hdsFormSpec.sections` instead of legacy `CollectorClient.getSections()`.
+
+### Migration
+
+Callers can pin to `github:healthdatasafe/hds-lib-js#0fedc1d` (the last pre-1.0 commit) until ported to the CMC API. `bridge-redcap` is frozen on this pin pending its own port — see [`_macro/bridge-redcap/CLAUDE.md`](../../bridge-redcap/CLAUDE.md) for the port checklist.
+
+For the doctor-side form-storage migration, see `doctor-dashboard/app/formSpecAdapter.ts` (CollectorRequest ↔ FormSpec translators) and `doctor-dashboard/app/cmcDoctor.ts` (`saveFormSpec` / `listInviteRecordsFor` / etc.) for the reference port.
+
 ## [Unreleased]
 
 ## [0.11.0] - 2026-05-14

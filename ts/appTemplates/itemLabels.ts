@@ -108,8 +108,12 @@ export function collectItemLabelsFromSections (
 }
 
 /**
- * Gather labels for itemKey from every active CollectorClient on the given
- * contacts. Each entry is attributed to the contact and form it came from.
+ * Gather labels for itemKey from every CMC relationship on the given contacts.
+ * Each entry is attributed to the contact and form (FormSpec) it came from.
+ *
+ * Post-plan-61 Phase C: walks `contact.cmcRelationships[].hdsFormSpec.sections`
+ * (no more legacy CollectorClient). Relationships without a mirrored FormSpec
+ * snapshot are skipped.
  */
 export function collectItemLabels (
   itemKey: string,
@@ -118,18 +122,21 @@ export function collectItemLabels (
 ): ItemLabelsWithSource[] {
   const sources: Array<{ section: CollectorSectionInterface, source: ItemLabelSource }> = [];
   for (const contact of contacts) {
-    for (const cc of contact.collectorClients) {
-      if (cc.status !== 'Active') continue;
-      const formTitle = cc.request?.title;
-      const sections = cc.getSections() || [];
-      for (const section of sections) {
+    for (const rel of contact.cmcRelationships) {
+      const spec = rel.hdsFormSpec;
+      if (!spec || !Array.isArray(spec.sections)) continue;
+      const formTitle = spec.title;
+      for (const sec of spec.sections) {
+        // FormSpec sections (AppTemplateSection) are structurally compatible
+        // with CollectorSectionInterface for label-extraction purposes.
+        const section = sec as unknown as CollectorSectionInterface;
         sources.push({
           section,
           source: {
             contactName: contact.displayName,
             formTitle,
             sectionKey: section.key,
-            requestKey: cc.key
+            requestKey: rel.accessId
           }
         });
       }

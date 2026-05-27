@@ -1,7 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
 import { createUserAndPermissions } from './test-utils/pryvService.js';
 import HDSLib from '../ts/index.ts';
-import { helperNewAppManaging } from './test-utils/helpersAppTemplate.js';
 const Application = HDSLib.appTemplates.Application;
 
 describe('[APAX] Application class', function () {
@@ -134,38 +133,6 @@ describe('[APAX] Application class', function () {
       } catch (e) {
         assert.equal(e.message, 'Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
       }
-    });
-  });
-
-  describe('[AMGX] AppManagingAccount tests', function () {
-    it('[AMGA] getCollectorById returns collector when exists', async () => {
-      const testBaseStreamId = 'amga-test';
-      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGA');
-      const collector = await appManaging.createCollector('Test Collector AMGA');
-
-      const foundCollector = await appManaging.getCollectorById(collector.id);
-      assert.ok(foundCollector);
-      assert.equal(foundCollector.id, collector.id);
-    });
-
-    it('[AMGB] getCollectorById returns undefined when not exists', async () => {
-      const testBaseStreamId = 'amgb-test';
-      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGB');
-
-      const foundCollector = await appManaging.getCollectorById('non-existent-id');
-      assert.equal(foundCollector, undefined);
-    });
-
-    it('[AMGC] getCollectors with forceRefresh reloads data', async () => {
-      const testBaseStreamId = 'amgc-test';
-      const { appManaging } = await helperNewAppManaging(testBaseStreamId, 'test-AMGC');
-
-      const collectors1 = await appManaging.getCollectors();
-      assert.equal(collectors1.length, 0);
-
-      await appManaging.createCollector('Test Collector AMGC');
-      const collectors2 = await appManaging.getCollectors(true);
-      assert.equal(collectors2.length, 1);
     });
   });
 

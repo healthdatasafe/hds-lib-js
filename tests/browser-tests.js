@@ -3,7 +3,6 @@
  * Add new tests here
  */
 import './applicationClass.test.js';
-import './apptemplates.test.js';
 import './apptemplatesRequest.test.js';
 import './conversions.test.js';
 import './errors.test.js';

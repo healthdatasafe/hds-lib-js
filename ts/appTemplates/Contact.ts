@@ -1,8 +1,4 @@
-import type { ContactSource, ChatStreams, Permission, CollectorSectionInterface } from './interfaces.ts';
-import type { CollectorClient } from './CollectorClient.ts';
-import type { CollectorInvite } from './CollectorInvite.ts';
-import type { Collector } from './Collector.ts';
-import { HDSModelAppStreams } from '../HDSModel/HDSModel-AppStreams.ts';
+import type { Permission } from './interfaces.ts';
 import { getStreamIdAndChildrenIds } from '../toolkit/StreamsTools.ts';
 import { pryv, cmc } from '../patchedPryv.ts';
 import type { FormSpec } from '../cmc/formSpec.ts';
@@ -116,40 +112,29 @@ function refBase (ref: string | null | undefined): string | null {
   }
 }
 
-/** Doctor-side: a form invite pair (which collector + which invite) */
-export interface ContactInvite {
-  collector: Collector;
-  invite: CollectorInvite;
-}
-
 /**
- * Groups all accesses/relationships from the same remote user (or service).
+ * Groups all CMC relationships from the same remote counterparty
+ * (doctor, researcher, or bridge service).
  *
- * A Contact represents a person (doctor, researcher) or service (bridge)
- * that has one or more accesses on the current user's account.
- * Multiple forms from the same doctor → one Contact with multiple sources.
- * Each bridge → one Contact per bridge.
+ * A Contact represents a person or service that has one or more CMC
+ * data-grant accesses on the current user's account. Built via
+ * `Contact.aggregateCmc(accesses, accepts, patientScope)` from the
+ * patient's local counterparty accesses.
  */
 export class Contact {
   /** Remote user's Pryv username. null for bridge/service contacts. */
   remoteUsername: string | null;
-  /** Display name (from first source, can be overridden) */
+  /** Display name (derived from counterparty username, can be overridden) */
   displayName: string;
-  /** All access sources grouped into this contact */
-  sources: ContactSource[];
-  /** CollectorClient instances for collector sources — patient side */
-  collectorClients: CollectorClient[];
-  /** Doctor-side: collector+invite pairs for this patient */
-  invites: ContactInvite[];
-  /** Raw Pryv access objects for all sources */
+  /** Raw Pryv counterparty access objects backing the relationships */
   accessObjects: any[];
 
   /** Cached set of accessible stream IDs (built by initStreamCache) */
   #accessibleStreamIds: Set<string> | null;
 
-  // ---- Plan 59 Phase 5a — CMC-shaped fields ---- //
+  // ---- CMC-shaped fields (Plan 59 Phase 5a; canonical Plan 61 Phase C) ---- //
 
-  /** CMC counterparty identity — null on legacy-only Contacts */
+  /** CMC counterparty identity */
   counterparty: { username: string; host: string } | null;
   /** Person (doctor / researcher) or service (bridge) — derived from app-code prefix */
   kind: 'person' | 'service' | 'unknown';
@@ -159,9 +144,6 @@ export class Contact {
   constructor (remoteUsername: string | null, displayName: string) {
     this.remoteUsername = remoteUsername;
     this.displayName = displayName;
-    this.sources = [];
-    this.collectorClients = [];
-    this.invites = [];
     this.accessObjects = [];
     this.#accessibleStreamIds = null;
     this.counterparty = null;
@@ -169,31 +151,10 @@ export class Contact {
     this.cmcRelationships = [];
   }
 
-  addSource (source: ContactSource): void {
-    this.sources.push(source);
-    if (this.displayName === this.remoteUsername && source.displayName !== source.remoteUsername) {
-      this.displayName = source.displayName;
-    }
-  }
-
-  /** Associate a CollectorClient with this contact */
-  addCollectorClient (cc: CollectorClient): void {
-    if (!this.collectorClients.includes(cc)) {
-      this.collectorClients.push(cc);
-    }
-  }
-
   /** Associate a raw access object with this contact */
   addAccessObject (access: any): void {
     if (!this.accessObjects.find((a: any) => a.id === access.id)) {
       this.accessObjects.push(access);
-    }
-  }
-
-  /** Associate a collector+invite pair (doctor side) */
-  addInvite (collector: Collector, invite: CollectorInvite): void {
-    if (!this.invites.find(i => i.invite.key === invite.key)) {
-      this.invites.push({ collector, invite });
     }
   }
 
@@ -302,10 +263,10 @@ export class Contact {
 
   /** Determine chat event source: 'me', 'contact', or 'unknown' */
   chatEventInfos (event: pryv.Event): { source: 'me' | 'contact' | 'unknown' } {
-    // Plan 59 Phase 5a — CMC chat-stream identification. The patient's
-    // outgoing chat lives on `<patientScope>:chats:<doctorSlug>`; the
-    // doctor's outgoing chat (incoming for the patient) lives on
-    // `<doctorScope>:chats:<patientSlug>` and is fetched via back-channel.
+    // CMC chat-stream identification. The patient's outgoing chat lives on
+    // `<patientScope>:chats:<doctorSlug>`; the doctor's outgoing chat
+    // (incoming for the patient) lives on `<doctorScope>:chats:<patientSlug>`
+    // and is fetched via back-channel.
     if (event.streamIds) {
       for (const rel of this.cmcRelationships) {
         if (!rel.features.chat) continue;
@@ -319,169 +280,50 @@ export class Contact {
         }
       }
     }
-    // Legacy fallback
-    for (const cc of this.collectorClients) {
-      if (!cc.hasChatFeature) continue;
-      const infos = cc.chatEventInfos(event);
-      if (infos.source === 'me') return { source: 'me' };
-      if (infos.source === 'requester') return { source: 'contact' };
-    }
     return { source: 'unknown' };
   }
 
-  /** Post a chat message via the connection */
-  async chatPost (connection: pryv.Connection, content: string): Promise<pryv.Event> {
-    const chat = this.chatStreams;
-    if (!chat) throw new Error('Cannot chat with this contact — no chat streams');
-    const newEvent = {
-      type: 'message/hds-chat-v1',
-      streamIds: [chat.main],
-      content
-    };
-    return await connection.apiOne('events.create', newEvent, 'event');
-  }
+  // ---- Derived getters (CMC-only) ---- //
 
-  // ---- CollectorClient helpers ---- //
-
-  /** Primary collectorClient (first active, or first available) */
-  get primaryCollectorClient (): CollectorClient | undefined {
-    return this.collectorClients.find(cc => cc.status === 'Active') ||
-      this.collectorClients[0];
-  }
-
-  /** CollectorClients with status Incoming — pending accept/refuse */
-  get incomingCollectorClients (): CollectorClient[] {
-    return this.collectorClients.filter(cc => cc.status === 'Incoming');
-  }
-
-  /** Whether any form is pending (Incoming) and actionable */
-  get isPending (): boolean {
-    return this.collectorClients.some(cc => cc.status === 'Incoming');
-  }
-
-  /** Whether any CollectorClient has a pending access update request */
-  get hasPendingUpdate (): boolean {
-    return this.collectorClients.some(cc => cc.pendingUpdate != null);
-  }
-
-  /** CollectorClients with pending update requests */
-  get pendingUpdateClients (): CollectorClient[] {
-    return this.collectorClients.filter(cc => cc.pendingUpdate != null);
-  }
-
-  /** The pending CollectorClient, if any */
-  get pendingCollectorClient (): CollectorClient | undefined {
-    return this.collectorClients.find(cc => cc.status === 'Incoming');
-  }
-
-  /** Accept the pending invite */
-  async acceptPendingInvite (): Promise<any> {
-    const cc = this.pendingCollectorClient;
-    if (!cc) throw new Error('No pending invite to accept');
-    return await cc.accept();
-  }
-
-  /** Refuse the pending invite */
-  async refusePendingInvite (): Promise<any> {
-    const cc = this.pendingCollectorClient;
-    if (!cc) throw new Error('No pending invite to refuse');
-    return await cc.refuse();
-  }
-
-  /** Aggregated form sections from all active CollectorClients */
-  get formSections (): CollectorSectionInterface[] {
-    const sections: CollectorSectionInterface[] = [];
-    for (const cc of this.collectorClients) {
-      if (cc.status !== 'Active') continue;
-      try {
-        const s = cc.getSections();
-        if (s) sections.push(...s);
-      } catch { /* ignore */ }
-    }
-    return sections;
-  }
-
-  /** Overall status: Active > Incoming > first source status */
+  /** Overall status — derived from cmcRelationships. */
   get status (): string | null {
-    if (this.sources.some(s => s.status === 'Active' || s.status === 'active')) return 'Active';
-    if (this.sources.some(s => s.status === 'Incoming')) return 'Incoming';
-    return this.sources[0]?.status || null;
-  }
-
-  // ---- Existing getters ---- //
-
-  /** Chat streams from any source that has chat enabled */
-  get chatStreams (): ChatStreams | null {
-    for (const source of this.sources) {
-      if (source.chatStreams) return source.chatStreams;
-    }
+    if (this.cmcRelationships.some(r => r.acceptedAt != null)) return 'Active';
+    if (this.cmcRelationships.length > 0) return 'Incoming';
     return null;
   }
 
+  /** Any chat-enabled relationship → true. */
   get hasChat (): boolean {
-    return this.chatStreams !== null;
+    return this.cmcRelationships.some(r => r.features.chat);
   }
 
+  /** Distinct CMC app codes attached to this contact. */
   get appStreamIds (): string[] {
     const ids: string[] = [];
-    for (const source of this.sources) {
-      if (source.appStreamId && !ids.includes(source.appStreamId)) {
-        ids.push(source.appStreamId);
-      }
+    for (const rel of this.cmcRelationships) {
+      if (rel.appCode && !ids.includes(rel.appCode)) ids.push(rel.appCode);
     }
     return ids;
   }
 
+  /** Aggregated granted permissions across CMC relationships, deduped. */
   get allPermissions (): Permission[] {
-    const seen = new Set<string>();
-    const result: Permission[] = [];
-    for (const source of this.sources) {
-      if (source.status === 'Deactivated' || source.status === 'Refused') continue;
-      for (const perm of source.permissions) {
-        const key = `${perm.streamId}:${perm.level}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          result.push(perm);
-        }
-      }
-    }
-    return result;
+    return this.cmcAllPermissions;
   }
 
+  /** Any relationship has been accepted. */
   get isActive (): boolean {
-    return this.sources.some(s => s.status === 'Active' || s.status === 'active');
+    return this.cmcRelationships.some(r => r.acceptedAt != null);
   }
 
+  /** Person (has remote username) vs service. */
   get isPerson (): boolean {
     return this.remoteUsername !== null;
   }
 
-  get collectorSources (): ContactSource[] {
-    return this.sources.filter(s => s.type === 'collector');
-  }
-
-  get bridgeSources (): ContactSource[] {
-    return this.sources.filter(s => s.type === 'bridge');
-  }
-
+  /** Patient-side counterparty access ids backing this contact. */
   get accessIds (): string[] {
-    return this.sources.map(s => s.accessId).filter((id): id is string => id !== null);
-  }
-
-  // ---- Static helpers ---- //
-
-  static sourceFromAccess (access: any): ContactSource {
-    const appStreamId = HDSModelAppStreams.getAppStreamId(access);
-    return {
-      remoteUsername: null,
-      displayName: access.name || 'Unknown',
-      chatStreams: null,
-      appStreamId,
-      permissions: access.permissions || [],
-      status: access.deleted ? 'Deleted' : 'active',
-      type: appStreamId ? 'bridge' : 'other',
-      accessId: access.id || null
-    };
+    return this.accessObjects.map(a => a?.id).filter((id): id is string => typeof id === 'string');
   }
 
   // ---- Plan 59 Phase 5a — CMC getters ---- //
@@ -665,33 +507,9 @@ export class Contact {
         hdsFormSpec: matchingAccept?.hdsFormSpec ?? null
       };
       contact.cmcRelationships.push(rel);
-      // Also populate the legacy accessObjects slot so existing event-filtering
-      // helpers (initStreamCache + eventIsAccessible) work without further glue.
       contact.addAccessObject(access);
     }
 
     return Array.from(byCounterparty.values());
-  }
-
-  static groupByContact (sources: ContactSource[]): Contact[] {
-    const byUsername = new Map<string, Contact>();
-    const standalone: Contact[] = [];
-
-    for (const source of sources) {
-      if (source.remoteUsername) {
-        let contact = byUsername.get(source.remoteUsername);
-        if (!contact) {
-          contact = new Contact(source.remoteUsername, source.displayName);
-          byUsername.set(source.remoteUsername, contact);
-        }
-        contact.addSource(source);
-      } else {
-        const contact = new Contact(null, source.displayName);
-        contact.addSource(source);
-        standalone.push(contact);
-      }
-    }
-
-    return [...byUsername.values(), ...standalone];
   }
 }
