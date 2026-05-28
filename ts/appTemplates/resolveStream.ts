@@ -2,7 +2,7 @@
  * Stream-tree resolver helpers (Plan 45 §6).
  *
  * Walk the parent chain of a runtime Pryv stream tree looking for
- * `clientData.hdsCustomField[eventType]` or `clientData.hdsSystemFeature[messageType]`.
+ * `clientData.hdsCustomField[eventType]`.
  *
  * Inheritance semantics (Plan 45 §2.4):
  *   - present non-empty def → use it
@@ -21,11 +21,6 @@ import {
   type EmptyDef,
   isEmptyDef
 } from './customFieldTypes.ts';
-import {
-  type SystemMessageType,
-  type HDSSystemAlertDef,
-  type HDSSystemAckDef
-} from './systemFeatureTypes.ts';
 import type { CustomFieldDeclaration } from './templateTypes.ts';
 
 type StreamMap = Map<string, Pryv.Stream>;
@@ -87,48 +82,6 @@ export function resolveStreamCustomField (
   eventType: CustomFieldEventType
 ): HDSCustomFieldDef | null {
   const r = resolveStreamCustomFieldDetailed(streamTreeOrMap, streamId, eventType);
-  return r.kind === 'def' ? r.def! : null;
-}
-
-export interface SystemFeatureResolution {
-  kind: ResolutionKind;
-  def?: HDSSystemAlertDef | HDSSystemAckDef;
-}
-
-/**
- * Walk parent chain looking for `clientData.hdsSystemFeature[messageType]`.
- * Same semantics as `resolveStreamCustomFieldDetailed` (`def` / `optOut` / `none`).
- */
-export function resolveStreamSystemFeatureDetailed (
-  streamTreeOrMap: Pryv.Stream[] | StreamMap,
-  streamId: string,
-  messageType: SystemMessageType
-): SystemFeatureResolution {
-  const map = isStreamMap(streamTreeOrMap) ? streamTreeOrMap : buildStreamMap(streamTreeOrMap);
-  const visited = new Set<string>();
-  let cur: Pryv.Stream | undefined = map.get(streamId);
-  while (cur) {
-    if (visited.has(cur.id)) return { kind: 'none' };
-    visited.add(cur.id);
-
-    const cd = (cur as any).clientData;
-    const decl = cd?.hdsSystemFeature?.[messageType];
-    if (decl !== undefined) {
-      if (isEmptyDef(decl)) return { kind: 'optOut' };
-      return { kind: 'def', def: decl as HDSSystemAlertDef | HDSSystemAckDef };
-    }
-    const parentId = (cur as any).parentId as string | null | undefined;
-    cur = parentId ? map.get(parentId) : undefined;
-  }
-  return { kind: 'none' };
-}
-
-export function resolveStreamSystemFeature (
-  streamTreeOrMap: Pryv.Stream[] | StreamMap,
-  streamId: string,
-  messageType: SystemMessageType
-): HDSSystemAlertDef | HDSSystemAckDef | null {
-  const r = resolveStreamSystemFeatureDetailed(streamTreeOrMap, streamId, messageType);
   return r.kind === 'def' ? r.def! : null;
 }
 

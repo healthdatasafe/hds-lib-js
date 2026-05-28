@@ -319,9 +319,9 @@ export class CollectorRequest {
   get existingStreamRefs (): Array<ExistingStreamRef> { return this.#existingStreamRefs; }
 
   /**
-   * Request access on a pre-existing stream (e.g. account-level `app-system-out` /
-   * `app-system-in`). Typing of inner events is owned by the stream's existing
-   * `clientData`; this CollectorRequest only patches access permissions at acceptance.
+   * Request access on a pre-existing stream (Plan 45 mode-3). Typing of inner
+   * events is owned by the stream's existing `clientData`; this CollectorRequest
+   * only patches access permissions at acceptance.
    */
   addExistingStreamRef (ref: ExistingStreamRef) {
     if (ref == null || typeof ref !== 'object') throw new HDSLibError('Invalid existingStreamRef', ref);

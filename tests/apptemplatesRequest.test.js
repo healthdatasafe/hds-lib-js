@@ -165,22 +165,22 @@ describe('[APRX] appTemplates Requests', function () {
     it('[ARES1] should parse existingStreamRefs from content', () => {
       const request = new CollectorRequest({
         existingStreamRefs: [
-          { streamId: 'app-system-out', permissions: ['manage'], purpose: 'system-out' },
-          { streamId: 'app-system-in', permissions: ['read'], purpose: 'system-in' }
+          { streamId: 'external-stream-a', permissions: ['manage'], purpose: 'example-out' },
+          { streamId: 'external-stream-b', permissions: ['read'], purpose: 'example-in' }
         ]
       });
       assert.equal(request.existingStreamRefs.length, 2);
-      assert.equal(request.existingStreamRefs[0].streamId, 'app-system-out');
+      assert.equal(request.existingStreamRefs[0].streamId, 'external-stream-a');
       assert.deepEqual(request.existingStreamRefs[0].permissions, ['manage']);
-      assert.equal(request.existingStreamRefs[1].streamId, 'app-system-in');
+      assert.equal(request.existingStreamRefs[1].streamId, 'external-stream-b');
     });
 
     it('[ARES2] should serialize existingStreamRefs in content', () => {
       const request = new CollectorRequest({});
-      request.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['manage'] });
+      request.addExistingStreamRef({ streamId: 'external-stream-a', permissions: ['manage'] });
       assert.ok(request.content.existingStreamRefs);
       assert.equal(request.content.existingStreamRefs.length, 1);
-      assert.equal(request.content.existingStreamRefs[0].streamId, 'app-system-out');
+      assert.equal(request.content.existingStreamRefs[0].streamId, 'external-stream-a');
     });
 
     it('[ARES3] should not serialize existingStreamRefs when empty', () => {
@@ -201,7 +201,7 @@ describe('[APRX] appTemplates Requests', function () {
     it('[ARES5] should reject empty permissions array', () => {
       const request = new CollectorRequest({});
       try {
-        request.addExistingStreamRef({ streamId: 'app-system-out', permissions: [] });
+        request.addExistingStreamRef({ streamId: 'external-stream-a', permissions: [] });
         throw new Error('Should throw error');
       } catch (e) {
         assert.match(e.message, /permissions must be a non-empty array/);
@@ -211,7 +211,7 @@ describe('[APRX] appTemplates Requests', function () {
     it('[ARES6] should reject invalid permission level', () => {
       const request = new CollectorRequest({});
       try {
-        request.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['admin'] });
+        request.addExistingStreamRef({ streamId: 'external-stream-a', permissions: ['admin'] });
         throw new Error('Should throw error');
       } catch (e) {
         assert.match(e.message, /Invalid permission level "admin"/);
@@ -228,7 +228,7 @@ describe('[APRX] appTemplates Requests', function () {
 
     it('[ARES8] should round-trip through setContent', () => {
       const r1 = new CollectorRequest({});
-      r1.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['manage'], purpose: 'system' });
+      r1.addExistingStreamRef({ streamId: 'external-stream-a', permissions: ['manage'], purpose: 'example' });
       const content1 = r1.content;
       const r2 = new CollectorRequest(content1);
       assert.deepEqual(r2.existingStreamRefs, r1.existingStreamRefs);

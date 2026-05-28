@@ -47,12 +47,6 @@ export type {
   HDSCustomField
 } from './appTemplates/customFieldTypes.ts';
 export type {
-  SystemMessageType,
-  HDSSystemAlertDef,
-  HDSSystemAckDef,
-  HDSSystemFeature
-} from './appTemplates/systemFeatureTypes.ts';
-export type {
   StreamPermission,
   ExistingStreamRef,
   CustomFieldDeclaration,
@@ -61,7 +55,6 @@ export type {
 } from './appTemplates/templateTypes.ts';
 export type {
   CustomFieldResolution,
-  SystemFeatureResolution,
   ResolutionKind,
   VirtualItemDef,
   VirtualItemFieldType

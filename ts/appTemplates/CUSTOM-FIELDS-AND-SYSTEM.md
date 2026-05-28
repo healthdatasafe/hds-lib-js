@@ -1,14 +1,16 @@
-# Custom fields & system stream — design reference
+# Custom fields — design reference
 
-This is the canonical developer/agent reference for two `appTemplates` extensions
-that share the same infrastructure:
+This is the canonical developer/agent reference for the `appTemplates` custom-field
+extension: **template-private fields stored on namespaced streams**, declared in
+`clientData.hdsCustomField` rather than baked into the canonical data model so
+templates extend the model without polluting it.
 
-1. **Custom fields** — template-private fields stored on namespaced streams
-2. **System stream** — operator → user alerts and user → operator acks on the
-   account-level `app-system/*` stream pair
-
-Both are **declared in `clientData`** rather than baked into the canonical data
-model, so templates extend the model without polluting it.
+> The companion **system-stream** design (Plan 45 account-level `app-system-out` /
+> `app-system-in` with `clientData.hdsSystemFeature`) was removed in plan 64
+> Phase A — superseded by the **CMC per-collector system channel**
+> (`:_cmc:apps:<app-code>:[<path>:]collectors:<counterparty-slug>`) carrying
+> `notification/alert-cmc`, `notification/ack-cmc`, `consent/scope-request-cmc`,
+> `consent/scope-update-cmc`. See `open-pryv.io/components/cmc/IMPLEMENTERS-GUIDE.md`.
 
 > Companion reading:
 > - `data-model/documentation/CUSTOM-FIELDS-AND-SYSTEM.md` — validator side
@@ -30,23 +32,11 @@ Custom fields let a template **provision its own template-private streams** at
 acceptance time, declared with everything the form engine and validator need to
 treat them as first-class fields *without* a canonical itemDef.
 
-### Why the system stream exists
-
-Operators (e.g. study coordinators, doctors) need a back-channel to push
-notifications to participants ("please complete today's questionnaire") and to
-receive structured acknowledgements. Chat is correspondent-scoped (per
-collector ↔ user pair); system messages are account-scoped (one inbox per user)
-because users want a single "alerts" pane.
-
-Plan 25 already shipped the `{app-id}-app/` convention (e.g. `bridge-mira-app-notes`).
-The system stream extends that to **per-account** fixtures `app-system-out` /
-`app-system-in` carrying `clientData.hdsSystemFeature` declarations.
-
 ### The "no canonical model branding" principle
 
-Neither feature mutates `data-model`'s `pack.json`. The data-model only ships:
+Custom fields do not mutate `data-model`'s `pack.json`. The data-model only ships:
 
-- Storage-shape `eventTypes` (`note/txt`, `count/generic`, `message/system-alert`, …)
+- Storage-shape `eventTypes` (`note/txt`, `count/generic`, …)
 - Semantic itemDefs that map onto those eventTypes
 
 Templates carry their own typing inline on the streams they provision. The
@@ -57,14 +47,12 @@ no naming convention check, no regex on stream ids, no central registry.
 
 Plan 25 generalised the bridge-side stream layout (`bridge-mira-app-notes`,
 `bridge-mira-app-chat`, …). Plan 45 reuses the same idea for **templates**
-(`stormm-woman-custom-flow`) and adds **account-level** fixtures
-(`app-system-out`, `app-system-in`) for system messaging.
+(`stormm-woman-custom-flow`).
 
 | Layer       | Convention                          | Example                          |
 | ----------- | ----------------------------------- | -------------------------------- |
 | Bridge      | `{bridge-id}-app-{suffix}`          | `bridge-mira-app-notes`          |
 | Template    | `{template-id}-custom-{key}`        | `stormm-woman-custom-flow`       |
-| Account     | `app-{feature}-{out\|in}`           | `app-system-out`, `app-system-in`|
 
 Naming is **soft / non-load-bearing** — the hyphenated prefixes are conventions
 for human readability. The validator and resolver consume `clientData`, never
@@ -153,43 +141,11 @@ The requester's access gains `contribute` on each.
 
 ---
 
-## 3. `clientData.hdsSystemFeature` schema
-
-Same shape, different key — keyed by `message/*` impl rather than storage eventType:
-
-```jsonc
-// stream { id: 'app-system-out', parentId: 'app-system', clientData: ↓ }
-{
-  "hdsSystemFeature": {
-    "message/system-alert": {
-      "version": "v1",
-      "levels":  ["info", "warning", "critical"]
-    }
-  }
-}
-
-// stream { id: 'app-system-in', parentId: 'app-system', clientData: ↓ }
-{
-  "hdsSystemFeature": {
-    "message/system-ack": { "version": "v1" }
-  }
-}
-```
-
-A descendant stream can override (declare its own def) or opt-out (declare `{}`)
-exactly like custom fields.
-
-Future extension types (`message/system-reminder`, `message/access-update-request`)
-can be added without breaking existing readers — unknown keys are skipped by the
-resolver.
-
----
-
 ## 4. Inheritance semantics (parent-chain walk)
 
 A field-def is resolved by walking from a stream up its parent chain. For each
 stream visited, the resolver inspects `clientData.hdsCustomField[eventType]`
-(or `hdsSystemFeature[messageType]`) and applies one of three rules:
+and applies one of three rules:
 
 | Value on stream         | Outcome                                |
 | ----------------------- | -------------------------------------- |
@@ -250,9 +206,8 @@ the form engine's responsibility (per spec §4 / Plan 45 Q6).
 
 ## 6. Stream-naming convention is soft / non-load-bearing
 
-The `*-custom-*` infix on template-private streams and the `app-system-*` /
-`app-system-in` names on account fixtures are **human-readability conventions**.
-The validator and resolver:
+The `*-custom-*` infix on template-private streams is a **human-readability
+convention**. The validator and resolver:
 
 - Never regex on streamIds.
 - Never assume a parent's id from a child's id.
@@ -273,8 +228,6 @@ Located in `ts/appTemplates/resolveStream.ts`:
 import {
   resolveStreamCustomField,
   resolveStreamCustomFieldDetailed,
-  resolveStreamSystemFeature,
-  resolveStreamSystemFeatureDetailed,
   streamCustomFieldToVirtualItem,
   buildStreamMap
 } from 'hds-lib';
@@ -288,10 +241,6 @@ explicit opt-out).
 ### `resolveStreamCustomFieldDetailed(...): { kind: 'def' | 'optOut' | 'none', def?: ... }`
 
 Use when you need to distinguish opt-out from missing.
-
-### `resolveStreamSystemFeature(...) / resolveStreamSystemFeatureDetailed(...)`
-
-Same semantics for `clientData.hdsSystemFeature[messageType]`.
 
 ### `streamCustomFieldToVirtualItem(streamTreeOrMap, streamId, eventType): VirtualItemDef | null`
 
@@ -316,7 +265,7 @@ A `CollectorRequest` references streams via three orthogonal mechanisms:
 | ---- | ------------------------------------- | ------------------------------------------------------ |
 | 1    | `sections[].itemKeys[]`               | Canonical items resolved via `data-model/pack.json`.   |
 | 2    | `customFields[]` *(provision-new)*    | Template-private streams created at acceptance.        |
-| 3    | `existingStreamRefs[]`                | Access asks on pre-existing streams (e.g. `app-system-*`). |
+| 3    | `existingStreamRefs[]`                | Access asks on pre-existing streams.                   |
 
 ### Mode 2 — sandbox prefix rule
 
@@ -345,34 +294,17 @@ consent prompt before granting; refusing one ref blocks the entire acceptance
 Each ref:
 ```jsonc
 {
-  "streamId":    "app-system-out",
+  "streamId":    "some-account-level-stream",
   "permissions": ["manage"],
-  "purpose":     "system-out"
+  "purpose":     "human-readable-purpose"
 }
 ```
 
-The `purpose` field is informational — surfaces in the UI (e.g. "system messaging
-to you"). Permissions are Pryv's standard `read | manage | contribute` levels.
+The `purpose` field is informational — surfaces in the UI as the consent prompt's
+explanation. Permissions are Pryv's standard `read | manage | contribute` levels.
 
 The CollectorClient append-permissions block applies the requested permissions
 without `streams.create` calls (the streams already exist).
-
-### How a template declares system support
-
-Templates declare system support **via Mode 3** referencing the canonical
-account-level `app-system-out` / `app-system-in` streams. There is no
-`features.system` block on the request — the system feature is a Mode-3 ask
-like any other cross-app access:
-
-```jsonc
-"existingStreamRefs": [
-  { "streamId": "app-system-out", "permissions": ["manage"], "purpose": "system-out" },
-  { "streamId": "app-system-in",  "permissions": ["read"],   "purpose": "system-in" }
-]
-```
-
-This keeps the request shape uniform (`features` is for in-place chat extensions
-to a permission, not for cross-app references).
 
 ### How the loader enforces the rules
 
@@ -413,9 +345,8 @@ function listTemplatePrivateStreams (streamTree: Pryv.Stream[]) {
 }
 ```
 
-Same approach for `hdsSystemFeature[messageType]`. Result: bridges that wire
-custom-field events into external systems (e.g. STORMM data export to REDCap)
-work without knowing a template's id ahead of time.
+Bridges that wire custom-field events into external systems (e.g. STORMM data
+export to REDCap) work without knowing a template's id ahead of time.
 
 ---
 
@@ -475,7 +406,5 @@ through the form engine.
   `_plans/47-STORMM-forms-paused/PLAN.md`
 - **`data-model/documentation/CUSTOM-FIELDS-AND-SYSTEM.md`** — validator side
   (storage-shape eventTypes, parent-chain walk in `data-model/src/items.js`).
-- **`data-model/documentation/DESIGN-NOTES.md`** — eventType
-  `<class>/<implementation>` convention used by the new `message/system-*` types.
 - **`hds-lib-js/AGENTS.md`** — agent primer; this file is its detailed
   reference for everything `appTemplates`-shaped.

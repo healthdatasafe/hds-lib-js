@@ -27,6 +27,10 @@ For the doctor-side form-storage migration, see `doctor-dashboard/app/formSpecAd
 
 ## [Unreleased]
 
+### Removed
+
+- **Plan-45 system-feature types + resolver (dormant).** Deleted `ts/appTemplates/systemFeatureTypes.ts` along with `HDSSystemAlertDef`, `HDSSystemAckDef`, `HDSSystemFeature`, `SystemMessageType`, `SystemFeatureResolution` and the `resolveStreamSystemFeature` / `resolveStreamSystemFeatureDetailed` helpers. The account-level `app-system-out` / `app-system-in` stream pair was superseded by the **CMC per-collector channel** (`:_cmc:apps:<app-code>:[<path>:]collectors:<counterparty-slug>`) carrying `notification/alert-cmc`, `notification/ack-cmc`, `consent/scope-request-cmc`, `consent/scope-update-cmc`. The mode-3 `existingStreamRefs[]` mechanism on `CollectorRequest` stays — generic, can reference any pre-existing stream. Data-model layer (`message/system-alert` + `message/system-ack` eventType registrations) left intact so legacy data stays valid. See `_macro/_plans/64-on-the-go-app-testing-atwork/PLAN.md` Phase A.
+
 ## [0.11.0] - 2026-05-14
 
 ### Plan 58 — `pryv@3.1.0` + `accesses.update` rollout

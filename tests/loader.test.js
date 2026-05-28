@@ -25,8 +25,8 @@ function validTemplate () {
       }
     ],
     existingStreamRefs: [
-      { streamId: 'app-system-out', permissions: ['manage'], purpose: 'system-out' },
-      { streamId: 'app-system-in', permissions: ['read'], purpose: 'system-in' }
+      { streamId: 'external-stream-a', permissions: ['manage'], purpose: 'example-out' },
+      { streamId: 'external-stream-b', permissions: ['read'], purpose: 'example-in' }
     ]
   };
 }

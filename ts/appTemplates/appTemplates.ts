@@ -19,19 +19,16 @@ export type {
 } from './itemLabels.ts';
 export { AppManagingAccount, AppClientAccount, Application, CollectorRequest, Contact };
 
-// Plan 45 — custom-fields & system-stream resolvers + types.
+// Plan 45 — custom-fields resolvers + types.
 export {
   buildStreamMap,
   resolveStreamCustomField,
   resolveStreamCustomFieldDetailed,
-  resolveStreamSystemFeature,
-  resolveStreamSystemFeatureDetailed,
   streamCustomFieldToVirtualItem,
   customFieldDeclarationToVirtualItem
 } from './resolveStream.ts';
 export type {
   CustomFieldResolution,
-  SystemFeatureResolution,
   ResolutionKind,
   VirtualItemDef,
   VirtualItemFieldType
@@ -50,12 +47,6 @@ export type {
   HDSCustomFieldDef,
   HDSCustomField
 } from './customFieldTypes.ts';
-export type {
-  SystemMessageType,
-  HDSSystemAlertDef,
-  HDSSystemAckDef,
-  HDSSystemFeature
-} from './systemFeatureTypes.ts';
 export type {
   StreamPermission,
   ExistingStreamRef,

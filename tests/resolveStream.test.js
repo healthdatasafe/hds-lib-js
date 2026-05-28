@@ -3,8 +3,6 @@ import {
   buildStreamMap,
   resolveStreamCustomField,
   resolveStreamCustomFieldDetailed,
-  resolveStreamSystemFeature,
-  resolveStreamSystemFeatureDetailed,
   streamCustomFieldToVirtualItem
 } from '../ts/appTemplates/resolveStream.ts';
 
@@ -62,28 +60,6 @@ function tree () {
           ]
         }
       ]
-    },
-    {
-      id: 'app-system',
-      parentId: null,
-      children: [
-        {
-          id: 'app-system-out',
-          parentId: 'app-system',
-          clientData: {
-            hdsSystemFeature: {
-              'message/system-alert': { version: 'v1', levels: ['info', 'warning', 'critical'] }
-            }
-          }
-        },
-        {
-          id: 'app-system-in',
-          parentId: 'app-system',
-          clientData: {
-            hdsSystemFeature: { 'message/system-ack': { version: 'v1' } }
-          }
-        }
-      ]
     }
   ];
 }
@@ -92,9 +68,8 @@ describe('[CFRS] resolveStream', function () {
   describe('[CFRS-MAP] buildStreamMap', function () {
     it('[CFRS-MAP-1] flattens a nested tree by id', function () {
       const map = buildStreamMap(tree());
-      assert.equal(map.size, 8); // 5 stormm + 3 app-system
+      assert.equal(map.size, 5);
       assert.ok(map.has('stormm-woman-custom-flow'));
-      assert.ok(map.has('app-system-out'));
     });
   });
 
@@ -141,34 +116,6 @@ describe('[CFRS] resolveStream', function () {
       const def = resolveStreamCustomField(map, 'stormm-woman-custom-flow', 'note/txt');
       assert.ok(def);
       assert.equal(def.key, 'menstrual-flow-detailed');
-    });
-  });
-
-  describe('[CFRS-SF] resolveStreamSystemFeature', function () {
-    it('[CFRS-SF-1] resolves system-alert on app-system-out', function () {
-      const def = resolveStreamSystemFeature(tree(), 'app-system-out', 'message/system-alert');
-      assert.ok(def);
-      assert.equal(def.version, 'v1');
-      assert.deepEqual(def.levels, ['info', 'warning', 'critical']);
-    });
-
-    it('[CFRS-SF-2] resolves system-ack on app-system-in', function () {
-      const def = resolveStreamSystemFeature(tree(), 'app-system-in', 'message/system-ack');
-      assert.ok(def);
-      assert.equal(def.version, 'v1');
-    });
-
-    it('[CFRS-SF-3] returns null for cross-pair (alert on -in / ack on -out)', function () {
-      const a = resolveStreamSystemFeature(tree(), 'app-system-in', 'message/system-alert');
-      const b = resolveStreamSystemFeature(tree(), 'app-system-out', 'message/system-ack');
-      assert.equal(a, null);
-      assert.equal(b, null);
-    });
-
-    it('[CFRS-SF-4] detailed variant returns def kind', function () {
-      const r = resolveStreamSystemFeatureDetailed(tree(), 'app-system-out', 'message/system-alert');
-      assert.equal(r.kind, 'def');
-      assert.equal(r.def.version, 'v1');
     });
   });
 
