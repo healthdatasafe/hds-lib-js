@@ -142,12 +142,15 @@ export class MonitorScope {
    */
   private async attachLiveMonitor (): Promise<void> {
     if (this.stopped) return;
-    const toTime = this.config.toTime ?? (Date.now() / 1000);
     const eventsGetScope: any = {
       fromTime: this.config.fromTime,
-      toTime,
       modifiedSince: this.maxModified,
     };
+    // Bound the live scope only if the consumer asked for one. A frozen
+    // `toTime = now` would exclude every event created after attach time —
+    // the socket's `eventsChanged` push fires, but the follow-up events.get
+    // returns nothing and the UI never updates.
+    if (this.config.toTime != null) eventsGetScope.toTime = this.config.toTime;
 
     this.monitor = new (pryv as any).Monitor(this.connection, eventsGetScope)
       .on('event', (event: Event) => {
