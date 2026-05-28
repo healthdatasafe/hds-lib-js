@@ -207,6 +207,31 @@ export class MonitorScope {
   }
 
   /**
+   * Force a live-monitor refresh: tear down the current Monitor (if any)
+   * and re-attach. The fresh `attachLiveMonitor` re-runs
+   * `events.get(modifiedSince=maxModified)` to catch up any events the
+   * socket may have missed, and re-subscribes the socket — picking up
+   * streams that didn't exist when the previous subscription was
+   * established (e.g. streams created by an embedded bridge after our
+   * connection's socket attached).
+   *
+   * Use after a known-good external write (e.g. on `hds-bridge-done`
+   * postMessage) to surface the new events without waiting for the next
+   * visibility-change cycle or user-driven action.
+   *
+   * No-op if already stopped. If currently paused, stays paused.
+   */
+  async refresh (): Promise<void> {
+    if (this.stopped) return;
+    if (this.paused) return;
+    if (this.monitor) {
+      try { this.monitor.stop(); } catch (_) { /* ignore */ }
+      this.monitor = null;
+    }
+    await this.attachLiveMonitor();
+  }
+
+  /**
    * Load older events beyond current scope (triggered by scroll-up).
    * Loads pageSize events older than the oldest currently loaded.
    */
