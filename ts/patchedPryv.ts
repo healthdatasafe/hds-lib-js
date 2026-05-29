@@ -9,6 +9,7 @@ import _pryv from 'pryv';
 import type * as _PryvTypes from 'pryv';
 import monitor from '@pryv/monitor';
 import socketIo from '@pryv/socket.io';
+import * as _cmc from '@pryv/cmc';
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
 monitor(_pryv);
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
@@ -40,5 +41,4 @@ export namespace pryv {
   export type KeyValue = _PryvTypes.KeyValue;
 }
 
-import * as _cmc from '@pryv/cmc';
 export const cmc = _cmc;
