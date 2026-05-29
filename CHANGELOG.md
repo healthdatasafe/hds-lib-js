@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added (plan 53 phase A — `HDSModelStreams.isContext()` helper)
+- `HDSModelStreams#isContext(streamId): boolean` — returns `true` iff the stream's data-model definition carries `role: 'context'` (the D3 descendant-streamId marker flag introduced in `@hds/data-model` Plan 53 Phase A). Unknown streamIds return `false` (no throw).
+- Use this to elide / mute / re-render context streams as metadata in settings trees, form-section renderers, and dashboards rather than as data-bearing buckets. Runtime resolution (`itemsDefs.forEvent` walk-up) is unaffected.
+- Tests: `[CTXR-P/Q/R/S]` in `tests/contextResolution.test.js`. Validates against the locally-built `data-model/dist/pack.json` so the flag is sourced from real YAML.
+
 ## [1.0.0] - 2026-05-27
 
 ### Plan 61 Phase C — legacy collector code deleted

@@ -104,6 +104,25 @@ describe('[CTXR] Context-via-substream (Plan 46 D3)', () => {
     });
   });
 
+  describe('isContext() — Plan 53 role: context flag', () => {
+    it('[CTXR-P] treatment-fertility is flagged as context', () => {
+      assert.equal(model.streams.isContext('treatment-fertility'), true);
+    });
+
+    it('[CTXR-Q] procedure-fertility is flagged as context', () => {
+      assert.equal(model.streams.isContext('procedure-fertility'), true);
+    });
+
+    it('[CTXR-R] data-bearing parent streams are not context', () => {
+      assert.equal(model.streams.isContext('treatment'), false);
+      assert.equal(model.streams.isContext('procedure'), false);
+    });
+
+    it('[CTXR-S] unknown streamId returns false (no throw)', () => {
+      assert.equal(model.streams.isContext('no-such-stream'), false);
+    });
+  });
+
   describe('legacy multi-streamId resolution still works (no regression)', () => {
     it('[CTXR-K] event with multiple streamIds resolves via direct match', () => {
       // bridge-athenahealth pattern: streamIds carry both the canonical home

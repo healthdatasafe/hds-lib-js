@@ -77,6 +77,21 @@ export class HDSModelStreams {
   }
 
   /**
+   * True iff the stream exists and its data-model definition carries
+   * `role: 'context'` — i.e. it's a descendant-streamId marker for the D3
+   * context-via-substream mechanic, not a data-bearing bucket. Unknown
+   * streamIds return `false` (no throw — this is a yes/no probe).
+   *
+   * Consumers (settings trees, form-section renderers, dashboards) should
+   * use this to elide / mute / re-render context streams as metadata rather
+   * than as independent input streams. See Plan 53.
+   */
+  isContext (streamId: string): boolean {
+    const streamData = this.#modelStreamsById[streamId];
+    return streamData != null && streamData.role === 'context';
+  }
+
+  /**
    * Get all parents id;
    */
   getParentsIds (streamId: string, throwErrorIfNotFound: boolean = true, initialArray: string[] = []): string[] {
