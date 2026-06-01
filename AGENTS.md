@@ -81,6 +81,62 @@ These are short reminders. The detail lives in the linked source.
 
 Every value/type intended for external consumption is exported from [`ts/index.ts`](ts/index.ts). If a consumer needs something that is not there, **add the export** and document it under `docs/` — do not let consumers reach into deep paths.
 
+#### Public API index (source of truth: [`ts/index.ts`](ts/index.ts))
+
+Flat enumeration of the top-level value exports, grouped by area. Each
+entry points at the canonical docs file for the deeper API. **If you add
+an export to `ts/index.ts`, add a row here.**
+
+**Bootstrap + model**
+
+| Export                                  | What it does                                                                                          | Read more                                              |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `settings`                              | Global library settings (`setServiceInfoURL`, init order, preferred-locales).                         | [`docs/settings.md`](docs/settings.md)                 |
+| `initHDSModel(opts?)`                   | Async bootstrap — fetches `pack.json` via service-info, builds the singleton `HDSModel`.              | [`docs/getting-started.md`](docs/getting-started.md)   |
+| `getHDSModel()`                         | Returns the singleton model. Throw if `initHDSModel` hasn't run.                                      | [`docs/hds-model.md`](docs/hds-model.md)               |
+| `HDSModel`                              | The class — exposes `itemsDefs`, `streams`, `eventTypes`, `datasources`, `authorizations`, `appStreams`. | [`docs/hds-model.md`](docs/hds-model.md)             |
+| `HDSService`                            | Service-info + auth helpers (resolves the API host, drives Pryv `AuthController`).                    | [`docs/getting-started.md`](docs/getting-started.md)   |
+| `HDSModelConversions`, `HDSModelConverters`, `HDSModelPreferred`, `HDSModelAppStreams` | Sub-managers exposed on `HDSModel` — listed here so consumers can type-check imports. | [`docs/hds-model.md`](docs/hds-model.md)              |
+| `extractOverloadAsDefinitions`          | Reads a Pryv account's overload events and rebuilds the `HDSModelOverload` definitions tree.          | [`docs/hds-model.md`](docs/hds-model.md)               |
+
+**Items + events**
+
+| Export                                  | What it does                                                                                          | Read more                                              |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `eventToShortText(event)`               | Single shared event formatter (number+unit, drug+intake, checkbox, select, date, …). Replaces four duplicated functions across the workspace. Resolves `itemDef` via `getHDSModel().itemsDefs.forEvent(event, false)`. | [`docs/toolkit.md`](docs/toolkit.md)                   |
+| `formatEventDate(timeSec)`              | Centralised date formatter — uses `HDSSettings.get('dateFormat')` when hooked, falls back to ISO date. | [`docs/toolkit.md`](docs/toolkit.md)                   |
+| `MonitorScope`                          | Progressive event loading + WebSocket subscribe (thin wrapper over the Pryv socket layer). Use this for live diaries / timelines / dashboards. | [`docs/toolkit.md`](docs/toolkit.md)               |
+| `computeReminders(item, source)`        | Computes the next-reminder time for an item from a `ReminderSource`. Backbone of "what's due now" UIs. | [`docs/toolkit.md`](docs/toolkit.md)                   |
+| `durationToSeconds(input)`, `durationToLabel(seconds)` | Parse / format human-readable durations (`"2h 15m"` ↔ `8100`). Used by event creation forms. | [`docs/toolkit.md`](docs/toolkit.md)         |
+| `toolkit`                               | Namespace re-export of `StreamsAutoCreate` + duration + reminders + formatters. Prefer named exports above; reach into `toolkit.*` only when scripting. | [`docs/toolkit.md`](docs/toolkit.md)                   |
+
+**Settings, profile, preferred display**
+
+| Export                                  | What it does                                                                                          | Read more                                              |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `HDSSettings`, `SETTING_TYPES`          | Per-user settings (preferred locales, theme, timezone, date format, unit system, display name). Backed by Pryv events under `settings/*`. | [`docs/settings.md`](docs/settings.md)                 |
+| `HDSProfile`, `PROFILE_FIELDS`          | Per-user profile (read-only domain facts: dob, sex-at-birth, etc.). Backed by Pryv events under `profile/*`. | [`docs/settings.md`](docs/settings.md)               |
+| `getPreferredInput(item, ctx)`          | Returns the preferred input shape for an item given user prefs (e.g. mass/kg vs mass/lb).             | [`docs/hds-model.md`](docs/hds-model.md)               |
+| `getPreferredDisplay(event, ctx)`       | Inverse: returns the preferred display string for an event given user prefs.                          | [`docs/hds-model.md`](docs/hds-model.md)               |
+
+**App templates + CMC (consent management)**
+
+| Export                                  | What it does                                                                                          | Read more                                              |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `appTemplates`                          | Namespace: `AppManagingAccount` / `AppClientAccount` / `Collector` / `CollectorClient` / `CollectorRequest` / `Contact`. The legal/consent shape used by every HDS app. | [`docs/app-templates.md`](docs/app-templates.md) + [`AppTemplates.md`](AppTemplates.md) |
+| `cmc`                                   | Namespace re-export of consent-management-contract helpers (form-spec validation, scope helpers).     | [`docs/app-templates.md`](docs/app-templates.md)       |
+| `cmcFormSpec`, `cmcAppScope`, `cmcConstants` | Direct named re-exports — the most-reached-for CMC primitives without going through `cmc.*`.       | [`docs/app-templates.md`](docs/app-templates.md)       |
+
+**Cross-cutting**
+
+| Export                                  | What it does                                                                                          | Read more                                              |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `localizeText(loc)` (alias `l`)         | Resolve a `localizableText` blob against `settings.preferredLocales`. Centralised i18n.               | [`docs/localization.md`](docs/localization.md)         |
+| `logger`                                | Centralised logger (`debug` / `info` / `warn` / `error`). Honours `boiler` log levels server-side.    | [`docs/utilities.md`](docs/utilities.md)               |
+| `HDSLibError`                           | Library-error class. Use `instanceof HDSLibError` to distinguish library errors from upstream Pryv ones. | [`docs/utilities.md`](docs/utilities.md)             |
+| `EuclidianDistanceEngine`               | n-dimensional similarity engine used by item-search UI and the converters layer.                      | [`docs/hds-model.md`](docs/hds-model.md)               |
+| `pryv`                                  | Re-exported Pryv SDK as both value **and** type namespace (declaration-merging in `patchedPryv.ts`). Use `HDSLib.pryv.*` everywhere — never import `pryv` separately, never load a second copy via CDN. | [Pryv reference](https://pryv.github.io/reference/) |
+
 ### Tests
 
 - [`tests/`](tests/) — mocha + node `assert`. One file per concept (`apptemplates.test.js`, `eventToShortText.test.js`, `itemLabels.test.js`, ...). Most tests load `pack.json` from the deployed `model.datasafe.dev` over HTTP, so the test runner needs network access.
