@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-06-01
+
 ### Changed — `cmcAppScope.ensureAppScope` no-subPath path is now a no-op
 
 The CMC plugin's `cmcAccessProvisionAppScopeHook` (deployed open-pryv.io demo + prod 2026-05-26, plan-61) auto-provisions `:_cmc:apps:<appCode>` on `accesses.create` / `accesses.update` whenever the access references a matching permission. So `ensureAppScope(conn, appCode)` (no `subPath`) no longer needs to call `streams.create` — it returns the leaf id directly. The sub-scope path (`ensureAppScope(conn, appCode, subPath)`) is unchanged. Public API is unchanged. Verification trace: `_plans/_TEMP/_done/cmc-per-app-lazy-provision-2026-06-01.md`.
