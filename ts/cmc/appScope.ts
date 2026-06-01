@@ -1,18 +1,16 @@
 /**
  * Idempotently provision streams under `:_cmc:apps` on a CMC-enabled account.
  *
- * The CMC plugin owns the `:_cmc:apps` namespace. Per-app leaves
- * (`:_cmc:apps:<appCode>`) are auto-provisioned server-side by the
- * `cmcAccessProvisionAppScopeHook` (deployed plan-61, 2026-05-26) whenever
- * `accesses.create` / `accesses.update` references a matching permission;
- * sub-scopes (`:_cmc:apps:<appCode>:<subPath>`) are not.
+ * The CMC plugin owns the `:_cmc:apps` namespace. The per-app leaf
+ * (`:_cmc:apps:<appCode>`) is auto-provisioned server-side by the
+ * `cmcAccessProvisionAppScopeHook` post-hook on `accesses.create` /
+ * `accesses.update`, whenever the access references a matching
+ * `:_cmc:apps:<appCode>:*` permission (deployed 2026-05-26, plan-61
+ * upstream fix). Callers therefore do not need to `streams.create` the
+ * leaf — this helper returns its id directly.
  *
- * For an OAuth-grant access the client still calls `streams.create` here:
- * pryv checks parent-permission first (no `manage` on `:_cmc:apps` → returns
- * `'forbidden'`), so we tolerate that — by the time the access is usable
- * the upstream hook has already created the leaf. The `'item-already-exists'`
- * branch covers the personal-token-with-`:_cmc:apps`-manage path (registration
- * personal tokens have it; bridge-athena's onboarding used to depend on it).
+ * Sub-scopes (`:_cmc:apps:<appCode>:<subPath>`) are NOT auto-provisioned
+ * and still require a `streams.create` here.
  *
  * Hoisted in Plan 60 B1 from three independent copies that had drifted:
  * `doctor-dashboard/app/cmcDoctor.ts` (canonical, used here),
@@ -30,13 +28,13 @@ export function pryvErrorCode (e: unknown): string | undefined {
 }
 
 /**
- * Idempotently provision `:_cmc:apps:<appCode>` (and optionally
+ * Resolve `:_cmc:apps:<appCode>` (and optionally provision
  * `:_cmc:apps:<appCode>:<subPath>`) on the caller's account.
  *
  * @param connection  caller's Pryv connection (doctor / patient / bridge).
  * @param appCode     `hds-collector`, `hds-patient`, `hds-bridge-mira`, etc.
  * @param subPath     optional leaf scope under the appScope (e.g. a collectorId).
- * @returns           the streamId of the deepest scope provisioned.
+ * @returns           the streamId of the deepest scope.
  */
 export async function ensureAppScope (
   connection: pryv.Connection,
@@ -44,12 +42,6 @@ export async function ensureAppScope (
   subPath?: string
 ): Promise<string> {
   const appScope = cmc.appScope(appCode); // :_cmc:apps:<appCode>
-  try {
-    await connection.apiOne('streams.create', { id: appScope, parentId: ':_cmc:apps', name: appCode });
-  } catch (e: unknown) {
-    const code = pryvErrorCode(e);
-    if (code !== 'item-already-exists' && code !== 'forbidden') throw e;
-  }
   if (subPath == null) return appScope;
   const sub = appScope + ':' + subPath;
   try {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed — `cmcAppScope.ensureAppScope` no-subPath path is now a no-op
+
+The CMC plugin's `cmcAccessProvisionAppScopeHook` (deployed open-pryv.io demo + prod 2026-05-26, plan-61) auto-provisions `:_cmc:apps:<appCode>` on `accesses.create` / `accesses.update` whenever the access references a matching permission. So `ensureAppScope(conn, appCode)` (no `subPath`) no longer needs to call `streams.create` — it returns the leaf id directly. The sub-scope path (`ensureAppScope(conn, appCode, subPath)`) is unchanged. Public API is unchanged. Verification trace: `_plans/_TEMP/_done/cmc-per-app-lazy-provision-2026-06-01.md`.
+
 ### Added (plan 53 phase A — `HDSModelStreams.isContext()` helper)
 - `HDSModelStreams#isContext(streamId): boolean` — returns `true` iff the stream's data-model definition carries `role: 'context'` (the D3 descendant-streamId marker flag introduced in `@hds/data-model` Plan 53 Phase A). Unknown streamIds return `false` (no throw).
 - Use this to elide / mute / re-render context streams as metadata in settings trees, form-section renderers, and dashboards rather than as data-bearing buckets. Runtime resolution (`itemsDefs.forEvent` walk-up) is unaffected.

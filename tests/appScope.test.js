@@ -2,11 +2,13 @@ import { assert } from './test-utils/deps-node.js';
 import { ensureAppScope, pryvErrorCode } from '../ts/cmc/appScope.ts';
 
 /**
- * Unit tests for the Plan 60 B1 hoisted `cmcAppScope.ensureAppScope`.
+ * Unit tests for `cmcAppScope.ensureAppScope`.
  *
- * The helper wraps two `streams.create` calls (appScope + optional subPath)
- * and tolerates idempotency / permission errors against the `:_cmc:apps`
- * plugin-managed namespace. See `ts/cmc/appScope.ts` for the rationale.
+ * Behaviour post-2026-05-26 plan-61 upstream fix: the per-app leaf
+ * `:_cmc:apps:<appCode>` is auto-provisioned by the CMC plugin's
+ * `cmcAccessProvisionAppScopeHook` on `accesses.create` / `accesses.update`.
+ * So this helper only does the sub-scope `streams.create` — the no-subPath
+ * case returns the leaf id without any API call.
  */
 
 const APP_CODE = 'hds-collector';
@@ -45,25 +47,20 @@ describe('[CAS] cmcAppScope.ensureAppScope', function () {
   });
 
   describe('[CASH] happy paths', function () {
-    it('[CAS10] provisions appScope only (no subPath)', async () => {
-      const conn = makeConn(() => ({ stream: { id: EXPECTED_APP_SCOPE } }));
+    it('[CAS10] no-subPath returns appScope id without any API call', async () => {
+      const conn = makeConn(() => { throw new Error('should not be called'); });
       const out = await ensureAppScope(conn, APP_CODE);
       assert.equal(out, EXPECTED_APP_SCOPE);
-      assert.equal(conn.calls.length, 1);
-      assert.equal(conn.calls[0].method, 'streams.create');
-      assert.deepEqual(conn.calls[0].params, {
-        id: EXPECTED_APP_SCOPE,
-        parentId: ':_cmc:apps',
-        name: APP_CODE
-      });
+      assert.equal(conn.calls.length, 0);
     });
 
-    it('[CAS11] provisions appScope + subPath', async () => {
+    it('[CAS11] subPath provisions sub-scope only (no leaf call)', async () => {
       const conn = makeConn(() => ({ stream: {} }));
       const out = await ensureAppScope(conn, APP_CODE, 'abc123');
       assert.equal(out, EXPECTED_APP_SCOPE + ':abc123');
-      assert.equal(conn.calls.length, 2);
-      assert.deepEqual(conn.calls[1].params, {
+      assert.equal(conn.calls.length, 1);
+      assert.equal(conn.calls[0].method, 'streams.create');
+      assert.deepEqual(conn.calls[0].params, {
         id: EXPECTED_APP_SCOPE + ':abc123',
         parentId: EXPECTED_APP_SCOPE,
         name: 'abc123'
@@ -72,43 +69,17 @@ describe('[CAS] cmcAppScope.ensureAppScope', function () {
   });
 
   describe('[CAST] tolerated errors', function () {
-    it('[CAS20] tolerates item-already-exists on appScope', async () => {
-      const conn = makeConn(() => { throw pryvError('item-already-exists'); });
-      const out = await ensureAppScope(conn, APP_CODE);
-      assert.equal(out, EXPECTED_APP_SCOPE);
-    });
-
-    it('[CAS21] tolerates forbidden on appScope (OAuth-narrow access)', async () => {
-      const conn = makeConn(() => { throw pryvError('forbidden'); });
-      const out = await ensureAppScope(conn, APP_CODE);
-      assert.equal(out, EXPECTED_APP_SCOPE);
-    });
-
     it('[CAS22] tolerates item-already-exists on subPath', async () => {
-      const conn = makeConn((method, params, idx) => {
-        if (idx === 0) return { stream: {} };
-        throw pryvError('item-already-exists');
-      });
+      const conn = makeConn(() => { throw pryvError('item-already-exists'); });
       const out = await ensureAppScope(conn, APP_CODE, 'abc123');
       assert.equal(out, EXPECTED_APP_SCOPE + ':abc123');
-      assert.equal(conn.calls.length, 2);
+      assert.equal(conn.calls.length, 1);
     });
   });
 
   describe('[CASR] rethrows on unrelated errors', function () {
-    it('[CAS30] rethrows non-tolerated pryv error on appScope', async () => {
-      const conn = makeConn(() => { throw pryvError('invalid-parameters-format'); });
-      await assert.rejects(
-        ensureAppScope(conn, APP_CODE),
-        (e) => e.innerObject?.id === 'invalid-parameters-format'
-      );
-    });
-
-    it('[CAS31] rethrows forbidden on subPath (only appScope tolerates forbidden)', async () => {
-      const conn = makeConn((method, params, idx) => {
-        if (idx === 0) return { stream: {} };
-        throw pryvError('forbidden');
-      });
+    it('[CAS31] rethrows forbidden on subPath', async () => {
+      const conn = makeConn(() => { throw pryvError('forbidden'); });
       await assert.rejects(
         ensureAppScope(conn, APP_CODE, 'abc123'),
         (e) => e.innerObject?.id === 'forbidden'
@@ -117,7 +88,7 @@ describe('[CAS] cmcAppScope.ensureAppScope', function () {
 
     it('[CAS32] rethrows plain Errors with no pryv id', async () => {
       const conn = makeConn(() => { throw new Error('boom'); });
-      await assert.rejects(ensureAppScope(conn, APP_CODE), /boom/);
+      await assert.rejects(ensureAppScope(conn, APP_CODE, 'abc123'), /boom/);
     });
   });
 });
