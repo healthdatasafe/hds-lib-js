@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-06-02
+
+### Fixed — `pryv.connectFromKey` type declaration
+
+`pryv@3.5.0` ships `connectFromKey` at runtime (`src/index.js` + `Service.js`) but the corresponding declaration is missing from `pryv/src/index.d.ts`. Without a fix, every consumer using `import { pryv } from 'hds-lib'` and calling the documented `pryv.connectFromKey(state.key, serviceInfoUrl)` migration helper fails to typecheck. Added a local augmentation in `ts/patchedPryv.ts` that extends the re-exported `pryv` type with `connectFromKey`. Upstream tracking pending — will remove once `pryv@3.5.x` lands the type.
+
 ## [1.1.0] - 2026-06-02
 
 ### Changed — pryv ecosystem bumped to 3.5.0

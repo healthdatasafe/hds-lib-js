@@ -19,8 +19,19 @@ socketIo(_pryv);
 // and the namespace augments it with all the types from pryv's .d.ts.
 // This lets consumers write both `new pryv.Connection(...)` and `x: pryv.Connection`.
 
+// pryv@3.5.0 ships `connectFromKey` at runtime (src/index.js + Service.js) but
+// its src/index.d.ts is missing both declarations. Local augmentation until
+// upstream fixes the types — track at https://github.com/pryv/lib-js issues.
+type PryvAugmented = typeof _PryvTypes & {
+  connectFromKey: (
+    key: string,
+    serviceInfoUrl?: string,
+    serviceCustomizations?: unknown
+  ) => Promise<_PryvTypes.Connection>;
+};
+
 // eslint-disable-next-line import-x/export -- declaration merging: value + type namespace
-export const pryv = _pryv as unknown as typeof _PryvTypes;
+export const pryv = _pryv as unknown as PryvAugmented;
 
 // eslint-disable-next-line @typescript-eslint/no-namespace, import-x/export -- declaration merging
 export namespace pryv {
