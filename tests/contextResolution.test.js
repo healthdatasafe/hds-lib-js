@@ -1,28 +1,13 @@
 import { assert } from './test-utils/deps-node.js';
 import { HDSModel } from '../ts/HDSModel/HDSModel.ts';
-import fs from 'fs';
-import path from 'path';
 
-/**
- * Plan 46 §2.1 — Context-via-substream resolution (D3).
- *
- * Validates the data-model + hds-lib-js implementation end-to-end by loading
- * the locally-built data-model pack.json (so it includes the new treatment-* /
- * procedure-* items registered at parent streams with -fertility context
- * children). Uses loadFromObject to bypass fetch, since Node's fetch does
- * not support file:// URLs.
- */
-const localPackPath = path.resolve(
-  process.cwd(),
-  '../../data-model/data-model/dist/pack.json'
-);
+const modelURL = 'https://model.datasafe.dev/pack.json';
 
 describe('[CTXR] Context-via-substream (Plan 46 D3)', () => {
   let model;
-  before(() => {
-    const packJson = JSON.parse(fs.readFileSync(localPackPath, 'utf8'));
-    model = new HDSModel('local-test');
-    model.loadFromObject(packJson);
+  before(async () => {
+    model = new HDSModel(modelURL);
+    await model.load();
   });
 
   describe('forEvent — walk-up resolution', () => {
