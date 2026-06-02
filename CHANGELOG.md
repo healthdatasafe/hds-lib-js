@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-02
+
+### Changed — pryv ecosystem bumped to 3.5.0
+
+- `pryv`, `@pryv/monitor`, `@pryv/socket.io` all moved `3.4.1` → `^3.5.0` in lockstep.
+- `@pryv/cmc` unchanged at `1.1.1` (independent track).
+- Consumer-visible behavior change inherited from `pryv@3.5.0`: `onStateChange(AUTHORIZED)` no longer carries `state.apiEndpoint` / `state.username` / `state.token` on the **fresh** auth-flow path (cookie-autologin AUTHORIZED is unchanged). Callers must use the new `pryv.connectFromKey(state.key, serviceInfoUrl)` helper. See macroPryv plan 83 + `_macro/_plans/69-auth-flow-key-migration-and-success-screen-atwork/` for the full migration recipe.
+- hds-lib's own source has no references to `state.apiEndpoint`/`state.username`/`state.token` (audited). The library re-exports `pryv` as-is, so the narrowed surface flows through to consumers via `import { pryv } from 'hds-lib'`.
+
 ## [1.0.2] - 2026-06-01
 
 ### Changed — `cmcAppScope.ensureAppScope` no-subPath path is now a no-op
