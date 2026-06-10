@@ -26,6 +26,9 @@ import type { AppTemplate, CustomFieldDeclaration, ExistingStreamRef } from './t
 const Ajv: any = (AjvNs as any).default ?? AjvNs;
 
 const ajv = new Ajv({ allErrors: true, strict: false });
+// ajv core ships without formats; absent this, compile() logs
+// `unknown format "uri" ignored in schema` to the console on import.
+ajv.addFormat('uri', /^[a-zA-Z][a-zA-Z0-9+.-]*:\S+$/);
 const validate: ValidateFunction<AppTemplate> = ajv.compile(schema as any);
 
 /** Validate the JSON shape (Ajv) and run cross-field rules. Returns the validated AppTemplate or throws HDSLibError. */

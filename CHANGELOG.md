@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-06-10
+
+### Fixed — ajv "unknown format" console noise on import
+
+`ts/appTemplates/loader.ts` compiled `appTemplate.schema.json` with an ajv
+instance that never registered the `uri` format used by `license.url`, so
+every import of `hds-lib` printed `unknown format "uri" ignored in schema
+at path "#/properties/url"` to the console. The format is now registered
+with a scheme-prefixed-URI regex. Side effect: `license.url` values are now
+actually validated (previously the format was silently ignored).
+
 ## [1.1.1] - 2026-06-02
 
 ### Fixed — `pryv.connectFromKey` type declaration
