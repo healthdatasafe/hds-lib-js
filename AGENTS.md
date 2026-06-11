@@ -153,11 +153,11 @@ an export to `ts/index.ts`, add a row here.**
 
 - **`tsc` stale output**: `tsc` may skip re-emitting a `.js` file if it already exists and didn't notice an internal change. After `npm run prepare` / `npm run build:ts`, **verify the relevant file in `js/` actually contains your change** before committing. If not, delete the stale `js/<path>.js` and re-run.
 - **Vite cache in consumer apps**: when you change a public type or export and a consumer app (Vite-based) doesn't pick it up, clear `<consumer>/node_modules/.vite` and restart the dev server.
-- **npm-link traps**: when an HDS app is npm-linked to `hds-lib`, both the app and any nested package (e.g. `hds-forms-js`'s [`src-test-app/`](https://github.com/healthdatasafe/hds-forms-js/tree/main/src-test-app)) must link the **same** `hds-lib` to avoid duplicate singletons (settings, model). If you see "two HDSModels" symptoms (e.g. `getHDSModel()` returning empty), this is the cause. **Run `cd _local && npm run check-links && npm run verify-live-source`** to diagnose. Full methodology: `_claude-memory/conventions.md § Live cross-repo development — quickstart` + `_plans/49-local-dev-dependency-graph-done/PLAN.md`.
+- **npm-link traps**: when an HDS app is npm-linked to `hds-lib`, both the app and any nested package (e.g. `hds-forms-js`'s [`src-test-app/`](https://github.com/healthdatasafe/hds-forms-js/tree/main/src-test-app)) must link the **same** `hds-lib` to avoid duplicate singletons (settings, model). If you see "two HDSModels" symptoms (e.g. `getHDSModel()` returning empty), this is the cause. Diagnose by checking which physical `hds-lib` each consumer resolves (`node -e "console.log(require.resolve('hds-lib'))"` per package, or your workspace's link-check tooling — in the HDS macro workspace: `cd _local && npm run check-links && npm run verify-live-source`).
 - **`exports.import` MUST point at TS source** (`./ts/index.ts` here). Vite resolves the `import` condition in dev mode; pointing at compiled JS causes downstream libs (hds-forms-js, hds-react-timeline) to inline a second copy of `hds-lib` → duplicate-singleton bug. Verify with `cd _local && npm run verify-live-source`.
 - **Initialization order**: in apps that call `initBoiler(name, configDir)` (server side) or `pryv.Browser.AuthController` (client side), do so **before** any `getHDSModel()` / `HDSSettings` lookup.
 
-### appTemplates — custom fields & system stream (Plan 45)
+### appTemplates — custom fields & system stream
 
 When extending `appTemplates/` for templates that declare custom fields,
 system-stream features, or any `clientData.hds*Field` declarations, read
