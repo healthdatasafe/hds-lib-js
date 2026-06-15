@@ -66,7 +66,7 @@
     "@pryv/socket.io": "^3.5.0",
     "ajv": "^8.20.0",
     "events": "^3.3.0",
-    "pryv": "^3.5.0",
+    "pryv": "^3.6.0",
     "short-unique-id": "^5.3.2"
   }
 }

@@ -3,6 +3,7 @@ import { AppClientAccount } from './AppClientAccount.ts';
 import { Application } from './Application.ts';
 import { CollectorRequest } from './CollectorRequest.ts';
 import { Contact } from './Contact.ts';
+import { Questionnaire } from './Questionnaire.ts';
 export { getOrCreateBridgeAccess, ensureBridgeAccess } from './bridgeAccess.ts';
 export type { BridgeAccessOptions, BridgeAccessResult } from './bridgeAccess.ts';
 export {
@@ -17,7 +18,18 @@ export type {
   ItemLabelsWithSource,
   CollectItemLabelsOptions
 } from './itemLabels.ts';
-export { AppManagingAccount, AppClientAccount, Application, CollectorRequest, Contact };
+export { AppManagingAccount, AppClientAccount, Application, CollectorRequest, Contact, Questionnaire };
+
+// Plan 71 — questionnaire shapes (used by hds-forms-js renderer + dashboards)
+export type {
+  QuestionScope,
+  QuestionSubField,
+  QuestionDef,
+  AnswerStatus,
+  AnswerEntry,
+  QuestionnaireRequestContent,
+  QuestionnaireAnswerContent
+} from './interfaces.ts';
 
 // Plan 45 — custom-fields resolvers + types.
 export {
