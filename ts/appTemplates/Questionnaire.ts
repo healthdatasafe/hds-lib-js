@@ -181,6 +181,41 @@ export class Questionnaire {
     };
   }
 
+  /**
+   * Materialize a CollectorRequest's bundled questionnaires into
+   * `questionnaire/request-v1` events on the given Pryv connection. The
+   * patient-side accept flow calls this AFTER `cmc.acceptInvite` succeeds,
+   * so the request events land in the patient's own stream and the
+   * questionnaires become "pending" for the patient app to render and fill.
+   *
+   * Returns the Pryv batch result array (one entry per event) — entries with
+   * `error` need caller-side handling; entries with `event` are successful
+   * writes. If the request carries no bundled questionnaires, returns []
+   * without making an API call.
+   *
+   * Atomicity: Pryv `events.batch` is best-effort per-entry — a single failed
+   * write doesn't roll back the others. Callers needing transactional
+   * guarantees must inspect the result and reconcile.
+   */
+  static async writeBundled (
+    connection: { api: (calls: Array<{ method: string, params: unknown }>) => Promise<unknown[]> },
+    request: { questionnaires: QuestionnaireRequestContent[] },
+    streamIds: string[],
+    options?: { timeSeconds?: number }
+  ): Promise<unknown[]> {
+    if (!Array.isArray(streamIds) || streamIds.length === 0) {
+      throw new HDSLibError('writeBundled: streamIds must be a non-empty array');
+    }
+    const list = request?.questionnaires ?? [];
+    if (list.length === 0) return [];
+    const time = options?.timeSeconds ?? Math.floor(Date.now() / 1000);
+    const calls = list.map((content) => ({
+      method: 'events.create',
+      params: Questionnaire.makeRequestEvent(content, streamIds, time)
+    }));
+    return await connection.api(calls);
+  }
+
   // ---------- answer-side helper ---------- //
 
   /**

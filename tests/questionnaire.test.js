@@ -239,6 +239,68 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
     });
   });
 
+  describe('[QST-WRB] writeBundled (Plan 71 E1)', function () {
+    function mockConnection () {
+      const calls = [];
+      const conn = {
+        calls,
+        async api (batch) {
+          calls.push(batch);
+          return batch.map((b, i) => ({ event: { id: `evt-${i}`, ...b.params } }));
+        }
+      };
+      return conn;
+    }
+
+    it('[QST-WRB-1] no bundled questionnaires → no API call, empty result', async () => {
+      const conn = mockConnection();
+      const out = await Questionnaire.writeBundled(conn, { questionnaires: [] }, ['s']);
+      assert.deepEqual(out, []);
+      assert.equal(conn.calls.length, 0);
+    });
+
+    it('[QST-WRB-2] writes one events.create per bundled questionnaire', async () => {
+      const conn = mockConnection();
+      const req = {
+        questionnaires: [
+          { title: { en: 'Q1' }, questions: { a: { label: { en: 'A' }, itemRef: 'body-weight', scope: { type: 'ever' } } } },
+          { title: { en: 'Q2' }, questions: { b: { label: { en: 'B' }, itemRef: 'body-weight', scope: { type: 'ever' } } } }
+        ]
+      };
+      const out = await Questionnaire.writeBundled(conn, req, ['s'], { timeSeconds: 1735689600 });
+      assert.equal(conn.calls.length, 1);
+      const batch = conn.calls[0];
+      assert.equal(batch.length, 2);
+      assert.equal(batch[0].method, 'events.create');
+      assert.equal(batch[0].params.type, 'questionnaire/request-v1');
+      assert.deepEqual(batch[0].params.streamIds, ['s']);
+      assert.equal(batch[0].params.time, 1735689600);
+      assert.equal(batch[0].params.content.title.en, 'Q1');
+      assert.equal(batch[1].params.content.title.en, 'Q2');
+      assert.equal(out.length, 2);
+    });
+
+    it('[QST-WRB-3] empty streamIds throws', async () => {
+      try {
+        await Questionnaire.writeBundled({ api: async () => [] }, { questionnaires: [] }, []);
+        throw new Error('should throw');
+      } catch (e) { assert.match(e.message, /non-empty array/); }
+    });
+
+    it('[QST-WRB-4] re-validates each questionnaire content via makeRequestEvent', async () => {
+      const conn = mockConnection();
+      const req = {
+        questionnaires: [
+          { questions: { 'has:colon': { label: { en: 'x' }, itemRef: 'body-weight', scope: { type: 'ever' } } } }
+        ]
+      };
+      try {
+        await Questionnaire.writeBundled(conn, req, ['s']);
+        throw new Error('should throw');
+      } catch (e) { assert.match(e.message, /Pryv path grammar/); }
+    });
+  });
+
   describe('[QST-ANS] buildAnswerEvent helper', function () {
     it('[QST-ANS-1] builds content + clientData mirror', () => {
       const out = Questionnaire.buildAnswerEvent('evt-q-abc', {
