@@ -82,9 +82,16 @@ describe('[STMX] STORMM woman template (Plan 71 Phase F)', function () {
     const r = new CollectorRequest(stormm);
     const q = r.getQuestionnaire(0);
     const expected = {
-      progesterone: 'G03DA04', levothyroxine: 'H03AA01', metformin: 'A10BA02',
-      dhea: 'G03XX01', hcg: 'G03GA01', estradiol: 'G03CA03', aspirin: 'B01AC06',
-      enoxaparin: 'B01AB05', prednisone: 'H02AB07', terbutaline: 'R03CC03',
+      progesterone: 'G03DA04',
+      levothyroxine: 'H03AA01',
+      metformin: 'A10BA02',
+      dhea: 'G03XX01',
+      hcg: 'G03GA01',
+      estradiol: 'G03CA03',
+      aspirin: 'B01AC06',
+      enoxaparin: 'B01AB05',
+      prednisone: 'H02AB07',
+      terbutaline: 'R03CC03',
       naltrexone: 'N07BB04'
     };
     for (const [key, atc] of Object.entries(expected)) {
