@@ -424,4 +424,91 @@ describe('[APRX] appTemplates Requests', function () {
       assert.equal(r2.questionnaires.length, 1);
     });
   });
+
+  describe('[APRQC] Questionnaire coverage check (Plan 71)', function () {
+    function bodyWeightQuestion () {
+      return {
+        label: { en: 'Body weight in past week' },
+        itemRef: 'body-weight',
+        scope: { type: 'latest', withinDays: 7 }
+      };
+    }
+
+    function moodQuestion () {
+      return {
+        label: { en: 'Mood' },
+        itemRef: 'wellbeing-mood',
+        scope: { type: 'window', withinDays: 30 }
+      };
+    }
+
+    it('[APRQC-1] ok=true when request already grants the question stream', () => {
+      const r = new CollectorRequest({});
+      r.addPermission('body-weight', 'Body weight', 'read');
+      const q = new Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      const report = r.checkQuestionnaireCoverage(q);
+      assert.equal(report.ok, true);
+      assert.equal(report.perQuestion.length, 1);
+      assert.equal(report.perQuestion[0].missing, false);
+      assert.equal(report.perQuestion[0].coveredBy.streamId, 'body-weight');
+      assert.deepEqual(report.unknownItems, []);
+      assert.deepEqual(report.proposedPermissions, []);
+    });
+
+    it('[APRQC-2] ok=false + proposedPermissions populated when a question stream is uncovered', () => {
+      const r = new CollectorRequest({});
+      const q = new Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      const report = r.checkQuestionnaireCoverage(q);
+      assert.equal(report.ok, false);
+      assert.equal(report.perQuestion[0].missing, true);
+      assert.equal(report.perQuestion[0].coveredBy, null);
+      assert.ok(report.proposedPermissions.length >= 1);
+      const proposed = report.proposedPermissions.find((p) => p.streamId === 'body-weight');
+      assert.ok(proposed, 'expected a proposal for body-weight');
+      assert.equal(proposed.level, 'read');
+    });
+
+    it('[APRQC-3] unknown itemRef surfaced in unknownItems + unknownItem flag, ok stays driven by missing only', () => {
+      const r = new CollectorRequest({});
+      r.addPermission('body-weight', 'Body weight', 'read');
+      const q = new Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      // Stuff in a raw question whose itemRef doesn't exist in the model — bypass addQuestion to avoid its lookup-free shape check.
+      const c = q.toRequestEventContent();
+      c.questions['ghost'] = { label: { en: 'Ghost' }, itemRef: 'no-such-item-xyz', scope: { type: 'ever' } };
+      const report = r.checkQuestionnaireCoverage(c);
+      assert.deepEqual(report.unknownItems, ['no-such-item-xyz']);
+      const ghostRow = report.perQuestion.find((c) => c.questionKey === 'ghost');
+      assert.equal(ghostRow.unknownItem, true);
+      assert.equal(ghostRow.streamId, null);
+      // body-weight is covered, ghost is unknown (not "missing") → ok=true
+      assert.equal(report.ok, true);
+    });
+
+    it('[APRQC-4] applyQuestionnaireCoverage adds the missing permissions in place', () => {
+      const r = new CollectorRequest({});
+      const q = new Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      q.addQuestion('m', moodQuestion());
+      const before = r.permissions.length;
+      const report = r.applyQuestionnaireCoverage(q);
+      assert.equal(report.perQuestion.length, 2);
+      assert.ok(r.permissions.length > before, 'permissions should have grown');
+      // Re-checking after apply should report ok=true
+      const after = r.checkQuestionnaireCoverage(q);
+      assert.equal(after.ok, true);
+      assert.deepEqual(after.proposedPermissions, []);
+    });
+
+    it('[APRQC-5] standalone checkQuestionnaireCoverage accepts raw content for both sides', async () => {
+      const { checkQuestionnaireCoverage } = await import('../ts/appTemplates/questionnaireCoverage.ts');
+      const q = new Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      const report = checkQuestionnaireCoverage(q.toRequestEventContent(), { permissions: [] });
+      assert.equal(report.ok, false);
+      assert.equal(report.perQuestion[0].missing, true);
+    });
+  });
 });

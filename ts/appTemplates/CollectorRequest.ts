@@ -6,6 +6,7 @@ import type { CollectorSectionInterface, RequestSectionType, QuestionnaireReques
 import type { ExistingStreamRef, CustomFieldDeclaration } from './templateTypes.ts';
 import type { CustomFieldEventType } from './customFieldTypes.ts';
 import { Questionnaire } from './Questionnaire.ts';
+import { checkQuestionnaireCoverage, type QuestionnaireCoverageReport } from './questionnaireCoverage.ts';
 
 export type { ExistingStreamRef, CustomFieldDeclaration };
 
@@ -448,6 +449,29 @@ export class CollectorRequest {
     if (index < 0 || index >= this.#questionnaires.length) return false;
     this.#questionnaires.splice(index, 1);
     return true;
+  }
+
+  /**
+   * Check whether this request's permissions cover every item referenced by
+   * the given Questionnaire. See `checkQuestionnaireCoverage` for the report
+   * shape. Read-only — does not mutate this request.
+   */
+  checkQuestionnaireCoverage (q: Questionnaire | QuestionnaireRequestContent): QuestionnaireCoverageReport {
+    return checkQuestionnaireCoverage(q, this);
+  }
+
+  /**
+   * Compute the coverage report for the given Questionnaire and, if any
+   * permissions are missing, add them to this request in place. Returns the
+   * report so callers can surface unknownItems / proposedPermissions to the
+   * doctor (e.g. "Added 3 permissions to your request: body-weight, ...").
+   */
+  applyQuestionnaireCoverage (q: Questionnaire | QuestionnaireRequestContent): QuestionnaireCoverageReport {
+    const report = checkQuestionnaireCoverage(q, this);
+    for (const p of report.proposedPermissions) {
+      this.addPermission(p.streamId, p.defaultName, p.level);
+    }
+    return report;
   }
 
   // ---------- sections ------------- //

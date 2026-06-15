@@ -31,6 +31,14 @@ export type {
   QuestionnaireAnswerContent
 } from './interfaces.ts';
 
+// Plan 71 — Questionnaire coverage check against a CollectorRequest's permissions.
+export { checkQuestionnaireCoverage } from './questionnaireCoverage.ts';
+export type {
+  QuestionCoverage,
+  QuestionnaireCoverageReport,
+  RequestCoverageLike
+} from './questionnaireCoverage.ts';
+
 // Plan 45 — custom-fields resolvers + types.
 export {
   buildStreamMap,

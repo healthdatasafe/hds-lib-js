@@ -16,8 +16,14 @@
 - `Questionnaire.makeRequestEvent(content, streamIds, time?)` materializes a bundled questionnaire content into a ready-to-write `questionnaire/request-v1` event payload. Re-validates content via the canonical Questionnaire roundtrip.
 - `Questionnaire.writeBundled(connection, request, streamIds, opts?)` batches one `events.create` per bundled questionnaire via `connection.api()`. Returns the Pryv batch result. 0-questionnaire case skips the API call.
 
+### Added (Plan 71 Phase G — Questionnaire coverage check)
+- `appTemplates.checkQuestionnaireCoverage(q, request) → QuestionnaireCoverageReport` — verifies that a CollectorRequest's permissions cover every stream referenced by a Questionnaire's items. Reports per-question coverage (covered / missing / unknown-item), aggregates `unknownItems`, and computes the minimal `proposedPermissions` to add (via the same `authorizations.forItemKeys` path that `CollectorRequest.buildPermissions` uses). Accepts either `Questionnaire` instances or raw content for both sides.
+- `CollectorRequest#checkQuestionnaireCoverage(q)` — convenience wrapper around the standalone helper, read-only.
+- `CollectorRequest#applyQuestionnaireCoverage(q)` — mutator that adds the missing permissions to the request in place and returns the same report. Useful when building an embedded questionnaire in a UI: "Add 3 missing permissions to your request?" → click → done.
+- New types exported from `appTemplates`: `QuestionCoverage`, `QuestionnaireCoverageReport`, `RequestCoverageLike`.
+
 ### Tests
-- 539 → 547 passing total (+27 new Plan-71-specific cases across `[QST-CTOR]`, `[QST-VAL]`, `[QST-SER]`, `[QST-ANS]`, `[QST-WRB]`, `[APRQS]`, `[STMX]`).
+- 539 → 552 passing total (+32 Plan-71-specific cases across `[QST-CTOR]`, `[QST-VAL]`, `[QST-SER]`, `[QST-ANS]`, `[QST-WRB]`, `[APRQS]`, `[APRQC]`, `[STMX]`).
 
 ## [1.1.2] - 2026-06-10
 

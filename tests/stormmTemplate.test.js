@@ -6,7 +6,7 @@ import { assert } from './test-utils/deps-node.js';
 import { CollectorRequest } from '../ts/appTemplates/CollectorRequest.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STORMM_PATH = path.resolve(__dirname, '../../../_plans/47-STORMM-forms-paused/templates/stormm-woman.json');
+const STORMM_PATH = path.resolve(__dirname, '../../../_plans/47-STORMM-forms-atwork/templates/stormm-woman.json');
 
 describe('[STMX] STORMM woman template (Plan 71 Phase F)', function () {
   this.timeout(8000);
