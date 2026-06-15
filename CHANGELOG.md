@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+> **Plan 71 (questionnaire request/answer event pair) — landing across data-model v1.10.0, hds-lib-js, hds-forms-js, hds-webapp.** Not yet released; held until cross-repo merge round.
+
+### Added (Plan 71 C1 — Questionnaire appTemplate)
+- New `Questionnaire` class in `ts/appTemplates/Questionnaire.ts` — sibling to `CollectorRequest`, reusable across requests. API: `addQuestion(key, def)` with Pryv path-grammar enforcement on keys + scope/subField/answer-entry validation; `toRequestEventContent()`; `static fromRequestEvent(event)`; `static buildAnswerEvent(requestEventId, answers, knownKeys?)` composes `content` + `clientData.related.<eventId>: true` mirror per Pryv §7.
+- Interfaces: `QuestionScope`, `QuestionSubField`, `QuestionDef`, `AnswerStatus`, `AnswerEntry`, `QuestionnaireRequestContent`, `QuestionnaireAnswerContent` exported from `appTemplates`.
+- `pryv` dep bumped `^3.5.0 → ^3.6.0` (npm 2026-06-11). Required by `prefillQuestionnaire`'s `Connection#getLatestByContent` use in hds-forms-js.
+
+### Added (Plan 71 C6a — CollectorRequest packs Questionnaires, Option B)
+- `CollectorRequest` gains `addQuestionnaire(q | content)`, `get questionnaires`, `getQuestionnaire(i)`, `removeQuestionnaire(i)`. `setContent` reads optional `content.questionnaires` (rejects non-array); the content getter emits the field only when non-empty. Full roundtrip through serialization. Coexists with sections + customFields + permissions + existingStreamRefs.
+
+### Added (Plan 71 C6b + E1 — questionnaire write helpers)
+- `Questionnaire.makeRequestEvent(content, streamIds, time?)` materializes a bundled questionnaire content into a ready-to-write `questionnaire/request-v1` event payload. Re-validates content via the canonical Questionnaire roundtrip.
+- `Questionnaire.writeBundled(connection, request, streamIds, opts?)` batches one `events.create` per bundled questionnaire via `connection.api()`. Returns the Pryv batch result. 0-questionnaire case skips the API call.
+
+### Tests
+- 539 → 547 passing total (+27 new Plan-71-specific cases across `[QST-CTOR]`, `[QST-VAL]`, `[QST-SER]`, `[QST-ANS]`, `[QST-WRB]`, `[APRQS]`, `[STMX]`).
+
 ## [1.1.2] - 2026-06-10
 
 ### Fixed — ajv "unknown format" console noise on import
