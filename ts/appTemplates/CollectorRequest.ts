@@ -2,9 +2,10 @@ import { HDSLibError } from '../errors.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { validateLocalizableText } from '../localizeText.ts';
 import type { localizableText } from '../localizeText.ts';
-import type { CollectorSectionInterface, RequestSectionType } from './interfaces.ts';
+import type { CollectorSectionInterface, RequestSectionType, QuestionnaireRequestContent } from './interfaces.ts';
 import type { ExistingStreamRef, CustomFieldDeclaration } from './templateTypes.ts';
 import type { CustomFieldEventType } from './customFieldTypes.ts';
+import { Questionnaire } from './Questionnaire.ts';
 
 export type { ExistingStreamRef, CustomFieldDeclaration };
 
@@ -42,6 +43,7 @@ export class CollectorRequest {
   #features: { chat?: { type: 'usernames' | 'user' } };
   #existingStreamRefs: Array<ExistingStreamRef>;
   #customFields: Array<CustomFieldDeclaration>;
+  #questionnaires: Array<QuestionnaireRequestContent>;
 
   #extraContent: any;
   constructor (content: any) {
@@ -54,6 +56,7 @@ export class CollectorRequest {
     this.#features = {};
     this.#existingStreamRefs = [];
     this.#customFields = [];
+    this.#questionnaires = [];
     this.setContent(content);
   }
 
@@ -185,6 +188,22 @@ export class CollectorRequest {
         this.addCustomField(cf);
       }
       delete futureContent.customFields;
+    }
+
+    // -- questionnaires (Plan 71 — bundle Questionnaire(s) into first-contact
+    //    request; on patient accept the CollectorClient writes one
+    //    questionnaire/request-v1 event per entry in the patient's stream).
+    //    For an established relationship the doctor sends a bare Questionnaire
+    //    directly — no CollectorRequest involved.
+    if (futureContent.questionnaires) {
+      if (!Array.isArray(futureContent.questionnaires)) {
+        throw new HDSLibError("CollectorRequest 'questionnaires' must be an array");
+      }
+      this.#questionnaires = [];
+      for (const q of futureContent.questionnaires) {
+        this.addQuestionnaire(q);
+      }
+      delete futureContent.questionnaires;
     }
 
     this.#extraContent = futureContent;
@@ -392,6 +411,45 @@ export class CollectorRequest {
     });
   }
 
+  // ---------- questionnaires (Plan 71) ---------- //
+
+  get questionnaires (): Array<QuestionnaireRequestContent> {
+    return this.#questionnaires;
+  }
+
+  /**
+   * Add a Questionnaire to this request. Accepts either a Questionnaire
+   * instance (its `toRequestEventContent()` payload is stored) or a raw
+   * `QuestionnaireRequestContent` object (validated through a Questionnaire
+   * round-trip so we surface errors at add-time rather than at send-time).
+   *
+   * On patient accept (`CollectorClient.acceptInvite` — Plan 71 C6+ work),
+   * one `questionnaire/request-v1` event is written per stored entry, in the
+   * same batch as the access-grant side-effects. For pre-accept inspection
+   * (e.g. preview UI) consumers can iterate `request.questionnaires`.
+   */
+  addQuestionnaire (q: Questionnaire | QuestionnaireRequestContent): QuestionnaireRequestContent {
+    const content = (q instanceof Questionnaire)
+      ? q.toRequestEventContent()
+      : new Questionnaire(q).toRequestEventContent();
+    this.#questionnaires.push(content);
+    return content;
+  }
+
+  /** Convenience: return a fresh Questionnaire instance over the stored entry at `index`. */
+  getQuestionnaire (index: number): Questionnaire | null {
+    const content = this.#questionnaires[index];
+    if (content == null) return null;
+    return new Questionnaire(content);
+  }
+
+  /** Remove the entry at `index`. Returns true if it existed. */
+  removeQuestionnaire (index: number): boolean {
+    if (index < 0 || index >= this.#questionnaires.length) return false;
+    this.#questionnaires.splice(index, 1);
+    return true;
+  }
+
   // ---------- sections ------------- //
 
   /**
@@ -421,6 +479,9 @@ export class CollectorRequest {
     }
     if (this.#customFields.length > 0) {
       content.customFields = this.#customFields;
+    }
+    if (this.#questionnaires.length > 0) {
+      content.questionnaires = this.#questionnaires;
     }
     Object.assign(content, this.#extraContent);
     return content;

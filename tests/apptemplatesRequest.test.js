@@ -1,6 +1,7 @@
 import { initHDSModel } from '../ts/index.ts';
 import { assert } from './test-utils/deps-node.js';
 import { CollectorRequest } from '../ts/appTemplates/CollectorRequest.ts';
+import { Questionnaire } from '../ts/appTemplates/Questionnaire.ts';
 
 describe('[APRX] appTemplates Requests', function () {
   this.timeout(8000);
@@ -307,6 +308,120 @@ describe('[APRX] appTemplates Requests', function () {
       request.addCustomField(cf);
       assert.equal(request.customFields[0].parentId, 'stormm-woman-custom');
       assert.equal(request.customFields[0].name, 'Flow');
+    });
+  });
+
+  describe('[APRQS] CollectorRequest questionnaires (Plan 71)', function () {
+    function validQuestion () {
+      return {
+        label: { en: 'Body weight in past week' },
+        itemRef: 'body-weight',
+        scope: { type: 'latest', withinDays: 7 }
+      };
+    }
+
+    it('[APRQS-1] default request has no questionnaires', () => {
+      const r = new CollectorRequest({});
+      assert.deepEqual(r.questionnaires, []);
+      assert.equal(r.content.questionnaires, undefined);
+    });
+
+    it('[APRQS-2] addQuestionnaire accepts a Questionnaire instance', () => {
+      const q = new Questionnaire({ title: { en: 'Intake' } });
+      q.addQuestion('weight-week', validQuestion());
+      const r = new CollectorRequest({});
+      r.addQuestionnaire(q);
+      assert.equal(r.questionnaires.length, 1);
+      assert.equal(r.questionnaires[0].title.en, 'Intake');
+      assert.equal(r.questionnaires[0].questions['weight-week'].itemRef, 'body-weight');
+    });
+
+    it('[APRQS-3] addQuestionnaire accepts a raw content object (validates via Questionnaire)', () => {
+      const r = new CollectorRequest({});
+      r.addQuestionnaire({
+        title: { en: 'From content' },
+        questions: { 'weight-week': validQuestion() }
+      });
+      assert.equal(r.questionnaires.length, 1);
+      assert.equal(r.questionnaires[0].title.en, 'From content');
+    });
+
+    it('[APRQS-4] addQuestionnaire rejects invalid question keys', () => {
+      const r = new CollectorRequest({});
+      assert.throws(() => r.addQuestionnaire({
+        questions: { 'has:colon': validQuestion() }
+      }), /Pryv path grammar/);
+    });
+
+    it('[APRQS-5] addQuestionnaire rejects an empty questionnaire (no questions)', () => {
+      const r = new CollectorRequest({});
+      assert.throws(() => r.addQuestionnaire({}), /at least one question/);
+    });
+
+    it('[APRQS-6] getQuestionnaire returns a fresh Questionnaire wrapping the stored entry', () => {
+      const r = new CollectorRequest({});
+      r.addQuestionnaire({ questions: { 'weight-week': validQuestion() } });
+      const q = r.getQuestionnaire(0);
+      assert.ok(q instanceof Questionnaire);
+      assert.deepEqual(q.questionKeys, ['weight-week']);
+    });
+
+    it('[APRQS-7] removeQuestionnaire splices the entry', () => {
+      const r = new CollectorRequest({});
+      r.addQuestionnaire({ questions: { a: validQuestion() } });
+      r.addQuestionnaire({ questions: { b: validQuestion() } });
+      assert.equal(r.removeQuestionnaire(0), true);
+      assert.equal(r.questionnaires.length, 1);
+      assert.equal(Object.keys(r.questionnaires[0].questions)[0], 'b');
+      assert.equal(r.removeQuestionnaire(42), false);
+    });
+
+    it('[APRQS-8] content.questionnaires only present when non-empty', () => {
+      const r = new CollectorRequest({});
+      r.addQuestionnaire({ questions: { 'weight-week': validQuestion() } });
+      assert.ok(Array.isArray(r.content.questionnaires));
+      assert.equal(r.content.questionnaires.length, 1);
+      r.removeQuestionnaire(0);
+      assert.equal(r.content.questionnaires, undefined);
+    });
+
+    it('[APRQS-9] round-trips through setContent', () => {
+      const r1 = new CollectorRequest({});
+      r1.addQuestionnaire({
+        title: { en: 'Roundtrip' },
+        questions: { 'weight-week': validQuestion() }
+      });
+      const content = r1.content;
+      const r2 = new CollectorRequest(content);
+      assert.equal(r2.questionnaires.length, 1);
+      assert.equal(r2.questionnaires[0].title.en, 'Roundtrip');
+      assert.equal(r2.questionnaires[0].questions['weight-week'].itemRef, 'body-weight');
+    });
+
+    it('[APRQS-10] setContent rejects non-array questionnaires field', () => {
+      assert.throws(
+        () => new CollectorRequest({ questionnaires: { wrong: 'shape' } }),
+        /must be an array/
+      );
+    });
+
+    it('[APRQS-11] coexists with sections + customFields + questionnaires in one request', () => {
+      const r = new CollectorRequest({});
+      r.title = { en: 'Mixed' };
+      const sec = r.createSection('s1', 'permanent');
+      sec.setName({ en: 'Section 1' });
+      sec.addItemKeys(['body-weight']);
+      r.addQuestionnaire({
+        title: { en: 'Bundled Q' },
+        questions: { 'weight-week': validQuestion() }
+      });
+      const c = r.content;
+      assert.equal(c.sections.length, 1);
+      assert.equal(c.questionnaires.length, 1);
+      // Round-trip survives the mix
+      const r2 = new CollectorRequest(c);
+      assert.equal(r2.sections.length, 1);
+      assert.equal(r2.questionnaires.length, 1);
     });
   });
 });
