@@ -154,6 +154,33 @@ export class Questionnaire {
     return new Questionnaire(event.content as Partial<QuestionnaireRequestContent>);
   }
 
+  /**
+   * Build a ready-to-write `questionnaire/request-v1` event payload.
+   * Convenience for the doctor-side flow that materializes bundled
+   * questionnaires (`CollectorRequest.questionnaires`) into events after the
+   * patient accepts and the data-grant access is in hand. The consumer
+   * batches the returned payloads via `connection.api()`.
+   */
+  static makeRequestEvent (
+    content: QuestionnaireRequestContent,
+    streamIds: string[],
+    timeSeconds?: number
+  ): { type: 'questionnaire/request-v1', streamIds: string[], time: number, content: QuestionnaireRequestContent } {
+    if (!Array.isArray(streamIds) || streamIds.length === 0) {
+      throw new HDSLibError('makeRequestEvent: streamIds must be a non-empty array');
+    }
+    // Roundtrip through a Questionnaire instance to validate the shape — the
+    // caller may pass content from anywhere (a CollectorRequest's bundled
+    // entry, a saved template, or a fresh build).
+    const roundTripped = new Questionnaire(content).toRequestEventContent();
+    return {
+      type: 'questionnaire/request-v1',
+      streamIds,
+      time: timeSeconds ?? Math.floor(Date.now() / 1000),
+      content: roundTripped
+    };
+  }
+
   // ---------- answer-side helper ---------- //
 
   /**

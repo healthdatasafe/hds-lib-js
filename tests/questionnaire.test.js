@@ -195,6 +195,48 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
         throw new Error('should throw');
       } catch (e) { assert.match(e.message, /no content/); }
     });
+
+    it('[QST-SER-5] makeRequestEvent builds a ready-to-write event payload', () => {
+      const ev = Questionnaire.makeRequestEvent(
+        { questions: { 'weight-week': { label: { en: 'Weight' }, itemRef: 'body-weight', scope: { type: 'latest', withinDays: 7 } } } },
+        ['questionnaire-out'],
+        1735689600
+      );
+      assert.equal(ev.type, 'questionnaire/request-v1');
+      assert.deepEqual(ev.streamIds, ['questionnaire-out']);
+      assert.equal(ev.time, 1735689600);
+      assert.equal(ev.content.questions['weight-week'].itemRef, 'body-weight');
+    });
+
+    it('[QST-SER-6] makeRequestEvent defaults time to now (seconds)', () => {
+      const before = Math.floor(Date.now() / 1000);
+      const ev = Questionnaire.makeRequestEvent(
+        { questions: { 'weight-week': { label: { en: 'Weight' }, itemRef: 'body-weight', scope: { type: 'ever' } } } },
+        ['s']
+      );
+      assert.ok(ev.time >= before);
+      assert.ok(ev.time <= Math.floor(Date.now() / 1000) + 1);
+    });
+
+    it('[QST-SER-7] makeRequestEvent rejects empty streamIds', () => {
+      try {
+        Questionnaire.makeRequestEvent(
+          { questions: { x: { label: { en: 'x' }, itemRef: 'body-weight', scope: { type: 'ever' } } } },
+          []
+        );
+        throw new Error('should throw');
+      } catch (e) { assert.match(e.message, /non-empty array/); }
+    });
+
+    it('[QST-SER-8] makeRequestEvent re-validates content (rejects bad keys)', () => {
+      try {
+        Questionnaire.makeRequestEvent(
+          { questions: { 'has:colon': { label: { en: 'x' }, itemRef: 'body-weight', scope: { type: 'ever' } } } },
+          ['s']
+        );
+        throw new Error('should throw');
+      } catch (e) { assert.match(e.message, /Pryv path grammar/); }
+    });
   });
 
   describe('[QST-ANS] buildAnswerEvent helper', function () {
