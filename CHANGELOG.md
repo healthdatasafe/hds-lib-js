@@ -1,8 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.0] - 2026-06-16
 
-> **Plan 71 (questionnaire request/answer event pair) — landing across data-model v1.10.0, hds-lib-js, hds-forms-js, hds-webapp.** Not yet released; held until cross-repo merge round.
+> **Plan 71 (questionnaire request/answer event pair) — Questionnaire appTemplate + CollectorRequest.questionnaires packing + write helpers + coverage check.** Released alongside data-model v1.10.0 (eventType pair) and hds-forms-js v0.11.0 (renderer + builder + helpers).
 
 ### Added (Plan 71 C1 — Questionnaire appTemplate)
 - New `Questionnaire` class in `ts/appTemplates/Questionnaire.ts` — sibling to `CollectorRequest`, reusable across requests. API: `addQuestion(key, def)` with Pryv path-grammar enforcement on keys + scope/subField/answer-entry validation; `toRequestEventContent()`; `static fromRequestEvent(event)`; `static buildAnswerEvent(requestEventId, answers, knownKeys?)` composes `content` + `clientData.related.<eventId>: true` mirror per Pryv §7.
