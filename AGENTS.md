@@ -23,6 +23,33 @@ Anything not covered above is either internal or new; in that case, read the sou
 
 ---
 
+## ⛔ The itemDef-first rule — provision → write → read (read before integrating)
+
+The single most important consumer contract, and the one the first two apps built on HDS both got wrong: **never hand-maintain a stream tree or hardcode `streamId`/`eventType` strings.** Items are the source of truth for which streams to create, how to write, and what to read. Drive everything off the item keys the app uses:
+
+```js
+const APP_ITEM_KEYS = ['body-weight', 'body-temperature-basal', 'cervical-fluid-observation'];
+const model = getHDSModel();
+
+// PROVISION — one idempotent call; do NOT build a STREAM_TREE constant by hand.
+await toolkit.StreamsAutoCreate.attachToConnection(connection).ensureExistsForItems(APP_ITEM_KEYS);
+// (lower level, if you need the raw { id, name, defaultName?, parentId } payloads:
+//  model.streams.getNecessaryListForItems(APP_ITEM_KEYS, { knowExistingStreamsIds }))
+
+// WRITE — event shape from the item:
+const tmpl = model.itemsDefs.forKey('body-weight').eventTemplate();  // { streamIds, type }
+
+// READ — derive the events.get `streams` filter from the SAME set. A single unknown stream
+//   in the filter fails the WHOLE query (zero events), so provision the full tree first.
+const streamIds = model.streams.getNecessaryListForItems(APP_ITEM_KEYS, { knowExistingStreamsIds: [] }).map(s => s.id);
+```
+
+Why it matters: a hand-built tree silently drifts from the model, and the events.get "one unknown stream → zero events" trap makes a freshly-written app read nothing. `StreamsAutoCreate.ensureExistsForItems` ([`ts/toolkit/StreamsAutoCreate.ts`](ts/toolkit/StreamsAutoCreate.ts)) is exactly the helper both apps reimplemented; point consumers at it.
+
+**No item for the data?** Don't fall back to loose strings or `note/txt`. Register a custom itemDef via `initHDSModel({ overload: { items: { … } } })` — adding a brand-new item (plus its streams/eventTypes) is always allowed ([`ts/HDSModel/HDSModel-Overload.ts`](ts/HDSModel/HDSModel-Overload.ts); overrides of an existing item are limited to display fields). The custom itemDef is the same shape as a core data-model definition, so it doubles as an upstream proposal — submit it to grow the catalogue. (App tokens cannot create a top-level **root** stream; request a new root in the initial OAuth scope with a `defaultName`, or parent the custom item under an existing root.)
+
+---
+
 ## Pryv concepts you must hold in your head
 
 `hds-lib-js` wraps and extends [`pryv` JS lib](https://github.com/pryv/lib-js). Most of what this library does is express HDS-specific patterns on top of standard Pryv objects. **Before designing anything that touches Pryv data shapes, read the corresponding section of the Pryv API reference.**
