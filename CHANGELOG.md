@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Documentation
+- `AGENTS.md`: lead with the itemDef-first **provision → write → read** consumer
+  rule. Derive streams from the model — `toolkit.StreamsAutoCreate.ensureExistsForItems`
+  (provision), `itemsDefs.forKey(key).eventTemplate()` (write), `getNecessaryListForItems`
+  for the read filter — never hand-maintain a stream tree. Documents the
+  `initHDSModel({ overload })` custom-itemDef path. Docs only; no API change (2026-06-19).
+
 ## [1.2.1] - 2026-06-19
 
 ### Changed — pryv ecosystem bumped to 3.7.1
