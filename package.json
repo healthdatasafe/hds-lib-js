@@ -1,6 +1,6 @@
 {
   "name": "hds-lib",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Health Data Safe - Library",
   "type": "module",
   "engines": {
@@ -62,11 +62,11 @@
   },
   "dependencies": {
     "@pryv/cmc": "1.1.1",
-    "@pryv/monitor": "^3.5.0",
-    "@pryv/socket.io": "^3.5.0",
+    "@pryv/monitor": "^3.7.1",
+    "@pryv/socket.io": "^3.7.1",
     "ajv": "^8.20.0",
     "events": "^3.3.0",
-    "pryv": "^3.6.0",
+    "pryv": "^3.7.1",
     "short-unique-id": "^5.3.2"
   }
 }

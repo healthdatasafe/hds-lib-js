@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.1] - 2026-06-19
+
+### Changed — pryv ecosystem bumped to 3.7.1
+
+`pryv` `^3.6.0 → ^3.7.1`, and `@pryv/monitor` + `@pryv/socket.io` `^3.5.0 → ^3.7.1`
+(latest published). Aligns hds-lib with the open-pryv.io 2.0.0-rc.4 prod cores
+(Plan 78 — USA/AWS region core) and the bridge repos, which already track
+pryv 3.7.1. No source changes; dependency bump only.
+
 ## [1.2.0] - 2026-06-16
 
 > **Plan 71 (questionnaire request/answer event pair) — Questionnaire appTemplate + CollectorRequest.questionnaires packing + write helpers + coverage check.** Released alongside data-model v1.10.0 (eventType pair) and hds-forms-js v0.11.0 (renderer + builder + helpers).
