@@ -9,6 +9,20 @@
   for the read filter — never hand-maintain a stream tree. Documents the
   `initHDSModel({ overload })` custom-itemDef path. Docs only; no API change (2026-06-19).
 
+## [1.2.2] - 2026-06-21
+
+### Fixed — CMC chat addressing (B-2026-06-18-3)
+
+- `Contact.aggregateCmc` now derives each relationship's `localChatStreamId`
+  from the server-granted `:chats:` `contribute` permission (falling back to the
+  remote chat stream's scope), instead of assuming a generic
+  `:_cmc:apps:hds-patient` scope that the CMC plugin never provisions. Patient
+  chat sends previously failed with `unknown-referenced-resource` because the
+  target stream didn't exist.
+- `Contact.chatEventInfos` now classifies a chat event by its plugin-stamped
+  `content.from` (delivered/incoming) vs. its absence (own outgoing), since each
+  relationship keeps a single conversation stream holding both directions.
+
 ## [1.2.1] - 2026-06-19
 
 ### Changed — pryv ecosystem bumped to 3.7.1

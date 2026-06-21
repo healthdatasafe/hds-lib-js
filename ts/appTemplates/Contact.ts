@@ -263,21 +263,21 @@ export class Contact {
 
   /** Determine chat event source: 'me', 'contact', or 'unknown' */
   chatEventInfos (event: pryv.Event): { source: 'me' | 'contact' | 'unknown' } {
-    // CMC chat-stream identification. The patient's outgoing chat lives on
-    // `<patientScope>:chats:<doctorSlug>`; the doctor's outgoing chat
-    // (incoming for the patient) lives on `<doctorScope>:chats:<patientSlug>`
-    // and is fetched via back-channel.
-    if (event.streamIds) {
-      for (const rel of this.cmcRelationships) {
-        if (!rel.features.chat) continue;
-        for (const sid of event.streamIds) {
-          if (rel.localChatStreamId && sid === rel.localChatStreamId) {
-            return { source: 'me' };
-          }
-          if (rel.remoteChatStreamId && sid === rel.remoteChatStreamId) {
-            return { source: 'contact' };
-          }
-        }
+    // Each relationship has ONE local conversation stream holding BOTH
+    // directions. The CMC plugin stamps `content.from = {username,...}` on
+    // delivered (incoming) events; the local outgoing trigger has no `from`.
+    // So within the local chat stream, classify by `content.from`. (Legacy:
+    // events still arriving on a counterparty's remoteChatStreamId — pre-mirror
+    // back-channel reads — are always the counterparty's.)
+    if (!event.streamIds) return { source: 'unknown' };
+    for (const rel of this.cmcRelationships) {
+      if (!rel.features.chat) continue;
+      if (rel.localChatStreamId && event.streamIds.includes(rel.localChatStreamId)) {
+        const from = (event.content as { from?: { username?: string } } | null | undefined)?.from;
+        return { source: from?.username ? 'contact' : 'me' };
+      }
+      if (rel.remoteChatStreamId && event.streamIds.includes(rel.remoteChatStreamId)) {
+        return { source: 'contact' };
       }
     }
     return { source: 'unknown' };
@@ -475,7 +475,28 @@ export class Contact {
         // in practice, but keeps the aggregator side-effect-free under tests.
         peerSlug = `${cp.username.toLowerCase()}--${cp.host.toLowerCase().replace(/:\d+$/, '').replace(/\./g, '-')}`;
       }
-      const localChatStreamId = `${patientScopeStreamId}:chats:${peerSlug}`;
+      // Local outgoing chat stream. The CMC plugin provisions the relationship's
+      // chat streams under the INVITING app's scope (e.g. the collector's
+      // `:_cmc:apps:hds-collector:<collectorId>`) and mirrors that scope onto the
+      // accepter's account — NOT under a generic patient app scope. On accept it
+      // grants this access `contribute` on the accepter's own per-counterparty
+      // chat stream. Prefer that server-granted stream (authoritative: it exists
+      // and is writable); else derive from the remote chat stream's scope; else
+      // fall back to the legacy patientScopeStreamId. (`clientData.cmc.appCode`
+      // is null on counterparty accesses, so the scope can't come from appCode.)
+      const grantedChat = (access.permissions ?? []).find(p =>
+        typeof p.streamId === 'string' &&
+        p.streamId.endsWith(`:chats:${peerSlug}`) &&
+        (p.level === 'contribute' || p.level === 'manage'));
+      let localChatStreamId: string;
+      if (grantedChat) {
+        localChatStreamId = grantedChat.streamId;
+      } else if (cp.remoteChatStreamId) {
+        const remoteScope = cp.remoteChatStreamId.replace(/:chats:[^:]+$/, '');
+        localChatStreamId = `${remoteScope}:chats:${peerSlug}`;
+      } else {
+        localChatStreamId = `${patientScopeStreamId}:chats:${peerSlug}`;
+      }
 
       // Match accept event by (counterparty, appCode). Same counterparty
       // can have multiple accept events for multiple data sets; we just

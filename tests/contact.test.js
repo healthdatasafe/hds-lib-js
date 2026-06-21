@@ -222,10 +222,36 @@ describe('[CTCT] Contact class', function () {
       assert.equal(rel.appCode, 'hds-collector');
       assert.deepEqual(rel.features, { chat: true, systemMessaging: true });
       assert.equal(rel.acceptedAt, 1716000000);
-      assert.equal(rel.localChatStreamId, ':_cmc:apps:hds-patient:chats:drandy--demo-datasafe-dev');
+      // localChatStreamId derives from the relationship's real scope (the
+      // remote chat stream's scope), not the generic patient app scope.
+      assert.equal(rel.localChatStreamId, ':_cmc:apps:hds-collector:foo:chats:drandy--demo-datasafe-dev');
       // aggregator populates accessObjects too
       assert.equal(c.accessObjects.length, 1);
       assert.equal(c.accessObjects[0].id, 'acc-cp-1');
+    });
+
+    it('[CTM5b] localChatStreamId prefers the server-granted :chats: contribute permission', () => {
+      const granted = ':_cmc:apps:hds-collector:app-x:chats:drandy--demo-datasafe-dev';
+      const a = counterpartyAccess({
+        permissions: [
+          { streamId: 'health', level: 'read' },
+          { streamId: granted, level: 'contribute' }
+        ]
+      });
+      const out = Contact.aggregateCmc([a], [acceptEvent()], SCOPE);
+      assert.equal(out[0].cmcRelationships[0].localChatStreamId, granted);
+    });
+
+    it('[CTM5c] chatEventInfos classifies by content.from within the local chat stream', () => {
+      const a = counterpartyAccess();
+      const c = Contact.aggregateCmc([a], [acceptEvent()], SCOPE)[0];
+      const local = c.cmcRelationships[0].localChatStreamId;
+      // outgoing trigger: no `from` → me
+      assert.deepEqual(c.chatEventInfos({ streamIds: [local], content: { content: 'hi' } }), { source: 'me' });
+      // delivered incoming: plugin-stamped `from` → contact
+      assert.deepEqual(c.chatEventInfos({ streamIds: [local], content: { from: { username: 'drandy' }, content: 'hi' } }), { source: 'contact' });
+      // unrelated stream → unknown
+      assert.deepEqual(c.chatEventInfos({ streamIds: ['other'], content: {} }), { source: 'unknown' });
     });
 
     it('[CTM6] aggregateCmc groups multiple accesses from the same counterparty into one Contact', () => {
