@@ -12,10 +12,8 @@
  * Sub-scopes (`:_cmc:apps:<appCode>:<subPath>`) are NOT auto-provisioned
  * and still require a `streams.create` here.
  *
- * Hoisted in Plan 60 B1 from three independent copies that had drifted:
- * `doctor-dashboard/app/cmcDoctor.ts` (canonical, used here),
- * `bridge-mira/src/methods/cmcBridgeMira.ts`, and the archived
- * `_plans/_archives/59-…/scripts/cmc-migrate.mjs`.
+ * Hoisted from three independent copies that had drifted across the
+ * doctor-dashboard, the Mira bridge, and an archived migration script.
  */
 
 import { cmc, pryv } from '../patchedPryv.ts';

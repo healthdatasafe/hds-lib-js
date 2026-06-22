@@ -55,7 +55,7 @@ pryv 3.7.1. No source changes; dependency bump only.
 - New types exported from `appTemplates`: `QuestionCoverage`, `QuestionnaireCoverageReport`, `RequestCoverageLike`.
 
 ### Tests
-- 539 → 552 passing total (+32 Plan-71-specific cases across `[QST-CTOR]`, `[QST-VAL]`, `[QST-SER]`, `[QST-ANS]`, `[QST-WRB]`, `[APRQS]`, `[APRQC]`, `[STMX]`).
+- 539 → 552 passing total (+32 questionnaire cases across `[QST-CTOR]`, `[QST-VAL]`, `[QST-SER]`, `[QST-ANS]`, `[QST-WRB]`, `[APRQS]`, `[APRQC]`, `[CMQT]`).
 
 ## [1.1.2] - 2026-06-10
 

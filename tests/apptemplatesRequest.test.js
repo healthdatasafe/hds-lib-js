@@ -239,11 +239,11 @@ describe('[APRX] appTemplates Requests', function () {
   describe('[APRCF] CollectorRequest customFields (Plan 45)', function () {
     function validCf () {
       return {
-        streamId: 'stormm-woman-custom-flow',
+        streamId: 'sample-template-custom-flow',
         eventType: 'note/txt',
         def: {
           version: 'v1',
-          templateId: 'stormm-woman',
+          templateId: 'sample-template',
           key: 'flow',
           label: { en: 'Flow' },
           options: ['light', 'medium', 'heavy']
@@ -254,7 +254,7 @@ describe('[APRX] appTemplates Requests', function () {
     it('[ARCF1] should parse customFields from content', () => {
       const request = new CollectorRequest({ customFields: [validCf()] });
       assert.equal(request.customFields.length, 1);
-      assert.equal(request.customFields[0].streamId, 'stormm-woman-custom-flow');
+      assert.equal(request.customFields[0].streamId, 'sample-template-custom-flow');
       assert.equal(request.customFields[0].eventType, 'note/txt');
       assert.equal(request.customFields[0].def.key, 'flow');
     });
@@ -302,11 +302,11 @@ describe('[APRX] appTemplates Requests', function () {
 
     it('[ARCF8] should preserve optional parentId and name', () => {
       const cf = validCf();
-      cf.parentId = 'stormm-woman-custom';
+      cf.parentId = 'sample-template-custom';
       cf.name = 'Flow';
       const request = new CollectorRequest({});
       request.addCustomField(cf);
-      assert.equal(request.customFields[0].parentId, 'stormm-woman-custom');
+      assert.equal(request.customFields[0].parentId, 'sample-template-custom');
       assert.equal(request.customFields[0].name, 'Flow');
     });
   });

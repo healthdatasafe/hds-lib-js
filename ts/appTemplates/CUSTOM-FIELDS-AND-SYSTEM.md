@@ -13,9 +13,7 @@ templates extend the model without polluting it.
 > `consent/scope-update-cmc`. See `open-pryv.io/components/cmc/IMPLEMENTERS-GUIDE.md`.
 
 > Companion reading:
-> - `data-model/documentation/CUSTOM-FIELDS-AND-SYSTEM.md` — validator side
-> - `_plans/45-custom-fields-appTemplates-atwork/PLAN.md` — design rationale & open-question log
-> - `_plans/45-custom-fields-appTemplates-atwork/spec.md` — implementation-ready blueprint
+> - `data-model` `documentation/CUSTOM-FIELDS-AND-SYSTEM.md` — validator side
 
 ---
 
@@ -25,7 +23,7 @@ templates extend the model without polluting it.
 
 A template may need to capture data points that are not (and should not be)
 canonical items. The canonical `data-model/pack.json` is the shared lingua franca
-of HDS — adding `stormm-cohort-id` or `study-coordinator-note` would brand it
+of HDS — adding `study-cohort-id` or `study-coordinator-note` would brand it
 with one consumer's vocabulary forever.
 
 Custom fields let a template **provision its own template-private streams** at
@@ -47,12 +45,12 @@ no naming convention check, no regex on stream ids, no central registry.
 
 Plan 25 generalised the bridge-side stream layout (`bridge-mira-app-notes`,
 `bridge-mira-app-chat`, …). Plan 45 reuses the same idea for **templates**
-(`stormm-woman-custom-flow`).
+(`sample-template-custom-flow`).
 
 | Layer       | Convention                          | Example                          |
 | ----------- | ----------------------------------- | -------------------------------- |
 | Bridge      | `{bridge-id}-app-{suffix}`          | `bridge-mira-app-notes`          |
-| Template    | `{template-id}-custom-{key}`        | `stormm-woman-custom-flow`       |
+| Template    | `{template-id}-custom-{key}`        | `sample-template-custom-flow`       |
 
 Naming is **soft / non-load-bearing** — the hyphenated prefixes are conventions
 for human readability. The validator and resolver consume `clientData`, never
@@ -65,12 +63,12 @@ the streamId.
 Each custom-field-bearing stream carries a single declaration keyed by eventType:
 
 ```jsonc
-// stream { id: 'stormm-woman-custom-flow', parentId: 'stormm-woman-custom', clientData: ↓ }
+// stream { id: 'sample-template-custom-flow', parentId: 'sample-template-custom', clientData: ↓ }
 {
   "hdsCustomField": {
     "note/txt": {
       "version":     "v1",
-      "templateId":  "stormm-woman",
+      "templateId":  "sample-template",
       "key":         "flow",
       "label":       { "en": "Menstrual flow" },
       "description": { "en": "Self-rated daily" },
@@ -103,27 +101,27 @@ The eventType key (`note/txt`, `count/generic`, etc.) is the **load-bearing dime
 mixed-type events. Templates typically declare exactly one eventType per stream
 to keep things simple.
 
-### Worked example — STORMM-style snippet
+### Worked example — custom-fields snippet
 
 ```jsonc
-// stormm-woman template
+// sample template
 {
-  "id": "stormm-woman",
+  "id": "sample-template",
   "customFields": [
     {
-      "streamId":  "stormm-woman-custom-flow",
+      "streamId":  "sample-template-custom-flow",
       "eventType": "note/txt",
       "def": {
-        "version": "v1", "templateId": "stormm-woman", "key": "flow",
+        "version": "v1", "templateId": "sample-template", "key": "flow",
         "label": { "en": "Menstrual flow" },
         "options": ["light", "medium", "heavy"]
       }
     },
     {
-      "streamId":  "stormm-woman-custom-pain",
+      "streamId":  "sample-template-custom-pain",
       "eventType": "count/generic",
       "def": {
-        "version": "v1", "templateId": "stormm-woman", "key": "pain",
+        "version": "v1", "templateId": "sample-template", "key": "pain",
         "label": { "en": "Pain (0-10)" },
         "min": 0, "max": 10, "step": 1
       }
@@ -133,9 +131,9 @@ to keep things simple.
 ```
 
 At acceptance the patient's account is provisioned with:
-- `stormm-woman-custom` (parent, idempotent)
-- `stormm-woman-custom-flow` with `clientData.hdsCustomField['note/txt']` = the def
-- `stormm-woman-custom-pain` with `clientData.hdsCustomField['count/generic']` = the def
+- `sample-template-custom` (parent, idempotent)
+- `sample-template-custom-flow` with `clientData.hdsCustomField['note/txt']` = the def
+- `sample-template-custom-pain` with `clientData.hdsCustomField['count/generic']` = the def
 
 The requester's access gains `contribute` on each.
 
@@ -157,19 +155,19 @@ and applies one of three rules:
 ### Worked examples
 
 ```text
-stormm-woman                        clientData.hdsCustomField['note/txt'] = { …flow def, options: 3 levels }
-└── stormm-woman-custom             (no clientData)
-    ├── stormm-woman-custom-flow    clientData.hdsCustomField['note/txt'] = { …override, options: 4 levels }
-    ├── stormm-woman-custom-quiet   clientData.hdsCustomField['note/txt'] = {}
-    └── stormm-woman-custom-other   (no clientData)
+sample-template                        clientData.hdsCustomField['note/txt'] = { …flow def, options: 3 levels }
+└── sample-template-custom             (no clientData)
+    ├── sample-template-custom-flow    clientData.hdsCustomField['note/txt'] = { …override, options: 4 levels }
+    ├── sample-template-custom-quiet   clientData.hdsCustomField['note/txt'] = {}
+    └── sample-template-custom-other   (no clientData)
 ```
 
 | Resolved from                       | Result                          |
 | ----------------------------------- | ------------------------------- |
-| `stormm-woman-custom-flow`          | override def (4 levels)         |
-| `stormm-woman-custom-quiet`         | opt-out (resolver returns null) |
-| `stormm-woman-custom-other`         | inherits root def (3 levels)    |
-| `stormm-woman-custom`               | inherits root def (3 levels)    |
+| `sample-template-custom-flow`          | override def (4 levels)         |
+| `sample-template-custom-quiet`         | opt-out (resolver returns null) |
+| `sample-template-custom-other`         | inherits root def (3 levels)    |
+| `sample-template-custom`               | inherits root def (3 levels)    |
 
 `resolveStreamCustomFieldDetailed()` distinguishes the three outcomes via
 `{ kind: 'def' | 'optOut' | 'none' }`. The shorter `resolveStreamCustomField()`
@@ -345,8 +343,9 @@ function listTemplatePrivateStreams (streamTree: Pryv.Stream[]) {
 }
 ```
 
-Bridges that wire custom-field events into external systems (e.g. STORMM data
-export to REDCap) work without knowing a template's id ahead of time.
+Bridges that wire custom-field events into external systems (e.g. exporting
+custom-field events to an external study database) work without knowing a
+template's id ahead of time.
 
 ---
 
@@ -396,15 +395,7 @@ through the form engine.
 
 ## 12. Cross-references
 
-- **Plan 45 PLAN.md** — design rationale + open-question log:
-  `_plans/45-custom-fields-appTemplates-atwork/PLAN.md`
-- **Plan 45 spec.md** — implementation-ready blueprint for Phases 2–9:
-  `_plans/45-custom-fields-appTemplates-atwork/spec.md`
-- **Plan 25 closure** — `{app-id}-app/` convention origin:
-  `_plans/25-generic-app-stream-done/Plan.md`
-- **Plan 47 (STORMM, paused)** — first consumer of customFields[] (Q10/Q16):
-  `_plans/47-STORMM-forms-paused/PLAN.md`
-- **`data-model/documentation/CUSTOM-FIELDS-AND-SYSTEM.md`** — validator side
-  (storage-shape eventTypes, parent-chain walk in `data-model/src/items.js`).
-- **`hds-lib-js/AGENTS.md`** — agent primer; this file is its detailed
+- **`data-model` `documentation/CUSTOM-FIELDS-AND-SYSTEM.md`** — validator side
+  (storage-shape eventTypes, parent-chain walk in `data-model`'s `src/items.js`).
+- **`AGENTS.md`** (repo root) — agent primer; this file is its detailed
   reference for everything `appTemplates`-shaped.

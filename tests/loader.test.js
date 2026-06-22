@@ -3,20 +3,20 @@ import { loadTemplate, isCustomFieldDeclaration, isExistingStreamRef } from '../
 
 function validTemplate () {
   return {
-    id: 'stormm-woman',
-    title: { en: 'STORMM' },
-    description: { en: 'STORMM women cohort' },
+    id: 'sample-template',
+    title: { en: 'Sample Template' },
+    description: { en: 'Sample women cohort' },
     chat: true,
     sections: [
       { key: 'menstrual', type: 'recurring', name: { en: 'Menstrual' }, customFieldKeys: ['flow'] }
     ],
     customFields: [
       {
-        streamId: 'stormm-woman-custom-flow',
+        streamId: 'sample-template-custom-flow',
         eventType: 'note/txt',
         def: {
           version: 'v1',
-          templateId: 'stormm-woman',
+          templateId: 'sample-template',
           key: 'flow',
           label: { en: 'Menstrual flow' },
           options: ['light', 'medium', 'heavy'],
@@ -35,7 +35,7 @@ describe('[CFLD] AppTemplate loader', function () {
   describe('[CFLD-OK] valid templates', function () {
     it('[CFLD-OK-1] accepts a fully-specified template', function () {
       const tpl = loadTemplate(validTemplate());
-      assert.equal(tpl.id, 'stormm-woman');
+      assert.equal(tpl.id, 'sample-template');
       assert.equal(tpl.customFields.length, 1);
       assert.equal(tpl.existingStreamRefs.length, 2);
     });
@@ -118,14 +118,14 @@ describe('[CFLD] AppTemplate loader', function () {
 
     it('[CFLD-CF-3] rejects existingStreamRefs[].streamId inside the sandbox', function () {
       const t = validTemplate();
-      t.existingStreamRefs[0].streamId = 'stormm-woman-system-out';
+      t.existingStreamRefs[0].streamId = 'sample-template-system-out';
       assert.throws(() => loadTemplate(t), /sandbox prefix/i);
     });
 
     it('[CFLD-CF-4] rejects existingStreamRefs collision with customFields streamId', function () {
       const t = validTemplate();
       t.existingStreamRefs.push({
-        streamId: 'stormm-woman-custom-flow', // same as customFields[0]
+        streamId: 'sample-template-custom-flow', // same as customFields[0]
         permissions: ['read']
       });
       assert.throws(() => loadTemplate(t), /sandbox prefix|mode-2|customFields/i);
@@ -145,7 +145,7 @@ describe('[CFLD] AppTemplate loader', function () {
 
     it('[CFLD-CF-7] rejects streamId/def.key suffix mismatch', function () {
       const t = validTemplate();
-      t.customFields[0].streamId = 'stormm-woman-custom-other';
+      t.customFields[0].streamId = 'sample-template-custom-other';
       // def.key still 'flow' → mismatch
       assert.throws(() => loadTemplate(t), /key|streamId/);
     });

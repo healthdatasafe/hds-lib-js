@@ -10,13 +10,13 @@ import {
 function tree () {
   return [
     {
-      id: 'stormm-woman',
+      id: 'sample-template',
       parentId: null,
       clientData: {
         hdsCustomField: {
           'note/txt': {
             version: 'v1',
-            templateId: 'stormm-woman',
+            templateId: 'sample-template',
             key: 'menstrual-flow',
             label: { en: 'Menstrual flow' },
             options: ['light', 'medium', 'heavy']
@@ -25,19 +25,19 @@ function tree () {
       },
       children: [
         {
-          id: 'stormm-woman-custom',
-          parentId: 'stormm-woman',
+          id: 'sample-template-custom',
+          parentId: 'sample-template',
           clientData: {},
           children: [
             {
-              id: 'stormm-woman-custom-flow',
-              parentId: 'stormm-woman-custom',
+              id: 'sample-template-custom-flow',
+              parentId: 'sample-template-custom',
               clientData: {
                 hdsCustomField: {
                   // Override label
                   'note/txt': {
                     version: 'v1',
-                    templateId: 'stormm-woman',
+                    templateId: 'sample-template',
                     key: 'menstrual-flow-detailed',
                     label: { en: 'Detailed flow' },
                     options: ['light', 'medium', 'heavy', 'flooding']
@@ -46,15 +46,15 @@ function tree () {
               }
             },
             {
-              id: 'stormm-woman-custom-optedout',
-              parentId: 'stormm-woman-custom',
+              id: 'sample-template-custom-optedout',
+              parentId: 'sample-template-custom',
               clientData: {
                 hdsCustomField: { 'note/txt': {} } // explicit opt-out
               }
             },
             {
-              id: 'stormm-woman-custom-inherited',
-              parentId: 'stormm-woman-custom'
+              id: 'sample-template-custom-inherited',
+              parentId: 'sample-template-custom'
               // No clientData — falls through to grandparent
             }
           ]
@@ -69,31 +69,31 @@ describe('[CFRS] resolveStream', function () {
     it('[CFRS-MAP-1] flattens a nested tree by id', function () {
       const map = buildStreamMap(tree());
       assert.equal(map.size, 5);
-      assert.ok(map.has('stormm-woman-custom-flow'));
+      assert.ok(map.has('sample-template-custom-flow'));
     });
   });
 
   describe('[CFRS-CF] resolveStreamCustomField', function () {
     it('[CFRS-CF-1] returns the def declared on the stream itself', function () {
-      const def = resolveStreamCustomField(tree(), 'stormm-woman-custom-flow', 'note/txt');
+      const def = resolveStreamCustomField(tree(), 'sample-template-custom-flow', 'note/txt');
       assert.ok(def);
       assert.equal(def.key, 'menstrual-flow-detailed');
       assert.deepEqual(def.options, ['light', 'medium', 'heavy', 'flooding']);
     });
 
     it('[CFRS-CF-2] inherits from grandparent when stream has no clientData', function () {
-      const def = resolveStreamCustomField(tree(), 'stormm-woman-custom-inherited', 'note/txt');
+      const def = resolveStreamCustomField(tree(), 'sample-template-custom-inherited', 'note/txt');
       assert.ok(def);
-      assert.equal(def.key, 'menstrual-flow'); // from stormm-woman root
+      assert.equal(def.key, 'menstrual-flow'); // from sample-template root
     });
 
     it('[CFRS-CF-3] empty {} on a descendant is opt-out → returns null', function () {
-      const def = resolveStreamCustomField(tree(), 'stormm-woman-custom-optedout', 'note/txt');
+      const def = resolveStreamCustomField(tree(), 'sample-template-custom-optedout', 'note/txt');
       assert.equal(def, null);
     });
 
     it('[CFRS-CF-4] returns null when no declaration up the chain', function () {
-      const def = resolveStreamCustomField(tree(), 'stormm-woman-custom-inherited', 'count/generic');
+      const def = resolveStreamCustomField(tree(), 'sample-template-custom-inherited', 'count/generic');
       assert.equal(def, null);
     });
 
@@ -103,17 +103,17 @@ describe('[CFRS] resolveStream', function () {
     });
 
     it('[CFRS-CF-6] detailed variant distinguishes opt-out from none', function () {
-      const optOut = resolveStreamCustomFieldDetailed(tree(), 'stormm-woman-custom-optedout', 'note/txt');
+      const optOut = resolveStreamCustomFieldDetailed(tree(), 'sample-template-custom-optedout', 'note/txt');
       assert.equal(optOut.kind, 'optOut');
-      const none = resolveStreamCustomFieldDetailed(tree(), 'stormm-woman-custom-inherited', 'count/generic');
+      const none = resolveStreamCustomFieldDetailed(tree(), 'sample-template-custom-inherited', 'count/generic');
       assert.equal(none.kind, 'none');
-      const def = resolveStreamCustomFieldDetailed(tree(), 'stormm-woman-custom-flow', 'note/txt');
+      const def = resolveStreamCustomFieldDetailed(tree(), 'sample-template-custom-flow', 'note/txt');
       assert.equal(def.kind, 'def');
     });
 
     it('[CFRS-CF-7] accepts a pre-built StreamMap for repeated lookups', function () {
       const map = buildStreamMap(tree());
-      const def = resolveStreamCustomField(map, 'stormm-woman-custom-flow', 'note/txt');
+      const def = resolveStreamCustomField(map, 'sample-template-custom-flow', 'note/txt');
       assert.ok(def);
       assert.equal(def.key, 'menstrual-flow-detailed');
     });
@@ -121,12 +121,12 @@ describe('[CFRS] resolveStream', function () {
 
   describe('[CFRS-VI] streamCustomFieldToVirtualItem', function () {
     it('[CFRS-VI-1] converts a note/txt with options to a select-type virtual item', function () {
-      const item = streamCustomFieldToVirtualItem(tree(), 'stormm-woman-custom-flow', 'note/txt');
+      const item = streamCustomFieldToVirtualItem(tree(), 'sample-template-custom-flow', 'note/txt');
       assert.ok(item);
-      assert.equal(item.key, 'stormm-woman::menstrual-flow-detailed');
+      assert.equal(item.key, 'sample-template::menstrual-flow-detailed');
       assert.equal(item.data.type, 'select');
       assert.equal(item.data.eventType, 'note/txt');
-      assert.equal(item.data.streamId, 'stormm-woman-custom-flow');
+      assert.equal(item.data.streamId, 'sample-template-custom-flow');
       assert.equal(item.data.options.length, 4);
       assert.equal(item.data.options[0].value, 'light');
       assert.equal(item.data.options[0].label.en, 'light');
@@ -163,12 +163,12 @@ describe('[CFRS] resolveStream', function () {
     });
 
     it('[CFRS-VI-4] returns null on opt-out', function () {
-      const item = streamCustomFieldToVirtualItem(tree(), 'stormm-woman-custom-optedout', 'note/txt');
+      const item = streamCustomFieldToVirtualItem(tree(), 'sample-template-custom-optedout', 'note/txt');
       assert.equal(item, null);
     });
 
     it('[CFRS-VI-5] returns null when no declaration in chain', function () {
-      const item = streamCustomFieldToVirtualItem(tree(), 'stormm-woman-custom-inherited', 'count/generic');
+      const item = streamCustomFieldToVirtualItem(tree(), 'sample-template-custom-inherited', 'count/generic');
       assert.equal(item, null);
     });
   });
