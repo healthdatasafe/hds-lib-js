@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-06-22
+
+### Fixed — medication/basic nested intake (B-2026-06-12-1)
+- `eventToShortText`: the `medication/basic` formatter now reads dose fields
+  from a nested `intake` sub-object (`{ name, intake: { doseValue, doseUnit, route } }`),
+  matching the corrected data-model shape, while still falling back to the
+  legacy flat layout (`{ name, doseValue, doseUnit, route }`) so previously
+  stored events keep rendering. Test EST18b added.
+
 ### Documentation
 - `AGENTS.md`: lead with the itemDef-first **provision → write → read** consumer
   rule. Derive streams from the model — `toolkit.StreamsAutoCreate.ensureExistsForItems`

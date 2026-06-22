@@ -349,13 +349,15 @@ function formatObject (content: any): string | null {
     const dl = content.drug.label;
     return typeof dl === 'string' ? dl : (localizeText(dl) || null);
   }
-  // medication/basic composite: { name, doseValue, doseUnit, route }
+  // medication/basic composite: { name, intake: { doseValue, doseUnit, route } }
+  // (legacy events stored the dose fields flat at the top level — read both).
   if (content.name && typeof content.name === 'string') {
+    const intake = content.intake ?? content;
     const parts: string[] = [];
-    if (content.doseValue) {
-      parts.push(`${content.doseValue}${content.doseUnit ? ' ' + content.doseUnit : ''}`);
+    if (intake.doseValue) {
+      parts.push(`${intake.doseValue}${intake.doseUnit ? ' ' + intake.doseUnit : ''}`);
     }
-    if (content.route) parts.push(content.route);
+    if (intake.route) parts.push(intake.route);
     return parts.length > 0 ? `${content.name} — ${parts.join(', ')}` : content.name;
   }
   if (content.value != null) return String(content.value);
