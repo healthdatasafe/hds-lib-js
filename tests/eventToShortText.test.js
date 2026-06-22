@@ -312,9 +312,19 @@ describe('[ESTX] eventToShortText', () => {
     assert.equal(eventToShortText(event), 'Negative 30%');
   });
 
-  it('[EST18] medication/basic composite shows name + dose', () => {
+  it('[EST18] medication/basic composite (legacy flat) shows name + dose', () => {
     const event = {
       content: { name: 'Ibuprofen', doseValue: 400, doseUnit: 'mg', route: 'oral' },
+      streamIds: ['medication-intake'],
+      type: 'medication/basic'
+    };
+    const result = eventToShortText(event);
+    assert.equal(result, 'Ibuprofen — 400 mg, oral');
+  });
+
+  it('[EST18b] medication/basic composite (nested intake) shows name + dose', () => {
+    const event = {
+      content: { name: 'Ibuprofen', intake: { doseValue: 400, doseUnit: 'mg', route: 'oral' } },
       streamIds: ['medication-intake'],
       type: 'medication/basic'
     };
