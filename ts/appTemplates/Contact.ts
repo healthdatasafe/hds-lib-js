@@ -185,6 +185,11 @@ export class Contact {
           this.#accessibleStreamIds.add('*');
           return; // wildcard covers everything for person contacts
         }
+        // The granted root is accessible whether or not the stream exists yet —
+        // item streams are auto-created on first entry, AFTER this cache is
+        // built. Skipping unknown roots made first-ever entries invisible
+        // until the next contact rebuild (B-2026-07-02 patient-app flow).
+        this.#accessibleStreamIds.add(p.streamId);
         const stream = streamsById[p.streamId];
         if (!stream) continue;
         const ids = getStreamIdAndChildrenIds(stream);

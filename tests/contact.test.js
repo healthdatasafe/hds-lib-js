@@ -89,6 +89,16 @@ describe('[CTCT] Contact class', function () {
       assert.equal(c.eventIsAccessible({}), false);
       assert.equal(c.eventIsAccessible({ streamIds: null }), false);
     });
+
+    it('[CTAP3] granted root is accessible even when the stream does not exist yet (B-2026-07-02)', () => {
+      // Item streams are auto-created on first entry, AFTER the cache is
+      // built — the granted root must still match or first entries are
+      // invisible until the next contact rebuild.
+      const c = new Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'body-weight', level: 'read' }] });
+      c.initStreamCache(streamsById); // 'body-weight' absent from streamsById
+      assert.equal(c.eventIsAccessible({ streamIds: ['body-weight'] }), true);
+    });
   });
 
   describe('[CTEF] eventIsFromContact', function () {

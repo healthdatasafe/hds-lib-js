@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.2.5] - 2026-07-02
+
+### Fixed
+- `appTemplates.Contact.initStreamCache` now marks granted permission roots as
+  accessible even when the stream does not exist yet on the account. Item
+  streams are auto-created on first entry — after the cache is built — so
+  first-ever entries were invisible in consumer apps (webapp chat/diary flow)
+  until the next contact rebuild.
+
 ## [1.2.4] - 2026-07-02
 
 ### Changed
