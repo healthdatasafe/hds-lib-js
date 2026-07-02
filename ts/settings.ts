@@ -1,7 +1,8 @@
 import { setPreferredLocales } from './localizeText.ts';
 
-// todo change when in production
-let serviceInfoUrl: string = 'https://demo.datasafe.dev/reg/service/info';
+// Production HDS registry. Apps targeting another platform (demo, local
+// backloop) must call setServiceInfoURL() before any HDSService/HDSModel use.
+let serviceInfoUrl: string = 'https://reg.api.datasafe.dev/service/info';
 
 /**
  * Set default service info URL
