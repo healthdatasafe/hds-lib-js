@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-07-02
+
+### Changed
+- Default `serviceInfoUrl` now points at **production** (`https://reg.api.datasafe.dev/service/info`);
+  it was the demo platform, left over from pre-production (`// todo change when in production`).
+  All shipped apps set the URL explicitly, so this only affects consumers relying on the
+  default (e.g. CLI tooling). Target demo/local explicitly via `settings.setServiceInfoURL()`
+  or `new HDSService(url)`.
+
 ## [1.2.3] - 2026-06-22
 
 ### Fixed — medication/basic nested intake (B-2026-06-12-1)
