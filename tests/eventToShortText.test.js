@@ -466,7 +466,8 @@ describe('[ESTX] eventToShortText', () => {
       event.time = Date.now() / 1000;
       const result = eventToShortText(event);
       // Creighton 10KL has a descriptive label in its method definition
-      assert.ok(result.includes('Creighton Model'), `Expected method name, got: ${result}`);
+      // (method label shortened to bare family name in data-model v1.10.3)
+      assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
       assert.ok(result.includes('10KL'), `Expected observation value, got: ${result}`);
     });
   });
@@ -521,7 +522,8 @@ describe('[ESTX] eventToShortText', () => {
       const result = eventToShortText(event);
       // billings "wetSlippery" value should have a localized label
       assert.ok(!result.includes('wetSlippery'), `Should use label not value, got: ${result}`);
-      assert.ok(result.includes('Billings (BOM) <- Mira'), `Expected target <- source, got: ${result}`);
+      // method label shortened to bare family name in data-model v1.10.3
+      assert.ok(result.includes('Billings <- Mira'), `Expected target <- source, got: ${result}`);
       assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
     });
 
@@ -565,7 +567,8 @@ describe('[ESTX] eventToShortText', () => {
       event.time = Date.now() / 1000;
       const result = eventToShortText(event);
       // creighton "10KL" has a label in its method definition
-      assert.ok(result.includes('Creighton Model'), `Expected method name, got: ${result}`);
+      // (method label shortened to bare family name in data-model v1.10.3)
+      assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
     });
   });
 });
