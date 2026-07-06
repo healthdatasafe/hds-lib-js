@@ -57,6 +57,15 @@ export function eventToShortText (event: any): string | null {
   const itemDef = model.itemsDefs.forEvent(event, false);
   const content = event.content;
 
+  // Blood pressure has a fixed, self-describing shape ({systolic, diastolic, rate}).
+  // Format it eventType-driven so it reads "120/80 ♥72" regardless of whether the
+  // itemDef is loaded (its composite fields are numbers, which the generic
+  // composite/object formatters would otherwise reduce to a single bare value).
+  if (event.type === 'blood-pressure/mmhg-bpm' && content != null && typeof content === 'object') {
+    const bp = formatBloodPressure(content);
+    if (bp) return bp;
+  }
+
   if (itemDef) {
     // For checkbox/date items, content may be null — the event time IS the data
     if (content == null && itemDef.data.type === 'checkbox') {
@@ -255,6 +264,19 @@ function formatComposite (content: any, itemDef: any): string | null {
     parts.push(`${fieldLabel}: ${valueText}`);
   }
   return parts.length > 0 ? parts.join(' · ') : formatObject(content);
+}
+
+/**
+ * Blood pressure (`blood-pressure/mmhg-bpm`) → "120/80", or "120/80 ♥72" when a
+ * pulse (`rate`) is present. eventType-driven: the `{systolic, diastolic, rate}`
+ * shape is fixed, so it renders correctly even without the itemDef. Returns null
+ * when systolic/diastolic are absent so the caller falls back to normal handling.
+ */
+function formatBloodPressure (content: any): string | null {
+  const { systolic, diastolic, rate } = content;
+  if (systolic == null || diastolic == null) return null;
+  const base = `${systolic}/${diastolic}`;
+  return (rate != null) ? `${base} ♥${rate}` : base;
 }
 
 function formatSelect (event: any, content: any, itemDef: any): string {

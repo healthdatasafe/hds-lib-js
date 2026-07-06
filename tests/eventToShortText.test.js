@@ -372,6 +372,26 @@ describe('[ESTX] eventToShortText', () => {
     assert.equal(result, 'Height: Medium · Firmness: Medium');
   });
 
+  // ─── Blood pressure composite (Plan 77 / #19 §4) ─────────────────
+
+  it('[EST23] blood pressure with pulse → "120/80 ♥72"', () => {
+    const event = {
+      content: { systolic: 120, diastolic: 80, rate: 72 },
+      streamIds: ['body-blood-pressure'],
+      type: 'blood-pressure/mmhg-bpm'
+    };
+    assert.equal(eventToShortText(event), '120/80 ♥72');
+  });
+
+  it('[EST23b] blood pressure without pulse → "120/80"', () => {
+    const event = {
+      content: { systolic: 120, diastolic: 80 },
+      streamIds: ['body-blood-pressure'],
+      type: 'blood-pressure/mmhg-bpm'
+    };
+    assert.equal(eventToShortText(event), '120/80');
+  });
+
   // ─── Convertible: mood ───────────────────────────────────────────
 
   describe('[EST20] convertible mood', () => {

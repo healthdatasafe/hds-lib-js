@@ -2,7 +2,15 @@
 
 ## [Unreleased]
 
-## [1.2.5] - 2026-07-02
+## [1.2.6] - 2026-07-06
+
+### Fixed
+- `eventToShortText`: blood-pressure events (`blood-pressure/mmhg-bpm`) now render as
+  `120/80` (or `120/80 ♥72` when a pulse is present) instead of a single bare number.
+  The composite's fields are numeric, so the generic composite/object formatters had
+  reduced the reading to its first value. Formatting is eventType-driven, so it works
+  with or without the `body-blood-pressure` itemDef loaded (data-model#19 §4 / Plan 77).
+  Tests: `[EST23]`, `[EST23b]`.
 
 ### Fixed
 - `appTemplates.Contact.initStreamCache` now marks granted permission roots as
