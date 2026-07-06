@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.2.7] - 2026-07-06
+
+### Changed
+- Bump `pryv`, `@pryv/monitor`, `@pryv/socket.io` to `^3.8.0` (auth-completion now accepts
+  the lowercase `pryvKey`/`pryvPoll` params alongside the legacy form; `@pryv/socket.io` +
+  `utils` TypeScript declaration fixes). `@pryv/cmc` unchanged (`1.1.1`, separate track).
+
 ## [1.2.6] - 2026-07-06
 
 ### Fixed
