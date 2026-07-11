@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.2.8] - 2026-07-11
+
+### Changed
+- Bump `@pryv/cmc` `1.1.1 → 3.9.0` (aligns with the version the live account app already
+  runs; `cmc` is re-exported unchanged from `patchedPryv`). 3.9.0 renamed the collector-side
+  `requestScopeUpdate(conn, …)` to `proposeScopeUpdate` and reused the old name for a browser
+  hand-off helper; hds-lib itself calls neither. `accept/refuseScopeUpdate` and
+  `accept/refuseInvite` signatures are unchanged. `tsc` + full test suite (558) + webpack all green.
+
 ## [1.2.7] - 2026-07-06
 
 ### Changed
