@@ -11,8 +11,8 @@ Generic toolkit for server and web applications — [Health Data Safe](https://g
 
 1. **HDS Data Model** — Load and query the [HDS data model](https://github.com/healthdatasafe/data-model): items, streams, authorizations, event types, datasources
 2. **App Templates** — Consent-based data collection and sharing (Manager, Collector, Invite, Client flows). Includes the **AppTemplate JSON loader** and **custom-field declarations** (template-private streams via `clientData.hdsCustomField`). See [`ts/appTemplates/CUSTOM-FIELDS-AND-SYSTEM.md`](./ts/appTemplates/CUSTOM-FIELDS-AND-SYSTEM.md) for the design reference. (System messaging now flows through the CMC per-collector channel — see `open-pryv.io/components/cmc/IMPLEMENTERS-GUIDE.md`.)
-3. **HDSSettings** — Per-app user settings (locale, theme, timezone, date format, unit system)
-4. **HDSProfile** — Account-level profile (display name, avatar, date of birth, sex, country)
+3. **HDSSettings** — **Per-app** settings, stored on the app's own `baseStream`: `theme`, `displayName`, and the dynamic `preferred-display-*` / `preferred-input-*` keys. Each app gets its own private copy — these do **not** interoperate between apps, by design.
+4. **HDSProfile** — **Account-level**, shared across every app and connection: identity (display name, avatar, name, date of birth, sex, country) **and account preferences** (`preferredLocales`, `timezone`, `dateFormat`, `unitSystem`). Preferences the whole ecosystem should agree on belong here, not in HDSSettings. (`theme` is the deliberate exception — it stays per-app.)
 5. **Pryv extensions** — Extends [Pryv JS lib](https://github.com/pryv/lib-js) with Socket.io and Monitor support
 6. **Toolkit** — Stream auto-creation, reminders, duration parsing, event formatting (`eventToShortText` handles `{drug}` / `{regimen}` / `{procedure}` payload shapes uniformly, with optional `×count`, procedure findings, and truncated notes)
 

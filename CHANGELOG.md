@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-15
+
+### Added
+- **`HDSProfile` now carries account-level preferences** — `preferredLocales`, `timezone`,
+  `dateFormat`, `unitSystem` (plan 78 §C 7.1b). They live on the account's own
+  `profile-preferences` stream and reuse the existing `settings/*` event types, so **no
+  data-model change or redeploy is required**.
+  - **Why:** `HDSSettings` binds to an app's `baseStream`, so every app gets a private copy
+    (hds-webapp → `applications/app-client-dr-form`, doctor-dashboard → `applications/app-dr-hds`)
+    and the values never interoperated. Preferences the whole ecosystem should agree on now live
+    at account level, where the account app can own them.
+  - `theme` deliberately **stays** on `HDSSettings` — it is legitimately per-app.
+  - These 4 fields default to a usable value (`['en']`, `Europe/Zurich`, `DD.MM.YYYY`, `metric`)
+    rather than `null`, with the same browser inference as `HDSSettings` (`navigator.language`,
+    `Intl` timezone), so callers never null-guard formatting. `HDSProfile.set('preferredLocales', …)`
+    applies the `setPreferredLocales` localizer side effect, as `HDSSettings` does.
+  - `readFromConnection` deliberately applies **no** browser inference — it reads someone else's
+    profile, where inferring locale/timezone from the local browser would be wrong.
+
+### Fixed
+- `readFromConnection` used a `value === null` test to decide "field not yet seen", which silently
+  skipped any field with a non-null default. Now tracked with an explicit `Set`.
+
+### Note for consumers
+- `HDSSettings` still exposes these 4 keys; nothing is removed yet. Migrating hds-webapp and
+  doctor-dashboard to read them from `HDSProfile` — and deciding the fate of values already written
+  to the per-app streams — is tracked in plan 78 §C 7.1b.
+
 ## [1.2.8] - 2026-07-11
 
 ### Changed

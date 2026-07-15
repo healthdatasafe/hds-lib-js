@@ -14,6 +14,22 @@ describe('[PRFL] PROFILE_FIELDS', () => {
     assert.strictEqual(PROFILE_FIELDS.sex.eventType, 'attributes/biological-sex');
     assert.strictEqual(PROFILE_FIELDS.country.eventType, 'contact/country');
   });
+
+  it('[PRFL2] account preferences share the profile-preferences stream and reuse settings/* types', () => {
+    // Reusing HDSSettings' event types means no new data-model types are required;
+    // the account-level streamId is what makes them interoperable across apps.
+    assert.strictEqual(PROFILE_FIELDS.preferredLocales.eventType, 'settings/preferred-locales');
+    assert.strictEqual(PROFILE_FIELDS.timezone.eventType, 'settings/timezone');
+    assert.strictEqual(PROFILE_FIELDS.dateFormat.eventType, 'settings/date-format');
+    assert.strictEqual(PROFILE_FIELDS.unitSystem.eventType, 'settings/unit-system');
+    for (const key of ['preferredLocales', 'timezone', 'dateFormat', 'unitSystem']) {
+      assert.strictEqual(PROFILE_FIELDS[key].streamId, 'profile-preferences', `${key} streamId`);
+    }
+  });
+
+  it('[PRFL3] theme is NOT a profile field — it stays per-app on HDSSettings', () => {
+    assert.strictEqual(PROFILE_FIELDS.theme, undefined);
+  });
 });
 
 describe('[HDSP] HDSProfile (dev API)', function () {
@@ -59,8 +75,20 @@ describe('[HDSP] HDSProfile (dev API)', function () {
 
     it('[HDSP-U3] getAll returns all defaults', () => {
       const all = HDSProfile.getAll();
+      // Identity fields default to null; account preferences always resolve to a
+      // usable value so callers never have to null-guard formatting (plan 78 §C 7.1b).
+      const PREFERENCE_DEFAULTS = {
+        preferredLocales: ['en'],
+        timezone: 'Europe/Zurich',
+        dateFormat: 'DD.MM.YYYY',
+        unitSystem: 'metric',
+      };
       for (const key of Object.keys(PROFILE_FIELDS)) {
-        assert.strictEqual(all[key], null, `${key} should be null`);
+        if (key in PREFERENCE_DEFAULTS) {
+          assert.deepStrictEqual(all[key], PREFERENCE_DEFAULTS[key], `${key} should hold its default`);
+        } else {
+          assert.strictEqual(all[key], null, `${key} should be null`);
+        }
       }
     });
 
@@ -147,6 +175,33 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       assert.strictEqual(HDSProfile.get('dateOfBirth'), '1985-03-15');
       assert.strictEqual(HDSProfile.get('sex'), 'male');
       assert.strictEqual(HDSProfile.get('country'), 'Switzerland');
+    });
+
+    it('[HDSP-S6] set account preferences round-trips (auto-creates profile-preferences)', async () => {
+      await HDSProfile.hookToConnection(connection);
+
+      // profile-preferences is deliberately NOT pre-created in `before` — ensureStream
+      // must create it on first write.
+      await HDSProfile.set('preferredLocales', ['fr', 'en']);
+      await HDSProfile.set('timezone', 'America/New_York');
+      await HDSProfile.set('dateFormat', 'YYYY-MM-DD');
+      await HDSProfile.set('unitSystem', 'imperial');
+
+      await HDSProfile.reload();
+      assert.deepStrictEqual(HDSProfile.get('preferredLocales'), ['fr', 'en']);
+      assert.strictEqual(HDSProfile.get('timezone'), 'America/New_York');
+      assert.strictEqual(HDSProfile.get('dateFormat'), 'YYYY-MM-DD');
+      assert.strictEqual(HDSProfile.get('unitSystem'), 'imperial');
+    });
+
+    it('[HDSP-S7] stored preferences survive a re-hook (interop across apps)', async () => {
+      // The point of 7.1b: a second app hooking the same account reads what the
+      // account app wrote, rather than its own per-app copy.
+      HDSProfile.unhook();
+      assert.deepStrictEqual(HDSProfile.get('preferredLocales'), ['en']); // back to default
+      await HDSProfile.hookToConnection(connection);
+      assert.strictEqual(HDSProfile.get('dateFormat'), 'YYYY-MM-DD');
+      assert.strictEqual(HDSProfile.get('unitSystem'), 'imperial');
     });
 
     it('[HDSP-S5] getAll returns all set values', async () => {

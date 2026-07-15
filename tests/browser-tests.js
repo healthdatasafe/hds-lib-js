@@ -2,6 +2,7 @@
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
+import './accountPreferences.test.js';
 import './applicationClass.test.js';
 import './apptemplatesRequest.test.js';
 import './conversions.test.js';

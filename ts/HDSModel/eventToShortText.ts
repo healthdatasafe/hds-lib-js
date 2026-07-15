@@ -1,6 +1,9 @@
 import { localizeText } from '../localizeText.ts';
 import { getModel } from './HDSModelInitAndSingleton.ts';
+// HDSSettings is still the right source for per-app settings (the dynamic
+// `preferred-display-*` keys). Account-level preferences go through the resolver.
 import HDSSettings from '../settings/HDSSettings.ts';
+import { resolveAccountPreference, hasAccountPreference } from '../settings/accountPreferences.ts';
 import type { DateFormat } from '../settings/HDSSettings.ts';
 
 const DATE_SEPARATORS: Record<DateFormat, (d: Date) => string> = {
@@ -14,12 +17,12 @@ function pad (n: number): string { return n < 10 ? '0' + n : String(n); }
 
 /**
  * Format a Unix timestamp (seconds) as a date string.
- * Uses HDSSettings dateFormat + timezone when available, otherwise ISO date.
+ * Uses the resolved account/app dateFormat when available, otherwise ISO date.
  */
 export function formatEventDate (timeSec: number): string {
   const d = new Date(timeSec * 1000);
-  if (HDSSettings.isHooked) {
-    const fmt = HDSSettings.get('dateFormat');
+  if (hasAccountPreference('dateFormat')) {
+    const fmt = resolveAccountPreference('dateFormat');
     const formatter = DATE_SEPARATORS[fmt];
     if (formatter) return formatter(d);
   }
@@ -171,8 +174,8 @@ function formatNumber (eventType: string, content: number, model: any): string {
   if (eventType === 'test-result/scale') {
     return formatTestResult(content);
   }
-  if (HDSSettings.isHooked) {
-    const system = HDSSettings.get('unitSystem');
+  if (hasAccountPreference('unitSystem')) {
+    const system = resolveAccountPreference('unitSystem');
     const result = model.conversions.convert(eventType, content, system);
     if (result) {
       const symbol = getSymbol(result.targetEventType, model);

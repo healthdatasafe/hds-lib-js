@@ -1,6 +1,7 @@
 import { HDSModel } from './HDSModel.ts';
 import { getModel } from './HDSModelInitAndSingleton.ts';
 import HDSSettings from '../settings/HDSSettings.ts';
+import { resolveAccountPreference, hasAccountPreference } from '../settings/accountPreferences.ts';
 import { localizeText } from '../localizeText.ts';
 import type { UnitSystem } from '../settings/HDSSettings.ts';
 
@@ -78,9 +79,9 @@ export class HDSModelPreferred {
         if (match) selectedEventType = perItemSetting;
       }
 
-      // 2. Fallback to unitSystem
-      if (!selectedEventType && HDSSettings.isHooked) {
-        const system: UnitSystem = HDSSettings.get('unitSystem');
+      // 2. Fallback to unitSystem (account-level when set, else the app's own)
+      if (!selectedEventType && hasAccountPreference('unitSystem')) {
+        const system: UnitSystem = resolveAccountPreference('unitSystem');
         selectedEventType = this.#resolveVariationFromUnitSystem(data.variations.eventType, system);
       }
 

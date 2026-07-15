@@ -1,7 +1,9 @@
 import { assert } from './test-utils/deps-node.js';
-import { eventToShortText } from '../ts/index.ts';
+// Import via the package entry point, like every other test file: a default import
+// straight from the .ts resolves to the module namespace under webpack (no .unhook),
+// which failed the browser suite while Node passed.
+import { eventToShortText, HDSSettings } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
-import HDSSettings from '../ts/settings/HDSSettings.ts';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 

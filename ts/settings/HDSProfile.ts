@@ -1,11 +1,21 @@
 import { pryv } from '../patchedPryv.ts';
 import { getAttachmentUrl } from '../toolkit/getAttachmentUrl.ts';
+import { setPreferredLocales } from '../localizeText.ts';
+import type { DateFormat, UnitSystem } from './HDSSettings.ts';
 
 type Connection = InstanceType<typeof pryv.Connection>;
 
 /**
  * Profile field definitions — each maps to a Pryv event in the profile/ stream tree.
  * These are account-level, shared across all connections (unlike HDSSettings which is per-app).
+ *
+ * Two groups:
+ * - **Identity** (displayName…country) — who the account holder is.
+ * - **Account preferences** (preferredLocales…unitSystem) — how they want data presented,
+ *   shared across every HDS app. They reuse the `settings/*` event types of the per-app
+ *   HDSSettings (so no new data-model types are needed) but live on the account-level
+ *   `profile-preferences` stream, which is what makes them interoperable. `theme` is
+ *   deliberately NOT here — it stays per-app on HDSSettings.
  */
 export const PROFILE_FIELDS = {
   displayName: { streamId: 'profile-display-name', eventType: 'contact/display-name' },
@@ -15,6 +25,10 @@ export const PROFILE_FIELDS = {
   dateOfBirth: { streamId: 'profile-date-of-birth', eventType: 'date/iso-8601' },
   sex: { streamId: 'profile-sex', eventType: 'attributes/biological-sex' },
   country: { streamId: 'profile-address', eventType: 'contact/country' },
+  preferredLocales: { streamId: 'profile-preferences', eventType: 'settings/preferred-locales' },
+  timezone: { streamId: 'profile-preferences', eventType: 'settings/timezone' },
+  dateFormat: { streamId: 'profile-preferences', eventType: 'settings/date-format' },
+  unitSystem: { streamId: 'profile-preferences', eventType: 'settings/unit-system' },
 } as const;
 
 export type ProfileKey = keyof typeof PROFILE_FIELDS;
@@ -27,6 +41,14 @@ export interface ProfileValues {
   dateOfBirth: string | null;
   sex: string | null;
   country: string | null;
+  /**
+   * Account preferences always resolve to a usable value — never null — so callers
+   * can format dates/units without null-guarding. Mirrors HDSSettings' defaults.
+   */
+  preferredLocales: string[];
+  timezone: string;
+  dateFormat: DateFormat;
+  unitSystem: UnitSystem;
 }
 
 const DEFAULTS: ProfileValues = {
@@ -37,7 +59,39 @@ const DEFAULTS: ProfileValues = {
   dateOfBirth: null,
   sex: null,
   country: null,
+  preferredLocales: ['en'],
+  timezone: 'Europe/Zurich',
+  dateFormat: 'DD.MM.YYYY',
+  unitSystem: 'metric',
 };
+
+/**
+ * Browser-inferred defaults for the preferences that can be detected. Applied over
+ * DEFAULTS but under stored values. Same inference as HDSSettings.
+ */
+function browserDefaults (): Partial<ProfileValues> {
+  if (typeof navigator === 'undefined') return {};
+  const result: Partial<ProfileValues> = {};
+  try {
+    const lang = navigator.language?.split('-')[0];
+    if (lang) result.preferredLocales = [lang];
+  } catch { /* ignore */ }
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) result.timezone = tz;
+  } catch { /* ignore */ }
+  return result;
+}
+
+/**
+ * Keep the localizer in step with `preferredLocales` — the profile is now the
+ * account-level source of truth for locale.
+ */
+function applyLocaleSideEffect (values: ProfileValues): void {
+  try {
+    setPreferredLocales(values.preferredLocales);
+  } catch { /* locale may not be supported — ignore */ }
+}
 
 /** @internal */
 let _connection: Connection | null = null;
@@ -95,6 +149,8 @@ function resolveAvatarUrl (event: any, conn: Connection | null = _connection): s
  * Returns null values for fields the connection cannot access.
  */
 async function readProfileFromConnection (conn: Connection): Promise<ProfileValues> {
+  // No browserDefaults() here: this reads *someone else's* profile, and inferring a
+  // contact's locale/timezone from the local browser would be plainly wrong.
   const values: ProfileValues = { ...DEFAULTS };
   let events: any[];
   try {
@@ -108,9 +164,13 @@ async function readProfileFromConnection (conn: Connection): Promise<ProfileValu
     return values;
   }
 
+  // First event per field wins. Tracked with a Set rather than a `=== null` test:
+  // the preference fields have non-null defaults, so a null-check would never match.
+  const seen = new Set<ProfileKey>();
   for (const event of events) {
     const key = matchField(event);
-    if (key && (values as any)[key] === null) {
+    if (key && !seen.has(key)) {
+      seen.add(key);
       if (key === 'avatar') {
         values.avatar = resolveAvatarUrl(event, conn);
       } else {
@@ -161,7 +221,8 @@ async function ensureStream (streamId: string): Promise<void> {
 async function load (): Promise<void> {
   if (!_connection) return;
 
-  _values = { ...DEFAULTS };
+  // Precedence: stored values > browser inference > DEFAULTS.
+  _values = { ...DEFAULTS, ...browserDefaults() };
   _cache = {};
 
   let events: any[];
@@ -173,6 +234,7 @@ async function load (): Promise<void> {
     );
   } catch {
     // Connection may not have access to profile/ streams (e.g. app-scoped permission)
+    applyLocaleSideEffect(_values);
     _hooked = true;
     return;
   }
@@ -189,18 +251,28 @@ async function load (): Promise<void> {
     }
   }
 
+  applyLocaleSideEffect(_values);
   _hooked = true;
 }
 
 /**
- * HDSProfile — singleton for account-level profile data stored in profile/ streams.
+ * HDSProfile — singleton for account-level data stored in profile/ streams.
  *
- * Unlike HDSSettings (per-app preferences), profile data is shared across all connections.
+ * Unlike HDSSettings (per-app), profile data is shared across all connections. It holds
+ * both **identity** (displayName, avatar, name, …) and, since plan 78 §C 7.1b, the
+ * **account preferences** every HDS app should agree on:
+ * `preferredLocales`, `timezone`, `dateFormat`, `unitSystem`.
+ *
+ * Why here and not HDSSettings: HDSSettings binds to an app's baseStream, so each app gets
+ * its own private copy (hds-webapp → `applications/app-client-dr-form`, doctor-dashboard →
+ * `applications/app-dr-hds`) and the values never interoperate. Account-level preferences
+ * must outlive any single app, so they live on the account's own `profile-preferences`
+ * stream. `theme` stays on HDSSettings — it is legitimately per-app.
  *
  * Usage:
  *   await HDSProfile.hookToConnection(connection);
  *   const name = HDSProfile.get('displayName');
- *   await HDSProfile.set('displayName', 'Alice');
+ *   await HDSProfile.set('dateFormat', 'YYYY-MM-DD');
  *
  * Fallback chain for displayName:
  *   HDSSettings.get('displayName') ?? HDSProfile.get('displayName') ?? null
@@ -243,6 +315,19 @@ const HDSProfile = {
   },
 
   /**
+   * Whether a field is actually stored on the server, as opposed to resolving to a
+   * default or browser inference.
+   *
+   * Needed because the account preferences never read as `null`: a caller choosing
+   * between an account-level value and a legacy per-app HDSSettings one must not let
+   * an unset profile default mask a value the user really did set. See
+   * `resolveAccountPreference`.
+   */
+  isStored (key: ProfileKey): boolean {
+    return _cache[key] !== undefined;
+  },
+
+  /**
    * Set a profile value — persists to HDS server and updates cache.
    */
   async set<K extends ProfileKey> (key: K, value: ProfileValues[K]): Promise<void> {
@@ -271,6 +356,7 @@ const HDSProfile = {
     }
 
     _values[key] = value;
+    if (key === 'preferredLocales') applyLocaleSideEffect(_values);
   },
 
   /**
@@ -338,6 +424,20 @@ const HDSProfile = {
    */
   async reload (): Promise<void> {
     await load();
+  },
+
+  /**
+   * @internal Test-only: mark as hooked and inject stored values without a server.
+   * Values passed here read as *stored* (`isStored` true), matching a loaded event;
+   * omitted fields stay at their default and read as not stored.
+   */
+  _testHook (stored: Partial<ProfileValues> = {}): void {
+    _values = { ...DEFAULTS, ...stored };
+    _cache = {};
+    for (const key of Object.keys(stored) as ProfileKey[]) {
+      _cache[key] = { id: `test-${key}`, content: stored[key] };
+    }
+    _hooked = true;
   },
 
   /**

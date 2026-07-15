@@ -13,6 +13,7 @@ import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText.t
 import { MonitorScope } from './MonitorScope.ts';
 import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings.ts';
 import { HDSProfile, PROFILE_FIELDS } from './settings/HDSProfile.ts';
+import { resolveAccountPreference, hasAccountPreference } from './settings/accountPreferences.ts';
 import { HDSModelConversions } from './HDSModel/HDSModel-Conversions.ts';
 import { HDSModelConverters } from './HDSModel/HDSModel-Converters.ts';
 import { HDSModelPreferred, getPreferredInput, getPreferredDisplay } from './HDSModel/HDSModel-Preferred.ts';
@@ -28,6 +29,7 @@ export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
 export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from './settings/HDSSettings.ts';
 export type { ProfileKey, ProfileValues } from './settings/HDSProfile.ts';
+export type { AccountPreferenceKey } from './settings/accountPreferences.ts';
 export type { ConverterPack, ConversionResult as ConverterConversionResult, ObservationVector, SourceBlock } from './converters/types.ts';
 export type { PreferredConfig } from './HDSModel/HDSModel-Preferred.ts';
 export type { AppStreamDef } from './HDSModel/HDSModel-AppStreams.ts';
@@ -36,7 +38,7 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants };
+export { pryv, cmc, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants };
 export type { FormSpec, FormSpecRecord } from './cmc/formSpec.ts';
 
 // Plan 45 — top-level type re-exports so consumers can `import type { CustomFieldDeclaration } from 'hds-lib'`.
@@ -84,6 +86,8 @@ const HDSLib = {
   SETTING_TYPES,
   HDSProfile,
   PROFILE_FIELDS,
+  resolveAccountPreference,
+  hasAccountPreference,
   HDSModelConversions,
   HDSModelConverters,
   EuclidianDistanceEngine,
