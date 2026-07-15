@@ -116,6 +116,21 @@ export class HDSModelItemsDefs {
 /**
  * Add key to model items and
  * load modeldata item into modelDataByStreamIdEventTypes for fast search
+ *
+ * `streamId:eventType` is the storage identity, and this index is what `forEvent`
+ * resolves through — so two *active* items may never share a pair.
+ *
+ * A **deprecated** item may, and that is what makes an item-key rename non-breaking:
+ * the old key stays as a deprecated alias resolvable via `forKey` (so consumers pinned
+ * to it keep working and migrate on their own schedule), while the active item owns the
+ * pair here, so `forEvent` stays unambiguous. The alias is faithful — same streamId,
+ * same eventType — so it produces identical events.
+ *
+ * This mirrors the loader in `data-model` (`src/items.js`, addItem). The two indexes are
+ * separate implementations of the same rule and MUST be kept in step: relaxing one is
+ * not relaxing the other. That drift is exactly what caused site-agents#3 — data-model
+ * published aliases its own loader accepted, and every hds-lib consumer threw on first
+ * `itemsDefs` access.
  */
 function loadModelDataByStreamIdEventTypes (model: any, map: { [key: string]: any }): void {
   for (const item of Object.values(model)) {
@@ -129,9 +144,16 @@ function loadModelDataByStreamIdEventTypes (model: any, map: { [key: string]: an
 
     for (const eventType of eventTypes) {
       const keyStreamIdEventType = (item as any).streamId + ':' + eventType;
-      if (map[keyStreamIdEventType]) {
-        // should be tested with a faulty model
-        throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+      const existing = map[keyStreamIdEventType];
+      if (existing) {
+        if (!existing.deprecated && !(item as any).deprecated) {
+          throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+        }
+        if (existing.deprecated && (item as any).deprecated) {
+          throw new Error(`Two deprecated items share streamId + eventType "${keyStreamIdEventType}" — forEvent would be ambiguous. Keep at most one deprecated alias per pair: ${JSON.stringify(item)}`);
+        }
+        // Exactly one is active — it owns the index regardless of load order.
+        if ((item as any).deprecated) continue;
       }
       map[keyStreamIdEventType] = item;
     }

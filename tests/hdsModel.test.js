@@ -214,7 +214,11 @@ describe('[MODX] Model', () => {
       const ds = dsModel.datasources.forKey('medication');
       assert.ok(ds);
       assert.equal(ds.key, 'medication');
-      assert.equal(ds.endpoint, 'https://demo-datasets.datasafe.dev/medication');
+      // `datasets://medication` resolves against service-info `assets.datasets`, so the
+      // host depends on which registry is default — it moved demo → prod in 1.2.4 and
+      // this assertion kept its hardcoded demo host. Assert the resolution *rule*
+      // instead, so the test stops re-breaking whenever deployment config moves.
+      assert.equal(ds.endpoint, dsModel.assets.datasets + 'medication');
       assert.equal(ds.queryParam, 'search');
       assert.equal(ds.minQueryLength, 3);
       assert.equal(ds.resultKey, 'medications');

@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-15
+
+### Fixed
+- **`model.itemsDefs` no longer throws on a model that renames an item key**
+  ([site-agents#3](https://github.com/healthdatasafe/site-agents/issues/3)). The
+  `streamId:eventType` index rejected *any* duplicate pair, including a **deprecated
+  rename-alias** and its active replacement — which is exactly the shape `data-model`
+  publishes to keep a key rename non-breaking. When `data-model` 2.0.0 shipped four such
+  aliases, `initHDSModel()` still resolved but the *first* access to `itemsDefs` threw
+  `Duplicate streamId + eventType "…"`, taking `forKey()` and
+  `streams.getNecessaryListForItems()` with it. Affected 1.2.8 and 1.3.0, node and browser.
+  - **Now:** the **active** item owns the pair regardless of load order; the deprecated
+    alias stays resolvable via `forKey()` and hidden from `getAllActive()`, and `forEvent()`
+    always returns the active item. This matches the loader in `data-model` (`src/items.js`).
+  - **Still an error**, because both are genuinely ambiguous: two *active* items on one
+    pair, and two *deprecated* items on one pair with no active owner.
+  - **No consumer change needed** — upgrading is enough. Apps pinning the old key
+    (`forKey('fertility-hormone-fsh')`) keep working; that is what the alias is for.
+- **`[MODSB]`** asserted a hardcoded `demo-datasets.datasafe.dev` endpoint while the default
+  registry moved to production in 1.2.4, so it resolved `datasets.datasafe.dev` and failed.
+  It now asserts the resolution *rule* against service-info `assets.datasets`, so it no
+  longer breaks when deployment config moves. Test-only.
+
 ## [1.3.0] - 2026-07-15
 
 ### Added
