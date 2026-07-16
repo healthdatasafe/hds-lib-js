@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-07-16
+
+### Changed
+- **`loadModelDataByStreamIdEventTypes` now validates an item's eventType shape**, matching
+  `data-model`'s own loader (`src/items.js`). An item carries EITHER a single `eventType` OR a
+  `variations.eventType` set, never both. The index checked `eventType` first, which **silently ignored
+  `variations`** when both were present and threw a bare `TypeError` when an item had neither. It now checks
+  `variations` first, **throws a clear error on the mixed shape** (`… mixes eventType and variations.eventType`)
+  and on the empty shape (`… has neither eventType nor variations.eventType`).
+  - **No effect on a valid published pack** — every item already has exactly one shape (schema-enforced), so
+    this only hardens against malformed or `HDSModel-Overload`-injected items. Surfaced by the 2026-07-16
+    review of the 1.3.1 fix. Consumers need not redeploy for this; they pick it up on their next natural bump.
+  - Adds `[ALIC]`/`[ALID]` test coverage, including the real `fertility-hormone-lh` differing-eventType
+    deprecation case that previously had only indirect (live-pack) coverage.
+
 ## [1.3.1] - 2026-07-15
 
 ### Fixed

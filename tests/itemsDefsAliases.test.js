@@ -115,4 +115,79 @@ describe('[ALIX] itemsDefs streamId:eventType index', () => {
       assert.throws(() => load(data).itemsDefs, /Two deprecated items share/);
     });
   });
+
+  describe('[ALIC] a deprecated item on a DIFFERENT eventType (the real LH shape)', () => {
+    // fertility-hormone-lh is deprecated on concentration/mg-l while the active
+    // body-urine-hormones-lh uses concentration/iu-l — they never collide (own map
+    // slots), and legacy mg-l events must keep resolving to the deprecated item.
+    // This is the other half of the deprecation contract, previously only covered
+    // indirectly via the live pack. (Review 2026-07-16, finding 4.)
+    function makeModelWithLh () {
+      return {
+        items: {
+          'body-urine-hormones-lh': {
+            version: 'v2',
+            label: { en: 'LH (urine)' },
+            description: { en: 'Luteinising hormone in your urine.' },
+            streamId: 'body-urine-hormones-lh',
+            eventType: 'concentration/iu-l',
+            type: 'number',
+            repeatable: 'any'
+          },
+          'fertility-hormone-lh': {
+            version: 'v1',
+            deprecated: true,
+            label: { en: 'LH (urine, legacy mg/L)' },
+            description: { en: 'Historical LH on the old unit.' },
+            streamId: 'body-urine-hormones-lh',
+            eventType: 'concentration/mg-l',
+            type: 'number',
+            repeatable: 'any'
+          }
+        },
+        streams: [{ id: 'body-urine-hormones-lh', name: 'LH' }]
+      };
+    }
+
+    it('[ALIC1] both items load; each pair keeps its own slot', () => {
+      const model = load(makeModelWithLh());
+      assert.equal(model.itemsDefs.getAll().length, 2);
+    });
+
+    it('[ALIC2] a legacy mg-l event resolves to the deprecated item', () => {
+      const model = load(makeModelWithLh());
+      const itemDef = model.itemsDefs.forEvent({
+        streamIds: ['body-urine-hormones-lh'],
+        type: 'concentration/mg-l'
+      });
+      assert.equal(itemDef.key, 'fertility-hormone-lh');
+      assert.ok(itemDef.isDeprecated);
+    });
+
+    it('[ALIC3] a new iu-l event resolves to the active item', () => {
+      const model = load(makeModelWithLh());
+      const itemDef = model.itemsDefs.forEvent({
+        streamIds: ['body-urine-hormones-lh'],
+        type: 'concentration/iu-l'
+      });
+      assert.equal(itemDef.key, 'body-urine-hormones-lh');
+      assert.ok(!itemDef.isDeprecated);
+    });
+  });
+
+  describe('[ALID] malformed eventType shape is rejected (mirrors data-model)', () => {
+    it('[ALID1] an item mixing eventType and variations.eventType throws', () => {
+      const data = makeModelWithAlias();
+      data.items['body-urine-hormones-fsh'].variations = {
+        eventType: { options: [{ value: 'concentration/iu-l' }] }
+      };
+      assert.throws(() => load(data).itemsDefs, /mixes eventType and variations/);
+    });
+
+    it('[ALID2] an item with neither eventType nor variations throws (not a TypeError)', () => {
+      const data = makeModelWithAlias();
+      delete data.items['body-urine-hormones-fsh'].eventType;
+      assert.throws(() => load(data).itemsDefs, /neither eventType nor variations/);
+    });
+  });
 });

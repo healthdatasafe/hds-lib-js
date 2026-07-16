@@ -134,12 +134,22 @@ export class HDSModelItemsDefs {
  */
 function loadModelDataByStreamIdEventTypes (model: any, map: { [key: string]: any }): void {
   for (const item of Object.values(model)) {
+    const it = item as any;
     const eventTypes: string[] = [];
-    if ((item as any).eventType) {
-      eventTypes.push((item as any).eventType);
+    // Mirror data-model's collection (src/items.js): an item carries EITHER a single
+    // `eventType` OR a `variations.eventType` set (e.g. body-weight kg/lb), never both.
+    // Check variations first and reject the mixed shape — checking `eventType` first
+    // (as this did) silently ignored variations when both were present, and dereferencing
+    // `.variations.eventType` in the else branch threw a TypeError when an item had neither.
+    if (it.variations?.eventType) {
+      eventTypes.push(...it.variations.eventType.options.map((o: any) => o.value));
+      if (it.eventType) {
+        throw new Error(`Item "${it.key ?? it.streamId}" mixes eventType and variations.eventType: ${JSON.stringify(it)}`);
+      }
+    } else if (it.eventType) {
+      eventTypes.push(it.eventType);
     } else {
-      const types = (item as any).variations.eventType.options.map((o: any) => o.value);
-      eventTypes.push(...types);
+      throw new Error(`Item "${it.key ?? it.streamId}" has neither eventType nor variations.eventType: ${JSON.stringify(it)}`);
     }
 
     for (const eventType of eventTypes) {
