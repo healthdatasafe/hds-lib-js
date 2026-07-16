@@ -84,12 +84,23 @@ function browserDefaults (): Partial<ProfileValues> {
 }
 
 /**
- * Keep the localizer in step with `preferredLocales` — the profile is now the
- * account-level source of truth for locale.
+ * Push the profile's locale to the localizer — but ONLY when it is genuinely **stored**.
+ *
+ * L1 fix (plan 78): the profile is the account-level source of truth for locale, but an
+ * *unstored* profile has no opinion. Applying its default (`['en']` / browser inference)
+ * unconditionally silently clobbered a legacy per-app language: `setPreferredLocales`
+ * prepends, and consumers (e.g. doctor-dashboard) hook HDSProfile *after* HDSSettings, so
+ * HDSProfile's default landed last and won. A user who had picked Français in the old
+ * per-app selector (stored in HDSSettings; profile empty) flipped to English on next load.
+ *
+ * Gating on `isStored` mirrors `resolveAccountPreference` exactly: profile locale wins only
+ * when the user explicitly stored an account-level value; otherwise the per-app / browser
+ * value already applied by HDSSettings stands.
  */
-function applyLocaleSideEffect (values: ProfileValues): void {
+function applyLocaleIfStored (): void {
+  if (_cache.preferredLocales === undefined) return;
   try {
-    setPreferredLocales(values.preferredLocales);
+    setPreferredLocales(_values.preferredLocales);
   } catch { /* locale may not be supported — ignore */ }
 }
 
@@ -221,10 +232,6 @@ async function ensureStream (streamId: string): Promise<void> {
 async function load (): Promise<void> {
   if (!_connection) return;
 
-  // Precedence: stored values > browser inference > DEFAULTS.
-  _values = { ...DEFAULTS, ...browserDefaults() };
-  _cache = {};
-
   let events: any[];
   try {
     events = await _connection.apiOne(
@@ -233,25 +240,39 @@ async function load (): Promise<void> {
       'events'
     );
   } catch {
-    // Connection may not have access to profile/ streams (e.g. app-scoped permission)
-    applyLocaleSideEffect(_values);
+    // Connection may not have access to profile/ streams (e.g. app-scoped permission), or a
+    // transient fetch error. Either way, do NOT wipe already-loaded values (P1): a failed
+    // *reload* must not un-store account preferences. On a first-ever load establish the
+    // defaults so getters work; on a reload keep the last good values.
+    if (!_hooked) {
+      _values = { ...DEFAULTS, ...browserDefaults() };
+      _cache = {};
+    }
+    // Nothing newly stored → do not assert a locale (would clobber a legacy per-app value — L1).
     _hooked = true;
     return;
   }
 
+  // Build into locals and swap in only after a successful fetch (P1) — so a failed reload
+  // never transiently drops account values to defaults. Precedence: stored > browser > DEFAULTS.
+  const nextValues: ProfileValues = { ...DEFAULTS, ...browserDefaults() };
+  const nextCache: Partial<Record<ProfileKey, any>> = {};
+
   for (const event of events) {
     const key = matchField(event);
-    if (key && !_cache[key]) {
-      _cache[key] = event;
+    if (key && !nextCache[key]) {
+      nextCache[key] = event;
       if (key === 'avatar') {
-        (_values as any).avatar = resolveAvatarUrl(event);
+        (nextValues as any).avatar = resolveAvatarUrl(event);
       } else {
-        (_values as any)[key] = event.content;
+        (nextValues as any)[key] = event.content;
       }
     }
   }
 
-  applyLocaleSideEffect(_values);
+  _values = nextValues;
+  _cache = nextCache;
+  applyLocaleIfStored();
   _hooked = true;
 }
 
@@ -356,7 +377,8 @@ const HDSProfile = {
     }
 
     _values[key] = value;
-    if (key === 'preferredLocales') applyLocaleSideEffect(_values);
+    // _cache[key] was just set above, so this now applies (the value is stored).
+    if (key === 'preferredLocales') applyLocaleIfStored();
   },
 
   /**

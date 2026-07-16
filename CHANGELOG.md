@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-07-16
+
+### Fixed
+- **`HDSProfile` no longer silently flips a legacy user's language to English (L1, plan 78).** The profile
+  applied its `preferredLocales` to the localizer on *every* load, even when nothing was stored — and since
+  `setPreferredLocales` prepends and consumers hook `HDSProfile` *after* `HDSSettings`, that default landed
+  last and won. A user who had picked Français in the old per-app selector (stored in `HDSSettings`; profile
+  empty) rendered English on next load. The side effect is now gated on `isStored('preferredLocales')`,
+  mirroring `resolveAccountPreference`: the profile asserts a locale only when the user explicitly stored an
+  account-level one; otherwise the per-app / browser value stands. Regression tests in
+  `tests/HDSProfileLocale.test.js` (`[HDSPL1]`/`[HDSPL3]` fail without the fix).
+- **A failed `HDSProfile.reload()` no longer un-stores account values (P1, plan 78).** `load()` reset
+  `_values`/`_cache` to defaults *before* the fetch, so a transient network error dropped displayName and
+  preferences to defaults (and `isStored` → false). It now builds into locals and swaps them in only after a
+  successful fetch; a failed reload keeps the last good values. Test `[HDSPP1]`.
+
 ## [1.3.2] - 2026-07-16
 
 ### Changed
