@@ -61,7 +61,7 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
-    "@pryv/cmc": "3.9.0",
+    "@pryv/cmc": "3.9.1",
     "@pryv/monitor": "^3.8.0",
     "@pryv/socket.io": "^3.8.0",
     "ajv": "^8.20.0",
