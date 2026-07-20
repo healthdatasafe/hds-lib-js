@@ -203,6 +203,41 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       assert.deepEqual(calls[0].streams, [':_cmc:apps:hds-patient:foo']);
     });
   });
+
+  describe('[CFSN] createInviteWithFormSpec request building', function () {
+    function inviteParams (overrides = {}) {
+      return {
+        appCode: 'hds-collector',
+        scopeStreamId: ':_cmc:apps:hds-collector:abc',
+        displayName: 'Dr Demo',
+        requestedPermissions: [{ streamId: 'health', level: 'read' }],
+        formSpec: basicSpec(),
+        ...overrides
+      };
+    }
+
+    function captureConn (calls) {
+      return {
+        apiOne (method, params, resultKey) {
+          calls.push({ method, params, resultKey });
+          return { id: 'evt-invite', content: { capabilityUrl: 'https://cap' } };
+        }
+      };
+    }
+
+    it('[CFS60] forwards accessType to the CMC request (issue #11)', async () => {
+      const calls = [];
+      await cmcFormSpec.createInviteWithFormSpec(captureConn(calls), inviteParams({ accessType: 'app' }));
+      assert.equal(calls[0].method, 'events.create');
+      assert.equal(calls[0].params.content.request.accessType, 'app');
+    });
+
+    it('[CFS61] omits accessType from the request when not given (plugin default: shared)', async () => {
+      const calls = [];
+      await cmcFormSpec.createInviteWithFormSpec(captureConn(calls), inviteParams());
+      assert.ok(!('accessType' in calls[0].params.content.request));
+    });
+  });
 });
 
 describe('[CTFS] Contact.aggregateCmc hdsFormSpec pass-through', function () {

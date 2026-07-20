@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-07-20
+
+### Added
+- **`createInviteWithFormSpec` forwards `accessType` to the CMC request**
+  ([hds-lib-js#11](https://github.com/healthdatasafe/hds-lib-js/issues/11)). The FormSpec invite
+  path hand-builds the `request` object (bypassing `cmc.createInvite`) and dropped the opt-in
+  `accessType: 'shared' | 'app'` param added in `@pryv/cmc` 3.9.1 — so callers could not request a
+  delegable app-type data-grant (named, scope-minimised sub-accesses via `accesses.create`;
+  see [open-pryv.io#107](https://github.com/pryv/open-pryv.io/issues/107)). `params.accessType` is
+  now passed through; omitted → the plugin's `shared` default, unchanged. Tests `[CFS60]`/`[CFS61]`.
+
+### Changed
+- deps: `pryv` 3.8.0 → 3.8.1.
+
 ## [1.3.3] - 2026-07-16
 
 ### Fixed

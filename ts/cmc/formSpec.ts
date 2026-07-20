@@ -241,6 +241,13 @@ export async function createInviteWithFormSpec (
     formSpec: FormSpec;
     mode?: 'single-use' | 'open-link';
     expiresAt?: number;
+    /**
+     * Opt-in (@pryv/cmc ≥ 3.9.1): `'app'` makes the accepted data-grant a
+     * delegable app-type access — the approved requester can then mint
+     * named, scope-minimised sub-accesses via `accesses.create`.
+     * Defaults to the CMC plugin's `'shared'` behavior when omitted.
+     */
+    accessType?: 'shared' | 'app';
     title?: localizableText;
     description?: localizableText;
     consent?: localizableText;
@@ -261,6 +268,7 @@ export async function createInviteWithFormSpec (
   };
   if (params.features) request.features = params.features;
   if (params.expiresAt) request.expiresAt = params.expiresAt;
+  if (params.accessType) request.accessType = params.accessType;
   const content: any = {
     to: params.to === undefined ? null : params.to,
     capabilityRequested: true,
