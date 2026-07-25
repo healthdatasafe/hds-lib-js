@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-07-25
+
+### Changed
+- deps: pryv ecosystem 3.8.1/3.9.1 → **3.10.0** (`pryv`, `@pryv/cmc`, `@pryv/monitor`,
+  `@pryv/socket.io`). The 3.10.0 release is purely additive (new `@pryv/encryption` client-side
+  encryption, `pryv.SharedSecrets`, DPoP / RFC 9449 support, and an optional `accessType` on
+  `@pryv/cmc` `createInvite`) — no breaking changes. Lint + 585 tests + webpack build green.
+
 ## [1.3.4] - 2026-07-20
 
 ### Added
