@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-07-30
+
+### Added
+- **Re-export `@pryv/encryption` from hds-lib** as `encryption`
+  ([hds-lib-js#12](https://github.com/healthdatasafe/hds-lib-js/issues/12)). Consumers reach the
+  official client-side encryption add-on (`EventsCipher` + `Keyring`, WebCrypto, zero runtime deps)
+  through hds-lib — `import { encryption } from 'hds-lib'` → `encryption.EventsCipher` /
+  `encryption.Keyring` — keeping version alignment with the embedded pryv ecosystem hds-lib's
+  responsibility, so downstream apps need no direct `@pryv/encryption` dependency. Added
+  `@pryv/encryption` 3.10.0 as a dependency. Lint + 585 tests + tsc build green.
+
 ## [1.3.5] - 2026-07-25
 
 ### Changed

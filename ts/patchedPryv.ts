@@ -10,6 +10,7 @@ import type * as _PryvTypes from 'pryv';
 import monitor from '@pryv/monitor';
 import socketIo from '@pryv/socket.io';
 import * as _cmc from '@pryv/cmc';
+import * as _encryption from '@pryv/encryption';
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
 monitor(_pryv);
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
@@ -53,3 +54,8 @@ export namespace pryv {
 }
 
 export const cmc = _cmc;
+
+// Official client-side encryption add-on (EventsCipher + Keyring, WebCrypto, zero runtime deps).
+// Re-exported so consumers reach it through hds-lib and version-alignment with the embedded
+// pryv ecosystem stays hds-lib's responsibility (see healthdatasafe/hds-lib-js#12).
+export const encryption = _encryption;
