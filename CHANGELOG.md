@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0] - 2026-08-07
+
+### Added
+- **`eventToShortText` renders `multi-select` content.** data-model 3.0.0 introduces array-valued items
+  (`profile-ethnicity`, `fertility-tracking-method`). Their content is now rendered as the joined
+  localized option labels ("White, Hispanic or Latino") instead of falling through to a generic
+  formatter. Tolerates a scalar as well, so an event written before the item became multi-valued still
+  renders its label rather than raw content.
+
 ## [Unreleased]
 
 ## [1.3.6] - 2026-07-30

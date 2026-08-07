@@ -593,4 +593,55 @@ describe('[ESTX] eventToShortText', () => {
       assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
     });
   });
+
+  describe('[EST24] multi-select (data-model 3.0.0, site-agents#9/#10)', () => {
+    it('[EST24a] joins the localized labels of every selected value', () => {
+      const event = {
+        content: ['white', 'hispanic-latino'],
+        streamIds: ['profile-ethnicity'],
+        type: 'attributes/ethnicity'
+      };
+      assert.equal(eventToShortText(event), 'White, Hispanic or Latino');
+    });
+
+    it('[EST24b] a single-element array is not decorated', () => {
+      const event = {
+        content: ['asian'],
+        streamIds: ['profile-ethnicity'],
+        type: 'attributes/ethnicity'
+      };
+      assert.equal(eventToShortText(event), 'Asian');
+    });
+
+    it('[EST24c] tolerates a scalar written before the item became multi-valued', () => {
+      // Backfill has not necessarily run everywhere; a legacy scalar must still
+      // render its label rather than raw content.
+      const event = {
+        content: 'mira',
+        streamIds: ['fertility-tracking-method'],
+        type: 'fertility/tracking-method-v1'
+      };
+      assert.equal(eventToShortText(event), 'Mira');
+    });
+
+    it('[EST24d] concurrent tracking methods all appear', () => {
+      const event = {
+        content: ['sympto-thermal', 'mira'],
+        streamIds: ['fertility-tracking-method'],
+        type: 'fertility/tracking-method-v1'
+      };
+      const result = eventToShortText(event);
+      assert.ok(result.includes('Sympto-Thermal'), `got: ${result}`);
+      assert.ok(result.includes('Mira'), `got: ${result}`);
+    });
+
+    it('[EST24e] an unknown value falls back to the raw value', () => {
+      const event = {
+        content: ['white', 'not-a-category'],
+        streamIds: ['profile-ethnicity'],
+        type: 'attributes/ethnicity'
+      };
+      assert.equal(eventToShortText(event), 'White, not-a-category');
+    });
+  });
 });

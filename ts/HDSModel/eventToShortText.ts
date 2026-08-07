@@ -99,6 +99,10 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
     return formatSelect(event, content, itemDef);
   }
 
+  if (type === 'multi-select') {
+    return formatMultiSelect(content, itemDef);
+  }
+
   if (type === 'date') {
     // date items store time on the event itself
     return formatEventDate(event.time);
@@ -300,6 +304,24 @@ function formatSelect (event: any, content: any, itemDef: any): string {
     }
   }
   return prefix + String(valueForSelect);
+}
+
+/**
+ * `multi-select` content is an array of option values — render the localized labels
+ * joined, e.g. "White, Hispanic or Latino". Truncates on the joined string so a long
+ * selection stays a short text, and tolerates a scalar (an event written before the
+ * item became multi-valued) rather than printing "[object Object]".
+ */
+function formatMultiSelect (content: any, itemDef: any): string {
+  const values: any[] = Array.isArray(content) ? content : [content];
+  const options = itemDef.data.options;
+  const labels = values.map((v) => {
+    const selected = options?.find((o: any) => o.value === v);
+    if (!selected?.label) return String(v);
+    return typeof selected.label === 'string' ? selected.label : (localizeText(selected.label) || String(v));
+  });
+  const text = labels.join(', ');
+  return text.length > 50 ? text.slice(0, 50) + '...' : text;
 }
 
 function formatDatasource (content: any): string | null {
