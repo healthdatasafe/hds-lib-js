@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales, validateLocalizableText } from '../ts/localizeText.ts';
+import { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales, onPreferredLocalesChange, validateLocalizableText } from '../ts/localizeText.ts';
 
 describe('[LOCX] Localization', () => {
   afterEach(() => {
@@ -133,6 +133,53 @@ describe('[LOCX] Localization', () => {
       assert.equal(localizeText({ en: 'Hello', fr: '' }), '');
       assert.equal(localizeText({ en: 'Hello', fr: null }), 'Hello');
       assert.equal(localizeText({ en: 'Hello', fr: undefined }), 'Hello');
+    });
+  });
+
+  describe('[LOCN] onPreferredLocalesChange (B-2026-07-10-1)', () => {
+    it('[LOCN1] fires with the new order when the locale actually changes', () => {
+      const seen = [];
+      const off = onPreferredLocalesChange((locales) => seen.push(locales));
+      setPreferredLocales(['fr']);
+      off();
+      assert.equal(seen.length, 1, 'listener should fire exactly once');
+      assert.equal(seen[0][0], 'fr', 'listener receives the new preferred order');
+      assert.equal(getPreferredLocales()[0], 'fr');
+    });
+
+    it('[LOCN2] does NOT fire when the effective order is unchanged', () => {
+      setPreferredLocales(['fr']);
+      let calls = 0;
+      const off = onPreferredLocalesChange(() => { calls++; });
+      setPreferredLocales(['fr']); // already in front — no change
+      off();
+      assert.equal(calls, 0, 'a redundant set must not churn consumers');
+    });
+
+    it('[LOCN3] the returned unsubscribe stops delivery', () => {
+      let calls = 0;
+      const off = onPreferredLocalesChange(() => { calls++; });
+      off();
+      setPreferredLocales(['es']);
+      assert.equal(calls, 0, 'unsubscribed listener must not be called');
+    });
+
+    it('[LOCN4] one throwing listener does not block the others', () => {
+      let reached = 0;
+      const off1 = onPreferredLocalesChange(() => { throw new Error('boom'); });
+      const off2 = onPreferredLocalesChange(() => { reached++; });
+      setPreferredLocales(['es']);
+      off1(); off2();
+      assert.equal(reached, 1, 'a bad listener must not break the locale change');
+    });
+
+    it('[LOCN5] the listener sees a snapshot localizeText already agrees with', () => {
+      const item = { en: 'Hello', fr: 'Bonjour' };
+      let observed = null;
+      const off = onPreferredLocalesChange(() => { observed = localizeText(item); });
+      setPreferredLocales(['fr']);
+      off();
+      assert.equal(observed, 'Bonjour', 'state must be committed before listeners fire');
     });
   });
 });

@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.5.0] - 2026-08-25
+
+### Added
+- **`onPreferredLocalesChange(listener)` — subscribe to preferred-locale changes**, returning an
+  unsubscribe function. Also re-exported from `settings`.
+
+  `localizeText()` reads module-level locale state at call time, so a consumer that had already
+  rendered a string had no way to learn the locale changed underneath it — the strings only refreshed
+  on a full page reload. That was the library half of `BUGS.md` **B-2026-07-10-1** (hds-webapp's live
+  language switch left data-model / method-spec strings in the old language until reload).
+
+  Listeners fire **only when the effective locale order actually changes**, so a redundant
+  `setPreferredLocales` with the same result does not churn consumers; the new order is committed
+  before listeners run, so `localizeText()` already agrees with the snapshot they receive; and a
+  listener that throws is isolated so it cannot break the locale change for anyone else.
+
+  Purely additive — `setPreferredLocales`' existing prepend-and-dedupe semantics are unchanged, so the
+  plan-78 L1 precedence behaviour (an unstored profile must not clobber a legacy per-app locale) is
+  untouched and still covered by `[HDSPL1]`–`[HDSPL3]`.
+
+
 ## [1.4.0] - 2026-08-07
 
 ### Added

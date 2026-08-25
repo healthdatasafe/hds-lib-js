@@ -14,6 +14,26 @@ const supportedLocales = ['en', 'fr', 'es'] as const;
 Object.freeze(supportedLocales);
 let preferredLocales: string[] = [...supportedLocales];
 
+export type PreferredLocalesListener = (locales: string[]) => void;
+const localesListeners = new Set<PreferredLocalesListener>();
+
+/**
+ * Subscribe to preferred-locale changes. Returns an unsubscribe function.
+ *
+ * Why this exists: `localizeText()` reads module-level state at call time, so a
+ * consumer that already rendered a string has no way to learn the locale moved
+ * underneath it. Without a notification the caller only re-localizes on a full
+ * reload — which was `BUGS.md` B-2026-07-10-1 (hds-webapp's live language switch
+ * left data-model / method-spec strings in the old language until reload).
+ *
+ * Listeners fire only when the effective locale ORDER actually changes, so a
+ * redundant `setPreferredLocales` with the same result does not churn consumers.
+ */
+export function onPreferredLocalesChange (listener: PreferredLocalesListener): () => void {
+  localesListeners.add(listener);
+  return () => { localesListeners.delete(listener); };
+}
+
 /**
  * get the current preferred locales
  */
@@ -65,7 +85,21 @@ export function setPreferredLocales (arrayOfLocals: string[]): void {
     throw new HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
   }
 
-  preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
+  const next = [...new Set([...arrayOfLocals, ...preferredLocales])];
+  // Compare BEFORE assigning so listeners fire only on a real change.
+  const changed = next.length !== preferredLocales.length || next.some((l, i) => l !== preferredLocales[i]);
+  preferredLocales = next;
+  if (!changed) return;
+
+  const snapshot = [...preferredLocales];
+  for (const listener of [...localesListeners]) {
+    // One bad listener must not break a locale change for every other consumer.
+    try {
+      listener(snapshot);
+    } catch (e) {
+      console.error('onPreferredLocalesChange listener threw', e);
+    }
+  }
 }
 
 /**
