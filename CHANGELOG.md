@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.6.0] - 2026-09-02
+
+### Changed
+- **`pryv` 3.10.0 → 3.11.0 and `@pryv/cmc` 3.10.0 → 3.11.0.** Surfaces the new
+  **`MfaRequiredError.method`** field to consumers through the re-exported `pryv`: when the platform
+  signals MFA at login it now also reports which factor to prompt for — `'totp'` (an
+  authenticator-app code) or `'sms'`. Apps can branch on `err.method` to render the right prompt
+  instead of assuming SMS.
+
+  **Back-compatible.** The field is `undefined` against a core that does not send `mfaMethod`, so
+  existing `MfaRequiredError` handling is unaffected and no consumer is required to change. Verified
+  both ways through the `hds-lib` re-export (`.method === 'totp'` when sent, `undefined` when
+  omitted).
+
+  Needed by the account app's TOTP enrolment + method-aware challenge work, since open-pryv.io
+  `2.0.0-rc.14` ships server-side TOTP enabled by default. Minor rather than patch because it adds
+  a capability to the consumer-facing surface. Plan 95 §C.
+
+  Gate: `tsc` clean, `eslint` clean, **595 tests passing**, webpack bundle compiled.
+
+
 ## [1.5.0] - 2026-08-25
 
 ### Added
