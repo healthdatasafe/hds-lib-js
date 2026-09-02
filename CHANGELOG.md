@@ -20,6 +20,22 @@
 
   Gate: `tsc` clean, `eslint` clean, **595 tests passing**, webpack bundle compiled.
 
+### Fixed
+- **Cleared all 15 npm advisories in the build/test chain (10 of them high) — now 0.** These were
+  pre-existing and unrelated to the pryv bump (main's lockfile at pryv 3.10.0 reported the identical
+  set; neither `pryv` nor `@pryv/cmc` appeared in the audit). Dev-only, so nothing shipped to
+  consumers' runtime was ever affected — but this library is consumed by 14 repos, so a clean audit
+  keeps their CI honest.
+
+  Two passes of `npm audit fix` took 15 → 4 (lockfile-only: `brace-expansion`, `flatted`,
+  `js-yaml`, `minimatch`, `picomatch`, `fast-uri`, `browserslist`, `socket.io-parser`, `ws`,
+  `engine.io-client`, `terser-webpack-plugin`). The remaining 4 required majors:
+  **`mocha` ^11.5.0 → ^12.0.0** (`diff`, `serialize-javascript`) and
+  **`copy-webpack-plugin` ^13.0.0 → ^14.0.0** (`serialize-javascript`).
+
+  Verified across the major bumps: `tsc` clean, `eslint` clean, webpack compiled, and **595 tests
+  still passing — the same count as before**, so the mocha upgrade did not silently drop any.
+
 
 ## [1.5.0] - 2026-08-25
 
