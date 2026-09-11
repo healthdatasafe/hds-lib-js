@@ -24,6 +24,7 @@ import { extractOverloadAsDefinitions } from './HDSModel/overloadExtract.ts';
 import * as cmcFormSpec from './cmc/formSpec.ts';
 import * as cmcAppScope from './cmc/appScope.ts';
 import * as cmcConstants from './cmc/constants.ts';
+import * as cmcDataExport from './cmc/dataExport.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
@@ -38,8 +39,9 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, encryption, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants };
+export { pryv, cmc, encryption, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport };
 export type { FormSpec, FormSpecRecord } from './cmc/formSpec.ts';
+export type { DataExportRequest, DataExportRequestParams } from './cmc/dataExport.ts';
 
 // Plan 45 — top-level type re-exports so consumers can `import type { CustomFieldDeclaration } from 'hds-lib'`.
 export type {
@@ -95,6 +97,7 @@ const HDSLib = {
   extractOverloadAsDefinitions,
   cmcFormSpec,
   cmcAppScope,
-  cmcConstants
+  cmcConstants,
+  cmcDataExport
 };
 export default HDSLib;

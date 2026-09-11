@@ -79,6 +79,8 @@ export interface CmcRelationship {
   remoteCollectorStreamId: string | null;
   /** Patient-side outgoing chat stream id — `<patientScope>:chats:<peerSlug>` */
   localChatStreamId: string;
+  /** Patient-side outgoing system-channel stream id — `<scope>:collectors:<peerSlug>` (data-export requests, acks); null when the grant carries no collectors anchor */
+  localCollectorStreamId: string | null;
   /** App code: `hds-collector`, `hds-bridge-<name>`, etc. */
   appCode: string;
   /** Negotiated feature flags */
@@ -502,6 +504,18 @@ export class Contact {
       } else {
         localChatStreamId = `${patientScopeStreamId}:chats:${peerSlug}`;
       }
+      // Same derivation for the system channel (collectors anchor), used for
+      // data-export requests and their acks. No legacy fallback: the anchor only
+      // exists where the plugin provisioned it.
+      const grantedCollector = (access.permissions ?? []).find(p =>
+        typeof p.streamId === 'string' &&
+        p.streamId.endsWith(`:collectors:${peerSlug}`) &&
+        (p.level === 'contribute' || p.level === 'manage'));
+      const localCollectorStreamId: string | null = grantedCollector
+        ? grantedCollector.streamId
+        : (cp.remoteCollectorStreamId
+            ? `${cp.remoteCollectorStreamId.replace(/:collectors:[^:]+$/, '')}:collectors:${peerSlug}`
+            : null);
 
       // Match accept event by (counterparty, appCode). Same counterparty
       // can have multiple accept events for multiple data sets; we just
@@ -526,6 +540,7 @@ export class Contact {
         remoteChatStreamId: cp.remoteChatStreamId ?? null,
         remoteCollectorStreamId: cp.remoteCollectorStreamId ?? null,
         localChatStreamId,
+        localCollectorStreamId,
         appCode,
         features,
         grantedPermissions: access.permissions ?? [],

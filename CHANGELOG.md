@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.0] - 2026-09-11
+
+### Added
+- **`cmcDataExport`** — data-export requests over the CMC system channel (GDPR / HIPAA
+  portability): `requestDataExport(conn, { collectorStreamId, dueAt?, note?, locale? })` on the
+  patient side, `fulfillDataExportRequest(conn, { collectorStreamId, alertEventId, ackId })` on the
+  doctor side, `listDataExportRequests(conn, collectorStreamId)` on either side (alerts joined with
+  their acks into `pending` / `fulfilled` records with direction and peer). No new event type: the
+  request is a `notification/alert-cmc` with `ackRequired` and a typed `content.hds` block
+  (`kind: data-export-request`, `requestedAt`, `dueAt?`, `note?`), the fulfilment the matching
+  `notification/ack-cmc`; the plugin validates the envelope and forwards the extra keys verbatim.
+- **`CmcRelationship.localCollectorStreamId`** — the patient's own system-channel stream for a
+  relationship (`<scope>:collectors:<peerSlug>`), derived like `localChatStreamId` from the grant's
+  permissions (or the remote collectors stream's scope); null when no collectors anchor exists.
+
 ## [2.0.0] - 2026-09-11
 
 ### BREAKING
