@@ -1,5 +1,5 @@
-const assert = require('node:assert/strict');
-const { cmcDataExport } = require('../js/index.js');
+import assert from 'node:assert/strict';
+import { cmcDataExport } from '../js/index.js';
 
 function fakeConnection (getResult = []) {
   const calls = [];
