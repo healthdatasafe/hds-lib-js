@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.0.0] - 2026-09-11
+
+### BREAKING
+- **`HDSItemDef.eventTemplate()` now refuses to guess which variation you meant.** For an itemDef
+  declaring `variations.eventType` the option **is** the stored value's meaning: `mass/kg` vs
+  `mass/lb` is the difference between 75 kg and 75 lb. It previously returned `eventTypes[0]`
+  whatever the caller intended, so a weight entered in pounds was stored as kilograms with nothing
+  failing anywhere, and a consumer deriving BMI later read a number wrong by a factor that looks
+  plausible enough to go unnoticed. Fixes
+  [#13](https://github.com/healthdatasafe/hds-lib-js/issues/13), the long-standing
+  `// TODO handle variations`.
+
+  ```js
+  itemDef.eventTemplate()                          // throws, naming the options
+  itemDef.eventTemplate({ eventType: 'mass/lb' })  // explicit, validated
+  ```
+
+  **Who is affected:** only callers that template one of the four items declaring variations
+  (`body-weight`, `body-height`, `body-blood-serum-glucose-fasting`, `profile-avatar`). Plain items
+  are unchanged and still work with a bare call. A mismatched `eventType` on a plain item, and an
+  `eventType` outside the declared options on a variation item, are both rejected rather than
+  ignored.
+
+  **Deliberately not resolved from `unitSystem` here.** That would couple this primitive to ambient
+  settings state and return a different unit for the same itemDef depending on whether an app had
+  hooked its settings, which is a quieter version of the same bug. Callers wanting the user's
+  preference resolve it themselves (`HDSModelPreferred` already does exactly that on the read path)
+  and pass the result in.
+
+  Gate: `tsc` clean, `eslint` clean, **600 tests passing** (595 before, one rewritten to the new contract, six added).
+
 ## [1.6.0] - 2026-09-02
 
 ### Changed

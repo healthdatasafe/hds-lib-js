@@ -74,13 +74,50 @@ describe('[MODX] Model', () => {
 
   // ---------- itemDef ------------ //
   describe('[MDVX] itemDef methods', function () {
-    it('[MDVA] eventTemplate() returns event template with streamId and type', async () => {
+    it('[MDVA] eventTemplate() returns event template with streamId and chosen type', async () => {
       const itemDef = model.itemsDefs.forKey('body-weight');
-      const template = itemDef.eventTemplate();
+      const template = itemDef.eventTemplate({ eventType: 'mass/kg' });
       assert.ok(template.streamIds);
       assert.ok(template.type);
       assert.deepEqual(template.streamIds, ['body-weight']);
-      assert.equal(template.type, 'mass/kg'); // first eventType
+      assert.equal(template.type, 'mass/kg');
+    });
+
+    // Issue #13: this used to return eventTypes[0] whatever the caller meant, so a
+    // weight entered in pounds was stored as kilograms with nothing failing.
+    it('[MDVA2] eventTemplate() honours the non-default variation', async () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      const template = itemDef.eventTemplate({ eventType: 'mass/lb' });
+      assert.equal(template.type, 'mass/lb');
+    });
+
+    it('[MDVA3] eventTemplate() throws on a variation item with no choice, naming the options', async () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      assert.throws(
+        () => itemDef.eventTemplate(),
+        /requires an explicit choice.*mass\/kg, mass\/lb/s
+      );
+    });
+
+    it('[MDVA4] eventTemplate() rejects an eventType outside the declared options', async () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      assert.throws(
+        () => itemDef.eventTemplate({ eventType: 'mass/stone' }),
+        /is not a declared variation/
+      );
+    });
+
+    it('[MDVA5] eventTemplate() still works bare for a plain (non-variation) item', async () => {
+      const itemDef = model.itemsDefs.forKey('profile-name');
+      assert.equal(itemDef.eventTemplate().type, itemDef.eventTypes[0]);
+    });
+
+    it('[MDVA6] eventTemplate() rejects a mismatched eventType on a plain item', async () => {
+      const itemDef = model.itemsDefs.forKey('profile-name');
+      assert.throws(
+        () => itemDef.eventTemplate({ eventType: 'mass/kg' }),
+        /cannot produce/
+      );
     });
 
     it('[MDVB] eventTemplate() returns correct streamId from data', async () => {

@@ -1,4 +1,5 @@
 import { localizeText } from '../localizeText.ts';
+import { HDSLibError } from '../errors.ts';
 import type { HDSModel } from './HDSModel.ts';
 
 export interface ReminderConfig {
@@ -77,9 +78,24 @@ export class HDSItemDef {
    *   When omitted, falls back to the itemDef's canonical streamId.
    *   Throws if the context isn't in the itemDef's subtree.
    *
-   * // TODO handle variations
+   * @param opts.eventType — REQUIRED for an itemDef declaring `variations.eventType`
+   *   (`body-weight`, `body-height`, `body-blood-serum-glucose-fasting`, `profile-avatar`).
+   *   Must be one of the declared options.
+   *
+   * For a variation item the option **is** the stored value's meaning: `mass/kg` vs
+   * `mass/lb` is the difference between 75 kg and 75 lb. Until 2.0.0 this returned
+   * `eventTypes[0]` whatever the caller meant, so a weight entered in pounds was stored
+   * as kilograms with nothing failing anywhere (issue #13). It now throws instead: a
+   * caller that has not chosen cannot express intent, and guessing on their behalf is
+   * what produced wrong clinical values.
+   *
+   * Deliberately NOT resolved from `unitSystem` here. That would couple this primitive
+   * to ambient settings state and return a different unit for the same itemDef depending
+   * on whether an app had hooked its settings, which is a quieter version of the same
+   * bug. Callers that want the user's preference resolve it themselves (see
+   * `HDSModelPreferred`) and pass the result in.
    */
-  eventTemplate (opts: { context?: string } = {}): {
+  eventTemplate (opts: { context?: string; eventType?: string } = {}): {
     streamIds: [string];
     type: string;
   } {
@@ -90,8 +106,42 @@ export class HDSItemDef {
     }
     return {
       streamIds: [chosenStreamId],
-      type: this.eventTypes[0]
+      type: this.#chooseEventType(opts.eventType)
     };
+  }
+
+  /**
+   * Resolve the event type for `eventTemplate()`, refusing to guess.
+   * Variation items require an explicit choice; plain items reject a mismatched one.
+   */
+  #chooseEventType (requested?: string): string {
+    const isVariation = this.#data.variations?.eventType != null;
+    const options = this.eventTypes;
+
+    if (!isVariation) {
+      if (requested != null && requested !== options[0]) {
+        throw new HDSLibError(
+          `eventTemplate: item "${this.#key}" declares eventType "${options[0]}" ` +
+          `and cannot produce "${requested}".`
+        );
+      }
+      return options[0] as string;
+    }
+
+    if (requested == null) {
+      throw new HDSLibError(
+        `eventTemplate: item "${this.#key}" declares variations.eventType and requires an ` +
+        `explicit choice. Pass one of: ${options.join(', ')}. ` +
+        'The option is the stored unit, so choosing for you would risk storing a wrong value.'
+      );
+    }
+    if (!options.includes(requested)) {
+      throw new HDSLibError(
+        `eventTemplate: "${requested}" is not a declared variation of item "${this.#key}". ` +
+        `Expected one of: ${options.join(', ')}.`
+      );
+    }
+    return requested;
   }
 
   /**
