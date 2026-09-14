@@ -1,5 +1,39 @@
 # Changelog
 
+## [2.2.0] - 2026-09-14
+
+### Added
+- **`cmcFormSpec.validateFormSpecItemKeys(formSpec, model?)`** — checks every
+  `sections[].itemKeys` entry of a FormSpec against the published data-model and returns a
+  `FormSpecItemKeyIssue[]` (`sectionKey`, `itemKey`, `reason: 'unknown' | 'deprecated'`, and for
+  deprecated keys a `replacement` when the model determines one unambiguously). Empty array for a
+  clean spec.
+
+  **Why it was missing, and what it catches.** A FormSpec names item keys *directly*, while events
+  resolve through `forEvent(streamId + eventType)`. So an item rename that keeps streamId and
+  eventType orphans no stored event and reads as safe, while silently stranding every spec that
+  named the old key. That is how data-model 2.3.0 withdrew the
+  `fertility-hormone-{fsh,hcg,pdg,e3g}` rename aliases. Since consumers now skip unresolvable keys
+  instead of throwing, the result is invisible: the item never appears in the form and the subject
+  cannot enter it (`B-2026-09-03-4`).
+
+  The `deprecated` arm matters at least as much as the `unknown` one, because a deprecated key
+  still resolves and so passes any existence check. Run against a real production spec, the
+  validator returned 4 `unknown` keys and **27** `deprecated` ones, the latter sitting on
+  `activity/plain` where the active items are `ratio/proportion` — a form collecting "had a
+  headache" where the model offers "headache, with severity".
+
+  A replacement is offered only when exactly one active item shares the deprecated item's
+  `streamId`. Several active items can share one (they differ by eventType), and choosing among
+  them would be a guess that changes the unit the data is recorded in.
+
+### Changed
+- **`saveFormSpec` now validates item keys and logs what it finds**, rather than accepting any
+  spec whose `version` is 1. The check is **advisory**: it warns and proceeds, and is skipped
+  entirely when no model has been initialised. Throwing would lock a collector out of re-saving a
+  data set that went stale underneath them, which punishes the wrong party; the authoring UI is
+  where `validateFormSpecItemKeys` should be acted on.
+
 ## [2.1.0] - 2026-09-11
 
 ### Added

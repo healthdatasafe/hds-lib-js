@@ -25,6 +25,8 @@
  */
 
 import { cmc, pryv } from '../patchedPryv.ts';
+import * as logger from '../logger.ts';
+import { getModel as getHDSModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { CMC_APP_CODES, CMC_EVENT_TYPES, appSubScope, extractAppSubScopeSuffix } from './constants.ts';
 import type { Permission } from '../appTemplates/interfaces.ts';
 import type { localizableText } from '../localizeText.ts';
@@ -81,10 +83,101 @@ export interface FormSpec {
   };
 }
 
+/** Why a FormSpec item key does not resolve cleanly against the published data-model. */
+export type FormSpecItemKeyIssueReason = 'unknown' | 'deprecated';
+
+/** One problematic `sections[].itemKeys` entry found by {@link validateFormSpecItemKeys}. */
+export interface FormSpecItemKeyIssue {
+  /** `sections[].key` the offending entry sits in. */
+  sectionKey: string;
+  itemKey: string;
+  /**
+   * `unknown` — the published pack defines no item under this key, so the app
+   * cannot render it at all. `deprecated` — it resolves, but to a deprecated
+   * item, so data collected through it lands on the legacy shape.
+   */
+  reason: FormSpecItemKeyIssueReason;
+  /**
+   * The active item to migrate to, when the model determines one unambiguously
+   * (exactly one non-deprecated item shares the deprecated item's `streamId`).
+   * Never set for `unknown`: a key the pack does not define carries no streamId
+   * to trace, so the replacement can only come from whoever authored the spec.
+   */
+  replacement?: string;
+}
+
+/**
+ * Check every `sections[].itemKeys` entry of a FormSpec against the published
+ * data-model.
+ *
+ * **Why this exists.** FormSpecs reference item keys *directly*, while events
+ * resolve through `forEvent(streamId + eventType)`. An item rename that keeps
+ * streamId and eventType therefore orphans nothing in stored events and looks
+ * safe — but it silently strands every spec naming the old key. That is exactly
+ * how data-model 2.3.0 (`b867215`) withdrew the `fertility-hormone-{fsh,hcg,pdg,e3g}`
+ * rename aliases on the reasoning that "no stored event referenced the item key",
+ * which was true of events and false of specs. Consumers now skip unresolvable
+ * keys rather than throwing (`B-2026-09-03-3`), so the failure is silent: the
+ * item simply never appears in the form and the subject cannot enter it.
+ *
+ * Read-only and model-only — it does not look at stored data. Returns `[]` for a
+ * clean spec, so the result doubles as a boolean.
+ *
+ * @param formSpec The spec to check.
+ * @param model Defaults to the initialised singleton. Pass one explicitly in tests.
+ */
+export function validateFormSpecItemKeys (
+  formSpec: FormSpec,
+  model?: any
+): FormSpecItemKeyIssue[] {
+  const m = model ?? getHDSModel();
+  const issues: FormSpecItemKeyIssue[] = [];
+  const activeByStreamId = new Map<string, string[]>();
+  for (const def of m.itemsDefs.getAllActive()) {
+    const streamId = def.data?.streamId;
+    if (typeof streamId !== 'string') continue;
+    const list = activeByStreamId.get(streamId);
+    if (list) list.push(def.key); else activeByStreamId.set(streamId, [def.key]);
+  }
+
+  for (const section of (formSpec.sections ?? [])) {
+    for (const itemKey of ((section as any).itemKeys ?? [])) {
+      const def = m.itemsDefs.forKey(itemKey, false);
+      if (def == null) {
+        issues.push({ sectionKey: (section as any).key, itemKey, reason: 'unknown' });
+        continue;
+      }
+      if (!def.isDeprecated) continue;
+      // Only suggest a replacement when it is unambiguous. Several active items
+      // can share a streamId (they differ by eventType), and picking one of those
+      // would be a guess that changes the unit data is recorded in.
+      const candidates = activeByStreamId.get(def.data?.streamId) ?? [];
+      const issue: FormSpecItemKeyIssue = { sectionKey: (section as any).key, itemKey, reason: 'deprecated' };
+      if (candidates.length === 1) issue.replacement = candidates[0];
+      issues.push(issue);
+    }
+  }
+  return issues;
+}
+
+/** One-line rendering of an issue, shared by the save-time warning and callers. */
+function describeItemKeyIssue (issue: FormSpecItemKeyIssue): string {
+  const where = `${issue.sectionKey}/${issue.itemKey}`;
+  if (issue.reason === 'unknown') return `${where} (not defined by the published data-model)`;
+  return issue.replacement
+    ? `${where} (deprecated — use ${issue.replacement})`
+    : `${where} (deprecated)`;
+}
+
 /**
  * Idempotent upsert of the canonical FormSpec event on the doctor's CMC
  * scope stream. One event per data-set. Re-saving with the same
  * collectorScopeStreamId updates the existing event in place.
+ *
+ * Item keys are checked against the published data-model and any problem is
+ * **logged, not thrown** — a collector re-saving an already-stale spec must not
+ * be locked out of their own data set, and the authoring UI is the right place
+ * to act on {@link validateFormSpecItemKeys} before it gets this far.
  *
  * @param connection Doctor's master connection.
  * @param collectorScopeStreamId `:_cmc:apps:hds-collector:<collectorId>` (must already exist).
@@ -98,6 +191,19 @@ export async function saveFormSpec (
 ): Promise<pryv.Event> {
   if (formSpec.version !== 1) {
     throw new Error(`saveFormSpec: unsupported FormSpec version ${formSpec.version}`);
+  }
+  // Advisory only, and skipped outright when the caller never ran initHDSModel:
+  // there is nothing to check against, and a save must not depend on it. Any
+  // failure inside the validator itself is a real bug and is left to propagate.
+  const model = getHDSModel();
+  if (model.isLoaded) {
+    const issues = validateFormSpecItemKeys(formSpec, model);
+    if (issues.length > 0) {
+      logger.warn(
+        `saveFormSpec: ${issues.length} item key(s) in "${collectorScopeStreamId}" do not resolve ` +
+        `cleanly against the published data-model — ${issues.map(describeItemKeyIssue).join(', ')}`
+      );
+    }
   }
   const existing = await loadFormSpec(connection, collectorScopeStreamId);
   if (existing) {

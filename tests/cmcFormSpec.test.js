@@ -1,6 +1,7 @@
 import { assert } from './test-utils/deps-node.js';
 import * as cmcFormSpec from '../ts/cmc/formSpec.ts';
 import { Contact } from '../ts/appTemplates/Contact.ts';
+import { HDSModel } from '../ts/HDSModel/HDSModel.ts';
 
 /**
  * Unit tests for the Plan 59 Phase 5a FormSpec helpers + the
@@ -335,5 +336,158 @@ describe('[CTFS] Contact.aggregateCmc hdsFormSpec pass-through', function () {
     assert.equal(out[0].cmcRelationships.length, 2);
     assert.equal(out[0].cmcFormSections.length, 2);
     assert.deepEqual(out[0].cmcFormSections.map(s => s.key), ['s1', 's1']);
+  });
+});
+
+/**
+ * [CFSV] validateFormSpecItemKeys — the guard for the failure mode behind
+ * `B-2026-09-03-4`.
+ *
+ * A FormSpec names item keys directly, while events resolve through
+ * `forEvent(streamId + eventType)`. So a rename that preserves streamId and
+ * eventType orphans no stored event and reads as safe, while silently
+ * stranding every spec that named the old key. data-model 2.3.0 withdrew the
+ * `fertility-hormone-{fsh,hcg,pdg,e3g}` aliases on exactly that reasoning.
+ *
+ * The model fixtures below mirror the real published pack, so the expectations
+ * are the real ones: `fertility-hormone-lh` resolves but is deprecated onto the
+ * legacy `concentration/mg-l` unit, and its active twin
+ * `body-urine-hormones-lh` is on `concentration/iu-l`.
+ */
+describe('[CFSV] validateFormSpecItemKeys', function () {
+  function load (data) {
+    const model = new HDSModel('http://fake/pack.json');
+    model.loadFromObject(data);
+    return model;
+  }
+
+  function basicSpec (overrides = {}) {
+    return {
+      version: 1,
+      title: { en: 'Fertility Tracking' },
+      description: { en: 'desc' },
+      permissions: [],
+      sections: [],
+      ...overrides
+    };
+  }
+
+  function urineHormoneModel () {
+    return load({
+      items: {
+        'body-urine-hormones-e3g': {
+          version: 'v2',
+          label: { en: 'E3G (urine)' },
+          streamId: 'body-urine-hormones-e3g',
+          eventType: 'concentration/ug-l',
+          type: 'number',
+          repeatable: 'any'
+        },
+        'body-urine-hormones-lh': {
+          version: 'v2',
+          label: { en: 'LH (urine)' },
+          streamId: 'body-urine-hormones-lh',
+          eventType: 'concentration/iu-l',
+          type: 'number',
+          repeatable: 'any'
+        },
+        // Permanently kept: the rename also changed the unit, so historical
+        // mg-l events still resolve here. Shares a streamId with the active
+        // item above but NOT its eventType.
+        'fertility-hormone-lh': {
+          version: 'v1',
+          deprecated: true,
+          label: { en: 'LH (urine, legacy)' },
+          streamId: 'body-urine-hormones-lh',
+          eventType: 'concentration/mg-l',
+          type: 'number',
+          repeatable: 'any'
+        }
+      },
+      streams: [
+        { id: 'body-urine-hormones-e3g', name: 'E3G' },
+        { id: 'body-urine-hormones-lh', name: 'LH' }
+      ]
+    });
+  }
+
+  function specWithKeys (itemKeys, sectionKey = 'fertility-recurring') {
+    return basicSpec({
+      sections: [{ key: sectionKey, type: 'recurring', name: { en: 'Fertility' }, itemKeys }]
+    });
+  }
+
+  it('[CFSV1] returns [] for a spec whose keys all resolve to active items', () => {
+    const out = cmcFormSpec.validateFormSpecItemKeys(
+      specWithKeys(['body-urine-hormones-e3g', 'body-urine-hormones-lh']),
+      urineHormoneModel()
+    );
+    assert.deepEqual(out, []);
+  });
+
+  it('[CFSV2] flags a withdrawn key as `unknown` and offers no replacement', () => {
+    // The real B-2026-09-03-4 case: the pack defines nothing under this key, so
+    // there is no streamId to trace a replacement from.
+    const out = cmcFormSpec.validateFormSpecItemKeys(
+      specWithKeys(['fertility-hormone-e3g']),
+      urineHormoneModel()
+    );
+    assert.equal(out.length, 1);
+    assert.deepEqual(out[0], { sectionKey: 'fertility-recurring', itemKey: 'fertility-hormone-e3g', reason: 'unknown' });
+    assert.equal(out[0].replacement, undefined);
+  });
+
+  it('[CFSV3] flags a deprecated key that still resolves, and names its replacement', () => {
+    // `fertility-hormone-lh` is NOT missing — it resolves, which is why an
+    // unknown-key check alone would pass this spec while the subject records
+    // LH in mg/L instead of IU/L.
+    const out = cmcFormSpec.validateFormSpecItemKeys(
+      specWithKeys(['fertility-hormone-lh']),
+      urineHormoneModel()
+    );
+    assert.equal(out.length, 1);
+    assert.equal(out[0].reason, 'deprecated');
+    assert.equal(out[0].itemKey, 'fertility-hormone-lh');
+    assert.equal(out[0].replacement, 'body-urine-hormones-lh');
+  });
+
+  it('[CFSV4] withholds a replacement when several active items share the streamId', () => {
+    // Picking one would be a guess that silently changes the unit data lands in.
+    const model = load({
+      items: {
+        'urine-lh-iu': { version: 'v2', label: { en: 'a' }, streamId: 's', eventType: 'concentration/iu-l', type: 'number', repeatable: 'any' },
+        'urine-lh-ug': { version: 'v2', label: { en: 'b' }, streamId: 's', eventType: 'concentration/ug-l', type: 'number', repeatable: 'any' },
+        'legacy-lh': { version: 'v1', deprecated: true, label: { en: 'c' }, streamId: 's', eventType: 'concentration/mg-l', type: 'number', repeatable: 'any' }
+      },
+      streams: [{ id: 's', name: 'S' }]
+    });
+    const out = cmcFormSpec.validateFormSpecItemKeys(specWithKeys(['legacy-lh']), model);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].reason, 'deprecated');
+    assert.equal(out[0].replacement, undefined);
+  });
+
+  it('[CFSV5] reports every offending key, across every section, with its section key', () => {
+    // The prod spec behind B-2026-09-03-4 carried four dead keys in one
+    // section, not the single one the bug was originally filed for.
+    const spec = basicSpec({
+      sections: [
+        { key: 'fertility-recurring', type: 'recurring', name: { en: 'F' }, itemKeys: ['fertility-hormone-e3g', 'body-urine-hormones-e3g', 'fertility-hormone-lh'] },
+        { key: 'body-recurring', type: 'recurring', name: { en: 'B' }, itemKeys: ['fertility-hormone-pdg'] }
+      ]
+    });
+    const out = cmcFormSpec.validateFormSpecItemKeys(spec, urineHormoneModel());
+    assert.deepEqual(out.map(i => `${i.sectionKey}/${i.itemKey}:${i.reason}`), [
+      'fertility-recurring/fertility-hormone-e3g:unknown',
+      'fertility-recurring/fertility-hormone-lh:deprecated',
+      'body-recurring/fertility-hormone-pdg:unknown'
+    ]);
+  });
+
+  it('[CFSV6] tolerates a spec with no sections and a section with no itemKeys', () => {
+    const model = urineHormoneModel();
+    assert.deepEqual(cmcFormSpec.validateFormSpecItemKeys(basicSpec({ sections: [] }), model), []);
+    assert.deepEqual(cmcFormSpec.validateFormSpecItemKeys(
+      basicSpec({ sections: [{ key: 's', type: 'recurring', name: { en: 'S' } }] }), model), []);
   });
 });
