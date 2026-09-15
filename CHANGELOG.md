@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.4.0] - 2026-09-15
+
+### Added
+- **`delegation` — the `@pryv/delegation` client, re-exported through hds-lib** (pinned 3.11.0).
+  Account delegation lets one account be controlled by others (a parent managing a child's account,
+  a trusted adult managing a dependent's), and ships in open-pryv.io 2.0.0-rc.18.
+
+  **Why it goes through hds-lib rather than being a consumer dependency:** the delegation client's
+  `openControlled()` builds a `pryv.Connection` from whatever `pryv` it is handed. A consumer that
+  added `@pryv/delegation` and `pryv` as its own dependencies would hand it a **second, unpatched**
+  pryv instance, with neither `@pryv/monitor` nor `@pryv/socket.io` applied, and silently lose
+  socket support on every controlled connection. Re-exporting here keeps one patched instance, the
+  same reason `cmc` and `encryption` live here. Callers pass it explicitly:
+  `delegation.Delegation.fromConnection(conn, { pryv })`, with `pryv` imported from `hds-lib`.
+
+  Types re-exported too (`Delegation`, `DelegateRecord`, `ControlledRecord`, `DelegationRecord`,
+  `DelegationError`, `RelationshipStatus`, …), so consumers need no direct dependency at all.
+
+  Tests `[DLG1]`–`[DLG4]` pin the seam, including that the re-exported `pryv` is the patched one.
+
 ## [2.3.0] - 2026-09-15
 
 ### Added

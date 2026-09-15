@@ -11,6 +11,7 @@ import monitor from '@pryv/monitor';
 import socketIo from '@pryv/socket.io';
 import * as _cmc from '@pryv/cmc';
 import * as _encryption from '@pryv/encryption';
+import * as _delegation from '@pryv/delegation';
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
 monitor(_pryv);
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
@@ -59,3 +60,13 @@ export const cmc = _cmc;
 // Re-exported so consumers reach it through hds-lib and version-alignment with the embedded
 // pryv ecosystem stays hds-lib's responsibility (see healthdatasafe/hds-lib-js#12).
 export const encryption = _encryption;
+
+// Account-delegation client (`delegations.*` API family), for guardian- and
+// caregiver-controlled accounts. Re-exported here for the same reason as cmc
+// and encryption: consumers must reach the pryv ecosystem through hds-lib, so
+// that `pryv` stays a single PATCHED module instance. `Delegation.openControlled`
+// builds a `Connection` and therefore needs an explicit `pryv`; callers must pass
+// the one exported here (`Delegation.fromConnection(conn, { pryv })`), never a
+// direct `import 'pryv'`, which would be a second unpatched instance with
+// neither the monitor nor the socket.io plugin applied.
+export const delegation = _delegation;
