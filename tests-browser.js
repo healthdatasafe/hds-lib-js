@@ -1,6 +1,2506 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ "./node_modules/@pryv/cmc/src/index.js"
+/*!*********************************************!*\
+  !*** ./node_modules/@pryv/cmc/src/index.js ***!
+  \*********************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * @pryv/cmc — CMC (Cross-account Messaging & Consent) client helpers.
+ *
+ * Mirrors the server plugin's slug + stream-id helpers so app code can
+ * build stream-ids deterministically without depending on the server's
+ * private modules, plus Level-1 protocol functions that wrap the
+ * lifecycle / chat / system / scope-update event writes on top of a
+ * `pryv.Connection`. See server-side
+ * `open-pryv.io/components/cmc/{IMPLEMENTERS-GUIDE.md,src/{slug,constants}.ts}`.
+ *
+ * Stream-id model:
+ *   :_cmc:                                  reserved root
+ *   :_cmc:inbox                             one-shot lifecycle (cross-app)
+ *   :_cmc:apps:<app-code>:[<path>:]chats:<counterparty-slug>
+ *   :_cmc:apps:<app-code>:[<path>:]collectors:<counterparty-slug>
+ *
+ * `counterparty-slug` = `<username>--<host-slug>` where host-slug is the
+ * host with `.` replaced by `-`.
+ */
+
+// --- Constants ---
+// All :_cmc:* identifiers compose from NS. If the namespace is ever
+// rebranded (e.g. to ':_xchg:' or similar), changing NS alone updates
+// every constant + every helper that builds a stream-id.
+const NS = ':_cmc:';
+const NS_INBOX = NS + 'inbox';
+const NS_APPS = NS + 'apps';
+const NS_INTERNAL = NS + '_internal';
+const NS_INTERNAL_RETRIES = NS_INTERNAL + ':retries';
+
+const ET_REQUEST = 'consent/request-cmc';
+const ET_ACCEPT = 'consent/accept-cmc';
+const ET_REFUSE = 'consent/refuse-cmc';
+const ET_REVOKE = 'consent/revoke-cmc';
+const ET_INVALIDATE_LINK = 'consent/invalidate-link-cmc';
+const ET_SCOPE_REQUEST = 'consent/scope-request-cmc';
+const ET_SCOPE_UPDATE = 'consent/scope-update-cmc';
+const ET_CHAT = 'message/chat-cmc';
+const ET_SYSTEM_ALERT = 'notification/alert-cmc';
+const ET_SYSTEM_ACK = 'notification/ack-cmc';
+const ET_SYSTEM_SCOPE_REQUEST = ET_SCOPE_REQUEST;
+const ET_SYSTEM_SCOPE_UPDATE = ET_SCOPE_UPDATE;
+
+const EVENT_TYPES_LIFECYCLE = [ET_REQUEST, ET_ACCEPT, ET_REFUSE, ET_REVOKE];
+const EVENT_TYPES_CHAT = [ET_CHAT];
+const EVENT_TYPES_SYSTEM = [
+  ET_SYSTEM_ALERT,
+  ET_SYSTEM_ACK,
+  ET_SYSTEM_SCOPE_REQUEST,
+  ET_SYSTEM_SCOPE_UPDATE
+];
+
+// --- Slug helpers ---
+
+const SEPARATOR = '--';
+const SLUG_PIECE_RE = /^[a-z0-9-]+$/;
+
+function assertNonEmpty (label, value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error('cmc-slug: ' + label + ' must be a non-empty string');
+  }
+  return value;
+}
+
+function assertSlugPiece (label, value) {
+  if (!SLUG_PIECE_RE.test(value)) {
+    throw new Error(
+      'cmc-slug: ' + label + ' "' + value + '" must match ' + SLUG_PIECE_RE.toString()
+    );
+  }
+  if (value.includes(SEPARATOR)) {
+    throw new Error(
+      'cmc-slug: ' + label + ' "' + value + '" must not contain the double-hyphen separator'
+    );
+  }
+}
+
+/**
+ * Slugify a host: lowercase and replace `.` with `-`.
+ */
+function slugifyHost (host) {
+  assertNonEmpty('host', host);
+  // Strip trailing port (`:3000`) — port doesn't affect cross-account
+  // identity. Two users on the same hostname are the same platform
+  // regardless of which port their api endpoint listens on. Mirrors
+  // the server-side helper in open-pryv.io components/cmc/src/slug.ts.
+  const hostNoPort = host.replace(/:\d+$/, '');
+  return hostNoPort.toLowerCase().replace(/\./g, '-');
+}
+
+/**
+ * Build a counterparty slug `<username>--<host-slug>`.
+ *
+ * @param {Object} params
+ * @param {string} params.username
+ * @param {string} params.host - full hostname (e.g. 'pryv.me')
+ * @returns {string}
+ */
+function counterpartySlug (params) {
+  const username = assertNonEmpty('username', params.username).toLowerCase();
+  assertSlugPiece('username', username);
+  const hostSlug = slugifyHost(params.host);
+  assertSlugPiece('host-slug', hostSlug);
+  return username + SEPARATOR + hostSlug;
+}
+
+/**
+ * Parse a counterparty slug back to its pieces. Note: the host-slug is
+ * lossy — `pryv-me` could come from `pryv.me` or `pryv-me`. Store the
+ * canonical host alongside the slug if you need it.
+ *
+ * @param {string} slug
+ * @returns {{ username: string, hostSlug: string }}
+ */
+function parseCounterpartySlug (slug) {
+  assertNonEmpty('slug', slug);
+  const pieces = slug.split(SEPARATOR);
+  if (pieces.length !== 2) {
+    throw new Error(
+      'cmc-slug: counterparty slug "' + slug + '" must have exactly 2 ' +
+      'double-hyphen-separated pieces, got ' + pieces.length
+    );
+  }
+  for (const piece of pieces) {
+    assertSlugPiece('slug piece', piece);
+  }
+  return { username: pieces[0], hostSlug: pieces[1] };
+}
+
+// --- Stream-id builders ---
+
+/** `<scopeStreamId>:chats` */
+function chatsParentUnder (scopeStreamId) {
+  return scopeStreamId + ':chats';
+}
+
+/** `<scopeStreamId>:chats:<counterparty-slug>` */
+function chatStreamUnder (scopeStreamId, slug) {
+  return scopeStreamId + ':chats:' + slug;
+}
+
+/** `<scopeStreamId>:collectors` */
+function collectorsParentUnder (scopeStreamId) {
+  return scopeStreamId + ':collectors';
+}
+
+/** `<scopeStreamId>:collectors:<counterparty-slug>` */
+function collectorStreamUnder (scopeStreamId, slug) {
+  return scopeStreamId + ':collectors:' + slug;
+}
+
+/**
+ * Build the app-scope root `:_cmc:apps:<app-code>`.
+ */
+function appScope (appCode) {
+  assertNonEmpty('appCode', appCode);
+  return NS_APPS + ':' + appCode;
+}
+
+// --- Classification predicates ---
+
+/** Does this stream-id live under the :_cmc: namespace? */
+function isCmcStreamId (streamId) {
+  return streamId === ':_cmc' || streamId.startsWith(NS);
+}
+
+const APP_NESTED_PLUGIN_RE = /:_cmc:apps:[^:]+(?::[^:]+)*:(chats|collectors)(?::|$)/;
+
+/** True if this id is at or beneath chats/collectors under :_cmc:apps:*. */
+function isAppNestedPluginStream (streamId) {
+  return APP_NESTED_PLUGIN_RE.test(streamId);
+}
+
+/**
+ * Extract the app-code segment from `:_cmc:apps:<app-code>[:...]`.
+ * Returns null for ids that aren't under `:_cmc:apps:`.
+ */
+function getAppCode (streamId) {
+  if (!streamId.startsWith(NS_APPS + ':')) return null;
+  const rest = streamId.substring(NS_APPS.length + 1);
+  const colonIdx = rest.indexOf(':');
+  return colonIdx === -1 ? rest : rest.substring(0, colonIdx);
+}
+
+const CHAT_STREAM_ID_RE = /^(:_cmc:apps:[^:]+(?::[^:]+)*):chats:([a-z0-9-]+--[a-z0-9-]+)$/;
+const COLLECTOR_STREAM_ID_RE = /^(:_cmc:apps:[^:]+(?::[^:]+)*):collectors:([a-z0-9-]+--[a-z0-9-]+)$/;
+
+/**
+ * Parse a chat trigger stream-id into its components.
+ * Returns null on shape mismatch.
+ */
+function parseChatStreamId (streamId) {
+  if (typeof streamId !== 'string') return null;
+  const m = streamId.match(CHAT_STREAM_ID_RE);
+  if (m == null) return null;
+  let counterparty;
+  try {
+    counterparty = parseCounterpartySlug(m[2]);
+  } catch (_e) {
+    return null;
+  }
+  return {
+    appCode: getAppCode(m[1]),
+    scopeStreamId: m[1],
+    counterpartySlug: m[2],
+    counterparty
+  };
+}
+
+/**
+ * Parse a collectors trigger stream-id into its components.
+ * Returns null on shape mismatch.
+ */
+function parseCollectorStreamId (streamId) {
+  if (typeof streamId !== 'string') return null;
+  const m = streamId.match(COLLECTOR_STREAM_ID_RE);
+  if (m == null) return null;
+  let counterparty;
+  try {
+    counterparty = parseCounterpartySlug(m[2]);
+  } catch (_e) {
+    return null;
+  }
+  return {
+    appCode: getAppCode(m[1]),
+    scopeStreamId: m[1],
+    counterpartySlug: m[2],
+    counterparty
+  };
+}
+
+/**
+ * Stable kebab-case `error.id` strings the cmc server plugin emits on
+ * trigger event `content.failure.reason`. Mirror of the server's
+ * `components/cmc/src/errorIds.ts` `CmcErrorIds`. Match on these
+ * constants instead of parsing English `error.message`.
+ */
+const errorIds = Object.freeze({
+  // Capability lifecycle
+  CAPABILITY_INVALID: 'cmc-capability-invalid',
+  CAPABILITY_CONSUMED: 'cmc-capability-consumed',
+  CAPABILITY_INVALIDATED: 'cmc-capability-invalidated',
+  CAPABILITY_ALREADY_ACCEPTED_BY_YOU: 'cmc-capability-already-accepted-by-you',
+  CAPABILITY_TIMEOUT: 'cmc-capability-timeout',
+  CAPABILITY_EMPTY: 'cmc-capability-empty',
+  CAPABILITY_MULTIPLE_OFFERS: 'cmc-capability-multiple-offers',
+  // Caller's `content.expiresAt` on the trigger event resolves to a
+  // TTL outside the platform-allowed bounds [60s, 30d]. Either omit
+  // `expiresAt` to use the 7-day default or pick a bounded value.
+  CAPABILITY_TTL_OUT_OF_RANGE: 'cmc-capability-ttl-out-of-range',
+  // Trigger-event content shape
+  HANDLER_MISSING_CAPABILITY_URL: 'cmc-handler-missing-capability-url',
+  HANDLER_MISSING_CAPABILITY_ID: 'cmc-handler-missing-capability-id',
+  HANDLER_OFFER_MISSING_CAPABILITY_ID: 'cmc-handler-offer-missing-capability-id',
+  OFFER_EMPTY_PERMISSIONS: 'cmc-offer-empty-permissions',
+  // Handler routing
+  HANDLER_WRONG_TYPE: 'cmc-handler-wrong-type',
+  HANDLER_THREW: 'cmc-handler-threw',
+  HANDLER_OFFER_READ_FAILED: 'cmc-handler-offer-read-failed',
+  // Counterparty resolution
+  HANDLER_COUNTERPARTY_UNKNOWN: 'cmc-handler-counterparty-unknown',
+  // Access mint
+  HANDLER_DATA_GRANT_CREATE_FAILED: 'cmc-handler-data-grant-create-failed',
+  HANDLER_DATA_GRANT_NO_APIENDPOINT: 'cmc-handler-data-grant-no-apiendpoint',
+  HANDLER_BUILD_DATA_GRANT_FAILED: 'cmc-handler-build-data-grant-failed',
+  BACK_CHANNEL_CREATE_FAILED: 'cmc-back-channel-create-failed',
+  // Outbound delivery
+  HANDLER_DELIVERY_THREW: 'cmc-handler-delivery-threw',
+  HANDLER_DELIVERY_REJECTED: 'cmc-handler-delivery-rejected',
+  HANDLER_DELIVERY_FAILED: 'cmc-handler-delivery-failed',
+  // Chat handler outcomes
+  CHAT_STREAM_NOT_CHAT: 'cmc-chat-stream-not-chat',
+  CHAT_COUNTERPARTY_ACCESS_NOT_FOUND: 'cmc-chat-counterparty-access-not-found',
+  CHAT_NO_REMOTE_APIENDPOINT: 'cmc-chat-no-remote-apiendpoint',
+  CHAT_NO_REMOTE_CHAT_STREAM: 'cmc-chat-no-remote-chat-stream',
+  // Feature-gating: a relationship with negotiated `features.chat:
+  // false` or `features.systemMessaging: false` rejects sends on the
+  // disabled channel. Default-permit on omission (matches the
+  // offer-side default).
+  CHAT_DISABLED: 'cmc-chat-disabled',
+  SYSTEM_MESSAGING_DISABLED: 'cmc-system-messaging-disabled',
+  // Route-level forge prevention: `accesses.create` / `accesses.update`
+  // reject any user-supplied `clientData.cmc.*`. That namespace is
+  // plugin-owned end-to-end (role, appCode, counterparty, capability,
+  // requestEventId, features); allowing user-set values would let an
+  // app forge a counterparty role and bypass the handshake.
+  CLIENTDATA_CMC_FORBIDDEN: 'cmc-clientdata-cmc-forbidden',
+  // streams.delete reject on the five reserved CMC parents +
+  // :_cmc:_internal:* + plugin-managed chats/collectors segments —
+  // even from a personal token. Deleting :_cmc: would silently break
+  // every active relationship on the account.
+  RESERVED_STREAM_UNDELETABLE: 'cmc-reserved-stream-undeletable',
+  // The peer-side `content.from` stamping hook rejects when the
+  // writer's counterparty access has no stored `{username,host}`
+  // identity — wiring bug at handshake time; surface for ops.
+  COUNTERPARTY_IDENTITY_MISSING: 'cmc-counterparty-identity-missing'
+});
+
+// --- Level-1 protocol functions ---
+//
+// Each function takes a `pryv.Connection` (peer dep) as first arg.
+// Server-side protocol behaviour is documented in
+// open-pryv.io/components/cmc/IMPLEMENTERS-GUIDE.md.
+//
+// `connection.api([{method, params}])` returns the raw batch result;
+// `connection.apiOne(method, params, resultKey)` unwraps `result[resultKey]`
+// and throws PryvError on `.error`. Both are used below.
+
+/**
+ * Typed error wrapping a CMC trigger-event failure. `id` is the stable
+ * kebab-case reason from `errorIds` (mirrors server-side CmcErrorIds);
+ * `cause` is the underlying error or trigger-event object for callers
+ * that want the raw payload.
+ */
+class CmcError extends Error {
+  constructor (message, id, cause) {
+    super(message);
+    this.name = 'CmcError';
+    this.id = id;
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+/**
+ * Open a CMC invite. Server-side mints capability URL + offer event.
+ * Reference: IMPLEMENTERS-GUIDE §"Step 2 — Provider publishes the request".
+ *
+ * @param {Object} conn               pryv.Connection (provider side)
+ * @param {Object} params
+ * @param {string} params.appCode
+ * @param {string} params.scopeStreamId          - e.g. ':_cmc:apps:my-app' or a subtree
+ * @param {string} params.displayName
+ * @param {Array<{streamId,level:string}>} params.requestedPermissions
+ * @param {'single-use'|'open-link'} [params.mode='single-use']
+ * @param {{en?:string}|Object} [params.title]
+ * @param {{en?:string}|Object} [params.description]
+ * @param {{en?:string}|Object} [params.consent]
+ * @param {{chat?:boolean, systemMessaging?:boolean}} [params.features]
+ * @param {number} [params.expiresAt]
+ * @param {'shared'|'app'} [params.accessType='shared'] - Pryv access type the
+ *   accepted data-grant is minted as. Default `shared` (non-delegable). Set
+ *   `app` to make the grant delegable — the approved requester can then
+ *   `accesses.create` scoped, individually-named sub-accesses (permissions ⊆
+ *   the grant) for least-privilege re-delegation with per-actor audit.
+ * @param {string|null} [params.to=null]
+ * @param {Object} [params.requesterMeta]
+ * @returns {Promise<{inviteEventId:string, capabilityUrl:string, mode:string, expiresAt:number}>}
+ */
+async function createInvite (conn, params) {
+  if (params == null) throw new Error('createInvite: params required');
+  const requesterMeta = Object.assign(
+    { displayName: params.displayName, appId: params.appCode },
+    params.requesterMeta || {}
+  );
+  const request = {
+    title: params.title || { en: params.displayName },
+    description: params.description || { en: '' },
+    consent: params.consent || { en: '' },
+    permissions: params.requestedPermissions || []
+  };
+  if (params.features) request.features = params.features;
+  if (params.expiresAt) request.expiresAt = params.expiresAt;
+  if (params.accessType) request.accessType = params.accessType;
+  const content = {
+    to: params.to === undefined ? null : params.to,
+    capabilityRequested: true,
+    request,
+    requesterMeta
+  };
+  if (params.mode && params.mode !== 'single-use') {
+    content.capability = { mode: params.mode };
+  }
+  const event = await conn.apiOne('events.create', {
+    streamIds: [params.scopeStreamId],
+    type: ET_REQUEST,
+    content
+  }, 'event');
+  return {
+    inviteEventId: event.id,
+    capabilityUrl: event.content && event.content.capabilityUrl,
+    mode: (event.content && event.content.capability && event.content.capability.mode) || params.mode || 'single-use',
+    expiresAt: (event.content && event.content.capabilityExpiresAt) || (event.content && event.content.request && event.content.request.expiresAt)
+  };
+}
+
+/**
+ * List provider-side invites issued under `params.scopeStreamId` (or
+ * default `:_cmc:apps`). Capped single call; default limit 1000.
+ * When `truncated` is true, caller can fall back to
+ * `connection.getEventsStreamed` for full iteration.
+ *
+ * @param {Object} conn
+ * @param {Object} [params]
+ * @param {string} [params.scopeStreamId=':_cmc:apps']
+ * @param {number} [params.limit=1000]
+ * @returns {Promise<{items:Array, truncated:boolean}>}
+ */
+async function listInvites (conn, params) {
+  const limit = (params && params.limit) || 1000;
+  const streams = [(params && params.scopeStreamId) || NS_APPS];
+  const events = await conn.apiOne('events.get', {
+    streams,
+    types: [ET_REQUEST],
+    limit
+  }, 'events');
+  const items = events.map(inviteRecordFromEvent);
+  return { items, truncated: items.length >= limit };
+}
+
+function inviteRecordFromEvent (event) {
+  const c = (event && event.content) || {};
+  return {
+    inviteEventId: event.id,
+    capabilityUrl: c.capabilityUrl || null,
+    mode: (c.capability && c.capability.mode) || 'single-use',
+    status: c.status || 'pending',
+    expiresAt: c.capabilityExpiresAt || (c.request && c.request.expiresAt) || null,
+    counterparty: c.acceptedBy || null,
+    acceptedAt: c.acceptedAt || null,
+    scopeStreamId: (event.streamIds && event.streamIds[0]) || event.streamId
+  };
+}
+
+/**
+ * Fetch one invite's record by trigger-event id.
+ *
+ * @param {Object} conn
+ * @param {string} inviteEventId
+ * @returns {Promise<Object>}
+ */
+async function getInviteStatus (conn, inviteEventId) {
+  const result = await conn.apiOne('events.getOne', { id: inviteEventId }, 'event');
+  return inviteRecordFromEvent(result);
+}
+
+/**
+ * Revoke a relationship (provider side — back-channel access). Posts a
+ * `consent/revoke-cmc` event with `{ accessId, reason }`; plugin
+ * orchestrates dual delete.
+ *
+ * Two ways to identify the relationship:
+ *   1. `{ accessId, scopeStreamId, reason? }` — power-user path, pass
+ *      the back-channel access id directly.
+ *   2. `{ inviteEventId, scopeStreamId?, reason? }` — convenience path.
+ *      Reads the invite event + matching inbox accept to derive
+ *      `backChannelAccessId`. Two extra API calls. Defaults
+ *      `scopeStreamId` to the invite event's own stream.
+ *
+ * @param {Object} conn
+ * @param {Object} params
+ * @param {string} [params.accessId]              - back-channel access id (provider side)
+ * @param {string} [params.inviteEventId]         - alternative to accessId
+ * @param {string} [params.scopeStreamId]         - own scope to write into (required with accessId; auto-derived with inviteEventId)
+ * @param {Object} [params.reason]
+ * @returns {Promise<void>}
+ */
+async function revokeRelationship (conn, params) {
+  if (params == null) throw new Error('revokeRelationship: params required');
+  let accessId = params.accessId;
+  let scopeStreamId = params.scopeStreamId;
+  if (!accessId) {
+    if (!params.inviteEventId) {
+      throw new Error('revokeRelationship: provide accessId, or inviteEventId for lookup');
+    }
+    const inviteEvent = await conn.apiOne('events.getOne', { id: params.inviteEventId }, 'event');
+    if (!inviteEvent) {
+      throw new Error('revokeRelationship: invite event not found: ' + params.inviteEventId);
+    }
+    if (!scopeStreamId) {
+      scopeStreamId = (inviteEvent.streamIds && inviteEvent.streamIds[0]) || inviteEvent.streamId;
+    }
+    const acceptsRaw = await conn.apiOne('events.get', {
+      streams: [NS_INBOX],
+      types: [ET_ACCEPT],
+      limit: 200
+    }, 'events');
+    const match = (acceptsRaw || []).find(function (e) {
+      const c = e.content || {};
+      return c.originalEventId === params.inviteEventId ||
+             c.requestEventId === params.inviteEventId ||
+             c.inviteEventId === params.inviteEventId;
+    });
+    if (!match) {
+      throw new Error('revokeRelationship: no inbox accept found for invite ' + params.inviteEventId);
+    }
+    accessId = match.content && match.content.backChannelAccessId;
+    if (!accessId) {
+      throw new Error('revokeRelationship: inbox accept ' + match.id + ' has no backChannelAccessId');
+    }
+  }
+  if (!scopeStreamId) {
+    throw new Error('revokeRelationship: scopeStreamId is required with accessId path');
+  }
+  const content = { accessId };
+  if (params.reason) content.reason = params.reason;
+  await conn.apiOne('events.create', {
+    streamIds: [scopeStreamId],
+    type: ET_REVOKE,
+    content
+  }, 'event');
+}
+
+/**
+ * Invalidate an open-link capability so it stops accepting NEW patients.
+ * The provided `inviteEventId` is used to look up the trigger event and
+ * read its `capabilityId`. Already-established relationships are
+ * untouched. Idempotent; no-op on single-use capabilities.
+ *
+ * @param {Object} conn
+ * @param {Object} params
+ * @param {string} params.inviteEventId
+ * @param {string} [params.scopeStreamId]   - own scope to write the invalidate into (defaults to the trigger's stream)
+ * @param {Object} [params.reason]
+ * @returns {Promise<void>}
+ */
+async function invalidateCapability (conn, params) {
+  if (params == null || !params.inviteEventId) {
+    throw new Error('invalidateCapability: params.inviteEventId required');
+  }
+  const trigger = await conn.apiOne('events.getOne', { id: params.inviteEventId }, 'event');
+  const capabilityId = trigger && trigger.content && (trigger.content.capabilityId ||
+    (trigger.content.capability && trigger.content.capability.id));
+  if (!capabilityId) {
+    throw new Error('invalidateCapability: could not locate capabilityId on invite event ' + params.inviteEventId);
+  }
+  const scopeStreamId = params.scopeStreamId ||
+    (trigger.streamIds && trigger.streamIds[0]) || trigger.streamId;
+  const content = { capabilityId };
+  if (params.reason) content.reason = params.reason;
+  await conn.apiOne('events.create', {
+    streamIds: [scopeStreamId],
+    type: ET_INVALIDATE_LINK,
+    content
+  }, 'event');
+}
+
+/**
+ * Provider proposes a scope change to a user (collector side). Posts a
+ * `consent/scope-request-cmc` on the collector stream.
+ *
+ * Renamed from `requestScopeUpdate` in 3.9.0 to free that name for the
+ * user-side accept hand-off helper. The old name is kept as a
+ * deprecated alias (see module.exports below); remove after one
+ * release cycle.
+ *
+ * @param {Object} conn
+ * @param {Object} params
+ * @param {string} params.collectorStreamId       - the provider's own collector stream
+ * @param {Array<{streamId,level:string}>} params.newPermissions
+ * @param {Object} [params.message]
+ * @param {number} [params.expires]
+ * @returns {Promise<{scopeRequestEventId:string}>}
+ */
+async function proposeScopeUpdate (conn, params) {
+  if (params == null) throw new Error('proposeScopeUpdate: params required');
+  const content = { newPermissions: params.newPermissions };
+  if (params.message) content.message = params.message;
+  if (params.expires) content.expires = params.expires;
+  const event = await conn.apiOne('events.create', {
+    streamIds: [params.collectorStreamId],
+    type: ET_SCOPE_REQUEST,
+    content
+  }, 'event');
+  return { scopeRequestEventId: event.id };
+}
+
+// --- Consumer side ---
+
+/**
+ * Read a capability URL. Opens the capability access as a Pryv
+ * connection and reads the offer event (one event under
+ * `:_cmc:_internal:offer`).
+ *
+ * No auto-retry — errors surface directly. Matches lib-js convention
+ * (Connection.api doesn't auto-retry). Caller picks retry policy.
+ *
+ * @param {string} capabilityUrl
+ * @param {Object} [opts]
+ * @param {Object} [opts.pryv]   - explicit pryv module (otherwise resolved via require('pryv'))
+ * @returns {Promise<{requester:{username:string|null,host:string,displayName?:string}, consent:Object|undefined, requestedPermissions:Array, mode:string, features:Object}>}
+ */
+async function readOffer (capabilityUrl, opts) {
+  const pryv = (opts && opts.pryv) || __webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js");
+  const cap = new pryv.Connection(capabilityUrl);
+  // The capability access has `read` on a single per-capability stream
+  // (`:_cmc:_internal:offer:<capId>`) but the accepter doesn't know
+  // <capId> from the capabilityUrl alone. The parent `:_cmc:_internal:offer`
+  // is NOT a reserved stream that auto-exists on every user account — only
+  // the per-capability children do — so a `streams: [':_cmc:_internal:offer']`
+  // filter resolves to `unknown-referenced-resource`.
+  //
+  // Mirror the plugin's own readOfferViaCapability (acceptOrchestration.ts):
+  // omit the streams filter entirely and rely on the cap access's
+  // permissions to narrow the response to the single offer event this
+  // token can read. The `types` filter is defensive in case the offer
+  // stream ever holds more than one event in future revisions.
+  const events = await cap.apiOne('events.get', {
+    types: [ET_REQUEST],
+    limit: 1
+  }, 'events');
+  if (events.length === 0) {
+    throw new CmcError('CMC capability offer stream empty', errorIds.CAPABILITY_EMPTY);
+  }
+  if (events.length > 1) {
+    throw new CmcError('CMC capability offer stream had multiple events', errorIds.CAPABILITY_MULTIPLE_OFFERS);
+  }
+  const offer = events[0];
+  const content = (offer && offer.content) || {};
+  const request = content.request || {};
+  const meta = content.requesterMeta || {};
+  let requesterIdentity = { username: null, host: '', displayName: meta.displayName };
+  try {
+    const info = await cap.service.info();
+    const decomposed = pryv.utils.decomposeAPIEndpoint(capabilityUrl, info.api);
+    // The capability access lives on the requester's platform — username
+    // on the capability is the requester's username.
+    const accessInfo = await cap.accessInfo();
+    requesterIdentity = {
+      username: (accessInfo && accessInfo.user && accessInfo.user.username) || decomposed.username,
+      host: decomposed.host,
+      displayName: meta.displayName
+    };
+  } catch (_e) {
+    // Best-effort identity; offer content still returned.
+  }
+  return {
+    requester: requesterIdentity,
+    consent: request.consent,
+    requestedPermissions: request.permissions || [],
+    mode: (content.capability && content.capability.mode) || 'single-use',
+    features: request.features || {}
+  };
+}
+
+/**
+ * Accept an offer. Mints the data-grant + back-channel locally; the
+ * server's plugin handles the back-channel delivery to the requester
+ * (~50-200ms async; trigger event status goes 'pending' → 'completed'
+ * once back-channel populates counterparty.apiEndpoint).
+ *
+ * **Requires a PERSONAL access token on `conn`.** Server-side
+ * `consent/accept-cmc` writes from app- or shared-access tokens are
+ * rejected `400 invalid-operation` (`error.data.id ===
+ * 'cmc-accept-requires-personal-token'`). Apps that hold only an
+ * app/shared token should call `requestAccept` instead — it hands off
+ * to app-web-user-account's `/cmc-accept` page where the user signs in, the
+ * trigger is written with the fresh personal token, and the data-grant
+ * apiEndpoint is returned to the caller.
+ *
+ * By default resolves only after Phase 2 (trigger status='completed').
+ * Throws CmcError carrying tagged failure.reason as error.id on 'failed'.
+ *
+ * Power users: opt out with { waitForCompletion: false } → resolves
+ * immediately after events.create with { acceptEventId,
+ * dataGrantAccessId, status: 'pending' } and observes completion
+ * themselves.
+ *
+ * @param {Object} conn                     accepter's connection (personal access token).
+ * @param {string} capabilityUrl
+ * @param {Object} opts
+ * @param {string} opts.scopeStreamId       - REQUIRED. Own :_cmc:apps:<app>[:...] stream where the accept trigger lands. Must NOT be :_cmc:inbox (which routes through the peer-delivered path).
+ * @param {{chat?:boolean,systemMessaging?:boolean}} [opts.extra]
+ * @param {string} [opts.accessName]
+ * @param {boolean} [opts.waitForCompletion=true]
+ * @param {number}  [opts.completionTimeoutMs=10000]
+ * @param {number}  [opts.completionPollIntervalMs=200]
+ * @returns {Promise<Object>}
+ */
+async function acceptInvite (conn, capabilityUrl, opts) {
+  opts = opts || {};
+  if (!opts.scopeStreamId) {
+    throw new Error('acceptInvite: opts.scopeStreamId is required ' +
+      '(an :_cmc:apps:<app>[:...] stream on YOUR account where the accept ' +
+      'trigger lands — not :_cmc:inbox, which routes through the peer-delivered path)');
+  }
+  const scopeStreamId = opts.scopeStreamId;
+  // Read the offer FIRST to capture counterparty identity (single-use
+  // capabilities flip to 'consumed' on the first accept, so a second
+  // read after submit would fail).
+  let counterparty = { username: null, host: null, displayName: undefined };
+  let offerFeatures = null;
+  try {
+    const offer = await readOffer(capabilityUrl, opts);
+    counterparty = {
+      username: offer.requester && offer.requester.username,
+      host: offer.requester && offer.requester.host,
+      displayName: offer.requester && offer.requester.displayName
+    };
+    offerFeatures = offer.features || null;
+  } catch (_e) {
+    // Best-effort; if offer read fails the accept can still proceed.
+  }
+  // Persist the negotiated features into the accept trigger so the
+  // plugin's handleAccept can stamp them onto the data-grant access's
+  // clientData.cmc.features. Both keys default to true when omitted on
+  // the offer side (per README "Features negotiation"); explicit false
+  // is binding both ways.
+  const resolvedFeatures = {
+    chat: offerFeatures?.chat !== false,
+    systemMessaging: offerFeatures?.systemMessaging !== false
+  };
+  const content = { capabilityUrl, features: resolvedFeatures };
+  if (opts.extra) content.extra = opts.extra;
+  if (opts.accessName) content.accessName = opts.accessName;
+  const event = await conn.apiOne('events.create', {
+    streamIds: [scopeStreamId],
+    type: ET_ACCEPT,
+    content
+  }, 'event');
+  const waitForCompletion = opts.waitForCompletion !== false;
+  if (!waitForCompletion) {
+    return {
+      acceptEventId: event.id,
+      dataGrantAccessId: (event.content && event.content.dataGrantAccessId) || null,
+      counterparty,
+      features: offerFeatures || {},
+      status: (event.content && event.content.status) || 'pending'
+    };
+  }
+  const finalEvent = await pollTriggerCompletion(conn, event.id, {
+    timeoutMs: opts.completionTimeoutMs || 10000,
+    intervalMs: opts.completionPollIntervalMs || 200
+  });
+  const fc = finalEvent.content || {};
+  if (fc.status === 'failed') {
+    const reason = (fc.failure && fc.failure.reason) || 'cmc-handler-threw';
+    throw new CmcError('CMC accept failed: ' + reason, reason, fc.failure);
+  }
+  return {
+    acceptEventId: finalEvent.id,
+    dataGrantAccessId: fc.dataGrantAccessId || null,
+    counterparty,
+    features: offerFeatures || fc.features || (fc.request && fc.request.features) || {}
+  };
+}
+
+/**
+ * Requester-side dual of `acceptInvite`'s Phase 2 wait: poll for the
+ * accepter's `consent/accept-cmc` arrival on `:_cmc:inbox`. Returns the
+ * data the requester needs to actually USE the access — the data-grant
+ * apiEndpoint on the accepter's account and the accepter's identity.
+ *
+ * The inbox arrival does NOT carry the requester's inviteEventId (the
+ * server-side `originalEventId` field is the capability-internal offer
+ * event id, not the trigger). Identification therefore relies on
+ * `from.{username,host}` + `requesterAppCode` matching. Pass either or
+ * both as options:
+ *   - { fromUsername, fromHost? }     match on incoming `from.username`
+ *                                     (and host if provided).
+ *   - { appCode }                     also match `requesterAppCode`.
+ *   - { sinceTime } (optional)        skip arrivals older than this
+ *                                     unix-seconds timestamp.
+ *
+ * If multiple arrivals match, the most-recent one wins.
+ *
+ * @param {Object} conn
+ * @param {Object} opts
+ * @param {string} [opts.fromUsername]
+ * @param {string} [opts.fromHost]
+ * @param {string} [opts.appCode]
+ * @param {number} [opts.sinceTime]
+ * @param {number} [opts.timeoutMs=15000]
+ * @param {number} [opts.intervalMs=300]
+ * @returns {Promise<{acceptInboxEventId:string, grantedAccessApiEndpoint:string|null, counterparty:{username:string,host:string}|null, features:Object}>}
+ */
+async function waitForAccept (conn, opts) {
+  opts = opts || {};
+  if (!opts.fromUsername && !opts.appCode) {
+    throw new Error('waitForAccept: provide at least one of opts.fromUsername / opts.appCode to identify the arrival');
+  }
+  const timeoutMs = opts.timeoutMs || 15000;
+  const intervalMs = opts.intervalMs || 300;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = await conn.apiOne('events.get', {
+      streams: [NS_INBOX],
+      types: [ET_ACCEPT],
+      limit: 100,
+      sortAscending: false
+    }, 'events');
+    for (const ev of (events || [])) {
+      const c = ev.content || {};
+      if (opts.sinceTime != null && ev.time != null && ev.time < opts.sinceTime) continue;
+      if (opts.fromUsername != null && (c.from == null || c.from.username !== opts.fromUsername)) continue;
+      if (opts.fromHost != null && (c.from == null || c.from.host !== opts.fromHost)) continue;
+      if (opts.appCode != null && c.requesterAppCode !== opts.appCode) continue;
+      return {
+        acceptInboxEventId: ev.id,
+        grantedAccessApiEndpoint: (c.grantedAccess && c.grantedAccess.apiEndpoint) || null,
+        counterparty: c.from || null,
+        features: c.features || {}
+      };
+    }
+    await sleep(intervalMs);
+  }
+  throw new CmcError(
+    'waitForAccept: no consent/accept-cmc arrival matching ' + JSON.stringify({ fromUsername: opts.fromUsername, fromHost: opts.fromHost, appCode: opts.appCode }) + ' within ' + timeoutMs + 'ms',
+    errorIds.CAPABILITY_TIMEOUT
+  );
+}
+
+async function pollTriggerCompletion (conn, eventId, opts) {
+  const deadline = Date.now() + opts.timeoutMs;
+  // Initial check before sleeping.
+  for (;;) {
+    const ev = await conn.apiOne('events.getOne', { id: eventId }, 'event');
+    const status = ev && ev.content && ev.content.status;
+    if (status === 'completed' || status === 'failed') return ev;
+    if (Date.now() >= deadline) {
+      throw new CmcError(
+        'CMC trigger ' + eventId + ' did not reach completed/failed within ' + opts.timeoutMs + 'ms (last status: ' + status + ')',
+        errorIds.CAPABILITY_TIMEOUT
+      );
+    }
+    await sleep(opts.intervalMs);
+  }
+}
+
+function sleep (ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+/**
+ * Refuse an offer. Single event write; plugin delivers refusal back via
+ * capability. No accesses created.
+ *
+ * @param {Object} conn
+ * @param {string} capabilityUrl
+ * @param {Object} opts
+ * @param {string} opts.scopeStreamId       - REQUIRED. Own :_cmc:apps:<app>[:...] stream where the refuse trigger lands.
+ * @param {Object} [opts.reason]
+ * @returns {Promise<{refuseEventId:string}>}
+ */
+async function refuseInvite (conn, capabilityUrl, opts) {
+  opts = opts || {};
+  if (!opts.scopeStreamId) {
+    throw new Error('refuseInvite: opts.scopeStreamId is required ' +
+      '(an :_cmc:apps:<app>[:...] stream on YOUR account where the refuse trigger lands)');
+  }
+  const scopeStreamId = opts.scopeStreamId;
+  const content = { capabilityUrl };
+  if (opts.reason) content.reason = opts.reason;
+  const event = await conn.apiOne('events.create', {
+    streamIds: [scopeStreamId],
+    type: ET_REFUSE,
+    content
+  }, 'event');
+  return { refuseEventId: event.id };
+}
+
+/**
+ * Revoke an established relationship from the accepter (data-grant) side.
+ *
+ * @param {Object} conn
+ * @param {Object} params
+ * @param {string} params.scopeStreamId   - own scope to write into
+ * @param {string} params.accessId        - the local data-grant access id
+ * @param {Object} [params.reason]
+ * @returns {Promise<void>}
+ */
+async function revokeAcceptance (conn, params) {
+  if (params == null) throw new Error('revokeAcceptance: params required');
+  const content = { accessId: params.accessId };
+  if (params.reason) content.reason = params.reason;
+  await conn.apiOne('events.create', {
+    streamIds: [params.scopeStreamId],
+    type: ET_REVOKE,
+    content
+  }, 'event');
+}
+
+/**
+ * List accepted relationships from the accepter side. Reads
+ * `consent/accept-cmc` triggers under the given scope.
+ *
+ * @param {Object} conn
+ * @param {Object} [params]
+ * @param {string} [params.scopeStreamId=':_cmc:apps']  - root or sub-scope to search recursively
+ * @param {number} [params.limit=1000]
+ * @returns {Promise<Array>}
+ */
+async function listAcceptedRelationships (conn, params) {
+  params = params || {};
+  // Default to the apps root (recursive) so callers get every relationship
+  // across all of their app scopes. Pass `params.scopeStreamId` for a narrower
+  // view (e.g. a single app or sub-scope).
+  const streams = [params.scopeStreamId || NS_APPS];
+  const limit = params.limit || 1000;
+  const events = await conn.apiOne('events.get', {
+    streams,
+    types: [ET_ACCEPT],
+    limit
+  }, 'events');
+  return events.map(function (event) {
+    const c = (event && event.content) || {};
+    return {
+      acceptEventId: event.id,
+      counterparty: c.from || c.acceptedBy || null,
+      dataGrantAccessId: c.dataGrantAccessId || null,
+      backChannelAccessId: c.backChannelAccessId || null,
+      appCode: c.appCode || null,
+      scopeStreamId: (event.streamIds && event.streamIds[0]) || event.streamId,
+      acceptedAt: c.acceptedAt || event.time || null,
+      // Features default to true on both keys when absent (per README
+      // "Features negotiation"). The legacy c.extra fallback predates
+      // the contract fix and is no longer reachable for events written
+      // by pryv-cmc >= 1.1.1; we leave the field-omission default at
+      // true to honour the documented contract.
+      features: c.features || { chat: true, systemMessaging: true }
+    };
+  });
+}
+
+// --- Cross-direction (chat, system, scope-update) ---
+
+/**
+ * Send a chat message. Posts `message/chat-cmc` to
+ * `<scopeStreamId>:chats:<peerSlug>`.
+ *
+ * @param {Object} conn
+ * @param {Object} params
+ * @param {string} params.scopeStreamId
+ * @param {string} params.peerSlug
+ * @param {string} params.content    1-10240 chars per data-types/message.json#chat-cmc schema
+ * @returns {Promise<{chatEventId:string}>}
+ */
+async function sendChat (conn, params) {
+  if (params == null) throw new Error('sendChat: params required');
+  const streamId = chatStreamUnder(params.scopeStreamId, params.peerSlug);
+  const event = await conn.apiOne('events.create', {
+    streamIds: [streamId],
+    type: ET_CHAT,
+    content: { content: params.content }
+  }, 'event');
+  return { chatEventId: event.id };
+}
+
+/**
+ * Send a system alert. Posts `notification/alert-cmc` to
+ * `<scopeStreamId>:collectors:<peerSlug>`.
+ *
+ * @param {Object} conn
+ * @param {Object} params
+ * @param {string} params.scopeStreamId
+ * @param {string} params.peerSlug
+ * @param {'info'|'warning'|'critical'} [params.level='info']
+ * @param {Object} params.title
+ * @param {Object} params.body
+ * @param {boolean} [params.ackRequired]
+ * @param {string} [params.ackId]
+ * @returns {Promise<{alertEventId:string}>}
+ */
+async function sendSystemAlert (conn, params) {
+  if (params == null) throw new Error('sendSystemAlert: params required');
+  const streamId = collectorStreamUnder(params.scopeStreamId, params.peerSlug);
+  const content = {
+    level: params.level || 'info',
+    title: params.title,
+    body: params.body
+  };
+  if (params.ackRequired !== undefined) content.ackRequired = params.ackRequired;
+  if (params.ackId) content.ackId = params.ackId;
+  const event = await conn.apiOne('events.create', {
+    streamIds: [streamId],
+    type: ET_SYSTEM_ALERT,
+    content
+  }, 'event');
+  return { alertEventId: event.id };
+}
+
+/**
+ * Send an ack for a received alert. Posts `notification/ack-cmc` with
+ * `{ alertEventId, ackId, ... }`.
+ *
+ * @param {Object} conn
+ * @param {Object} params
+ * @param {string} params.scopeStreamId
+ * @param {string} params.peerSlug
+ * @param {string} params.alertEventId
+ * @param {string} params.ackId
+ * @returns {Promise<{ackEventId:string}>}
+ */
+async function sendSystemAck (conn, params) {
+  if (params == null) throw new Error('sendSystemAck: params required');
+  const streamId = collectorStreamUnder(params.scopeStreamId, params.peerSlug);
+  const content = {
+    alertEventId: params.alertEventId,
+    ackId: params.ackId
+  };
+  const event = await conn.apiOne('events.create', {
+    streamIds: [streamId],
+    type: ET_SYSTEM_ACK,
+    content
+  }, 'event');
+  return { ackEventId: event.id };
+}
+
+/**
+ * Accept a scope-update proposal. Posts `consent/scope-update-cmc` with
+ * `{ scopeRequestEventId, accept: true }`. Server-side plugin runs
+ * `accesses.update` on the local data-grant.
+ *
+ * @param {Object} conn
+ * @param {string} scopeRequestEventId
+ * @param {Object} [opts]
+ * @param {string} [opts.scopeStreamId]   - own collector stream (defaults to the request's stream)
+ * @returns {Promise<{updateAcceptEventId:string, newDataGrantAccessId:string|null}>}
+ */
+async function acceptScopeUpdate (conn, scopeRequestEventId, opts) {
+  opts = opts || {};
+  const scopeStreamId = opts.scopeStreamId || await resolveScopeRequestStream(conn, scopeRequestEventId);
+  const event = await conn.apiOne('events.create', {
+    streamIds: [scopeStreamId],
+    type: ET_SCOPE_UPDATE,
+    content: { scopeRequestEventId, accept: true }
+  }, 'event');
+  return {
+    updateAcceptEventId: event.id,
+    newDataGrantAccessId: (event.content && event.content.newAccessId) || null
+  };
+}
+
+/**
+ * Refuse a scope-update proposal.
+ *
+ * @param {Object} conn
+ * @param {string} scopeRequestEventId
+ * @param {Object} [opts]
+ * @param {string} [opts.scopeStreamId]
+ * @param {Object} [opts.reason]
+ * @returns {Promise<{updateRefuseEventId:string}>}
+ */
+async function refuseScopeUpdate (conn, scopeRequestEventId, opts) {
+  opts = opts || {};
+  const scopeStreamId = opts.scopeStreamId || await resolveScopeRequestStream(conn, scopeRequestEventId);
+  const content = { scopeRequestEventId, accept: false };
+  if (opts.reason) content.reason = opts.reason;
+  const event = await conn.apiOne('events.create', {
+    streamIds: [scopeStreamId],
+    type: ET_SCOPE_UPDATE,
+    content
+  }, 'event');
+  return { updateRefuseEventId: event.id };
+}
+
+async function resolveScopeRequestStream (conn, scopeRequestEventId) {
+  const ev = await conn.apiOne('events.getOne', { id: scopeRequestEventId }, 'event');
+  return (ev.streamIds && ev.streamIds[0]) || ev.streamId;
+}
+
+// --- Accept hand-off (app-web-user-account) ---
+//
+// `acceptInvite` posts the trigger directly on a `pryv.Connection`.
+// Since CMC's accept/scope-update/revoke triggers now require a
+// PERSONAL access token server-side, apps that hold only an app- or
+// shared-access token cannot accept directly: they delegate the
+// authentication to app-web-user-account's `/cmc-accept` page, which prompts
+// the user to sign in, writes the trigger with the fresh personal
+// token, and returns the resulting data-grant apiEndpoint to the
+// caller. Two helpers: `requestAcceptUrl` (URL only, for caller-driven
+// flows) and `requestAccept` (full popup-or-redirect + result promise).
+
+const REQUEST_ACCEPT_POSTMSG_TYPE = 'cmc-accept-result';
+
+/**
+ * Build the `/cmc-accept` URL with query parameters for the
+ * app-web-user-account hand-off. Use this if you want to drive the navigation
+ * yourself (e.g., custom popup options, deep-link on mobile).
+ *
+ * @param {Object} opts
+ * @param {string} opts.authUrl         - app-web-user-account base + `/cmc-accept` path (e.g. `https://pryv.github.io/app-web-user-account/cmc-accept`).
+ * @param {string} opts.pryvApi         - recipient's Pryv API base (e.g. `https://reg.pryv.me/`).
+ * @param {string} opts.capabilityUrl   - capability URL from the requester's invite.
+ * @param {string} opts.scopeStreamId   - recipient's `:_cmc:apps:<app>[:...]` stream.
+ * @param {string} [opts.accessName]    - optional override for the data-grant access name.
+ * @param {string} [opts.returnUrl]     - for redirect-mode flows; the page navigates here with `?cmcAcceptResult=<json>`.
+ * @returns {string}
+ */
+function requestAcceptUrl (opts) {
+  if (opts == null) throw new Error('requestAcceptUrl: opts required');
+  if (typeof opts.authUrl !== 'string' || opts.authUrl.length === 0) {
+    throw new Error('requestAcceptUrl: opts.authUrl required');
+  }
+  if (typeof opts.capabilityUrl !== 'string' || opts.capabilityUrl.length === 0) {
+    throw new Error('requestAcceptUrl: opts.capabilityUrl required');
+  }
+  if (typeof opts.scopeStreamId !== 'string' || opts.scopeStreamId.length === 0) {
+    throw new Error('requestAcceptUrl: opts.scopeStreamId required');
+  }
+  if (typeof opts.pryvApi !== 'string' || opts.pryvApi.length === 0) {
+    throw new Error('requestAcceptUrl: opts.pryvApi required');
+  }
+  const q = [
+    'capabilityUrl=' + encodeURIComponent(opts.capabilityUrl),
+    'scopeStreamId=' + encodeURIComponent(opts.scopeStreamId),
+    'pryvApi=' + encodeURIComponent(opts.pryvApi)
+  ];
+  if (typeof opts.accessName === 'string' && opts.accessName.length > 0) {
+    q.push('accessName=' + encodeURIComponent(opts.accessName));
+  }
+  if (typeof opts.returnUrl === 'string' && opts.returnUrl.length > 0) {
+    q.push('returnUrl=' + encodeURIComponent(opts.returnUrl));
+    q.push('mode=redirect');
+  } else {
+    q.push('mode=popup');
+  }
+  const sep = opts.authUrl.includes('?') ? '&' : '?';
+  return opts.authUrl + sep + q.join('&');
+}
+
+/**
+ * Open the `/cmc-accept` hand-off and return a Promise resolving to
+ * the result. Browser-only — relies on `window.open` + `postMessage`
+ * (popup mode) or `window.location.assign` (redirect mode). For
+ * non-browser contexts, use `requestAcceptUrl` and drive navigation
+ * yourself.
+ *
+ * Popup mode (default):
+ *   Opens a child window, listens for a `cmc-accept-result`
+ *   postMessage from it, returns `{ ok, dataGrantApiEndpoint,
+ *   acceptEventId }`. Rejects with CmcError on `ok: false`, on user
+ *   closing the popup without acting, or on timeout.
+ *
+ * Redirect mode:
+ *   Navigates the current window to `/cmc-accept` with a `returnUrl`
+ *   query so the page returns by re-navigating. Returns nothing (the
+ *   navigation happens synchronously). The receiving page is
+ *   responsible for parsing `?cmcAcceptResult=<json>` on `returnUrl`.
+ *
+ * @param {Object} opts                  same shape as requestAcceptUrl, plus:
+ * @param {'popup'|'redirect'} [opts.mode='popup']
+ * @param {string} [opts.popupFeatures]  `window.open` features string (popup mode).
+ * @param {number} [opts.timeoutMs=600000]  popup-mode max wait (default 10 min).
+ * @returns {Promise<{ok:boolean, dataGrantApiEndpoint?:string, acceptEventId?:string, reason?:string}>}
+ */
+function requestAccept (opts) {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('requestAccept: window required (browser-only). Use requestAcceptUrl for non-browser flows.'));
+  }
+  const mode = (opts && opts.mode) || (opts && opts.returnUrl ? 'redirect' : 'popup');
+  const url = requestAcceptUrl(Object.assign({}, opts, { returnUrl: mode === 'redirect' ? opts.returnUrl : undefined }));
+  if (mode === 'redirect') {
+    window.location.assign(url);
+    return Promise.resolve({ ok: true, redirected: true });
+  }
+  // popup mode
+  const features = (opts && opts.popupFeatures) || 'width=480,height=720,resizable=yes,scrollbars=yes';
+  const popup = window.open(url, 'cmcAccept', features);
+  if (popup == null) {
+    return Promise.reject(new CmcError('requestAccept: popup blocked. Pass opts.returnUrl + mode=\'redirect\' as a fallback.', 'cmc-accept-popup-blocked'));
+  }
+  const timeoutMs = (opts && opts.timeoutMs) || 600000;
+  return new Promise(function (resolve, reject) {
+    let settled = false;
+    function onMessage (ev) {
+      const data = ev && ev.data;
+      if (data == null || data.type !== REQUEST_ACCEPT_POSTMSG_TYPE) return;
+      settle();
+      if (data.ok) {
+        resolve({
+          ok: true,
+          dataGrantApiEndpoint: data.dataGrantApiEndpoint,
+          acceptEventId: data.acceptEventId
+        });
+      } else {
+        reject(new CmcError('CMC accept hand-off returned ok=false: ' + (data.reason || 'unknown'),
+          data.reason || 'cmc-accept-failed'));
+      }
+    }
+    function settle () {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', onMessage);
+      clearInterval(closedPoll);
+      clearTimeout(timer);
+    }
+    const closedPoll = setInterval(function () {
+      if (popup.closed) {
+        settle();
+        reject(new CmcError('CMC accept hand-off: popup closed before result', 'cmc-accept-popup-closed'));
+      }
+    }, 500);
+    const timer = setTimeout(function () {
+      settle();
+      try { popup.close(); } catch (_e) { /* cross-origin */ }
+      reject(new CmcError('CMC accept hand-off timed out after ' + timeoutMs + 'ms', 'cmc-accept-timeout'));
+    }, timeoutMs);
+    window.addEventListener('message', onMessage);
+  });
+}
+
+// --- Scope-update accept hand-off (app-web-user-account) ---
+//
+// `acceptScopeUpdate` posts the trigger directly on a `pryv.Connection`.
+// Since the server gates `consent/scope-update-cmc` to personal tokens
+// only (mirrors the accept gate), apps holding app/shared tokens hand
+// off to `app-web-user-account`'s `/cmc-scope-update` page. Two helpers:
+// `requestScopeUpdateUrl` (URL only) and `requestScopeUpdate` (full
+// popup-or-redirect + result promise). Symmetric to requestAccept /
+// requestAcceptUrl above.
+
+const REQUEST_SCOPE_UPDATE_POSTMSG_TYPE = 'cmc-scope-update-result';
+
+/**
+ * Build the `/cmc-scope-update` URL with query parameters for the
+ * app-web-user-account hand-off.
+ *
+ * @param {Object} opts
+ * @param {string} opts.authUrl              - app-web-user-account base + `/cmc-scope-update`.
+ * @param {string} opts.pryvApi              - user's Pryv API base.
+ * @param {string} opts.scopeRequestEventId  - the collector-side scope-request event id.
+ * @param {string} [opts.scopeStreamId]      - own collector stream (defaults to the request's home stream when omitted).
+ * @param {string} [opts.returnUrl]          - switches to redirect mode.
+ * @returns {string}
+ */
+function requestScopeUpdateUrl (opts) {
+  if (opts == null) throw new Error('requestScopeUpdateUrl: opts required');
+  if (typeof opts.authUrl !== 'string' || opts.authUrl.length === 0) {
+    throw new Error('requestScopeUpdateUrl: opts.authUrl required');
+  }
+  if (typeof opts.scopeRequestEventId !== 'string' || opts.scopeRequestEventId.length === 0) {
+    throw new Error('requestScopeUpdateUrl: opts.scopeRequestEventId required');
+  }
+  if (typeof opts.pryvApi !== 'string' || opts.pryvApi.length === 0) {
+    throw new Error('requestScopeUpdateUrl: opts.pryvApi required');
+  }
+  const q = [
+    'scopeRequestEventId=' + encodeURIComponent(opts.scopeRequestEventId),
+    'pryvApi=' + encodeURIComponent(opts.pryvApi)
+  ];
+  if (typeof opts.scopeStreamId === 'string' && opts.scopeStreamId.length > 0) {
+    q.push('scopeStreamId=' + encodeURIComponent(opts.scopeStreamId));
+  }
+  if (typeof opts.returnUrl === 'string' && opts.returnUrl.length > 0) {
+    q.push('returnUrl=' + encodeURIComponent(opts.returnUrl));
+    q.push('mode=redirect');
+  } else {
+    q.push('mode=popup');
+  }
+  const sep = opts.authUrl.includes('?') ? '&' : '?';
+  return opts.authUrl + sep + q.join('&');
+}
+
+/**
+ * Open the `/cmc-scope-update` hand-off and return a Promise resolving
+ * to the result. Browser-only.
+ *
+ * Popup mode (default):
+ *   Opens a child window; listens for a `cmc-scope-update-result`
+ *   postMessage from it. Resolves with `{ ok: true, updateEventId,
+ *   action: 'accept'|'refuse' }` on success; rejects with CmcError on
+ *   ok: false / user-cancel / popup-blocked / timeout.
+ *
+ * Redirect mode:
+ *   Navigates the current window to the page; the page returns by
+ *   re-navigating to `returnUrl?cmcScopeUpdateResult=<json>`. Returns
+ *   `{ ok: true, redirected: true }` immediately (the navigation
+ *   completes asynchronously).
+ *
+ * @param {Object} opts                 same shape as requestScopeUpdateUrl, plus:
+ * @param {'popup'|'redirect'} [opts.mode='popup']
+ * @param {string} [opts.popupFeatures]
+ * @param {number} [opts.timeoutMs=600000]
+ * @returns {Promise<{ok:boolean, updateEventId?:string, action?:'accept'|'refuse', reason?:string, redirected?:boolean}>}
+ */
+function requestScopeUpdate (opts) {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('requestScopeUpdate: window required (browser-only). Use requestScopeUpdateUrl for non-browser flows.'));
+  }
+  const mode = (opts && opts.mode) || (opts && opts.returnUrl ? 'redirect' : 'popup');
+  const url = requestScopeUpdateUrl(Object.assign({}, opts, { returnUrl: mode === 'redirect' ? opts.returnUrl : undefined }));
+  if (mode === 'redirect') {
+    window.location.assign(url);
+    return Promise.resolve({ ok: true, redirected: true });
+  }
+  const features = (opts && opts.popupFeatures) || 'width=480,height=720,resizable=yes,scrollbars=yes';
+  const popup = window.open(url, 'cmcScopeUpdate', features);
+  if (popup == null) {
+    return Promise.reject(new CmcError('requestScopeUpdate: popup blocked. Pass opts.returnUrl + mode=\'redirect\' as a fallback.', 'cmc-scope-update-popup-blocked'));
+  }
+  const timeoutMs = (opts && opts.timeoutMs) || 600000;
+  return new Promise(function (resolve, reject) {
+    let settled = false;
+    function onMessage (ev) {
+      const data = ev && ev.data;
+      if (data == null || data.type !== REQUEST_SCOPE_UPDATE_POSTMSG_TYPE) return;
+      settle();
+      if (data.ok) {
+        resolve({
+          ok: true,
+          updateEventId: data.updateEventId,
+          action: data.action,
+        });
+      } else {
+        reject(new CmcError('CMC scope-update hand-off returned ok=false: ' + (data.reason || 'unknown'),
+          data.reason || 'cmc-scope-update-failed'));
+      }
+    }
+    function settle () {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', onMessage);
+      clearInterval(closedPoll);
+      clearTimeout(timer);
+    }
+    const closedPoll = setInterval(function () {
+      if (popup.closed) {
+        settle();
+        reject(new CmcError('CMC scope-update hand-off: popup closed before result', 'cmc-scope-update-popup-closed'));
+      }
+    }, 500);
+    const timer = setTimeout(function () {
+      settle();
+      try { popup.close(); } catch (_e) { /* cross-origin */ }
+      reject(new CmcError('CMC scope-update hand-off timed out after ' + timeoutMs + 'ms', 'cmc-scope-update-timeout'));
+    }, timeoutMs);
+    window.addEventListener('message', onMessage);
+  });
+}
+
+// --- Observation scopes (for use with `new pryv.Monitor(conn, scope)`) ---
+
+const scopes = {
+  /**
+   * Inbox scope — `{ streams: [':_cmc:inbox'] }`.
+   * Use for lifecycle events (request/accept/refuse/revoke arrivals).
+   * @returns {{streams:string[]}}
+   */
+  inbox (_params) {
+    return { streams: [NS_INBOX] };
+  },
+  /**
+   * Chats scope. With only `appCode`, watches all chat activity under
+   * the app-scope (`:_cmc:apps:<app-code>:chats`). With `peerSlug` as
+   * well, narrows to a single counterparty stream.
+   * @param {{appCode:string, peerSlug?:string, scopeStreamId?:string}} params
+   * @returns {{streams:string[]}}
+   */
+  chats (params) {
+    if (params == null || (!params.appCode && !params.scopeStreamId)) {
+      throw new Error('cmc.scopes.chats: params.appCode or params.scopeStreamId required');
+    }
+    const scope = params.scopeStreamId || appScope(params.appCode);
+    if (params.peerSlug) return { streams: [chatStreamUnder(scope, params.peerSlug)] };
+    return { streams: [chatsParentUnder(scope)] };
+  },
+  /**
+   * Collectors scope. Same semantics as `chats` but for system messages.
+   * @param {{appCode:string, peerSlug?:string, scopeStreamId?:string}} params
+   * @returns {{streams:string[]}}
+   */
+  collectors (params) {
+    if (params == null || (!params.appCode && !params.scopeStreamId)) {
+      throw new Error('cmc.scopes.collectors: params.appCode or params.scopeStreamId required');
+    }
+    const scope = params.scopeStreamId || appScope(params.appCode);
+    if (params.peerSlug) return { streams: [collectorStreamUnder(scope, params.peerSlug)] };
+    return { streams: [collectorsParentUnder(scope)] };
+  }
+};
+
+module.exports = {
+  // namespace constants
+  NS,
+  NS_INBOX,
+  NS_APPS,
+  NS_INTERNAL,
+  NS_INTERNAL_RETRIES,
+  // typed error-id catalogue (mirrors server-side CmcErrorIds)
+  errorIds,
+  CmcError,
+  // event types
+  ET_REQUEST,
+  ET_ACCEPT,
+  ET_REFUSE,
+  ET_REVOKE,
+  ET_INVALIDATE_LINK,
+  ET_SCOPE_REQUEST,
+  ET_SCOPE_UPDATE,
+  ET_CHAT,
+  ET_SYSTEM_ALERT,
+  ET_SYSTEM_ACK,
+  ET_SYSTEM_SCOPE_REQUEST,
+  ET_SYSTEM_SCOPE_UPDATE,
+  EVENT_TYPES_LIFECYCLE,
+  EVENT_TYPES_CHAT,
+  EVENT_TYPES_SYSTEM,
+  // slug helpers
+  SEPARATOR,
+  slugifyHost,
+  counterpartySlug,
+  parseCounterpartySlug,
+  // stream-id builders
+  appScope,
+  chatsParentUnder,
+  chatStreamUnder,
+  collectorsParentUnder,
+  collectorStreamUnder,
+  // classification + parsing
+  isCmcStreamId,
+  isAppNestedPluginStream,
+  getAppCode,
+  parseChatStreamId,
+  parseCollectorStreamId,
+  // Level-1 protocol functions
+  createInvite,
+  listInvites,
+  getInviteStatus,
+  revokeRelationship,
+  invalidateCapability,
+  proposeScopeUpdate,
+  readOffer,
+  acceptInvite,
+  waitForAccept,
+  refuseInvite,
+  revokeAcceptance,
+  listAcceptedRelationships,
+  sendChat,
+  sendSystemAlert,
+  sendSystemAck,
+  acceptScopeUpdate,
+  refuseScopeUpdate,
+  // accept hand-off (apps without a personal token)
+  requestAccept,
+  requestAcceptUrl,
+  // scope-update accept hand-off (mirrors requestAccept)
+  requestScopeUpdate,
+  requestScopeUpdateUrl,
+  // observation scopes
+  scopes
+};
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/EventsCipher.js"
+/*!***********************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/EventsCipher.js ***!
+  \***********************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * Encrypts and decrypts Pryv.io events.
+ *
+ * An encrypted event carries `type: "encrypted/<method>"` and a
+ * `content: { payload, keyRef?, hint? }`. All other envelope fields
+ * (id, streamIds, time, created, …) stay in plaintext.
+ *
+ * Decryption is defensive: any failure leaves the event untouched (the exact
+ * same reference is returned) and, when configured, is reported through
+ * `onDecryptError` — a failed decryption never throws and never drops an event.
+ * Encryption, by contrast, throws on error.
+ *
+ * Attachments are handled by the byte helpers `encryptAttachmentData` /
+ * `decryptAttachmentData`. An attachment is encrypted with the SAME method and
+ * key as its event's content, stored as the method's raw payload byte layout
+ * (WITHOUT Base64). Unlike passive event decryption, attachment decryption is an
+ * explicit request and THROWS on failure.
+ */
+const Keyring = __webpack_require__(/*! ./Keyring */ "./node_modules/@pryv/encryption/src/Keyring.js");
+const builtinMethods = __webpack_require__(/*! ./methods */ "./node_modules/@pryv/encryption/src/methods/index.js");
+
+const ENCRYPTED_TYPE_PREFIX = 'encrypted/';
+
+class EventsCipher {
+  /**
+   * @param {Keyring} keyring
+   * @param {Object} [options]
+   * @param {(event: Object, error: Error) => void} [options.onDecryptError] called on any decryption failure. Default: silent.
+   */
+  constructor (keyring, options = {}) {
+    if (!(keyring instanceof Keyring)) {
+      throw new Error('EventsCipher requires a Keyring');
+    }
+    this.keyring = keyring;
+    this.onDecryptError = (options && options.onDecryptError) || null;
+    // Clone the built-ins so registerMethod() never mutates the shared map.
+    this._methods = Object.assign({}, builtinMethods);
+  }
+
+  /**
+   * Register (or override) an encryption method. `decrypt` is required;
+   * `encrypt` is optional (a decrypt-only method supports reading existing
+   * encrypted events but cannot produce new ones).
+   * @param {string} name
+   * @param {{ decrypt: Function, encrypt?: Function }} method
+   * @returns {EventsCipher} this, for chaining.
+   */
+  registerMethod (name, method) {
+    if (!method || typeof method.decrypt !== 'function' ||
+        (method.encrypt != null && typeof method.encrypt !== 'function') ||
+        (method.encryptBytes != null && typeof method.encryptBytes !== 'function') ||
+        (method.decryptBytes != null && typeof method.decryptBytes !== 'function')) {
+      throw new Error('registerMethod expects a { decrypt } function and optional { encrypt, encryptBytes, decryptBytes } functions');
+    }
+    this._methods[name] = method;
+    return this;
+  }
+
+  /**
+   * Encrypt event material into the `{ type, content }` an implementer passes to
+   * an `events.create` / `events.update` call. Only the material's `type` and
+   * `content` are encrypted; any other fields are ignored. Throws on unknown or
+   * decrypt-only method, or on a missing key. The input is not mutated.
+   * @param {Object} material - `{ type, content, ... }` (same shape decryptEvent restores).
+   * @param {Object} params
+   * @param {string} params.method
+   * @param {string} [params.keyRef]
+   * @param {*} [params.hint]
+   * @returns {Promise<{ type: string, content: { payload: string, keyRef?: string, hint?: * } }>}
+   */
+  async encryptEventContent (material, params = {}) {
+    const { method: methodName, keyRef, hint } = params;
+    const method = this._methods[methodName];
+    if (!method) {
+      throw new Error(`Unknown encryption method: ${methodName}`);
+    }
+    if (typeof method.encrypt !== 'function') {
+      throw new Error(`Method "${methodName}" is decrypt-only and cannot encrypt`);
+    }
+    const key = await this.keyring.getKeyFor(methodName, keyRef, hint);
+    if (key == null) {
+      throw new Error(`No key available for method "${methodName}"${keyRef != null ? ` (keyRef "${keyRef}")` : ''}`);
+    }
+
+    const source = { type: material.type, content: material.content };
+    const content = await method.encrypt(source, key);
+    if (keyRef != null) content.keyRef = keyRef;
+    if (hint != null) content.hint = hint;
+
+    return { type: ENCRYPTED_TYPE_PREFIX + methodName, content };
+  }
+
+  /**
+   * Encrypt a plain event. Throws on unknown method or missing key.
+   * @param {Object} plainEvent
+   * @param {Object} params
+   * @param {string} params.method
+   * @param {string} [params.keyRef]
+   * @param {*} [params.hint]
+   * @returns {Promise<Object>} a new encrypted event (input is not mutated).
+   */
+  async encryptEvent (plainEvent, params = {}) {
+    const { type, content } = await this.encryptEventContent(plainEvent, params);
+    const encrypted = Object.assign({}, plainEvent);
+    encrypted.type = type;
+    encrypted.content = content;
+    return encrypted;
+  }
+
+  /**
+   * Decrypt a single event. Never throws.
+   * - Non-encrypted or unregistered-method events are returned untouched (same ref).
+   * - On any failure the original event is returned (same ref) and
+   *   `onDecryptError(event, error)` is called when configured.
+   * - On success a NEW object is returned with restored `type`/`content`,
+   *   preserved envelope fields, and a `decryptedFrom` back-reference.
+   * @param {Object} event
+   * @returns {Promise<Object>}
+   */
+  async decryptEvent (event) {
+    const methodName = methodNameFromType(event && event.type);
+    if (methodName == null) return event;
+    const method = this._methods[methodName];
+    if (!method) return event;
+
+    try {
+      const content = event.content || {};
+      const key = await this.keyring.getKeyFor(methodName, content.keyRef, content.hint);
+      if (key == null) {
+        throw new Error(`No key available for method "${methodName}"`);
+      }
+      const material = await method.decrypt(content, key);
+      if (material == null || material.type == null || material.content == null) {
+        throw new Error('Decrypted payload is missing "type" or "content"');
+      }
+      return Object.assign({}, event, material, { decryptedFrom: event });
+    } catch (error) {
+      if (this.onDecryptError) this.onDecryptError(event, error);
+      return event;
+    }
+  }
+
+  /**
+   * Decrypt an array of events. Never throws; failures pass through untouched.
+   * @param {Object[]} events
+   * @returns {Promise<Object[]>}
+   */
+  async decryptEvents (events) {
+    return Promise.all(events.map((event) => this.decryptEvent(event)));
+  }
+
+  /**
+   * Wrap a `forEachEvent`-style callback so each event is decrypted before it
+   * is forwarded to the user callback.
+   * @param {(event: Object) => *} callback
+   * @returns {(event: Object) => Promise<*>}
+   */
+  wrapForEachEvent (callback) {
+    return async (event) => {
+      const decrypted = await this.decryptEvent(event);
+      return callback(decrypted);
+    };
+  }
+
+  /**
+   * Encrypt raw attachment bytes with the SAME method and key an event's
+   * `content` uses. The result is the method's raw payload byte layout (exactly
+   * the bytes Base64-decoding a `content.payload` would yield, WITHOUT Base64) —
+   * upload it verbatim as the file's binary body. Like `encryptEventContent`,
+   * this THROWS on an unknown method, a method without byte support, or a missing
+   * key. The input bytes are not mutated.
+   * @param {Uint8Array} bytes - raw attachment bytes to encrypt.
+   * @param {Object} params
+   * @param {string} params.method
+   * @param {string} [params.keyRef]
+   * @param {*} [params.hint]
+   * @returns {Promise<Uint8Array>} raw payload-layout bytes.
+   */
+  async encryptAttachmentData (bytes, params = {}) {
+    const { method: methodName, keyRef, hint } = params;
+    const method = this._methods[methodName];
+    if (!method) {
+      throw new Error(`Unknown encryption method: ${methodName}`);
+    }
+    if (typeof method.encryptBytes !== 'function') {
+      throw new Error(`Method "${methodName}" does not support attachment (byte) encryption`);
+    }
+    const key = await this.keyring.getKeyFor(methodName, keyRef, hint);
+    if (key == null) {
+      throw new Error(`No key available for method "${methodName}"${keyRef != null ? ` (keyRef "${keyRef}")` : ''}`);
+    }
+    return method.encryptBytes(bytes, key);
+  }
+
+  /**
+   * Decrypt raw attachment bytes that belong to `event`. The method is derived
+   * from the event's `encrypted/<method>` type and the key from its
+   * `content.keyRef` / `content.hint` — the SAME material used for its content.
+   *
+   * `event` may be the encrypted event OR an already-decrypted one (carrying a
+   * `decryptedFrom` back-reference); the encrypted form is used either way.
+   *
+   * Unlike the passive, never-throw event decryption (`decryptEvent`),
+   * attachment decryption is an EXPLICIT request and THROWS on failure (event
+   * not encrypted, unknown method, no byte support, missing key, bad key /
+   * tampered / truncated bytes).
+   * @param {Object} event - the (encrypted or decrypted) event the attachment belongs to.
+   * @param {Uint8Array} bytes - raw payload-layout bytes downloaded from the core.
+   * @returns {Promise<Uint8Array>} raw plaintext bytes.
+   */
+  async decryptAttachmentData (event, bytes) {
+    const source = this.stripDecrypted(event);
+    const methodName = methodNameFromType(source && source.type);
+    if (methodName == null) {
+      throw new Error('Event is not encrypted (type is not "encrypted/<method>")');
+    }
+    const method = this._methods[methodName];
+    if (!method) {
+      throw new Error(`Unknown encryption method: ${methodName}`);
+    }
+    if (typeof method.decryptBytes !== 'function') {
+      throw new Error(`Method "${methodName}" does not support attachment (byte) decryption`);
+    }
+    const content = (source && source.content) || {};
+    const key = await this.keyring.getKeyFor(methodName, content.keyRef, content.hint);
+    if (key == null) {
+      throw new Error(`No key available for method "${methodName}"${content.keyRef != null ? ` (keyRef "${content.keyRef}")` : ''}`);
+    }
+    return method.decryptBytes(bytes, key);
+  }
+
+  /**
+   * Return the original encrypted event a decrypted event came from, or the
+   * event itself when it was never decrypted.
+   * @param {Object} event
+   * @returns {Object}
+   */
+  stripDecrypted (event) {
+    if (event && event.decryptedFrom != null) return event.decryptedFrom;
+    return event;
+  }
+}
+
+/**
+ * Extract the method name from an `encrypted/<method>` type, or null.
+ * @param {*} type
+ * @returns {?string}
+ */
+function methodNameFromType (type) {
+  if (typeof type !== 'string' || !type.startsWith(ENCRYPTED_TYPE_PREFIX)) return null;
+  const name = type.slice(ENCRYPTED_TYPE_PREFIX.length);
+  return name.length > 0 ? name : null;
+}
+
+module.exports = EventsCipher;
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/Keyring.js"
+/*!******************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/Keyring.js ***!
+  \******************************************************/
+(module) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * A key store with a pluggable chain of asynchronous resolvers.
+ *
+ * Resolution order for `getKeyFor(method, keyRef, hint)`:
+ *   1. the key/value store, looked up by `keyRef`;
+ *   2. each registered resolver, in registration order — the first one that
+ *      returns a non-null value wins.
+ *
+ * Key material is stored and returned as-is (raw `Uint8Array`, base64 string
+ * or `CryptoKey`); interpreting it is the encryption method's responsibility.
+ */
+class Keyring {
+  /**
+   * @param {Object<string, (Uint8Array|string|CryptoKey)>} [keys] initial keyRef → material map.
+   */
+  constructor (keys = {}) {
+    this._store = new Map();
+    if (keys != null) {
+      for (const keyRef of Object.keys(keys)) {
+        this._store.set(keyRef, keys[keyRef]);
+      }
+    }
+    this._resolvers = [];
+  }
+
+  /**
+   * Add or replace a key in the store.
+   * @param {string} keyRef
+   * @param {Uint8Array|string|CryptoKey} material
+   * @returns {Keyring} this, for chaining.
+   */
+  set (keyRef, material) {
+    this._store.set(keyRef, material);
+    return this;
+  }
+
+  /**
+   * Register an asynchronous resolver, tried after the store misses.
+   * @param {(method: string, keyRef: ?string, hint: *) => Promise<?(Uint8Array|string|CryptoKey)>} resolver
+   * @returns {Keyring} this, for chaining.
+   */
+  use (resolver) {
+    if (typeof resolver !== 'function') {
+      throw new Error('Keyring.use() expects a function');
+    }
+    this._resolvers.push(resolver);
+    return this;
+  }
+
+  /**
+   * Resolve key material for a given method / keyRef / hint.
+   * The store is consulted first, then each resolver in registration order.
+   * @param {string} method
+   * @param {?string} keyRef
+   * @param {*} [hint]
+   * @returns {Promise<?(Uint8Array|string|CryptoKey)>} resolved material, or null.
+   */
+  async getKeyFor (method, keyRef, hint) {
+    if (keyRef != null && this._store.has(keyRef)) {
+      return this._store.get(keyRef);
+    }
+    for (const resolver of this._resolvers) {
+      const material = await resolver(method, keyRef, hint);
+      if (material != null) return material;
+    }
+    return null;
+  }
+}
+
+module.exports = Keyring;
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/index.js"
+/*!****************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/index.js ***!
+  \****************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * @pryv/encryption — client-side encryption and decryption of Pryv.io events.
+ *
+ * - `Keyring`: a key store with a pluggable chain of async key resolvers.
+ * - `EventsCipher`: encrypts / decrypts events using registered methods.
+ * - `methods`: the built-in encryption methods (`aes-256-gcm`,
+ *   `aes-text-base64`, `ecies-aes-256-gcm`).
+ */
+const EventsCipher = __webpack_require__(/*! ./EventsCipher */ "./node_modules/@pryv/encryption/src/EventsCipher.js");
+const Keyring = __webpack_require__(/*! ./Keyring */ "./node_modules/@pryv/encryption/src/Keyring.js");
+const methods = __webpack_require__(/*! ./methods */ "./node_modules/@pryv/encryption/src/methods/index.js");
+
+module.exports = { EventsCipher, Keyring, methods };
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/lib/base64.js"
+/*!*********************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/lib/base64.js ***!
+  \*********************************************************/
+(module) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * Isomorphic base64 helpers built on the standard `btoa`/`atob` globals,
+ * which are available in browsers and in Node.js (>= 16). No `Buffer`, so the
+ * same code path runs unchanged in both environments.
+ */
+
+/**
+ * Encode raw bytes to a standard (non-URL-safe) base64 string.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+function bytesToBase64 (bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Decode a standard base64 string to raw bytes.
+ * @param {string} b64
+ * @returns {Uint8Array}
+ */
+function base64ToBytes (b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+module.exports = { bytesToBase64, base64ToBytes };
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/lib/md5.js"
+/*!******************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/lib/md5.js ***!
+  \******************************************************/
+(module) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * Minimal, dependency-free MD5 over bytes.
+ *
+ * ⚠ This exists SOLELY to reproduce the OpenSSL EVP_BytesToKey key derivation
+ * used by the legacy `aes-text-base64` decrypt-only method (MD5 is not part of
+ * WebCrypto). MD5 is cryptographically broken — it MUST NOT be used for
+ * anything other than reading pre-existing legacy ciphertext. Do not reach for
+ * it for hashing, integrity, or any new derivation.
+ *
+ * Implements RFC 1321. Operates on and returns `Uint8Array`; no `Buffer`, so it
+ * runs unchanged in the browser and in Node.js.
+ */
+
+function toUint32 (n) { return n >>> 0; }
+function rotl (x, c) { return toUint32((x << c) | (x >>> (32 - c))); }
+
+const S = [
+  7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+  5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+  4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+  6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
+];
+
+// K[i] = floor(2^32 * abs(sin(i + 1))), precomputed at load.
+const K = new Uint32Array(64);
+for (let i = 0; i < 64; i++) {
+  K[i] = toUint32(Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000));
+}
+
+/**
+ * Compute the MD5 digest of the given bytes.
+ * @param {Uint8Array} message
+ * @returns {Uint8Array} 16-byte digest.
+ */
+function md5 (message) {
+  const originalLenBits = message.length * 8;
+
+  // Pad: append 0x80, then zeros, until length ≡ 56 (mod 64), then 64-bit length.
+  const paddedLen = ((message.length + 8) >> 6 << 6) + 64;
+  const bytes = new Uint8Array(paddedLen);
+  bytes.set(message);
+  bytes[message.length] = 0x80;
+
+  // 64-bit little-endian bit length (low 32 bits, then high 32 bits).
+  const lenLow = toUint32(originalLenBits);
+  const lenHigh = Math.floor(originalLenBits / 0x100000000) >>> 0;
+  bytes[paddedLen - 8] = lenLow & 0xff;
+  bytes[paddedLen - 7] = (lenLow >>> 8) & 0xff;
+  bytes[paddedLen - 6] = (lenLow >>> 16) & 0xff;
+  bytes[paddedLen - 5] = (lenLow >>> 24) & 0xff;
+  bytes[paddedLen - 4] = lenHigh & 0xff;
+  bytes[paddedLen - 3] = (lenHigh >>> 8) & 0xff;
+  bytes[paddedLen - 2] = (lenHigh >>> 16) & 0xff;
+  bytes[paddedLen - 1] = (lenHigh >>> 24) & 0xff;
+
+  let a0 = 0x67452301;
+  let b0 = 0xefcdab89;
+  let c0 = 0x98badcfe;
+  let d0 = 0x10325476;
+
+  const M = new Uint32Array(16);
+  for (let offset = 0; offset < paddedLen; offset += 64) {
+    for (let j = 0; j < 16; j++) {
+      const k = offset + j * 4;
+      M[j] = toUint32(bytes[k] | (bytes[k + 1] << 8) | (bytes[k + 2] << 16) | (bytes[k + 3] << 24));
+    }
+
+    let A = a0;
+    let B = b0;
+    let C = c0;
+    let D = d0;
+
+    for (let i = 0; i < 64; i++) {
+      let F;
+      let g;
+      if (i < 16) {
+        F = (B & C) | (~B & D);
+        g = i;
+      } else if (i < 32) {
+        F = (D & B) | (~D & C);
+        g = (5 * i + 1) % 16;
+      } else if (i < 48) {
+        F = B ^ C ^ D;
+        g = (3 * i + 5) % 16;
+      } else {
+        F = C ^ (B | (~D >>> 0));
+        g = (7 * i) % 16;
+      }
+      F = toUint32(F + A + K[i] + M[g]);
+      A = D;
+      D = C;
+      C = B;
+      B = toUint32(B + rotl(F, S[i]));
+    }
+
+    a0 = toUint32(a0 + A);
+    b0 = toUint32(b0 + B);
+    c0 = toUint32(c0 + C);
+    d0 = toUint32(d0 + D);
+  }
+
+  const out = new Uint8Array(16);
+  const words = [a0, b0, c0, d0];
+  for (let i = 0; i < 4; i++) {
+    out[i * 4] = words[i] & 0xff;
+    out[i * 4 + 1] = (words[i] >>> 8) & 0xff;
+    out[i * 4 + 2] = (words[i] >>> 16) & 0xff;
+    out[i * 4 + 3] = (words[i] >>> 24) & 0xff;
+  }
+  return out;
+}
+
+module.exports = { md5 };
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/methods/aes-256-gcm.js"
+/*!******************************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/methods/aes-256-gcm.js ***!
+  \******************************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * Built-in `aes-256-gcm` encryption method.
+ *
+ * Wire format of `content.payload`:
+ *   base64( iv (12 bytes) || ciphertext || gcm-auth-tag (16 bytes) )
+ *
+ * WebCrypto's `subtle.encrypt` appends the 16-byte GCM authentication tag to
+ * the ciphertext it returns, so the payload is simply the random IV followed
+ * by that output, base64-encoded.
+ *
+ * Key material is accepted as a 32-byte `Uint8Array`, a base64 string of 32
+ * bytes, or an already-imported AES-GCM `CryptoKey`.
+ */
+const { bytesToBase64, base64ToBytes } = __webpack_require__(/*! ../lib/base64 */ "./node_modules/@pryv/encryption/src/lib/base64.js");
+
+const ALGORITHM = 'AES-GCM';
+const IV_LENGTH = 12; // bytes — the recommended GCM nonce length
+const KEY_LENGTH = 32; // bytes — AES-256
+
+/**
+ * Normalise supported key-material shapes into an AES-GCM CryptoKey.
+ * @param {Uint8Array|string|CryptoKey} key
+ * @returns {Promise<CryptoKey>}
+ */
+async function importKey (key) {
+  if (typeof CryptoKey !== 'undefined' && key instanceof CryptoKey) return key;
+
+  let raw;
+  if (key instanceof Uint8Array) {
+    raw = key;
+  } else if (key instanceof ArrayBuffer) {
+    raw = new Uint8Array(key);
+  } else if (typeof key === 'string') {
+    raw = base64ToBytes(key);
+  } else {
+    throw new Error('aes-256-gcm: unsupported key material (expected Uint8Array, base64 string or CryptoKey)');
+  }
+
+  if (raw.length !== KEY_LENGTH) {
+    throw new Error(`aes-256-gcm: key must be ${KEY_LENGTH} bytes, got ${raw.length}`);
+  }
+  return globalThis.crypto.subtle.importKey('raw', raw, ALGORITHM, false, ['encrypt', 'decrypt']);
+}
+
+/**
+ * Encrypt raw bytes into the method's payload byte layout:
+ *   iv (12 bytes) || ciphertext || gcm-auth-tag (16 bytes)
+ * These are exactly the bytes that Base64-decoding a `content.payload` yields.
+ * The input is not mutated.
+ * @param {Uint8Array} bytes - plaintext bytes to encrypt.
+ * @param {Uint8Array|string|CryptoKey} key
+ * @returns {Promise<Uint8Array>}
+ */
+async function encryptBytes (bytes, key) {
+  const cryptoKey = await importKey(key);
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+  const cipherBuffer = await globalThis.crypto.subtle.encrypt({ name: ALGORITHM, iv }, cryptoKey, bytes);
+  const cipherBytes = new Uint8Array(cipherBuffer);
+
+  const out = new Uint8Array(iv.length + cipherBytes.length);
+  out.set(iv, 0);
+  out.set(cipherBytes, iv.length);
+  return out;
+}
+
+/**
+ * Decrypt the method's payload byte layout back into raw plaintext bytes.
+ * Throws on any failure (bad key, tampered tag, truncated input).
+ * @param {Uint8Array} bytes - `iv || ciphertext || gcm-tag`.
+ * @param {Uint8Array|string|CryptoKey} key
+ * @returns {Promise<Uint8Array>}
+ */
+async function decryptBytes (bytes, key) {
+  if (bytes.length <= IV_LENGTH) {
+    throw new Error('aes-256-gcm: payload too short');
+  }
+  const cryptoKey = await importKey(key);
+  const iv = bytes.slice(0, IV_LENGTH);
+  const cipherBytes = bytes.slice(IV_LENGTH);
+  const plainBuffer = await globalThis.crypto.subtle.decrypt({ name: ALGORITHM, iv }, cryptoKey, cipherBytes);
+  return new Uint8Array(plainBuffer);
+}
+
+/**
+ * Encrypt a material object into an event `content`. Thin wrapper over
+ * {@link encryptBytes}: `payload = base64(encryptBytes(utf8(JSON.stringify(material))))`.
+ * @param {Object} material - the object to serialise + encrypt.
+ * @param {Uint8Array|string|CryptoKey} key
+ * @returns {Promise<{ payload: string }>}
+ */
+async function encrypt (material, key) {
+  const plaintext = new TextEncoder().encode(JSON.stringify(material));
+  const out = await encryptBytes(plaintext, key);
+  return { payload: bytesToBase64(out) };
+}
+
+/**
+ * Decrypt an event `content` back into its material object. Thin wrapper over
+ * {@link decryptBytes}. Throws on any failure (bad key, tampered tag, malformed /
+ * truncated payload, or non-JSON plaintext).
+ * @param {{ payload: string }} content
+ * @param {Uint8Array|string|CryptoKey} key
+ * @returns {Promise<Object>}
+ */
+async function decrypt (content, key) {
+  if (content == null || typeof content.payload !== 'string') {
+    throw new Error('aes-256-gcm: content.payload must be a base64 string');
+  }
+  const plainBytes = await decryptBytes(base64ToBytes(content.payload), key);
+  return JSON.parse(new TextDecoder().decode(plainBytes));
+}
+
+module.exports = { encrypt, decrypt, encryptBytes, decryptBytes };
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/methods/aes-text-base64.js"
+/*!**********************************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/methods/aes-text-base64.js ***!
+  \**********************************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * Legacy, decrypt-only `aes-text-base64` method.
+ *
+ * Reads the historical ciphertext format produced by
+ * `CryptoJS.AES.encrypt(text, passphrase).toString()` — the OpenSSL
+ * "salted" envelope:
+ *
+ *   base64( "Salted__" || salt[8] || AES-256-CBC(text, key, iv) )
+ *
+ * The 32-byte AES key and 16-byte IV are derived from the passphrase STRING and
+ * the salt via OpenSSL's EVP_BytesToKey (MD5, one iteration). The cipher is
+ * AES-256-CBC with PKCS#7 padding, which WebCrypto's `AES-CBC` handles natively.
+ *
+ * Key material for THIS method is the passphrase STRING itself — not base64 of
+ * key bytes (unlike `aes-256-gcm`). See the component README.
+ *
+ * This method is decrypt-only: there is no `encrypt`. It exists to read
+ * pre-existing legacy events; new events must use a modern method.
+ */
+const { base64ToBytes } = __webpack_require__(/*! ../lib/base64 */ "./node_modules/@pryv/encryption/src/lib/base64.js");
+const { md5 } = __webpack_require__(/*! ../lib/md5 */ "./node_modules/@pryv/encryption/src/lib/md5.js");
+
+const SALTED_MAGIC = [0x53, 0x61, 0x6c, 0x74, 0x65, 0x64, 0x5f, 0x5f]; // "Salted__"
+const SALT_LENGTH = 8;
+const KEY_LENGTH = 32; // AES-256
+const IV_LENGTH = 16; // CBC block size
+
+/**
+ * OpenSSL EVP_BytesToKey with MD5 and a single hashing chain (count = 1).
+ * @param {Uint8Array} passphrase - UTF-8 bytes of the passphrase string.
+ * @param {Uint8Array} salt - 8 salt bytes.
+ * @returns {{ key: Uint8Array, iv: Uint8Array }}
+ */
+function evpBytesToKey (passphrase, salt) {
+  const needed = KEY_LENGTH + IV_LENGTH;
+  const derived = new Uint8Array(needed);
+  let filled = 0;
+  let block = new Uint8Array(0);
+  while (filled < needed) {
+    const input = new Uint8Array(block.length + passphrase.length + salt.length);
+    input.set(block, 0);
+    input.set(passphrase, block.length);
+    input.set(salt, block.length + passphrase.length);
+    block = md5(input);
+    const take = Math.min(block.length, needed - filled);
+    derived.set(block.subarray(0, take), filled);
+    filled += take;
+  }
+  return { key: derived.slice(0, KEY_LENGTH), iv: derived.slice(KEY_LENGTH, KEY_LENGTH + IV_LENGTH) };
+}
+
+/**
+ * Decrypt a legacy `aes-text-base64` `content` back into its material object.
+ * Throws on any failure (missing/short payload, absent "Salted__" prefix, wrong
+ * passphrase / bad padding, or non-JSON plaintext).
+ * @param {{ payload: string }} content
+ * @param {string} key - the passphrase STRING.
+ * @returns {Promise<Object>}
+ */
+async function decrypt (content, key) {
+  if (content == null || typeof content.payload !== 'string') {
+    throw new Error('aes-text-base64: content.payload must be a base64 string');
+  }
+  if (typeof key !== 'string') {
+    throw new Error('aes-text-base64: key material must be the passphrase string');
+  }
+
+  const blob = base64ToBytes(content.payload);
+  if (blob.length < SALTED_MAGIC.length + SALT_LENGTH + IV_LENGTH) {
+    throw new Error('aes-text-base64: payload too short');
+  }
+  for (let i = 0; i < SALTED_MAGIC.length; i++) {
+    if (blob[i] !== SALTED_MAGIC[i]) {
+      throw new Error('aes-text-base64: missing "Salted__" prefix');
+    }
+  }
+
+  const salt = blob.slice(SALTED_MAGIC.length, SALTED_MAGIC.length + SALT_LENGTH);
+  const ciphertext = blob.slice(SALTED_MAGIC.length + SALT_LENGTH);
+
+  const passphrase = new TextEncoder().encode(key);
+  const { key: keyBytes, iv } = evpBytesToKey(passphrase, salt);
+
+  const cryptoKey = await globalThis.crypto.subtle.importKey('raw', keyBytes, 'AES-CBC', false, ['decrypt']);
+  const plainBuffer = await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, cryptoKey, ciphertext);
+  return JSON.parse(new TextDecoder().decode(plainBuffer));
+}
+
+module.exports = { decrypt };
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/methods/ecies-aes-256-gcm.js"
+/*!************************************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/methods/ecies-aes-256-gcm.js ***!
+  \************************************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * Asymmetric `ecies-aes-256-gcm` method (ECIES over NIST P-256 + AES-256-GCM).
+ *
+ * A sender encrypts to a recipient's PUBLIC key; only the holder of the matching
+ * PRIVATE key can decrypt. This enables sharing an encrypted event with someone
+ * without ever moving a shared secret.
+ *
+ * Wire format of `content.payload` (FROZEN — published in the event-type
+ * registry):
+ *
+ *   base64( ephemeralPublicKey[65, SEC1 uncompressed 0x04||X||Y]
+ *           || iv[12] || ciphertext || gcm-tag[16] )
+ *
+ * Scheme:
+ *   1. Generate an ephemeral P-256 key pair.
+ *   2. ECDH(ephemeral private, recipient public) -> 32-byte shared secret.
+ *   3. HKDF-SHA-256(secret, salt = <empty>, info = ASCII "encrypted/ecies-aes-256-gcm"),
+ *      32 bytes -> AES-256-GCM key.
+ *   4. AES-256-GCM(UTF-8 JSON of the material, key, random 12-byte IV).
+ *      WebCrypto appends the 16-byte tag to the ciphertext it returns.
+ *
+ * Key material (see the component README):
+ *   - decrypt: recipient PRIVATE key as a CryptoKey (ECDH), a JWK (has `d`), or
+ *     base64 / Uint8Array PKCS#8.
+ *   - encrypt: recipient PUBLIC key as a CryptoKey, a JWK (no `d`), a raw
+ *     65-byte Uint8Array (SEC1 uncompressed) or its base64.
+ *   - either operation also accepts a `{ publicKey, privateKey }` pair object
+ *     holding any of the above; the side the operation needs is picked.
+ */
+const { bytesToBase64, base64ToBytes } = __webpack_require__(/*! ../lib/base64 */ "./node_modules/@pryv/encryption/src/lib/base64.js");
+
+const CURVE = 'P-256';
+const ALGORITHM = { name: 'ECDH', namedCurve: CURVE };
+const INFO = 'encrypted/ecies-aes-256-gcm';
+const EPH_PUB_LENGTH = 65; // SEC1 uncompressed: 0x04 || X(32) || Y(32)
+const IV_LENGTH = 12;
+const GCM_TAG_LENGTH = 16;
+
+/**
+ * Mint a fresh recipient key pair as exportable JWK objects.
+ * @returns {Promise<{ publicKey: Object, privateKey: Object }>}
+ */
+async function generateKeyPair () {
+  const subtle = globalThis.crypto.subtle;
+  const pair = await subtle.generateKey(ALGORITHM, true, ['deriveBits']);
+  return {
+    publicKey: await subtle.exportKey('jwk', pair.publicKey),
+    privateKey: await subtle.exportKey('jwk', pair.privateKey)
+  };
+}
+
+/**
+ * Normalise any accepted key-material shape into an ECDH CryptoKey.
+ * @param {*} material - CryptoKey, JWK, raw/PKCS#8 Uint8Array, base64 string, or a `{ publicKey, privateKey }` pair.
+ * @param {'encrypt'|'decrypt'} usage - `encrypt` needs the PUBLIC key, `decrypt` the PRIVATE key.
+ * @returns {Promise<CryptoKey>}
+ */
+async function normalizeKey (material, usage) {
+  if (usage !== 'encrypt' && usage !== 'decrypt') {
+    throw new Error(`ecies-aes-256-gcm: unknown usage "${usage}"`);
+  }
+  if (material == null) {
+    throw new Error('ecies-aes-256-gcm: key material is required');
+  }
+  const wantPrivate = usage === 'decrypt';
+  const subtle = globalThis.crypto.subtle;
+
+  // Pair object: pick the side the operation needs.
+  if (isPair(material)) {
+    const side = wantPrivate ? material.privateKey : material.publicKey;
+    if (side == null) {
+      throw new Error(`ecies-aes-256-gcm: pair object has no ${wantPrivate ? 'privateKey' : 'publicKey'}`);
+    }
+    return normalizeKey(side, usage);
+  }
+
+  // Already a CryptoKey — trust it.
+  if (typeof CryptoKey !== 'undefined' && material instanceof CryptoKey) {
+    return material;
+  }
+
+  // JWK object.
+  if (typeof material === 'object' && !(material instanceof Uint8Array) &&
+      !(material instanceof ArrayBuffer) && material.kty != null) {
+    const isPrivateJwk = material.d != null;
+    if (wantPrivate && !isPrivateJwk) {
+      throw new Error('ecies-aes-256-gcm: decrypt requires a private key (JWK with "d")');
+    }
+    return subtle.importKey('jwk', material, ALGORITHM, false, wantPrivate ? ['deriveBits'] : []);
+  }
+
+  // Raw bytes: PKCS#8 for private, SEC1 raw (65 bytes) for public.
+  let bytes;
+  if (material instanceof Uint8Array) {
+    bytes = material;
+  } else if (material instanceof ArrayBuffer) {
+    bytes = new Uint8Array(material);
+  } else if (typeof material === 'string') {
+    bytes = base64ToBytes(material);
+  } else {
+    throw new Error('ecies-aes-256-gcm: unsupported key material');
+  }
+
+  if (wantPrivate) {
+    return subtle.importKey('pkcs8', bytes, ALGORITHM, false, ['deriveBits']);
+  }
+  if (bytes.length !== EPH_PUB_LENGTH || bytes[0] !== 0x04) {
+    throw new Error('ecies-aes-256-gcm: public key must be a 65-byte SEC1 uncompressed point (0x04 || X || Y)');
+  }
+  return subtle.importKey('raw', bytes, ALGORITHM, false, []);
+}
+
+/**
+ * Derive the AES-256-GCM key from an ECDH shared secret via HKDF-SHA-256.
+ * @param {Uint8Array} secret - the 32-byte ECDH shared secret.
+ * @param {string[]} usages
+ * @returns {Promise<CryptoKey>}
+ */
+async function deriveAesKey (secret, usages) {
+  const subtle = globalThis.crypto.subtle;
+  const hkdfKey = await subtle.importKey('raw', secret, 'HKDF', false, ['deriveBits']);
+  const aesBits = await subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode(INFO) },
+    hkdfKey,
+    256
+  );
+  return subtle.importKey('raw', new Uint8Array(aesBits), 'AES-GCM', false, usages);
+}
+
+/**
+ * Encrypt raw bytes to the recipient's public key, producing the method's
+ * payload byte layout:
+ *   ephemeralPublicKey[65] || iv[12] || ciphertext || gcm-tag[16]
+ * These are exactly the bytes that Base64-decoding a `content.payload` yields.
+ * The input is not mutated.
+ * @param {Uint8Array} bytes - plaintext bytes to encrypt.
+ * @param {*} key - recipient public key in any accepted shape (or a pair object).
+ * @returns {Promise<Uint8Array>}
+ */
+async function encryptBytes (bytes, key) {
+  const subtle = globalThis.crypto.subtle;
+  const recipientPublic = await normalizeKey(key, 'encrypt');
+
+  const ephemeral = await subtle.generateKey(ALGORITHM, true, ['deriveBits']);
+  const secretBits = await subtle.deriveBits({ name: 'ECDH', public: recipientPublic }, ephemeral.privateKey, 256);
+  const aesKey = await deriveAesKey(new Uint8Array(secretBits), ['encrypt']);
+
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+  const cipherBuffer = await subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, bytes);
+  const cipherBytes = new Uint8Array(cipherBuffer);
+
+  const ephRaw = new Uint8Array(await subtle.exportKey('raw', ephemeral.publicKey));
+
+  const out = new Uint8Array(ephRaw.length + iv.length + cipherBytes.length);
+  out.set(ephRaw, 0);
+  out.set(iv, ephRaw.length);
+  out.set(cipherBytes, ephRaw.length + iv.length);
+  return out;
+}
+
+/**
+ * Decrypt the method's payload byte layout back into raw plaintext bytes with
+ * the recipient's private key. Throws on any failure (short input, bad key,
+ * tampered tag).
+ * @param {Uint8Array} bytes - `ephemeralPublicKey[65] || iv[12] || ciphertext || gcm-tag[16]`.
+ * @param {*} key - recipient private key in any accepted shape (or a pair object).
+ * @returns {Promise<Uint8Array>}
+ */
+async function decryptBytes (bytes, key) {
+  const subtle = globalThis.crypto.subtle;
+  if (bytes.length < EPH_PUB_LENGTH + IV_LENGTH + GCM_TAG_LENGTH) {
+    throw new Error('ecies-aes-256-gcm: payload too short');
+  }
+
+  const ephRaw = bytes.slice(0, EPH_PUB_LENGTH);
+  const iv = bytes.slice(EPH_PUB_LENGTH, EPH_PUB_LENGTH + IV_LENGTH);
+  const cipherBytes = bytes.slice(EPH_PUB_LENGTH + IV_LENGTH);
+
+  const recipientPrivate = await normalizeKey(key, 'decrypt');
+  const ephemeralPublic = await subtle.importKey('raw', ephRaw, ALGORITHM, false, []);
+  const secretBits = await subtle.deriveBits({ name: 'ECDH', public: ephemeralPublic }, recipientPrivate, 256);
+  const aesKey = await deriveAesKey(new Uint8Array(secretBits), ['decrypt']);
+
+  const plainBuffer = await subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, cipherBytes);
+  return new Uint8Array(plainBuffer);
+}
+
+/**
+ * Encrypt a material object to the recipient's public key. Thin wrapper over
+ * {@link encryptBytes}: `payload = base64(encryptBytes(utf8(JSON.stringify(material))))`.
+ * @param {Object} material - the object to serialise + encrypt.
+ * @param {*} key - recipient public key in any accepted shape (or a pair object).
+ * @returns {Promise<{ payload: string }>}
+ */
+async function encrypt (material, key) {
+  const plaintext = new TextEncoder().encode(JSON.stringify(material));
+  const out = await encryptBytes(plaintext, key);
+  return { payload: bytesToBase64(out) };
+}
+
+/**
+ * Decrypt an event `content` with the recipient's private key. Thin wrapper over
+ * {@link decryptBytes}. Throws on any failure (missing/short payload, bad key,
+ * tampered tag, non-JSON).
+ * @param {{ payload: string }} content
+ * @param {*} key - recipient private key in any accepted shape (or a pair object).
+ * @returns {Promise<Object>}
+ */
+async function decrypt (content, key) {
+  if (content == null || typeof content.payload !== 'string') {
+    throw new Error('ecies-aes-256-gcm: content.payload must be a base64 string');
+  }
+  const plainBytes = await decryptBytes(base64ToBytes(content.payload), key);
+  return JSON.parse(new TextDecoder().decode(plainBytes));
+}
+
+/**
+ * @param {*} m
+ * @returns {boolean} true when `m` is a `{ publicKey, privateKey }` pair object (not a JWK).
+ */
+function isPair (m) {
+  return m != null && typeof m === 'object' && m.kty == null &&
+    !(m instanceof Uint8Array) && !(m instanceof ArrayBuffer) &&
+    (typeof CryptoKey === 'undefined' || !(m instanceof CryptoKey)) &&
+    (m.publicKey != null || m.privateKey != null);
+}
+
+module.exports = { encrypt, decrypt, encryptBytes, decryptBytes, generateKeyPair, normalizeKey };
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/encryption/src/methods/index.js"
+/*!************************************************************!*\
+  !*** ./node_modules/@pryv/encryption/src/methods/index.js ***!
+  \************************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+/**
+ * Registry of built-in encryption methods, keyed by their method name (the
+ * suffix of an `encrypted/<method>` event type).
+ */
+const aes256gcm = __webpack_require__(/*! ./aes-256-gcm */ "./node_modules/@pryv/encryption/src/methods/aes-256-gcm.js");
+const aesTextBase64 = __webpack_require__(/*! ./aes-text-base64 */ "./node_modules/@pryv/encryption/src/methods/aes-text-base64.js");
+const eciesAes256gcm = __webpack_require__(/*! ./ecies-aes-256-gcm */ "./node_modules/@pryv/encryption/src/methods/ecies-aes-256-gcm.js");
+
+module.exports = {
+  'aes-256-gcm': aes256gcm,
+  'aes-text-base64': aesTextBase64,
+  'ecies-aes-256-gcm': eciesAes256gcm
+};
+
+
+/***/ },
+
 /***/ "./node_modules/@pryv/monitor/src/Monitor.js"
 /*!***************************************************!*\
   !*** ./node_modules/@pryv/monitor/src/Monitor.js ***!
@@ -173,6 +2673,30 @@ class Monitor extends EventEmitter {
   }
 
   /**
+   * Register a handler for the server's fine-grained `accessUpdated`
+   * event. Fires whenever a Pryv.io ≥ 2.0.0-pre.X server emits the
+   * event after a successful `accesses.update` — payload is
+   * `{ type: 'access-updated', accessId: '<base>:<serial>', serial }`.
+   *
+   * Requires `Monitor.UpdateMethod.Socket` to be active (the event
+   * is server-pushed via `@pryv/socket.io`). With other update methods
+   * (e.g. `EventsTimer` polling), the handler will never fire —
+   * polling-based consumers should call `connection.accessInfo(true)`
+   * themselves when they need to refresh the cache.
+   *
+   * The underlying `connection.socket` already busts the
+   * `connection.accessInfo` cache when this event fires, so the next
+   * `connection.accessInfo()` call returns the freshly-fetched copy.
+   *
+   * @param {(payload: any) => void} handler - called with `(payload)` on each event
+   * @returns {Monitor} this (chainable)
+   */
+  onAccessUpdated (handler) {
+    this.on('accessUpdated', handler);
+    return this;
+  }
+
+  /**
    * @private
    * Called by UpdateMethod to share cross references
    * Set a custom update method
@@ -263,9 +2787,57 @@ class Socket extends UpdateMethod {
     }
     // @ts-ignore - socket is added by @pryv/socket.io extension
     this.socket = await this.monitor.connection.socket.open();
-    this.socket.on('eventsChanged', () => { this.monitor.updateEvents(); });
-    this.socket.on('streamsChanged', () => { this.monitor.updateStreams(); });
-    this.socket.on('error', (error) => { this.monitor.emit(Changes.ERROR, error); });
+
+    // Scoped notifications (opt-in): register this monitor's scope so the server
+    // wakes us only when a matching change occurs, delivered as a single
+    // `notificationsChanged({ keys })`. Because a scoped connection opts out of
+    // the coarse broadcasts server-side, we register BOTH an events scope (so
+    // `updateEvents` fires) and a streams scope (so `updateStreams` fires).
+    // Older servers reject `subscribe` (the wildcard treats it as an unknown
+    // method); we then fall back to the legacy coarse signals.
+    const onEvents = () => { this.monitor.updateEvents(); };
+    const onStreams = () => { this.monitor.updateStreams(); };
+    this.socket.on('notificationsChanged', (payload) => {
+      const keys = (payload && payload.keys) || [];
+      if (keys.includes('monEvents')) onEvents();
+      if (keys.includes('monStreams')) onStreams();
+    });
+    const scope = this.monitor.eventsGetScope || {};
+    const eventsQuery = {};
+    for (const f of ['streams', 'types', 'content', 'clientData']) {
+      if (scope[f] != null) eventsQuery[f] = scope[f];
+    }
+    const streamsQuery = scope.streams != null ? { streams: scope.streams } : {};
+    const ack = await this.socket.subscribe({
+      scopes: {
+        monEvents: { kind: 'events', query: eventsQuery },
+        monStreams: { kind: 'streams', query: streamsQuery }
+      }
+    });
+    if (!ack || ack.ok !== true) {
+      // Server does not support scoped subscriptions — use coarse signals.
+      this.socket.on('eventsChanged', onEvents);
+      this.socket.on('streamsChanged', onStreams);
+    }
+    // Re-emit the server's fine-grained `accessUpdated` event on the
+    // Monitor itself so consumers can subscribe via
+    // `monitor.onAccessUpdated(handler)`. The underlying SocketIO has
+    // already busted the connection's accessInfo cache; the payload
+    // carries the new composite accessId + serial for fine-grained
+    // reactions.
+    this.socket.on('accessUpdated', (payload) => {
+      this.monitor.emit('accessUpdated', payload);
+    });
+    this.socket.on('error', (error) => {
+      this.monitor.emit(Changes.ERROR, error);
+      // If the underlying socket.io-client transport has been torn down
+      // (i.e. SocketIO emitted 'error' after reconnect_failed), drop our
+      // reference so a future Changes.READY can rebuild instead of
+      // short-circuiting on the cached, dead handle.
+      if (this.socket && !this.socket._io) {
+        this.socket = null;
+      }
+    });
   }
 
   async stop () {
@@ -377,7 +2949,7 @@ module.exports = function (pryv) {
   console.log('Pryv version', pryv.version);
   // check version here
   if (pryv.Monitor) {
-    throw new Error('Monitor already loaded');
+    return; // already loaded
   }
   // sharing cross references
   pryv.Monitor = Monitor;
@@ -521,7 +3093,7 @@ module.exports = async function _updateStreams (monitor) {
 const io = __webpack_require__(/*! socket.io-client */ "./node_modules/socket.io-client/build/cjs/index.js");
 const { EventEmitter } = __webpack_require__(/*! events */ "./node_modules/events/events.js");
 
-const EVENTS = ['eventsChanged', 'streamsChanged', 'accessesChanged', 'disconnect', 'error'];
+const EVENTS = ['eventsChanged', 'streamsChanged', 'accessesChanged', 'accessUpdated', 'notificationsChanged', 'disconnect', 'error'];
 
 /**
  * Socket.IO transport for a Connection.
@@ -556,8 +3128,29 @@ class SocketIO extends EventEmitter {
       this.connection.username()
         .then(username => {
           const socketEndpoint = this.connection.endpoint + username + '?auth=' + this.connection.token;
+          // Cap reconnects so a server-side outage can't drive a runaway loop.
+          // socket.io-client default is reconnectionAttempts: Infinity, max delay 5s.
+          // With these settings, a stuck client gives up after ~10 attempts spread
+          // over ~1 minute (with randomization), then surfaces 'error' to consumers.
           // @ts-ignore - io is callable in socket.io-client
-          this._io = io(socketEndpoint, { forceNew: true });
+          this._io = io(socketEndpoint, {
+            forceNew: true,
+            transports: ['websocket'],
+            reconnectionAttempts: 10,
+            reconnectionDelayMax: 60000,
+            randomizationFactor: 0.5
+          });
+
+          // Terminal failure: socket.io-client gave up reconnecting.
+          // Tear down our handle and surface 'error' so consumers (e.g. Monitor)
+          // can clean up instead of leaving a zombie socket reference.
+          this._io.on('reconnect_failed', () => {
+            const dead = this._io;
+            this._io = null;
+            this.connecting = false;
+            try { if (dead) dead.close(); } catch (ex) { }
+            this.emit('error', new Error('socket.io: reconnect_failed (gave up after configured attempts)'));
+          });
 
           // handle failure
           for (const errcode of ['connect_error', 'connection_failed', 'error', 'connection_timeout']) {
@@ -579,6 +3172,14 @@ class SocketIO extends EventEmitter {
           this._io.on('connect', () => {
             this.connecting = false;
             registerListeners(this);
+            // When the server emits `accessUpdated` (fine-grained event
+            // fired after every successful `accesses.update`), bust the
+            // connection's `accessInfo` cache so the next read picks up
+            // the new permissions / serial. Best-effort: a failed
+            // refresh leaves the previous cached value intact.
+            this._io.on('accessUpdated', () => {
+              this.connection.accessInfo(true).catch(() => { /* swallow */ });
+            });
             resolve(this);
           });
         })
@@ -600,7 +3201,7 @@ class SocketIO extends EventEmitter {
 
   /**
    * Add listener for Socket.IO events
-   * @param {('eventsChanged'|'streamsChanged'|'accessesChanged'|'disconnect'|'error')} eventName - The event to listen for
+   * @param {('eventsChanged'|'streamsChanged'|'accessesChanged'|'accessUpdated'|'disconnect'|'error')} eventName - The event to listen for
    * @param {Function} listener - The callback function
    * @returns {SocketIO} this
    */
@@ -631,6 +3232,44 @@ class SocketIO extends EventEmitter {
       });
     }
     return await this.connection._chunkedBatchCall(arrayOfAPICalls, progress, httpHandler.bind(this));
+  }
+
+  /**
+   * Register scoped notification subscriptions on this connection. Matched
+   * changes are delivered as `notificationsChanged({ keys })`. Resolves the
+   * server ack `{ ok, keys }`, or `{ ok: false }` when the server does not
+   * support scoped notifications (so callers can fall back to coarse events).
+   * @param {object} payload - `{ key, kind, query }` or `{ scopes: { key: { kind, query } } }`
+   * @returns {Promise<object>}
+   */
+  subscribe (payload) {
+    checkOpen(this);
+    return new Promise((resolve) => {
+      this._io.emit('subscribe', payload, (err, res) => resolve(err != null ? { ok: false, error: err } : (res || { ok: false })));
+    });
+  }
+
+  /**
+   * Remove scoped subscriptions: `{ key }`, `{ keys: [...] }`, or `{ all: true }`.
+   * @param {object} payload
+   * @returns {Promise<object>}
+   */
+  unsubscribe (payload) {
+    checkOpen(this);
+    return new Promise((resolve) => {
+      this._io.emit('unsubscribe', payload, (err, res) => resolve(err != null ? { ok: false, error: err } : res));
+    });
+  }
+
+  /**
+   * List the scopes currently registered on this connection.
+   * @returns {Promise<object>} `{ scopes: { key: { kind, query } } }`
+   */
+  getSubscriptions () {
+    checkOpen(this);
+    return new Promise((resolve) => {
+      this._io.emit('getSubscriptions', null, (err, res) => resolve(err != null ? { scopes: {} } : res));
+    });
   }
 }
 
@@ -682,7 +3321,7 @@ module.exports = function (pryv) {
   console.log('"pryv" lib version', pryv.version);
   // check version here
   if (pryv.Connection.SocketIO) {
-    throw new Error('Socket.IO add-on already loaded');
+    return; // already loaded
   }
   // sharing cross references
   pryv.Connection.SocketIO = SocketIO;
@@ -12463,8 +15102,15 @@ class AuthController {
     validateSettings.call(this, settings);
 
     this.stateChangeListeners = [];
+    // External `onStateChange` callers only see `{ status, id, key, serviceInfo? }`
+    // on AUTHORIZED — credentials (`username`, `token`, `apiEndpoint`) stay
+    // inside the lib. Internal listeners (e.g. LoginButton, for cookie
+    // autologin) get the full unfiltered state.
     if (this.settings.onStateChange) {
-      this.stateChangeListeners.push(this.settings.onStateChange);
+      const externalListener = this.settings.onStateChange;
+      this.stateChangeListeners.push(function (state) {
+        externalListener(filterForExternalListener(state));
+      });
     }
     this.service = service;
 
@@ -12607,6 +15253,10 @@ class AuthController {
   async startAuthRequest () {
     // @ts-ignore - postAccess uses .call(this) for context
     this.state = await postAccess.call(this);
+    // Remember the polling key so listeners on the terminal AUTHORIZED
+    // state can be handed `{ key, serviceInfo? }` (the polling response
+    // itself doesn't echo `key` back).
+    this._authFlowKey = this.state?.key;
 
     await doPolling.call(this);
 
@@ -12646,6 +15296,11 @@ class AuthController {
         // @ts-ignore - this is bound via .call()
         setTimeout(await doPolling.bind(this), this.state?.poll_rate_ms);
       } else {
+        // Carry the key forward — listeners on the narrow public surface
+        // need it, and the server doesn't echo it back on ACCEPTED.
+        if (this._authFlowKey != null && pollResponse.key == null) {
+          pollResponse.key = this._authFlowKey;
+        }
         this.state = pollResponse;
       }
 
@@ -12685,6 +15340,38 @@ class AuthController {
 }
 
 // ----------- private methods -------------
+
+/**
+ * Narrow the state passed to *external* `onStateChange` callers so the
+ * calling app sees only `{ status, id, key, serviceInfo? }` on the
+ * terminal AUTHORIZED state reached through the auth-flow polling path.
+ * `username` / `token` / `apiEndpoint` are kept inside the lib; the
+ * calling app uses `pryv.connectFromKey(key, serviceInfoUrl)` to obtain
+ * a `Connection`.
+ *
+ * The cookie-autologin path (no fresh `key` available, restored from
+ * `LoginButton.getAuthorizationData()`) passes through unchanged so
+ * existing pages that build a `Connection` directly from the restored
+ * state on page load keep working.
+ *
+ * Non-AUTHORIZED states pass through unchanged so error messages /
+ * loading flags / etc. still reach the listener.
+ *
+ * @param {Object} state - full internal state
+ * @returns {Object} narrowed state
+ */
+function filterForExternalListener (state) {
+  if (state == null || state.status !== AuthStates.AUTHORIZED) {
+    return state;
+  }
+  // No key → cookie-autologin path; preserve existing shape.
+  if (state.key == null) {
+    return state;
+  }
+  const out = { status: state.status, id: state.id, key: state.key };
+  if (state.serviceInfo != null) out.serviceInfo = state.serviceInfo;
+  return out;
+}
 
 async function checkAutoLogin (authController) {
   const loginButton = authController.loginButton;
@@ -13051,7 +15738,8 @@ class LoginButton {
     // this step should be applied only for the browser
     if (!utils.isBrowser()) return;
 
-    // 3. Check if there is a prYvkey as result of "out of page login"
+    // 3. Check if there is a pryvKey / pryvPoll (or legacy prYvkey /
+    //    prYvpoll) as result of "out of page login"
     const url = window.location.href;
     const pollUrl = retrievePollUrl(url);
     if (pollUrl !== null) {
@@ -13065,16 +15753,27 @@ class LoginButton {
           error: e
         };
       }
+      // These params are one-shot; leaving them in the visible URL puts
+      // stale auth state into bookmarks / copied links.
+      if (window.history && typeof window.history.replaceState === 'function') {
+        window.history.replaceState(null, '', utils.cleanURLFromPrYvParams(url));
+      }
     }
 
     function retrievePollUrl (url) {
+      // Modern lowercase form (pryvKey / pryvPoll) is preferred; the
+      // capital-Y form (prYvkey / prYvpoll) is accepted for back-compat
+      // with apps emitting the legacy URL contract — see
+      // [DEPRECATED] notes on cleanURLFromPrYvParams.
       const params = utils.getQueryParamsFromURL(url);
       let pollUrl = null;
-      if (params.prYvkey) { // deprecated method - To be removed
-        pollUrl = authController.serviceInfo.access + params.prYvkey;
+      const key = params.pryvKey || params.prYvkey;
+      if (key) {
+        pollUrl = authController.serviceInfo.access + key;
       }
-      if (params.prYvpoll) {
-        pollUrl = params.prYvpoll;
+      const poll = params.pryvPoll || params.prYvpoll;
+      if (poll) {
+        pollUrl = poll;
       }
       return pollUrl;
     }
@@ -13201,7 +15900,9 @@ const utils = __webpack_require__(/*! ./utils.js */ "./node_modules/pryv/src/uti
 const jsonParser = __webpack_require__(/*! ./lib/json-parser */ "./node_modules/pryv/src/lib/json-parser.js");
 const libGetEventStreamed = __webpack_require__(/*! ./lib/getEventStreamed */ "./node_modules/pryv/src/lib/getEventStreamed.js");
 const PryvError = __webpack_require__(/*! ./lib/PryvError */ "./node_modules/pryv/src/lib/PryvError.js");
+const StaleAccessIdError = __webpack_require__(/*! ./lib/StaleAccessIdError */ "./node_modules/pryv/src/lib/StaleAccessIdError.js");
 const buildSearchParams = __webpack_require__(/*! ./lib/buildSearchParams */ "./node_modules/pryv/src/lib/buildSearchParams.js");
+const resolveDotPath = __webpack_require__(/*! ./lib/resolveDotPath */ "./node_modules/pryv/src/lib/resolveDotPath.js");
 
 /**
  * @class Connection
@@ -13266,11 +15967,22 @@ class Connection {
 
   /**
    * Get access info for this connection.
-   * It's async as it is fetched from the API.
+   *
+   * Memoized per-Connection: the first call fetches from the server and
+   * caches the result; subsequent calls return the cached copy in O(1).
+   * Pass `forceRefresh: true` to invalidate the cache and fetch a fresh
+   * copy from the server — used internally by `connection.socket` to
+   * react to `accessUpdated` server-push events. A failed server
+   * fetch leaves any prior cached value intact.
+   *
+   * @param {boolean} [forceRefresh=false] - bypass + refresh the cache
    * @returns {Promise<AccessInfo>} Promise resolving to the access info
    */
-  async accessInfo () {
-    return this.get('access-info', null);
+  async accessInfo (forceRefresh = false) {
+    if (!forceRefresh && this._accessInfoCache != null) return this._accessInfoCache;
+    const fresh = await this.get('access-info', null);
+    this._accessInfoCache = fresh;
+    return fresh;
   }
 
   /**
@@ -13445,7 +16157,7 @@ class Connection {
    */
   async _postFetchRaw (path, data, contentType) {
     const headers = {
-      Authorization: this.token,
+      ...(await this._authHeaders('POST', this.endpoint + path)),
       Accept: 'application/json'
     };
     // optional for form-data llowing fetch to
@@ -13460,6 +16172,19 @@ class Connection {
     });
     const body = await response.json();
     return { response, body };
+  }
+
+  /**
+   * @protected
+   * Authentication headers for a request. The base Connection sends the
+   * bearer token as-is; {@link SignedConnection} overrides this to attach a
+   * per-request DPoP (RFC 9449) proof. Async because a proof requires signing.
+   * @param {string} method - HTTP method (informs the proof's `htm`)
+   * @param {string} url - full request URL WITHOUT query (informs `htu`)
+   * @returns {Promise<Object>} header map to merge into the request
+   */
+  async _authHeaders (method, url) {
+    return { Authorization: this.token };
   }
 
   /**
@@ -13490,7 +16215,7 @@ class Connection {
     }
     const response = await fetch(this.endpoint + path + queryStr, {
       headers: {
-        Authorization: this.token,
+        ...(await this._authHeaders('GET', this.endpoint + path)),
         Accept: 'application/json'
       }
     });
@@ -13531,6 +16256,44 @@ class Connection {
     const now = getTimestamp();
     this._handleMeta(res.body, now);
     return res.body;
+  }
+
+  /**
+   * Get the latest event per value for a content path — typical form-prefill
+   * lookup ("latest assertion per code"). Queries `events.get` with a
+   * `content` condition `{ path, in: values }` (server must support content
+   * queries — see `Service.supportsContentQueries()`), pages through the
+   * time-descending result and keeps the first (= latest) event per value.
+   * Handles paging internally, so the result is correct regardless of the
+   * default `events.get` page size.
+   * @param {string} path - dot-path into `content` (or `$` for the root value)
+   * @param {Array<string|number|boolean>} values - values to look up (one Map entry max per value)
+   * @param {Object} [baseQuery] - additional `events.get` params (e.g. `streams`, `types`, `fromTime`); passed through
+   * @returns {Promise<Map<string|number|boolean, Object>>} value → latest matching event; values with no match are absent
+   */
+  async getLatestByContent (path, values, baseQuery = {}) {
+    const PAGE_LIMIT = 1000;
+    const lookup = new Set(values);
+    const found = new Map();
+    const condition = { path, in: [...lookup] };
+    const content = (baseQuery.content || []).concat([condition]);
+    let skip = 0;
+    while (found.size < lookup.size) {
+      const params = Object.assign({}, baseQuery, {
+        content,
+        sortAscending: false,
+        skip,
+        limit: PAGE_LIMIT
+      });
+      const events = await this.apiOne('events.get', params, 'events');
+      for (const event of events) {
+        const value = resolveDotPath(event.content, path);
+        if (lookup.has(value) && !found.has(value)) found.set(value, event);
+      }
+      if (events.length < PAGE_LIMIT) break;
+      skip += events.length;
+    }
+    return found;
   }
 
   /**
@@ -13611,6 +16374,48 @@ class Connection {
     return utils.buildAPIEndpoint(this);
   }
 
+  /**
+   * Update an access by composite id (Pryv.io ≥ 2.0.0-pre.X). Wraps
+   * `accesses.update` and translates the 409 `stale-resource` response
+   * into a typed `StaleAccessIdError` so callers can `instanceof`-test
+   * and refetch + retry without re-parsing the inner error.
+   *
+   * Pass `id` as the wire-format reference returned by the server — bare
+   * cuid on a never-updated access, composite `<base>:<serial>` otherwise.
+   * `changes` is the body of mutable fields (name, deviceName, permissions,
+   * expireAfter, expires:null, clientData).
+   *
+   * @param {string} id
+   * @param {Object} changes
+   * @returns {Promise<Object>} the updated access (with new composite id)
+   * @throws {StaleAccessIdError} if the server reports the id is stale
+   */
+  async updateAccess (id, changes) {
+    try {
+      return await this.apiOne('accesses.update', { id, update: changes }, 'access');
+    } catch (e) {
+      if (e && e.innerObject && e.innerObject.id === 'stale-resource') {
+        throw new StaleAccessIdError(e.message, e.innerObject.data || {});
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Fetch an access by composite id including its full version history
+   * (oldest first). Server: `accesses.getOne ?includeHistory=true`.
+   *
+   * Useful for audit views. Pass the composite `<base>:<serial>` to
+   * inspect a specific past version (the result's `current` field then
+   * points at the live head's composite id).
+   *
+   * @param {string} id
+   * @returns {Promise<{ access: Object, current?: string, history?: Object[] }>}
+   */
+  async getAccessWithHistory (id) {
+    return await this.apiOne('accesses.getOne', { id, includeHistory: true });
+  }
+
   // private method that handle meta data parsing
   _handleMeta (res, requestLocalTimestamp) {
     if (!res.meta) throw new Error('Cannot find .meta in response.');
@@ -13684,6 +16489,407 @@ const Service = __webpack_require__(/*! ./Service */ "./node_modules/pryv/src/Se
 
 /***/ },
 
+/***/ "./node_modules/pryv/src/OAuth2Client.js"
+/*!***********************************************!*\
+  !*** ./node_modules/pryv/src/OAuth2Client.js ***!
+  \***********************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+const oauth = __webpack_require__(/*! oauth4webapi */ "./node_modules/oauth4webapi/build/index.js");
+const Connection = __webpack_require__(/*! ./Connection */ "./node_modules/pryv/src/Connection.js");
+const SignedConnection = __webpack_require__(/*! ./SignedConnection */ "./node_modules/pryv/src/SignedConnection.js");
+const utils = __webpack_require__(/*! ./utils */ "./node_modules/pryv/src/utils.js");
+
+// sessionStorage key prefix for the per-flow PKCE verifier, keyed by `state`.
+const VERIFIER_KEY_PREFIX = 'pryv-oauth2-verifier:';
+
+/**
+ * Minimal Web-Storage-like contract used to persist the per-flow PKCE verifier.
+ * A browser `sessionStorage` satisfies it structurally.
+ * @typedef {Object} OAuth2Storage
+ * @property {(key: string) => (string | null)} getItem
+ * @property {(key: string, value: string) => void} setItem
+ * @property {(key: string) => void} removeItem
+ */
+
+/**
+ * @class OAuth2Client
+ * Browser-side consumer of the Pryv OAuth2 authorization-code flow (PKCE).
+ *
+ * Sibling to {@link Browser}: an OAuth-aware app runs
+ * `redirectToAuthorize()` → (the browser bounces through `/oauth2/authorize`
+ * and back to `redirectUri`) → `handleCallback()`, which returns a ready
+ * {@link Connection}. `refresh()` swaps the refresh token for a fresh one.
+ *
+ * PKCE is handled internally: a random `code_verifier` is generated per flow,
+ * stored in `sessionStorage` keyed by `state`, and consumed on callback.
+ *
+ * The authorization-server endpoints are discovered from the issuer via
+ * RFC 8414 (`GET <issuer>/.well-known/oauth-authorization-server`).
+ *
+ * @example
+ * const client = new pryv.OAuth2Client({
+ *   authorizationServer: 'https://host', // Pryv API base (issuer)
+ *   clientId: 'my-app',
+ *   redirectUri: 'https://my-app.example/callback',
+ *   scope: 'cmc:study-A'
+ * });
+ * // on "Login with Pryv":
+ * await client.redirectToAuthorize();
+ * // on the redirect_uri page:
+ * const connection = await client.handleCallback(window.location.search);
+ *
+ * @memberof pryv
+ */
+class OAuth2Client {
+  /**
+   * @param {Object} [options]
+   * @param {string} [options.authorizationServer] - Issuer / Pryv API base URL. The
+   *   discovery document is fetched from `<authorizationServer>/.well-known/oauth-authorization-server`.
+   *   (This is the concrete issuer URL, not the `/service/info` URL — client-side
+   *   derivation from the per-user `service:api` template is unreliable for multi-core.)
+   *   Required at runtime.
+   * @param {string} [options.clientId] - App-account client id. Required at runtime.
+   * @param {string} [options.redirectUri] - Registered redirect URI. Required at runtime.
+   * @param {string} [options.scope] - Consent-offer reference registered on the client, e.g. `'cmc:study-A'`.
+   * @param {OAuth2Storage} [options.storage] - Web-Storage-like `{ getItem, setItem, removeItem }`.
+   *   Defaults to `globalThis.sessionStorage` in a browser, else an in-memory store.
+   * @param {string} [options.refreshToken] - Seed the client with a previously-persisted
+   *   refresh token so `refresh()` works after a page reload WITHOUT re-running the
+   *   authorization flow. Persist ONLY this value (read it from `client.refreshToken`
+   *   or the `onTokenRotated` callback) — never the whole `lastTokenResponse`, which
+   *   also carries the access token and so is a larger XSS surface.
+   * @param {(refreshToken: string) => void} [options.onTokenRotated] - Called with the
+   *   NEW refresh token every time it rotates (after `handleCallback()` and each
+   *   `refresh()`), so the app can persist the minimal secret. Exceptions it throws
+   *   are swallowed (persistence must not break the token exchange).
+   * @param {boolean} [options.dpop=false] - Opt into RFC 9449 DPoP: an ES256 key
+   *   pair is generated per client, the token is bound to it at issuance, and
+   *   `handleCallback()` / `refresh()` return a {@link SignedConnection} that
+   *   proves possession of the key on every request. A token stolen from the
+   *   resulting connection is useless without the private key. The key is
+   *   session-scoped (not persisted) — re-seeding a `refreshToken` after reload
+   *   mints a fresh binding for the new key.
+   */
+  constructor (options = {}) {
+    const { authorizationServer, clientId, redirectUri, scope, storage, refreshToken, onTokenRotated, dpop } = options;
+    if (!authorizationServer) throw new Error('OAuth2Client: "authorizationServer" is required');
+    if (!clientId) throw new Error('OAuth2Client: "clientId" is required');
+    if (!redirectUri) throw new Error('OAuth2Client: "redirectUri" is required');
+
+    this.issuer = new URL(authorizationServer);
+    this.clientId = clientId;
+    this.redirectUri = redirectUri;
+    this.scope = scope;
+    this.storage = storage || defaultStorage();
+
+    // Public client (PKCE, no secret) — token_endpoint auth method "none".
+    this._client = { client_id: clientId };
+    this._clientAuth = oauth.None();
+    this._as = null;
+    this._refreshToken = refreshToken || null;
+    this._onTokenRotated = (typeof onTokenRotated === 'function') ? onTokenRotated : null;
+    // DPoP (RFC 9449): lazily generated ES256 key pair + oauth4webapi handle,
+    // shared between the token-endpoint proofs (handle) and the resulting
+    // SignedConnection's per-request proofs (same key → same bound thumbprint).
+    this._dpop = dpop === true;
+    this._dpopKeyPair = null;
+    this._dpopHandle = null;
+    // In-flight refresh() promise — dedups concurrent callers onto one token
+    // request so they can't each present the same refresh token and have the
+    // loser rejected as reuse (invalid_grant) by an always-rotating server.
+    this._refreshInFlight = null;
+    /** Last raw token-endpoint response (access_token, scope, apiEndpoint, …). */
+    this.lastTokenResponse = null;
+  }
+
+  /**
+   * The current refresh token (rotates on every `handleCallback()` / `refresh()`).
+   * Read it to persist the minimal secret across reloads; re-seed via the
+   * `refreshToken` constructor option. `null` before the first exchange.
+   * @returns {string | null}
+   */
+  get refreshToken () {
+    return this._refreshToken;
+  }
+
+  /**
+   * @private
+   * Lazily generate the DPoP ES256 key pair + oauth4webapi handle (once).
+   * Returns `undefined` when DPoP is off, so call sites can spread it as an
+   * absent option. The key is `extractable` so the resulting
+   * {@link SignedConnection} can export the public JWK into each proof.
+   * @returns {Promise<Object|undefined>} the DPoP handle, or undefined
+   */
+  async _ensureDPoP () {
+    if (!this._dpop) return undefined;
+    if (this._dpopHandle == null) {
+      this._dpopKeyPair = await oauth.generateKeyPair('ES256', { extractable: true });
+      // DPoP() only reads the optional `clockSkew` symbol off the client; our
+      // public-client literal carries none, which trips oauth4webapi's
+      // weak-type guard on the branded param. Cast — the value is correct.
+      this._dpopHandle = oauth.DPoP(/** @type {any} */ (this._client), this._dpopKeyPair);
+    }
+    return this._dpopHandle;
+  }
+
+  /**
+   * @private
+   * Lazily discover + cache the authorization-server metadata (RFC 8414).
+   * @returns {Promise<Object>} the `AuthorizationServer` metadata
+   */
+  async _discover () {
+    if (this._as) return this._as;
+    const response = await oauth.discoveryRequest(this.issuer, { algorithm: 'oauth2' });
+    this._as = await oauth.processDiscoveryResponse(this.issuer, response);
+    return this._as;
+  }
+
+  /**
+   * Build the `/oauth2/authorize` URL (generating + storing the PKCE verifier)
+   * and navigate to it. Returns the URL so non-browser callers can drive the
+   * redirect themselves.
+   *
+   * @param {Object} [options]
+   * @param {string} [options.state] - CSRF/correlation value; a random one is generated when omitted.
+   * @param {(url: string) => void} [options.redirect] - Navigation function; defaults to
+   *   `globalThis.location.assign` when available, else a no-op (URL still returned).
+   * @returns {Promise<string>} the authorization URL
+   */
+  async redirectToAuthorize (options = {}) {
+    const as = await this._discover();
+    const state = options.state || oauth.generateRandomState();
+    const codeVerifier = oauth.generateRandomCodeVerifier();
+    const codeChallenge = await oauth.calculatePKCECodeChallenge(codeVerifier);
+    this.storage.setItem(VERIFIER_KEY_PREFIX + state, codeVerifier);
+
+    const url = new URL(as.authorization_endpoint);
+    // The browser is about to be navigated to this URL. `oauth4webapi` only
+    // enforces https on endpoints it fetches itself, not on this navigation
+    // target — a tampered/MITM discovery document could return an http:/other
+    // `authorization_endpoint` and send the user somewhere hostile. Assert the
+    // scheme with the same https-or-loopback rule used for the apiEndpoint.
+    assertHttpsOrLoopback(url, 'authorization_endpoint');
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('client_id', this.clientId);
+    url.searchParams.set('redirect_uri', this.redirectUri);
+    if (this.scope) url.searchParams.set('scope', this.scope);
+    url.searchParams.set('code_challenge', codeChallenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+    url.searchParams.set('state', state);
+
+    const authorizationUrl = url.href;
+    const redirect = options.redirect || defaultRedirect;
+    redirect(authorizationUrl);
+    return authorizationUrl;
+  }
+
+  /**
+   * Validate the redirect_uri callback, exchange the code for tokens (PKCE),
+   * and build a {@link Connection} from the Pryv `apiEndpoint` extension.
+   *
+   * @param {string} queryString - `window.location.search` (with or without leading `?`).
+   * @returns {Promise<Connection>} an authenticated Pryv connection
+   */
+  async handleCallback (queryString) {
+    const as = await this._discover();
+    const params = new URLSearchParams(stripLeadingQuestionMark(queryString));
+
+    const state = params.get('state');
+    if (!state) throw new Error('OAuth2Client: callback is missing "state"');
+    const storageKey = VERIFIER_KEY_PREFIX + state;
+    const codeVerifier = this.storage.getItem(storageKey);
+    if (!codeVerifier) {
+      throw new Error('OAuth2Client: no stored PKCE verifier for this state (expired session or forged callback)');
+    }
+
+    // The verifier is single-use and bound to this state; drop it on every
+    // exit path (success OR error) so a failed/denied callback never leaves it
+    // behind in sessionStorage.
+    try {
+      // Throws on authorization errors (e.g. access_denied) or a state mismatch.
+      const callbackParams = oauth.validateAuthResponse(as, this._client, params, state);
+      const dpopHandle = await this._ensureDPoP();
+      const response = await oauth.authorizationCodeGrantRequest(
+        as, this._client, this._clientAuth, callbackParams, this.redirectUri, codeVerifier,
+        dpopHandle ? { DPoP: dpopHandle } : undefined
+      );
+      const result = await oauth.processAuthorizationCodeResponse(as, this._client, response);
+      return this._connectionFromTokenResponse(result);
+    } finally {
+      this.storage.removeItem(storageKey);
+    }
+  }
+
+  /**
+   * Exchange the stored refresh token for a fresh access token and return a
+   * new {@link Connection}. Requires a prior successful `handleCallback()`.
+   *
+   * @returns {Promise<Connection>}
+   */
+  async refresh () {
+    // Serialize concurrent callers onto a single in-flight exchange (F1). An
+    // always-rotating server consumes the refresh token on first use, so two
+    // parallel refresh() calls presenting the same token would rotate once and
+    // have the loser rejected as reuse. Dedup to one request; both callers get
+    // the same fresh Connection.
+    if (this._refreshInFlight) return this._refreshInFlight;
+    this._refreshInFlight = this._doRefresh();
+    // Clear the slot once settled (success OR failure) so the next call retries.
+    this._refreshInFlight.catch(() => {}).finally(() => { this._refreshInFlight = null; });
+    return this._refreshInFlight;
+  }
+
+  /**
+   * @private
+   * The actual refresh exchange, wrapped by `refresh()`'s in-flight dedup.
+   * @returns {Promise<Connection>}
+   */
+  async _doRefresh () {
+    if (!this._refreshToken) {
+      throw new Error('OAuth2Client: no refresh token available; call handleCallback() first');
+    }
+    const as = await this._discover();
+    const dpopHandle = await this._ensureDPoP();
+    const response = await oauth.refreshTokenGrantRequest(
+      as, this._client, this._clientAuth, this._refreshToken,
+      dpopHandle ? { DPoP: dpopHandle } : undefined
+    );
+    const result = await oauth.processRefreshTokenResponse(as, this._client, response);
+    return this._connectionFromTokenResponse(result);
+  }
+
+  /**
+   * @private
+   * @param {Object} tokenResponse - a processed token-endpoint response
+   * @returns {Connection}
+   */
+  _connectionFromTokenResponse (tokenResponse) {
+    // Persist the rotated refresh token FIRST — before any validation that can
+    // throw (F2). The server has already committed the rotation (old token
+    // consumed, new one issued in this response). If we validated first and it
+    // threw (e.g. a momentarily-missing or http: apiEndpoint), we would strand
+    // the client on the now-dead old token AND lose the new one — permanently
+    // bricking the session. Storing first lets a later refresh() retry with the
+    // current token.
+    this._ingestTokens(tokenResponse);
+
+    const apiEndpoint = tokenResponse.apiEndpoint;
+    if (!apiEndpoint) {
+      throw new Error('OAuth2Client: token response is missing the Pryv "apiEndpoint" extension');
+    }
+    // Validate the endpoint the Connection will actually send the token to, not
+    // the raw apiEndpoint string: Connection splits token/endpoint on the LAST
+    // `@` (utils regex), so a crafted `http://tok@127.0.0.1/x@evil/` parses as
+    // loopback here but posts the token to `evil` there. Assert on the extracted
+    // endpoint to close that parser-divergence gap.
+    const { endpoint } = utils.extractTokenAndAPIEndpoint(String(apiEndpoint));
+    assertSecureApiEndpoint(endpoint);
+    // DPoP flow → a SignedConnection bound to the same key the token was
+    // issued against; every request then carries a proof of possession.
+    if (this._dpop) return new SignedConnection(String(apiEndpoint), this._dpopKeyPair);
+    return new Connection(String(apiEndpoint));
+  }
+
+  /**
+   * @private
+   * Non-throwing: record the rotated refresh token + raw response and notify the
+   * app so it can persist the minimal secret. Runs before validation so a
+   * validation failure never loses the rotation (see `_connectionFromTokenResponse`).
+   * @param {Object} tokenResponse - a processed token-endpoint response
+   */
+  _ingestTokens (tokenResponse) {
+    this.lastTokenResponse = tokenResponse;
+    if (!tokenResponse.refresh_token) return;
+    this._refreshToken = tokenResponse.refresh_token;
+    if (this._onTokenRotated) {
+      // Persistence must never break the exchange — swallow app callback errors.
+      try { this._onTokenRotated(this._refreshToken); } catch (_) { /* ignore */ }
+    }
+  }
+}
+
+/**
+ * @private
+ * Refuse an `apiEndpoint` that would send the bearer token in cleartext. The
+ * token is embedded in the endpoint (`https://<token>@host/`) and then sent on
+ * every request, so a non-https endpoint leaks it on the wire. Defense-in-depth
+ * against a compromised/misconfigured authorization server.
+ * @param {string} apiEndpoint
+ */
+function assertSecureApiEndpoint (apiEndpoint) {
+  assertHttpsOrLoopback(apiEndpoint, 'apiEndpoint');
+}
+
+/**
+ * @private
+ * Enforce a "must be transport-secure" rule on a URL that is either navigated
+ * to (the authorize redirect) or used to send the bearer token (the
+ * apiEndpoint): allow `https:` everywhere, and `http:` only for loopback hosts
+ * (local development). Single source of truth so both call sites stay in sync.
+ * @param {string | URL} rawUrl - the URL to check (string or a parsed `URL`)
+ * @param {string} label - human-readable name of the value, used in errors
+ */
+function assertHttpsOrLoopback (rawUrl, label) {
+  let url;
+  try {
+    url = (rawUrl instanceof URL) ? rawUrl : new URL(rawUrl);
+  } catch {
+    throw new Error('OAuth2Client: ' + label + ' is not a valid URL');
+  }
+  const host = url.hostname;
+  const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+  if (url.protocol === 'https:') return;
+  if (url.protocol === 'http:' && isLoopback) return;
+  throw new Error('OAuth2Client: refusing insecure ' + label + ' (' + url.protocol + '//' + host + '); https is required');
+}
+
+/**
+ * @private
+ * Default navigation: use the browser's `location.assign` when present,
+ * otherwise a no-op (the caller gets the URL back from `redirectToAuthorize`).
+ * @param {string} url
+ */
+function defaultRedirect (url) {
+  const loc = (typeof globalThis !== 'undefined') ? globalThis.location : undefined;
+  if (loc && typeof loc.assign === 'function') loc.assign(url);
+}
+
+/**
+ * @private
+ * `globalThis.sessionStorage` in a browser, else a process-local in-memory store
+ * (sufficient for tests and non-browser callers that inject nothing).
+ * @returns {OAuth2Storage}
+ */
+function defaultStorage () {
+  if (typeof globalThis !== 'undefined' && globalThis.sessionStorage) return globalThis.sessionStorage;
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); }
+  };
+}
+
+/**
+ * @private
+ * @param {string} queryString
+ * @returns {string}
+ */
+function stripLeadingQuestionMark (queryString) {
+  const s = queryString || '';
+  return s.charAt(0) === '?' ? s.slice(1) : s;
+}
+
+module.exports = OAuth2Client;
+
+
+/***/ },
+
 /***/ "./node_modules/pryv/src/Service.js"
 /*!******************************************!*\
   !*** ./node_modules/pryv/src/Service.js ***!
@@ -13695,6 +16901,8 @@ const Service = __webpack_require__(/*! ./Service */ "./node_modules/pryv/src/Se
  * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
  */
 const utils = __webpack_require__(/*! ./utils.js */ "./node_modules/pryv/src/utils.js");
+const PryvError = __webpack_require__(/*! ./lib/PryvError.js */ "./node_modules/pryv/src/lib/PryvError.js");
+const MfaRequiredError = __webpack_require__(/*! ./lib/MfaRequiredError.js */ "./node_modules/pryv/src/lib/MfaRequiredError.js");
 // Connection is required at the end of this file to allow circular requires.
 const Assets = __webpack_require__(/*! ./ServiceAssets.js */ "./node_modules/pryv/src/ServiceAssets.js");
 
@@ -13768,6 +16976,17 @@ class Service {
   async supportsHF () {
     const infos = await this.info();
     return (infos.features == null || infos.features.noHF !== true);
+  }
+
+  /**
+   * Whether the platform supports `events.get` content/clientData query
+   * conditions (`features.contentQueries` in service info). Older platforms
+   * reject the parameters with a 400 — use this to pick a fallback path.
+   * @returns {Promise<boolean>}
+   */
+  async supportsContentQueries () {
+    const infos = await this.info();
+    return infos.features != null && infos.features.contentQueries === true;
   }
 
   /**
@@ -13874,20 +17093,433 @@ class Service {
     );
 
     if (!response.ok) {
-      if (body?.error?.message) {
-        throw new Error(body.error.message);
-      }
-      throw new Error('Login failed: ' + JSON.stringify(body));
+      throw PryvError.fromApiResponse(response, body);
     }
 
-    if (!body.token) {
-      throw new Error('Invalid login response: ' + JSON.stringify(body));
+    if (body && body.mfaToken) {
+      throw new MfaRequiredError(body.mfaToken, response, body);
+    }
+
+    if (!body || !body.token) {
+      throw new PryvError(
+        'Invalid login response: ' + JSON.stringify(body)
+      );
     }
     return new Connection(
       Service.buildAPIEndpoint(await this.info(), username, body.token),
       this // Pre load Connection with service
     );
   }
+
+  /**
+   * Re-trigger an MFA challenge (e.g. resend SMS) during a pending login.
+   * Use after `login()` threw `MfaRequiredError` if the user needs another
+   * SMS code.
+   *
+   * @param {string} userId
+   * @param {string} mfaToken - From `MfaRequiredError.mfaToken`
+   * @returns {Promise<void>}
+   * @throws {PryvError} on 4xx/5xx (e.g. invalid/expired mfaToken)
+   */
+  async mfaChallenge (userId, mfaToken) {
+    if (!userId || !mfaToken) {
+      throw new PryvError('mfaChallenge requires userId and mfaToken');
+    }
+    const url = await this.apiEndpointFor(userId) + 'mfa/challenge';
+    const { response, body } = await utils.fetchPost(url, {}, {
+      Authorization: mfaToken
+    });
+    if (!response.ok) throw PryvError.fromApiResponse(response, body);
+  }
+
+  /**
+   * Finish an MFA-protected login by submitting the SMS code. Returns a
+   * fully-formed `Connection` (parallel to `Service.login`).
+   *
+   * @param {string} userId
+   * @param {string} mfaToken - From `MfaRequiredError.mfaToken`
+   * @param {string} code - The SMS verification code
+   * @returns {Promise<Connection>}
+   * @throws {PryvError} on bad code, expired mfaToken, etc.
+   */
+  async mfaVerify (userId, mfaToken, code) {
+    if (!userId || !mfaToken || code == null) {
+      throw new PryvError('mfaVerify requires userId, mfaToken, code');
+    }
+    const url = await this.apiEndpointFor(userId) + 'mfa/verify';
+    const { response, body } = await utils.fetchPost(url, { code }, {
+      Authorization: mfaToken
+    });
+    if (!response.ok) throw PryvError.fromApiResponse(response, body);
+    if (!body || !body.token) {
+      throw new PryvError(
+        'mfa.verify did not return a token: ' + JSON.stringify(body)
+      );
+    }
+    return new Connection(
+      Service.buildAPIEndpoint(await this.info(), userId, body.token),
+      this
+    );
+  }
+
+  /**
+   * Check whether a username is registered on this service.
+   * One round-trip via `POST <register>/<userId>/server`.
+   *
+   * @param {string} userId - The username to check
+   * @returns {Promise<boolean>} `true` if registered, `false` on 404
+   * @throws {PryvError} on network errors or non-404 API errors
+   */
+  async userExists (userId) {
+    const serviceInfo = await this.info();
+    const url = serviceInfo.register + encodeURIComponent(userId) + '/server';
+    const { response, body } = await utils.fetchPost(url, {});
+    if (response.ok) return true;
+    if (response.status === 404) return false;
+    throw PryvError.fromApiResponse(response, body);
+  }
+
+  /**
+   * Resolve an email address to a username on this service.
+   * One round-trip via `GET <register>/<email>/uid`.
+   *
+   * On multi-core services where the platform stores identifiers hashed,
+   * the queried node may not host the user and answers `307` with the
+   * home node's URL in `{ server }`. `fetch` follows the redirect
+   * transparently; for HTTP clients that do not auto-follow, this method
+   * also follows the `{ server }` hint once explicitly.
+   *
+   * @param {string} email - The email to look up
+   * @returns {Promise<string|null>} The username, or `null` if unknown
+   * @throws {PryvError} on network errors or non-404 API errors
+   */
+  async userIdForEmail (email) {
+    const serviceInfo = await this.info();
+    const url = serviceInfo.register + encodeURIComponent(email) + '/uid';
+    let { response, body } = await utils.fetchGet(url);
+    if (response.status === 307 && body && body.server) {
+      const home = body.server.endsWith('/') ? body.server : body.server + '/';
+      const homeUrl = home + 'reg/' + encodeURIComponent(email) + '/uid';
+      ({ response, body } = await utils.fetchGet(homeUrl));
+    }
+    if (response.ok) return (body && (body.uid || body.username)) || null;
+    if (response.status === 404) return null;
+    throw PryvError.fromApiResponse(response, body);
+  }
+
+  /**
+   * Fetch the raw hostings tree advertised by `<register>/hostings`.
+   *
+   * Returns the nested API shape `{ regions: { <region>: { zones:
+   * { <zone>: { hostings: { <key>: { name, description, availableCore,
+   * available } } } } } } }`. For a flat list ready to render in a UI,
+   * use `flatHostings()`.
+   *
+   * @returns {Promise<Object>} the raw `/reg/hostings` body
+   * @throws {PryvError} on non-2xx
+   */
+  async availableHostings () {
+    const serviceInfo = await this.info();
+    const { response, body } = await utils.fetchGet(
+      serviceInfo.register + 'hostings'
+    );
+    if (!response.ok) throw PryvError.fromApiResponse(response, body);
+    return body;
+  }
+
+  /**
+   * Flatten `availableHostings()` into a list of `{ key, name, description,
+   * region, zone, availableCore, available }` items.
+   *
+   * @returns {Promise<Array<Object>>}
+   * @throws {PryvError} on non-2xx
+   */
+  async flatHostings () {
+    const tree = await this.availableHostings();
+    const out = [];
+    const regions = (tree && tree.regions) || {};
+    for (const [regionKey, region] of Object.entries(regions)) {
+      const zones = (region && region.zones) || {};
+      for (const [zoneKey, zone] of Object.entries(zones)) {
+        const hostings = (zone && zone.hostings) || {};
+        for (const [key, h] of Object.entries(hostings)) {
+          if (!h) continue;
+          out.push({
+            key,
+            name: h.name,
+            description: h.description,
+            region: regionKey,
+            zone: zoneKey,
+            availableCore: h.availableCore,
+            available: h.available === true
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Register a new user on this service.
+   *
+   * Hides the v1/v2 register endpoint difference. v2 platforms (service
+   * version >= 2.0 or >= 1.6) accept camelCase fields at `<register>users`;
+   * older v1 service-register expects mixed-case fields at `<register>user`.
+   *
+   * Pass `hosting: 'auto'` to use the first hosting flagged `available: true`
+   * in `flatHostings()` — useful for tests and single-hosting platforms.
+   *
+   * @param {Object} opts
+   * @param {string} opts.username
+   * @param {string} opts.password
+   * @param {string} opts.email
+   * @param {string} opts.hosting - Hosting key (use `service.flatHostings()` to discover) or `'auto'`
+   * @param {string} opts.appId
+   * @param {string} [opts.language='en']
+   * @param {string} [opts.invitationToken='enjoy']
+   * @param {string} [opts.referer]
+   * @returns {Promise<{ username: string, apiEndpoint: string }>}
+   * @throws {PryvError} on duplicate username, weak password, etc.
+   */
+  async createUser (opts) {
+    if (!opts || !opts.username || !opts.password || !opts.email ||
+        !opts.hosting || !opts.appId) {
+      throw new PryvError(
+        'createUser requires username, password, email, hosting, appId'
+      );
+    }
+    const serviceInfo = await this.info();
+    const isModern = supportsCamelCaseRegister(serviceInfo.version);
+    const language = opts.language || 'en';
+    const invitationToken = opts.invitationToken || 'enjoy';
+
+    let hosting = opts.hosting;
+    if (hosting === 'auto') {
+      const flat = await this.flatHostings();
+      const first = flat.find(h => h.available);
+      if (!first) {
+        throw new PryvError(
+          'createUser({ hosting: "auto" }): no hosting flagged available'
+        );
+      }
+      hosting = first.key;
+    }
+
+    let url, payload;
+    if (isModern) {
+      url = serviceInfo.register + 'users';
+      payload = {
+        appId: opts.appId,
+        username: opts.username,
+        password: opts.password,
+        email: opts.email,
+        hosting,
+        language,
+        invitationToken,
+        ...(opts.referer != null && { referer: opts.referer })
+      };
+    } else {
+      url = serviceInfo.register + 'user';
+      payload = {
+        appid: opts.appId,
+        username: opts.username,
+        password: opts.password,
+        email: opts.email,
+        hosting,
+        languageCode: language,
+        invitationtoken: invitationToken,
+        ...(opts.referer != null && { referer: opts.referer })
+      };
+    }
+    const { response, body } = await utils.fetchPost(url, payload);
+    if (!response.ok) throw PryvError.fromApiResponse(response, body);
+    const apiEndpoint = await this.apiEndpointFor(opts.username);
+    return { username: opts.username, apiEndpoint };
+  }
+
+  /**
+   * Trigger a password-reset email for the given user.
+   * Pre-auth — no token required.
+   *
+   * @param {string} userId
+   * @param {string} appId
+   * @returns {Promise<void>}
+   * @throws {PryvError} on 4xx/5xx
+   */
+  async requestPasswordReset (userId, appId) {
+    if (!userId || !appId) {
+      throw new PryvError('requestPasswordReset requires userId and appId');
+    }
+    const url = await this.apiEndpointFor(userId) +
+      'account/request-password-reset';
+    const { response, body } = await utils.fetchPost(url, {
+      appId,
+      username: userId
+    });
+    if (!response.ok) throw PryvError.fromApiResponse(response, body);
+  }
+
+  /**
+   * Start an access-request flow. Posts to the platform's auth endpoint
+   * (`serviceInfo.access`) and returns the envelope the consumer needs to
+   * present an approve-link to the user and poll for completion.
+   *
+   * `Browser.setupAuth` already wraps this for the high-level browser flow.
+   * Use this method when you're a non-browser caller (CLI, native app, bot)
+   * or building your own UI on top.
+   *
+   * @param {Object} authRequest - The auth-request body
+   * @param {string} authRequest.requestingAppId
+   * @param {Array<{ streamId: string, level: string, defaultName: string }>} authRequest.requestedPermissions
+   * @param {string} [authRequest.languageCode='en']
+   * @param {string|boolean} [authRequest.returnUrl]
+   * @param {string} [authRequest.referer]
+   * @param {Object} [authRequest.clientData]
+   * @param {string} [authRequest.deviceName]
+   * @param {number} [authRequest.expireAfter]
+   * @returns {Promise<{ key: string, authUrl: string, poll: string, pollRateMs: number }>}
+   * @throws {PryvError} on non-2xx
+   */
+  async startAccessRequest (authRequest) {
+    if (!authRequest || !authRequest.requestingAppId) {
+      throw new PryvError(
+        'startAccessRequest requires authRequest.requestingAppId'
+      );
+    }
+    const serviceInfo = await this.info();
+    const { response, body } = await utils.fetchPost(
+      serviceInfo.access,
+      authRequest
+    );
+    if (!response.ok) throw PryvError.fromApiResponse(response, body);
+    if (!body || !body.key || !body.poll) {
+      throw new PryvError(
+        'Invalid access-request response: ' + JSON.stringify(body)
+      );
+    }
+    return {
+      key: body.key,
+      authUrl: body.authUrl || body.url,
+      poll: body.poll,
+      pollRateMs: body.poll_rate_ms != null ? body.poll_rate_ms : body.pollRateMs
+    };
+  }
+
+  /**
+   * Poll an in-progress access request once. Accepts either:
+   *   - a `key` returned by `startAccessRequest` (poll URL is built from
+   *     `serviceInfo.access + key`)
+   *   - a full poll URL (use as-is — recommended, since the server-issued
+   *     URL is canonical and may include a different subdomain).
+   *
+   * Returns the raw body. Inspect `body.status` to drive the flow:
+   *   - `'NEED_SIGNIN'` → user has not interacted yet; keep polling.
+   *   - `'ACCEPTED'`    → `body.apiEndpoint` + `body.username` + `body.token` are set.
+   *   - `'REFUSED'`     → user declined.
+   *
+   * @param {string} keyOrPollUrl
+   * @returns {Promise<Object>}
+   * @throws {PryvError} on transport errors or non-2xx-and-not-403-REFUSED
+   */
+  async pollAccessRequest (keyOrPollUrl) {
+    if (!keyOrPollUrl) {
+      throw new PryvError('pollAccessRequest requires a key or poll URL');
+    }
+    let pollUrl = keyOrPollUrl;
+    if (!/^https?:\/\//.test(keyOrPollUrl)) {
+      const serviceInfo = await this.info();
+      pollUrl = serviceInfo.access + keyOrPollUrl;
+    }
+    const { response, body } = await utils.fetchGet(pollUrl);
+    // 403 with status=REFUSED is the canonical "user declined" terminal
+    // state — treat as a successful poll, not an error (matches the
+    // behaviour of `Auth/AuthController.js`).
+    if (response.status === 403 && body && body.status === 'REFUSED') {
+      return body;
+    }
+    if (!response.ok) throw PryvError.fromApiResponse(response, body);
+    return body;
+  }
+
+  /**
+   * Resolve a completed auth-flow polling key into a `Connection`.
+   *
+   * Pairs with `Service.startAccessRequest` / `Service.pollAccessRequest`
+   * and the headless polling pattern: the calling app holds only the
+   * `key` returned by the auth-flow (not the underlying token /
+   * apiEndpoint), and uses this method to build a working `Connection`.
+   *
+   * The implementation polls `<access>/<key>` once; the call MUST be
+   * made while the access is still in the ACCEPTED state (which
+   * persists until expiry — see `expireAfter` on the access request).
+   *
+   * @param {string} key - polling key from `startAccessRequest`
+   * @returns {Promise<Connection>}
+   * @throws {PryvError} if the key is not ACCEPTED (NEED_SIGNIN, REFUSED, ERROR)
+   */
+  async connectFromKey (key) {
+    if (!key) {
+      throw new PryvError('connectFromKey requires a key');
+    }
+    const body = await this.pollAccessRequest(key);
+    if (body.status !== 'ACCEPTED') {
+      throw new PryvError(
+        'connectFromKey: access is not ACCEPTED (status=' + body.status + ')'
+      );
+    }
+    if (!body.apiEndpoint) {
+      throw new PryvError(
+        'connectFromKey: ACCEPTED response missing apiEndpoint'
+      );
+    }
+    return new Connection(body.apiEndpoint, this);
+  }
+
+  /**
+   * Set a new password using a reset token (from the reset email).
+   * Pre-auth — no login token required.
+   *
+   * @param {string} userId
+   * @param {string} newPassword
+   * @param {string} resetToken
+   * @param {string} appId
+   * @returns {Promise<void>}
+   * @throws {PryvError} on `unknown-or-expired-reset-token`, weak password, etc.
+   */
+  async resetPassword (userId, newPassword, resetToken, appId) {
+    if (!userId || !newPassword || !resetToken || !appId) {
+      throw new PryvError(
+        'resetPassword requires userId, newPassword, resetToken, appId'
+      );
+    }
+    const url = await this.apiEndpointFor(userId) + 'account/reset-password';
+    const { response, body } = await utils.fetchPost(url, {
+      username: userId,
+      newPassword,
+      resetToken,
+      appId
+    });
+    if (!response.ok) throw PryvError.fromApiResponse(response, body);
+  }
+}
+
+/**
+ * Detect whether the platform's service-info `version` supports the modern
+ * camelCase register endpoint (`POST /users`). v2 service-register routes
+ * both, but v1 platforms only accept the mixed-case `POST /user`.
+ *
+ * @param {string|undefined} version - service-info `version` field
+ * @returns {boolean}
+ */
+function supportsCamelCaseRegister (version) {
+  if (!version || typeof version !== 'string') return true; // optimistic: assume v2+
+  const m = /^(\d+)\.(\d+)/.exec(version);
+  if (!m) return true;
+  const major = parseInt(m[1], 10);
+  const minor = parseInt(m[2], 10);
+  if (major >= 2) return true;
+  if (major === 1 && minor >= 6) return true;
+  return false;
 }
 
 module.exports = Service;
@@ -13906,10 +17538,12 @@ const Connection = __webpack_require__(/*! ./Connection */ "./node_modules/pryv/
  * @property {string} support The email or URL of the support page.
  * @property {string} terms The terms and conditions, in plain text or the URL displaying them.
  * @property {string} eventTypes The URL of the list of validated event types.
+ * @property {string} [version] The platform version.
  * @property {Object} [assets] Holder for service specific Assets (icons, css, ...)
  * @property {string} [assets.definitions] URL to json object with assets definitions
  * @property {Object} [features] Platform feature flags
  * @property {boolean} [features.noHF] True if HF data is not supported
+ * @property {boolean} [features.contentQueries] True if events.get content/clientData query conditions are supported
  */
 
 
@@ -14101,6 +17735,371 @@ function relPathToAbs (baseUrlString, sRelPath) {
 
 /***/ },
 
+/***/ "./node_modules/pryv/src/SharedSecrets.js"
+/*!************************************************!*\
+  !*** ./node_modules/pryv/src/SharedSecrets.js ***!
+  \************************************************/
+(module) {
+
+/**
+ * @license
+ * Copyright (C) Pryv https://pryv.com
+ * This file is part of Pryv.io and released under BSD-Clause-3 License
+ * Refer to LICENSE file
+ */
+
+/**
+ * Shared secrets — hand a secret to a third party by one-time key.
+ *
+ * The problem this solves: passing a secret (typically an apiEndpoint carrying
+ * an access token) to a third party usually means putting it in a URL, where it
+ * survives in browser history, referrer headers and server access logs. Instead,
+ * store the secret on the account and hand over a random key that can be
+ * redeemed exactly once.
+ *
+ * Redemption needs no credentials — the key IS the credential — so the third
+ * party can use `retrieve` with nothing but the URL you gave them.
+ *
+ * All crypto goes through the Web Crypto API rather than Node's `crypto`, so the
+ * same code runs in the browser bundle and in Node.
+ */
+
+/** Reads `key` back into the pieces the API expects. */
+function parseKey (key) {
+  if (typeof key !== 'string') return null;
+  const parts = key.split('.');
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) return null;
+  return { id: parts[0], randomPart: parts[1] };
+}
+
+function base64url (bytes) {
+  let binary = '';
+  for (const b of new Uint8Array(bytes)) binary += String.fromCharCode(b);
+  const b64 = typeof btoa === 'function'
+    ? btoa(binary)
+    : Buffer.from(binary, 'binary').toString('base64');
+  return b64.replace(/=+$/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function toHex (buffer) {
+  return Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function subtle () {
+  const c = globalThis.crypto;
+  if (c == null || c.subtle == null) {
+    throw new Error('Web Crypto is unavailable — Node 20+ or a secure browser context is required.');
+  }
+  return c.subtle;
+}
+
+/** 24 random bytes (192 bits), base64url — the strength of the key itself. */
+function randomPart () {
+  const bytes = new Uint8Array(24);
+  globalThis.crypto.getRandomValues(bytes);
+  return base64url(bytes);
+}
+
+/** SHA-256 of a string, hex — what the server stores in place of the key. */
+async function sha256Hex (value) {
+  const data = new TextEncoder().encode(value);
+  return toHex(await subtle().digest('SHA-256', data));
+}
+
+/**
+ * HMAC-SHA256 of `message` under `verifierSecret`, hex.
+ *
+ * Used for the `hmac-sha256` signature: creator and redeemer share the verifier
+ * secret out of band, and only the HMAC ever reaches the server — so the server
+ * can check the proof without being able to produce one.
+ */
+async function hmacSha256Hex (verifierSecret, message) {
+  const enc = new TextEncoder();
+  const cryptoKey = await subtle().importKey(
+    'raw', enc.encode(verifierSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return toHex(await subtle().sign('HMAC', cryptoKey, enc.encode(message)));
+}
+
+/**
+ * Create a shared secret on the account `connection` is authenticated against.
+ *
+ * @param {Connection} connection
+ * @param {Object} params
+ * @param {number} params.ttl seconds the secret stays redeemable (required)
+ * @param {string} params.title shown to the account owner (required)
+ * @param {Object} params.onConsumed `{ message, returnUrl? }` shown once spent
+ * @param {*} params.secret the payload: any non-null JSON value (the server
+ *   refuses `null` and `undefined` with `shared-secret-missing-secret`)
+ * @param {Object} [params.signature] `{ type: 'secret', value }` or
+ *   `{ type: 'hmac-sha256', verifierSecret }`. For the HMAC form the key
+ *   material is generated here so the proof can be bound before creation.
+ * @returns {Promise<Object>} `{ id, key, expires, ... }`; `key` is returned
+ *   only here and cannot be recovered later.
+ */
+async function create (connection, params) {
+  const { signature, ...rest } = params || {};
+  const body = { ...rest };
+  let key = null;
+
+  if (signature != null && signature.type === 'hmac-sha256') {
+    // The HMAC is bound to key material that must exist BEFORE the item does,
+    // so the client generates the random half and sends only its hash.
+    const random = randomPart();
+    body.keyHash = await sha256Hex(random);
+    body.signature = {
+      type: 'hmac-sha256',
+      value: await hmacSha256Hex(signature.verifierSecret, random)
+    };
+    const res = await connection.post('shared-secrets', body);
+    return { ...res.sharedSecret, key: res.sharedSecret.id + '.' + random };
+  }
+
+  if (signature != null) body.signature = signature;
+  const res = await connection.post('shared-secrets', body);
+  key = res.sharedSecret.key;
+  return { ...res.sharedSecret, key };
+}
+
+/**
+ * Redeem a key. Needs no credentials, so a third party can call it directly.
+ *
+ * @param {string} apiEndpoint the account's API endpoint (no token needed)
+ * @param {string} key
+ * @param {Object} [options]
+ * @param {string} [options.passphrase] for a `secret`-type signature
+ * @param {string} [options.verifierSecret] for an `hmac-sha256` signature
+ * @returns {Promise<{secret: *}>} on success. On refusal the API error carries
+ *   the creator's `message` and optional `returnUrl` to show the end user.
+ */
+async function retrieve (apiEndpoint, key, options = {}) {
+  const body = { key };
+  if (options.passphrase != null) {
+    body.signature = { type: 'secret', payload: options.passphrase };
+  } else if (options.verifierSecret != null) {
+    const parsed = parseKey(key);
+    if (parsed == null) throw new Error('Malformed shared-secret key.');
+    body.signature = {
+      type: 'hmac-sha256',
+      payload: await hmacSha256Hex(options.verifierSecret, parsed.randomPart)
+    };
+  }
+  const base = apiEndpoint.endsWith('/') ? apiEndpoint : apiEndpoint + '/';
+  const res = await fetch(base + 'shared-secrets/retrieve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const parsed = await res.json();
+  if (!res.ok) {
+    const err = new Error(parsed?.error?.message || 'Shared secret unavailable.');
+    err.id = parsed?.error?.id;
+    err.returnUrl = parsed?.error?.data?.returnUrl;
+    throw err;
+  }
+  return parsed;
+}
+
+/** Status of a shared secret, without consuming it. Creator or personal token. */
+async function status (connection, key) {
+  const res = await connection.post('shared-secrets/status', { key });
+  return res.sharedSecret;
+}
+
+module.exports = {
+  create,
+  retrieve,
+  status,
+  parseKey,
+  hmacSha256Hex,
+  sha256Hex
+};
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/SignedConnection.js"
+/*!***************************************************!*\
+  !*** ./node_modules/pryv/src/SignedConnection.js ***!
+  \***************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+const Connection = __webpack_require__(/*! ./Connection */ "./node_modules/pryv/src/Connection.js");
+const { createDPoPProof } = __webpack_require__(/*! ./dpopProof */ "./node_modules/pryv/src/dpopProof.js");
+
+/**
+ * @class SignedConnection
+ * A {@link Connection} whose access token is sender-constrained via DPoP
+ * (RFC 9449): every request carries a fresh proof signed with a client-held
+ * key, and presents the token under the `DPoP` auth-scheme. A token stolen
+ * from this connection is useless to anyone who does not also hold the
+ * private key.
+ *
+ * Built by {@link OAuth2Client} with `dpop: true` (which binds the token to
+ * the key at issuance and hands the same key pair here). It can also be
+ * constructed directly from an `apiEndpoint` whose token was already bound
+ * to `keyPair` — mismatched keys make every request fail the server's
+ * proof-of-possession check.
+ *
+ * The key pair is ES256 (EC P-256), the only algorithm the server accepts;
+ * its public key must be exportable to JWK. Attachment downloads via a
+ * `readToken` need no proof (the server exempts that capability), so those
+ * keep working through a plain URL.
+ *
+ * @memberof pryv
+ */
+class SignedConnection extends Connection {
+  /**
+   * @param {string} apiEndpoint - Pryv API endpoint carrying the DPoP-bound token
+   * @param {CryptoKeyPair} keyPair - the ES256 key the token is bound to
+   * @param {Service} [service] - optional pre-built Service
+   */
+  constructor (apiEndpoint, keyPair, service) {
+    super(apiEndpoint, service);
+    if (keyPair == null || keyPair.privateKey == null || keyPair.publicKey == null) {
+      throw new Error('SignedConnection: an ES256 CryptoKeyPair ({ publicKey, privateKey }) is required');
+    }
+    this._dpopKeyPair = keyPair;
+  }
+
+  /**
+   * @protected
+   * @override
+   * Attach a per-request DPoP proof and present the token under the DPoP
+   * scheme. `url` is the request URL without query — the proof's `htu`.
+   * @param {string} method
+   * @param {string} url
+   * @returns {Promise<Object>}
+   */
+  async _authHeaders (method, url) {
+    const proof = await createDPoPProof({
+      keyPair: this._dpopKeyPair,
+      htm: method,
+      htu: url,
+      accessToken: this.token
+    });
+    return {
+      Authorization: 'DPoP ' + this.token,
+      DPoP: proof
+    };
+  }
+}
+
+module.exports = SignedConnection;
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/dpopProof.js"
+/*!********************************************!*\
+  !*** ./node_modules/pryv/src/dpopProof.js ***!
+  \********************************************/
+(module) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * DPoP (RFC 9449) proof builder — isomorphic (browser + Node ≥ 20), built
+ * only on WebCrypto (`globalThis.crypto.subtle`) so it survives the webpack
+ * browser bundle unchanged. ES256 only, matching the server
+ * (`open-pryv.io/components/oauth2/src/dpop.ts`).
+ *
+ * A proof is a compact JWS whose header carries the public JWK and whose
+ * payload binds the request: `htm` (method), `htu` (URL without query —
+ * the server compares in RFC 9449 §4.3 normalized form), `iat`, a fresh
+ * single-use `jti`, and — for resource-server requests — `ath`
+ * (`base64url(sha256(access_token))`).
+ */
+
+const subtle = globalThis.crypto.subtle;
+const textEncoder = new TextEncoder();
+
+/**
+ * @private
+ * base64url-encode raw bytes (no padding). `btoa` is available in browsers
+ * and Node ≥ 16.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+function base64url (bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/=+$/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+/**
+ * @private
+ * @param {string} str
+ * @returns {Promise<string>} base64url(sha256(str))
+ */
+async function sha256base64url (str) {
+  const digest = await subtle.digest('SHA-256', textEncoder.encode(str));
+  return base64url(new Uint8Array(digest));
+}
+
+/**
+ * @private
+ * htu comparison form: scheme + host + path, query and fragment dropped
+ * (RFC 9449 §4.3 — the server normalizes the same way, so a signed URL that
+ * still carries a query would match too, but we strip for clarity).
+ * @param {string} url
+ * @returns {string}
+ */
+function stripQuery (url) {
+  const parsed = new URL(url);
+  return parsed.origin + parsed.pathname;
+}
+
+/**
+ * Build a DPoP proof for one request.
+ *
+ * @param {Object} params
+ * @param {CryptoKeyPair} params.keyPair - ES256 (EC P-256) key pair. The public
+ *   key MUST be exportable to JWK; the private key is used to sign.
+ * @param {string} params.htm - HTTP method (e.g. `'GET'`, `'POST'`).
+ * @param {string} params.htu - full request URL; query/fragment are stripped.
+ * @param {string} [params.accessToken] - when present, the proof carries
+ *   `ath = base64url(sha256(accessToken))`, binding it to that token
+ *   (required on resource-server requests; omitted on the token endpoint).
+ * @returns {Promise<string>} the compact JWS proof for the `DPoP` header
+ */
+async function createDPoPProof ({ keyPair, htm, htu, accessToken }) {
+  const jwk = await subtle.exportKey('jwk', keyPair.publicKey);
+  const header = {
+    typ: 'dpop+jwt',
+    alg: 'ES256',
+    jwk: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y }
+  };
+  const payload = {
+    jti: globalThis.crypto.randomUUID(),
+    htm,
+    htu: stripQuery(htu),
+    iat: Math.floor(Date.now() / 1000)
+  };
+  if (accessToken != null) payload.ath = await sha256base64url(accessToken);
+
+  const signingInput = base64url(textEncoder.encode(JSON.stringify(header))) +
+    '.' + base64url(textEncoder.encode(JSON.stringify(payload)));
+  // ECDSA WebCrypto signatures are the raw 64-byte r||s concatenation — exactly
+  // the JWS ES256 form (the server rejects DER).
+  const signature = await subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' }, keyPair.privateKey, textEncoder.encode(signingInput)
+  );
+  return signingInput + '.' + base64url(new Uint8Array(signature));
+}
+
+module.exports = { createDPoPProof };
+
+
+/***/ },
+
 /***/ "./node_modules/pryv/src/index.js"
 /*!****************************************!*\
   !*** ./node_modules/pryv/src/index.js ***!
@@ -14116,19 +18115,113 @@ function relPathToAbs (baseUrlString, sRelPath) {
  * @exports pryv
  * @property {pryv.Service} Service - To interact with Pryv.io at a "Platform level"
  * @property {pryv.Connection} Connection - To interact with an individual's (user) data set
+ * @property {pryv.SignedConnection} SignedConnection - A Connection whose token is DPoP-sender-constrained (RFC 9449)
  * @property {pryv.Browser} Browser - Browser Tools - Access request helpers and visuals (button)
+ * @property {pryv.OAuth2Client} OAuth2Client - Browser-side OAuth2 authorization-code (PKCE) flow consumer
  * @property {pryv.utils} utils - Exposes some utils for HTTP calls and tools to manipulate Pryv's API endpoints
- * @property {pryv.PryvError} PryvError - Custom error class with innerObject support
+ * @property {pryv.PryvError} PryvError - Custom error class with innerObject + structured API-error fields
+ * @property {pryv.MfaRequiredError} MfaRequiredError - Thrown by Service.login when the platform returns an mfaToken instead of a token. Carries `.mfaToken`.
+ * @property {pryv.StaleAccessIdError} StaleAccessIdError - Thrown when a Pryv.io server rejects an `accesses.update` / `accesses.delete` with a 409 stale-resource. Refetch + retry.
+ * @property {Object} ERRORS - Catalogue of Pryv API error ids (mirrors open-pryv.io/components/errors)
  */
+const Service = __webpack_require__(/*! ./Service */ "./node_modules/pryv/src/Service.js");
+
 module.exports = {
-  Service: __webpack_require__(/*! ./Service */ "./node_modules/pryv/src/Service.js"),
+  Service,
   Connection: __webpack_require__(/*! ./Connection */ "./node_modules/pryv/src/Connection.js"),
+  SignedConnection: __webpack_require__(/*! ./SignedConnection */ "./node_modules/pryv/src/SignedConnection.js"),
   Auth: __webpack_require__(/*! ./Auth */ "./node_modules/pryv/src/Auth/index.js"),
   Browser: __webpack_require__(/*! ./Browser */ "./node_modules/pryv/src/Browser/index.js"),
+  OAuth2Client: __webpack_require__(/*! ./OAuth2Client */ "./node_modules/pryv/src/OAuth2Client.js"),
+  SharedSecrets: __webpack_require__(/*! ./SharedSecrets */ "./node_modules/pryv/src/SharedSecrets.js"),
   utils: __webpack_require__(/*! ./utils */ "./node_modules/pryv/src/utils.js"),
   PryvError: __webpack_require__(/*! ./lib/PryvError */ "./node_modules/pryv/src/lib/PryvError.js"),
-  version: (__webpack_require__(/*! ../package.json */ "./node_modules/pryv/package.json").version)
+  MfaRequiredError: __webpack_require__(/*! ./lib/MfaRequiredError */ "./node_modules/pryv/src/lib/MfaRequiredError.js"),
+  StaleAccessIdError: __webpack_require__(/*! ./lib/StaleAccessIdError */ "./node_modules/pryv/src/lib/StaleAccessIdError.js"),
+  ERRORS: __webpack_require__(/*! ./lib/errorIds */ "./node_modules/pryv/src/lib/errorIds.js"),
+  version: (__webpack_require__(/*! ../package.json */ "./node_modules/pryv/package.json").version),
+  connectFromKey
 };
+
+/**
+ * Module-level convenience over `Service#connectFromKey` — builds a
+ * `Service` on the fly, fetches its info, and resolves the given
+ * auth-flow polling key into a working `Connection`.
+ *
+ * Mirrors the `pryv.connectFromKey(key, serviceInfoUrl)` shape the
+ * headless polling pattern documents.
+ *
+ * @param {string} key - polling key from `Service.startAccessRequest`
+ * @param {string} serviceInfoUrl - URL of the platform's `/service/info`
+ * @param {Object} [serviceCustomizations] - same shape as `new Service(url, customizations)`
+ * @returns {Promise<import('./Connection')>}
+ */
+async function connectFromKey (key, serviceInfoUrl, serviceCustomizations) {
+  const service = new Service(serviceInfoUrl, serviceCustomizations);
+  await service.info();
+  return service.connectFromKey(key);
+}
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/lib/MfaRequiredError.js"
+/*!*******************************************************!*\
+  !*** ./node_modules/pryv/src/lib/MfaRequiredError.js ***!
+  \*******************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+const PryvError = __webpack_require__(/*! ./PryvError */ "./node_modules/pryv/src/lib/PryvError.js");
+
+/**
+ * Thrown by `Service.login` when the platform replied with `{ mfaToken }`
+ * instead of `{ token }`. Consumers catch this, prompt the user for the
+ * code, then call `Service.mfaVerify(userId, err.mfaToken, code)`.
+ *
+ * `err.method` (when present) tells the app which factor to prompt for:
+ * `'totp'` (an authenticator-app code) or `'sms'` (a code sent by SMS).
+ *
+ *   try { conn = await service.login(u, p, app) }
+ *   catch (err) {
+ *     if (err instanceof MfaRequiredError) {
+ *       const code = await prompt()
+ *       conn = await service.mfaVerify(u, err.mfaToken, code)
+ *     } else { throw err }
+ *   }
+ *
+ * @extends PryvError
+ */
+class MfaRequiredError extends PryvError {
+  /**
+   * @param {string} mfaToken - The token returned by the API (use with mfa.challenge / mfa.verify)
+   * @param {Response} response - The fetch Response object
+   * @param {Object} [body] - Parsed JSON body
+   */
+  constructor (mfaToken, response, body) {
+    const apiErr = body && body.error;
+    const message = (apiErr && apiErr.message) || 'MFA required';
+    super(message);
+    this.name = 'MfaRequiredError';
+    /** @type {string} */
+    this.mfaToken = mfaToken;
+    /** @type {string|undefined} The MFA method to prompt for: 'totp' | 'sms'. */
+    this.method = body && body.mfaMethod;
+    this.id = (apiErr && apiErr.id) || 'mfa-required';
+    this.status = response && response.status;
+    this.response = { body, status: response && response.status };
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, MfaRequiredError);
+    }
+  }
+}
+
+module.exports = MfaRequiredError;
 
 
 /***/ },
@@ -14146,29 +18239,113 @@ module.exports = {
 
 /**
  * Custom error class for Pryv library errors.
- * Includes an innerObject property for wrapping underlying errors.
+ *
+ * Two construction patterns are supported (additive — both stay valid):
+ *
+ *   // Legacy: wrap an underlying error or value
+ *   throw new PryvError('Failed to do X', innerError)
+ *
+ *   // Structured: carry the API error id, HTTP status, and raw response
+ *   throw PryvError.fromApiResponse(response, body)
+ *
+ * Structured fields (`id`, `status`, `response`) are `undefined` unless set
+ * via the static factory or assigned post-hoc.
+ *
  * @extends Error
  */
 class PryvError extends Error {
   /**
-   * Create a PryvError
    * @param {string} message - Error message
-   * @param {Error|Object} [innerObject] - The underlying error or object that caused this error
+   * @param {Error|Object} [innerObject] - Underlying error or value
    */
   constructor (message, innerObject) {
     super(message);
     this.name = 'PryvError';
     /** @type {Error|Object|undefined} */
     this.innerObject = innerObject;
+    /** @type {string|undefined} Pryv API error id, e.g. `'unknown-user'` */
+    this.id = undefined;
+    /** @type {number|undefined} HTTP status that produced this error */
+    this.status = undefined;
+    /** @type {{ body: any, status: number }|undefined} Raw response */
+    this.response = undefined;
 
-    // Maintains proper stack trace for where error was thrown (only in V8)
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, PryvError);
     }
   }
+
+  /**
+   * Build a PryvError from a fetch Response and its parsed JSON body.
+   * Pulls `id` and `message` from `body.error` when present (Pryv API shape).
+   *
+   * @param {Response} response - The fetch Response object
+   * @param {Object} [body] - Parsed JSON body
+   * @returns {PryvError}
+   */
+  static fromApiResponse (response, body) {
+    const apiErr = body && body.error;
+    const message = (apiErr && apiErr.message) ||
+      `Pryv API error (HTTP ${response.status})`;
+    const err = new PryvError(message);
+    err.id = apiErr && apiErr.id;
+    err.status = response.status;
+    err.response = { body, status: response.status };
+    return err;
+  }
 }
 
 module.exports = PryvError;
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/lib/StaleAccessIdError.js"
+/*!*********************************************************!*\
+  !*** ./node_modules/pryv/src/lib/StaleAccessIdError.js ***!
+  \*********************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+const PryvError = __webpack_require__(/*! ./PryvError */ "./node_modules/pryv/src/lib/PryvError.js");
+
+/**
+ * Typed error surfaced when a Pryv.io server (≥ 2.0.0-pre.X) rejects
+ * an `accesses.update` or `accesses.delete` call with a 409
+ * `stale-resource` response.
+ *
+ * The composite access id `<base>:<serial>` carries the version the
+ * caller last observed. If the access has since been updated, the
+ * server rejects the call so the caller refetches the current head
+ * (`connection.api('accesses.getOne', { id: base })`) and retries
+ * with the fresh composite id.
+ *
+ * Reach for `.data.provided` to see what the caller sent and
+ * `.data.currentSerial` to see what the server currently has.
+ *
+ * @extends PryvError
+ */
+class StaleAccessIdError extends PryvError {
+  /**
+   * @param {string} message
+   * @param {{ provided?: string, currentSerial?: number | null }} data
+   */
+  constructor (message, data) {
+    super(message);
+    this.name = 'StaleAccessIdError';
+    /** @type {{ provided?: string, currentSerial?: number | null }} */
+    this.data = data || {};
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, StaleAccessIdError);
+    }
+  }
+}
+
+module.exports = StaleAccessIdError;
 
 
 /***/ },
@@ -14185,8 +18362,12 @@ module.exports = PryvError;
  */
 
 /**
- * Build URL search params string from an object, properly handling arrays.
- * Arrays are expanded as repeated keys: { a: ['x', 'y'] } => 'a=x&a=y'
+ * Build URL search params string from an object, properly handling arrays
+ * and structured values.
+ * - Arrays of scalars are expanded as repeated keys: { a: ['x', 'y'] } => 'a=x&a=y'
+ * - Arrays containing objects (e.g. `content` / `clientData` conditions,
+ *   rich `streams` queries) and plain objects are sent as one
+ *   JSON-encoded parameter, which the API parses back.
  * @param {Object} params - Query parameters object
  * @returns {string} - URL encoded query string
  */
@@ -14194,9 +18375,15 @@ function buildSearchParams (params) {
   const searchParams = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (Array.isArray(value)) {
-      for (const item of value) {
-        searchParams.append(key, item);
+      if (value.some((item) => item !== null && typeof item === 'object')) {
+        searchParams.append(key, JSON.stringify(value));
+      } else {
+        for (const item of value) {
+          searchParams.append(key, item);
+        }
       }
+    } else if (value !== null && typeof value === 'object') {
+      searchParams.append(key, JSON.stringify(value));
     } else if (value !== undefined && value !== null) {
       searchParams.append(key, value);
     }
@@ -14205,6 +18392,83 @@ function buildSearchParams (params) {
 }
 
 module.exports = buildSearchParams;
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/lib/errorIds.js"
+/*!***********************************************!*\
+  !*** ./node_modules/pryv/src/lib/errorIds.js ***!
+  \***********************************************/
+(module) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * Catalogue of Pryv API error ids.
+ *
+ * Mirrors `open-pryv.io/components/errors/src/ErrorIds.js`. Use these
+ * constants instead of hardcoding error-id strings:
+ *
+ *   if (err instanceof PryvError && err.id === pryv.ERRORS.UNKNOWN_USER) { … }
+ *
+ * Adding a new id here is safe; renaming or removing one is a breaking
+ * change for consumers using the constant.
+ */
+const ERRORS = Object.freeze({
+  API_UNAVAILABLE: 'api-unavailable',
+  CORRUPTED_DATA: 'corrupted-data',
+  FORBIDDEN: 'forbidden',
+  INVALID_ACCESS_TOKEN: 'invalid-access-token',
+  INVALID_CREDENTIALS: 'invalid-credentials',
+  UNSUPPORTED_OPERATION: 'unsupported-operation',
+  INVALID_EVENT_TYPE: 'invalid-event-type',
+  INVALID_ITEM_ID: 'invalid-item-id',
+  INVALID_METHOD: 'invalid-method',
+  INVALID_OPERATION: 'invalid-operation',
+  INVALID_PARAMETERS_FORMAT: 'invalid-parameters-format',
+  INVALID_REQUEST_STRUCTURE: 'invalid-request-structure',
+  ITEM_ALREADY_EXISTS: 'item-already-exists',
+  MISSING_HEADER: 'missing-header',
+  UNEXPECTED_ERROR: 'unexpected-error',
+  UNKNOWN_REFERENCED_RESOURCE: 'unknown-referenced-resource',
+  UNKNOWN_RESOURCE: 'unknown-resource',
+  UNSUPPORTED_CONTENT_TYPE: 'unsupported-content-type',
+  TOO_MANY_RESULTS: 'too-many-results',
+  GONE: 'removed-method',
+  UNAVAILABLE_METHOD: 'unavailable-method',
+
+  // Registration / unique-field validation
+  INVALID_INVITATION_TOKEN: 'invitationToken-invalid',
+  INVALID_USERNAME: 'username-invalid',
+  USERNAME_REQUIRED: 'username-required',
+  INVALID_EMAIL: 'email-invalid',
+  INVALID_LANGUAGE: 'language-invalid',
+  INVALID_APP_ID: 'appid-invalid',
+  INVALID_PASSWORD: 'password-invalid',
+  INVALID_REFERER: 'referer-invalid',
+  EMAIL_REQUIRED: 'email-required',
+  PASSWORD_REQUIRED: 'password-required',
+  MISSING_REQUIRED_FIELD: 'missing-required-field',
+  NEW_PASSWORD_FIELD_IS_REQUIRED: 'newPassword-required',
+
+  // Account-stream / system-stream protections
+  DENIED_STREAM_ACCESS: 'denied-stream-access',
+  TOO_HIGH_ACCESS_FOR_SYSTEM_STREAMS: 'too-high-access-for-account-stream',
+  FORBIDDEN_MULTIPLE_ACCOUNT_STREAMS: 'forbidden-multiple-account-streams-events',
+  FORBIDDEN_ACCOUNT_EVENT_MODIFICATION: 'forbidden-none-editable-account-streams',
+  FORBIDDEN_TO_CHANGE_ACCOUNT_STREAM_ID: 'forbidden-change-account-streams-id',
+  FORBIDDEN_TO_EDIT_NONEDITABLE_ACCOUNT_FIELDS: 'forbidden-to-edit-noneditable-account-fields',
+
+  // Pre-auth lookups (returned by `/reg/:email/uid` and similar)
+  UNKNOWN_USER: 'unknown-user',
+  UNKNOWN_EMAIL: 'unknown-email'
+});
+
+module.exports = ERRORS;
 
 
 /***/ },
@@ -14250,6 +18514,7 @@ async function getEventStreamed (conn, queryParam, parser) {
   /**
    * Holds results from the parser
    */
+  /** @type {(Error & { rawResponse?: string }) | undefined} */
   let errResult;
   let bodyObjectResult;
   /**
@@ -14276,7 +18541,7 @@ async function getEventStreamed (conn, queryParam, parser) {
   }
 
   if (errResult) {
-    throw new Error(errResult);
+    throw new Error(errResult?.message + ' ' + errResult?.rawResponse);
   }
 
   // We're done!
@@ -14462,6 +18727,41 @@ module.exports = function (foreachEvent, includeDeletions) {
 
 /***/ },
 
+/***/ "./node_modules/pryv/src/lib/resolveDotPath.js"
+/*!*****************************************************!*\
+  !*** ./node_modules/pryv/src/lib/resolveDotPath.js ***!
+  \*****************************************************/
+(module) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * Resolve a content-query dot-path against a JSON value.
+ * `$` addresses the root value itself. Returns `undefined` when the path
+ * does not lead to a value.
+ * @param {*} root - The JSON value (typically an event's `content`)
+ * @param {string} path - Dot-path (e.g. 'drug.codes.atc') or '$'
+ * @returns {*} The value at the path, or undefined
+ */
+function resolveDotPath (root, path) {
+  if (path === '$') return root;
+  let current = root;
+  for (const segment of path.split('.')) {
+    if (current == null || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    if (!Object.prototype.hasOwnProperty.call(current, segment)) return undefined;
+    current = current[segment];
+  }
+  return current;
+}
+
+module.exports = resolveDotPath;
+
+
+/***/ },
+
 /***/ "./node_modules/pryv/src/utils.js"
 /*!****************************************!*\
   !*** ./node_modules/pryv/src/utils.js ***!
@@ -14598,6 +18898,76 @@ const utils = module.exports = {
   },
 
   /**
+   * Decompose a Pryv apiEndpoint into `{ token, username, host }` using
+   * the platform's `service.info.api` URL template to invert whichever
+   * username placement the platform uses (subdomain vs path-style).
+   *
+   * Pryv apiEndpoints follow one of two URL shapes (the difference is
+   * platform-defined, encoded in `service.info.api`):
+   *
+   *   subdomain  template `https://{username}.<domain>/`
+   *              endpoint `https://<token>@<username>.<domain>/`
+   *   path-style template `https://<host>/{username}/`
+   *              endpoint `https://<token>@<host>/<username>/`
+   *
+   * Returns the **canonical platform host** (no `<username>.` subdomain
+   * prefix in subdomain mode) — the identity cross-account features
+   * (e.g. CMC counterparty slugs) key on, regardless of which user the
+   * endpoint belongs to.
+   *
+   * `token` and `username` are null when the endpoint carries no token /
+   * when the endpoint shape doesn't match the template; `host` is
+   * best-effort in that case.
+   *
+   * @memberof pryv.utils
+   * @param {APIEndpoint} apiEndpoint  e.g. 'https://t0k3n@alice.pryv.me/'
+   * @param {string} serviceInfoApi    e.g. 'https://{username}.pryv.me/'
+   *                                   from /service/info → field `api`.
+   * @returns {DecomposedAPIEndpoint}
+   *
+   * @example
+   *   const conn = new pryv.Connection(apiEndpoint);
+   *   const info = await conn.service.info();
+   *   const me = pryv.utils.decomposeAPIEndpoint(apiEndpoint, info.api);
+   *   // → { token: 't0k3n', username: 'alice', host: 'pryv.me' }
+   */
+  decomposeAPIEndpoint: function (apiEndpoint, serviceInfoApi) {
+    const { token, endpoint } = utils.extractTokenAndAPIEndpoint(apiEndpoint);
+    const tplIdx = serviceInfoApi.indexOf('{username}');
+    if (tplIdx < 0) {
+      // Template doesn't carry {username} — operator-defined, can't decompose.
+      let host = '';
+      try { host = new URL(endpoint).host; } catch (_e) {}
+      return { token, username: null, host };
+    }
+    const tplPrefix = serviceInfoApi.slice(0, tplIdx);
+    const tplSuffix = serviceInfoApi.slice(tplIdx + '{username}'.length);
+    if (!endpoint.startsWith(tplPrefix) || !endpoint.endsWith(tplSuffix)) {
+      let host = '';
+      try { host = new URL(endpoint).host; } catch (_e) {}
+      return { token, username: null, host };
+    }
+    const username = endpoint.slice(tplPrefix.length, endpoint.length - tplSuffix.length);
+    // Disambiguate by where {username} sits in the template:
+    //   - subdomain  → prefix ends with `://` (username right after scheme)
+    //   - path-style → prefix has more after `://` (host already in prefix)
+    const isSubdomainTemplate = /:\/\/$/.test(tplPrefix);
+    let host;
+    if (isSubdomainTemplate) {
+      // tplSuffix starts with the domain (e.g. '.pryv.me/')
+      host = tplSuffix.replace(/^\.+/, '').replace(/\/+$/, '');
+    } else {
+      // path-style — host is in the prefix's URL
+      try {
+        host = new URL(tplPrefix).host;
+      } catch (_e) {
+        host = '';
+      }
+    }
+    return { token, username, host };
+  },
+
+  /**
    * Check if the browser is running on a mobile device or tablet
    * @memberof pryv.utils
    * @param {string|Navigator} [navigator] - Navigator object or user agent string (for testing)
@@ -14615,14 +18985,79 @@ const utils = module.exports = {
   },
 
   /**
-   * Remove Pryv-specific query parameters from URL
+   * Remove the one-shot Pryv auth-completion query parameters from a URL,
+   * keeping any long-lived `pryv*` params intact.
+   *
+   * Both casings are stripped:
+   *   - Modern lowercase: `pryvKey`, `pryvPoll`
+   *   - Legacy capital-Y: `prYv<anything>` (anything starting with `prYv`)
+   *
+   * `pryv*` params that are NOT in the modern allowlist (e.g.
+   * `pryvServiceInfoUrl`, `pryvApiEndpoint`) are intentionally preserved —
+   * they are not one-shot.
+   *
    * @memberof pryv.utils
    * @param {string} url - URL to clean
-   * @returns {string} URL without prYv* parameters
+   * @returns {string} URL without the one-shot auth-completion params
    */
   cleanURLFromPrYvParams: function (url) {
-    const PRYV_REGEXP = /[?#&]+prYv([^=&]+)=([^&]*)/g;
-    return url.replace(PRYV_REGEXP, '');
+    // Legacy form: kept for back-compat with apps still emitting
+    // `prYv<anything>=...` (notably app-web-user-account's close_or_redirect).
+    const LEGACY = /[?#&]+prYv([^=&]+)=([^&]*)/g;
+    // Modern form: an explicit allowlist of one-shot params so we never
+    // wipe long-lived camelCase `pryv*` params by accident.
+    const MODERN = /[?#&]+(pryvKey|pryvPoll)=([^&]*)/g;
+    return url.replace(LEGACY, '').replace(MODERN, '');
+  },
+
+  /**
+   * Parse a wire-format access reference into `{ base, serial }`
+   * (Pryv.io ≥ 2.0.0-pre.X). Accepts both bare cuid (`"abc123"` →
+   * `{ base: 'abc123', serial: null }`) and composite (`"abc123:3"` →
+   * `{ base: 'abc123', serial: 3 }`). Throws on malformed input.
+   * Apply this to `access.id`, `access.createdBy`,
+   * `access.modifiedBy`, and `streamIds` entries of the form
+   * `access-<base>:<serial>` from audit events.
+   * @memberof pryv.utils
+   * @param {string} ref - Access reference string
+   * @returns {{ base: string, serial: number | null }}
+   */
+  parseAccessRef: function (ref) {
+    if (typeof ref !== 'string' || ref.length === 0) {
+      throw new Error('parseAccessRef: expected a non-empty string, got ' + JSON.stringify(ref));
+    }
+    const colonIdx = ref.indexOf(':');
+    if (colonIdx === -1) return { base: ref, serial: null };
+    const base = ref.slice(0, colonIdx);
+    const tail = ref.slice(colonIdx + 1);
+    if (base.length === 0) {
+      throw new Error('parseAccessRef: empty base in ' + JSON.stringify(ref));
+    }
+    const serial = Number(tail);
+    if (!Number.isInteger(serial) || serial < 1) {
+      throw new Error('parseAccessRef: serial must be a positive integer, got ' + JSON.stringify(tail));
+    }
+    return { base, serial };
+  },
+
+  /**
+   * Render an `{ base, serial }` pair back to the wire format. Bare
+   * cuid when serial is null/undefined; `<base>:<serial>` otherwise.
+   * Mostly used to construct the composite id when calling
+   * `connection.api()` for `accesses.update` / `accesses.delete`.
+   * @memberof pryv.utils
+   * @param {{ base: string, serial?: number | null }} ref
+   * @returns {string}
+   */
+  serializeAccessRef: function (ref) {
+    if (ref == null || typeof ref.base !== 'string' || ref.base.length === 0) {
+      throw new Error('serializeAccessRef: ref.base must be a non-empty string');
+    }
+    if (ref.serial == null) return ref.base;
+    if (!Number.isInteger(ref.serial) || ref.serial < 1) {
+      throw new Error('serializeAccessRef: serial must be a positive integer, got ' + JSON.stringify(ref.serial));
+    }
+    return ref.base + ':' + ref.serial;
   },
 
   /**
@@ -14669,6 +19104,18 @@ utils.buildPryvApiEndpoint = utils.buildAPIEndpoint;
 /**
  * A String url of the form http(s)://{token}@{apiEndpoint}
  * @typedef {string} APIEndpoint
+ */
+
+/**
+ * Decomposed form of an APIEndpoint, returned by `decomposeAPIEndpoint`.
+ * `token` and `username` are `null` when the endpoint doesn't carry a
+ * token / doesn't match the `service.info.api` template. `host` is the
+ * canonical platform host (no `<username>.` subdomain prefix in
+ * subdomain-style deployments).
+ * @typedef {Object} DecomposedAPIEndpoint
+ * @property {string|null} token
+ * @property {string|null} username
+ * @property {string} host
  */
 
 /**
@@ -15344,12 +19791,21 @@ exports.HDSDatasourceDef = HDSDatasourceDef;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HDSItemDef = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 class HDSItemDef {
     #data;
     #key;
-    constructor(key, definitionData) {
+    /**
+     * Optional model handle, used to validate descendant streamIds in
+     * `eventTemplate({ context })`. Constructed by HDSModelItemsDefs which has
+     * the model handle available; older callers that build HDSItemDef directly
+     * still work — they just can't use the `context` option.
+     */
+    #model;
+    constructor(key, definitionData, model = null) {
         this.#key = key;
         this.#data = definitionData;
+        this.#model = model;
     }
     get eventTypes() {
         if (this.#data.eventType)
@@ -15387,13 +19843,103 @@ class HDSItemDef {
     }
     /**
      * a template event with eventType and streamIds
-     * // TODO handle variations
+     *
+     * @param opts.context — optional context streamId per Plan 46 §2.1 (D3).
+     *   Must equal `this.streamId` or be a descendant. Lets a single itemDef
+     *   registered at e.g. `treatment` produce events placed at `treatment-fertility`,
+     *   `treatment-oncology`, etc., without per-domain item definitions.
+     *   When omitted, falls back to the itemDef's canonical streamId.
+     *   Throws if the context isn't in the itemDef's subtree.
+     *
+     * @param opts.eventType — REQUIRED for an itemDef declaring `variations.eventType`
+     *   (`body-weight`, `body-height`, `body-blood-serum-glucose-fasting`, `profile-avatar`).
+     *   Must be one of the declared options.
+     *
+     * For a variation item the option **is** the stored value's meaning: `mass/kg` vs
+     * `mass/lb` is the difference between 75 kg and 75 lb. Until 2.0.0 this returned
+     * `eventTypes[0]` whatever the caller meant, so a weight entered in pounds was stored
+     * as kilograms with nothing failing anywhere (issue #13). It now throws instead: a
+     * caller that has not chosen cannot express intent, and guessing on their behalf is
+     * what produced wrong clinical values.
+     *
+     * Deliberately NOT resolved from `unitSystem` here. That would couple this primitive
+     * to ambient settings state and return a different unit for the same itemDef depending
+     * on whether an app had hooked its settings, which is a quieter version of the same
+     * bug. Callers that want the user's preference resolve it themselves (see
+     * `HDSModelPreferred`) and pass the result in.
      */
-    eventTemplate() {
+    eventTemplate(opts = {}) {
+        let chosenStreamId = this.#data.streamId;
+        if (opts.context != null && opts.context !== chosenStreamId) {
+            this.#assertDescendantOf(opts.context, chosenStreamId);
+            chosenStreamId = opts.context;
+        }
         return {
-            streamIds: [this.#data.streamId],
-            type: this.eventTypes[0]
+            streamIds: [chosenStreamId],
+            type: this.#chooseEventType(opts.eventType)
         };
+    }
+    /**
+     * Resolve the event type for `eventTemplate()`, refusing to guess.
+     * Variation items require an explicit choice; plain items reject a mismatched one.
+     */
+    #chooseEventType(requested) {
+        const isVariation = this.#data.variations?.eventType != null;
+        const options = this.eventTypes;
+        if (!isVariation) {
+            if (requested != null && requested !== options[0]) {
+                throw new errors_ts_1.HDSLibError(`eventTemplate: item "${this.#key}" declares eventType "${options[0]}" ` +
+                    `and cannot produce "${requested}".`);
+            }
+            return options[0];
+        }
+        if (requested == null) {
+            throw new errors_ts_1.HDSLibError(`eventTemplate: item "${this.#key}" declares variations.eventType and requires an ` +
+                `explicit choice. Pass one of: ${options.join(', ')}. ` +
+                'The option is the stored unit, so choosing for you would risk storing a wrong value.');
+        }
+        if (!options.includes(requested)) {
+            throw new errors_ts_1.HDSLibError(`eventTemplate: "${requested}" is not a declared variation of item "${this.#key}". ` +
+                `Expected one of: ${options.join(', ')}.`);
+        }
+        return requested;
+    }
+    /**
+     * Throws if `candidate` is not a descendant of `ancestor` in the model's
+     * stream tree. Requires the model handle (passed at construction).
+     */
+    #assertDescendantOf(candidate, ancestor) {
+        if (!this.#model) {
+            throw new Error(`HDSItemDef "${this.#key}" was constructed without a model handle; cannot validate context "${candidate}"`);
+        }
+        // getParentsIds returns ancestors (excluding self). Treat candidate as
+        // valid iff `ancestor` is in its parent chain.
+        const ancestors = this.#model.streams.getParentsIds(candidate, false);
+        if (!ancestors.includes(ancestor)) {
+            throw new Error(`Context streamId "${candidate}" is not a descendant of itemDef "${this.#key}" streamId "${ancestor}"`);
+        }
+    }
+    /**
+     * D3-aware event-matching. Returns true if the given event resolves to
+     * this itemDef via `model.itemsDefs.forEvent(event)` — covering both the
+     * direct (streamId, eventType) match and the closest-ancestor walk-up.
+     *
+     * Useful in form-engine code that needs to check whether an event belongs
+     * to a particular itemDef without re-implementing the resolution rule.
+     * Falls back to plain `(streamId in event.streamIds, type === eventType)`
+     * if the model handle isn't available.
+     */
+    matchesEvent(event) {
+        if (!event || event.type == null || !Array.isArray(event.streamIds))
+            return false;
+        if (this.#model) {
+            const resolved = this.#model.itemsDefs.forEvent(event, false);
+            return resolved !== null && resolved.key === this.#key;
+        }
+        // Fallback: direct match against this itemDef's streamId + eventType.
+        if (!this.eventTypes.includes(event.type))
+            return false;
+        return event.streamIds.includes(this.#data.streamId);
     }
 }
 exports.HDSItemDef = HDSItemDef;
@@ -16047,11 +20593,21 @@ class HDSModelItemsDefs {
                 throw new Error('Cannot find item definition with key: ' + key);
             return null;
         }
-        this.#itemsDefs[key] = new HDSItemDef_ts_1.HDSItemDef(key, defData);
+        this.#itemsDefs[key] = new HDSItemDef_ts_1.HDSItemDef(key, defData, this.#model);
         return this.#itemsDefs[key];
     }
     /**
      * get a definition for an event
+     *
+     * Resolution rule (Plan 46 §2.1 — context-via-substream / D3):
+     *   1. Try direct match on every entry in event.streamIds (legacy: events
+     *      may carry multiple streamIds, e.g. bridge-athenahealth credentials).
+     *   2. If no direct match, walk parents of streamIds[0] looking for a
+     *      matching itemDef. Closest ancestor wins.
+     *
+     * The walk-up reuses `HDSModelStreams.getParentsIds`, the same helper
+     * Authorizations consumes (HDSModel-Authorizations.ts:86) and the same
+     * algorithm Plan 45's resolveStream.ts uses for clientData lookup.
      */
     forEvent(event, throwErrorIfNotFound = true) {
         const candidates = [];
@@ -16060,6 +20616,23 @@ class HDSModelItemsDefs {
             const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
             if (candidate)
                 candidates.push(candidate);
+        }
+        if (candidates.length === 0 && event.streamIds && event.streamIds.length > 0) {
+            const primary = event.streamIds[0];
+            // getParentsIds returns root-first ancestors of `primary` (excludes self).
+            // We need closest-ancestor-wins, so iterate leaf-to-root: walk parents
+            // in reverse, then check `primary` is already covered by the direct-match
+            // pass above — so we only need ancestors here.
+            const ancestorsRootFirst = this.#model.streams.getParentsIds(primary, false);
+            for (let i = ancestorsRootFirst.length - 1; i >= 0; i--) {
+                const ancestorId = ancestorsRootFirst[i];
+                const keyStreamIdEventType = ancestorId + ':' + event.type;
+                const candidate = this.#modelDataByStreamIdEventTypes[keyStreamIdEventType];
+                if (candidate) {
+                    candidates.push(candidate);
+                    break;
+                }
+            }
         }
         if (candidates.length === 0) {
             if (throwErrorIfNotFound)
@@ -16076,22 +20649,56 @@ exports.HDSModelItemsDefs = HDSModelItemsDefs;
 /**
  * Add key to model items and
  * load modeldata item into modelDataByStreamIdEventTypes for fast search
+ *
+ * `streamId:eventType` is the storage identity, and this index is what `forEvent`
+ * resolves through — so two *active* items may never share a pair.
+ *
+ * A **deprecated** item may, and that is what makes an item-key rename non-breaking:
+ * the old key stays as a deprecated alias resolvable via `forKey` (so consumers pinned
+ * to it keep working and migrate on their own schedule), while the active item owns the
+ * pair here, so `forEvent` stays unambiguous. The alias is faithful — same streamId,
+ * same eventType — so it produces identical events.
+ *
+ * This mirrors the loader in `data-model` (`src/items.js`, addItem). The two indexes are
+ * separate implementations of the same rule and MUST be kept in step: relaxing one is
+ * not relaxing the other. That drift is exactly what caused site-agents#3 — data-model
+ * published aliases its own loader accepted, and every hds-lib consumer threw on first
+ * `itemsDefs` access.
  */
 function loadModelDataByStreamIdEventTypes(model, map) {
     for (const item of Object.values(model)) {
+        const it = item;
         const eventTypes = [];
-        if (item.eventType) {
-            eventTypes.push(item.eventType);
+        // Mirror data-model's collection (src/items.js): an item carries EITHER a single
+        // `eventType` OR a `variations.eventType` set (e.g. body-weight kg/lb), never both.
+        // Check variations first and reject the mixed shape — checking `eventType` first
+        // (as this did) silently ignored variations when both were present, and dereferencing
+        // `.variations.eventType` in the else branch threw a TypeError when an item had neither.
+        if (it.variations?.eventType) {
+            eventTypes.push(...it.variations.eventType.options.map((o) => o.value));
+            if (it.eventType) {
+                throw new Error(`Item "${it.key ?? it.streamId}" mixes eventType and variations.eventType: ${JSON.stringify(it)}`);
+            }
+        }
+        else if (it.eventType) {
+            eventTypes.push(it.eventType);
         }
         else {
-            const types = item.variations.eventType.options.map((o) => o.value);
-            eventTypes.push(...types);
+            throw new Error(`Item "${it.key ?? it.streamId}" has neither eventType nor variations.eventType: ${JSON.stringify(it)}`);
         }
         for (const eventType of eventTypes) {
             const keyStreamIdEventType = item.streamId + ':' + eventType;
-            if (map[keyStreamIdEventType]) {
-                // should be tested with a faulty model
-                throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+            const existing = map[keyStreamIdEventType];
+            if (existing) {
+                if (!existing.deprecated && !item.deprecated) {
+                    throw new Error(`Duplicate streamId + eventType "${keyStreamIdEventType}" for item ${JSON.stringify(item)}`);
+                }
+                if (existing.deprecated && item.deprecated) {
+                    throw new Error(`Two deprecated items share streamId + eventType "${keyStreamIdEventType}" — forEvent would be ambiguous. Keep at most one deprecated alias per pair: ${JSON.stringify(item)}`);
+                }
+                // Exactly one is active — it owns the index regardless of load order.
+                if (item.deprecated)
+                    continue;
             }
             map[keyStreamIdEventType] = item;
         }
@@ -16413,6 +21020,7 @@ exports.getPreferredInput = getPreferredInput;
 exports.getPreferredDisplay = getPreferredDisplay;
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ../settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
+const accountPreferences_ts_1 = __webpack_require__(/*! ../settings/accountPreferences.js */ "./ts/settings/accountPreferences.ts");
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 /**
  * HDSModel-Preferred — Unified API for preferred representations.
@@ -16461,9 +21069,9 @@ class HDSModelPreferred {
                 if (match)
                     selectedEventType = perItemSetting;
             }
-            // 2. Fallback to unitSystem
-            if (!selectedEventType && HDSSettings_ts_1.default.isHooked) {
-                const system = HDSSettings_ts_1.default.get('unitSystem');
+            // 2. Fallback to unitSystem (account-level when set, else the app's own)
+            if (!selectedEventType && (0, accountPreferences_ts_1.hasAccountPreference)('unitSystem')) {
+                const system = (0, accountPreferences_ts_1.resolveAccountPreference)('unitSystem');
                 selectedEventType = this.#resolveVariationFromUnitSystem(data.variations.eventType, system);
             }
             // 3. Default: first option
@@ -16632,6 +21240,20 @@ class HDSModelStreams {
         return streamData;
     }
     /**
+     * True iff the stream exists and its data-model definition carries
+     * `role: 'context'` — i.e. it's a descendant-streamId marker for the D3
+     * context-via-substream mechanic, not a data-bearing bucket. Unknown
+     * streamIds return `false` (no throw — this is a yes/no probe).
+     *
+     * Consumers (settings trees, form-section renderers, dashboards) should
+     * use this to elide / mute / re-render context streams as metadata rather
+     * than as independent input streams. See Plan 53.
+     */
+    isContext(streamId) {
+        const streamData = this.#modelStreamsById[streamId];
+        return streamData != null && streamData.role === 'context';
+    }
+    /**
      * Get all parents id;
      */
     getParentsIds(streamId, throwErrorIfNotFound = true, initialArray = []) {
@@ -16741,11 +21363,20 @@ class HDSModel {
         const response = await fetch(this.#modelUrl);
         const resultText = await response.text();
         const result = JSON.parse(resultText);
+        this.loadFromObject(result, overload);
+    }
+    /**
+     * Load model from an in-memory object (skips fetch). Useful when the
+     * pack.json content is already in memory — tests, embedded apps, or
+     * environments where fetch can't reach the model URL (e.g. Node with a
+     * file:// URL, which Node's fetch does not yet implement).
+     */
+    loadFromObject(data, overload = null) {
         if (overload) {
-            (0, HDSModel_Overload_ts_1.validateOverload)(result, overload);
-            (0, HDSModel_Overload_ts_1.applyOverload)(result, overload);
+            (0, HDSModel_Overload_ts_1.validateOverload)(data, overload);
+            (0, HDSModel_Overload_ts_1.applyOverload)(data, overload);
         }
-        this.#modelData = result;
+        this.#modelData = data;
         // add key to items before freezing;
         for (const [key, item] of Object.entries(this.#modelData.items)) {
             item.key = key;
@@ -16903,7 +21534,10 @@ exports.formatEventDateTime = formatEventDateTime;
 exports.eventToShortText = eventToShortText;
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+// HDSSettings is still the right source for per-app settings (the dynamic
+// `preferred-display-*` keys). Account-level preferences go through the resolver.
 const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ../settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
+const accountPreferences_ts_1 = __webpack_require__(/*! ../settings/accountPreferences.js */ "./ts/settings/accountPreferences.ts");
 const DATE_SEPARATORS = {
     'DD.MM.YYYY': (d) => pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
     'DD/MM/YYYY': (d) => pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(),
@@ -16913,12 +21547,12 @@ const DATE_SEPARATORS = {
 function pad(n) { return n < 10 ? '0' + n : String(n); }
 /**
  * Format a Unix timestamp (seconds) as a date string.
- * Uses HDSSettings dateFormat + timezone when available, otherwise ISO date.
+ * Uses the resolved account/app dateFormat when available, otherwise ISO date.
  */
 function formatEventDate(timeSec) {
     const d = new Date(timeSec * 1000);
-    if (HDSSettings_ts_1.default.isHooked) {
-        const fmt = HDSSettings_ts_1.default.get('dateFormat');
+    if ((0, accountPreferences_ts_1.hasAccountPreference)('dateFormat')) {
+        const fmt = (0, accountPreferences_ts_1.resolveAccountPreference)('dateFormat');
         const formatter = DATE_SEPARATORS[fmt];
         if (formatter)
             return formatter(d);
@@ -16955,6 +21589,15 @@ function eventToShortText(event) {
     const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
     const itemDef = model.itemsDefs.forEvent(event, false);
     const content = event.content;
+    // Blood pressure has a fixed, self-describing shape ({systolic, diastolic, rate}).
+    // Format it eventType-driven so it reads "120/80 ♥72" regardless of whether the
+    // itemDef is loaded (its composite fields are numbers, which the generic
+    // composite/object formatters would otherwise reduce to a single bare value).
+    if (event.type === 'blood-pressure/mmhg-bpm' && content != null && typeof content === 'object') {
+        const bp = formatBloodPressure(content);
+        if (bp)
+            return bp;
+    }
     if (itemDef) {
         // For checkbox/date items, content may be null — the event time IS the data
         if (content == null && itemDef.data.type === 'checkbox') {
@@ -16982,6 +21625,9 @@ function formatWithItemDef(event, content, itemDef, model) {
     if (type === 'select') {
         return formatSelect(event, content, itemDef);
     }
+    if (type === 'multi-select') {
+        return formatMultiSelect(content, itemDef);
+    }
     if (type === 'date') {
         // date items store time on the event itself
         return formatEventDate(event.time);
@@ -16991,6 +21637,9 @@ function formatWithItemDef(event, content, itemDef, model) {
     }
     if (type === 'slider') {
         return formatSlider(content, itemDef);
+    }
+    if (type === 'composite') {
+        return formatComposite(content, itemDef);
     }
     // number, text, composite, etc.
     if (typeof content === 'number') {
@@ -17041,8 +21690,8 @@ function formatNumber(eventType, content, model) {
     if (eventType === 'test-result/scale') {
         return formatTestResult(content);
     }
-    if (HDSSettings_ts_1.default.isHooked) {
-        const system = HDSSettings_ts_1.default.get('unitSystem');
+    if ((0, accountPreferences_ts_1.hasAccountPreference)('unitSystem')) {
+        const system = (0, accountPreferences_ts_1.resolveAccountPreference)('unitSystem');
         const result = model.conversions.convert(eventType, content, system);
         if (result) {
             const symbol = getSymbol(result.targetEventType, model);
@@ -17079,6 +21728,83 @@ function formatSlider(content, itemDef) {
     const suffix = display.suffix ? (0, localizeText_ts_1.localizeText)(display.suffix) : '';
     return suffix ? `${text} ${suffix}` : text;
 }
+/**
+ * Format a composite event by walking the itemDef's `composite` block. Only
+ * applies when every field is a `select` with options — emits "Field: Label"
+ * for each present field, joined by " · ". The field label uses the
+ * composite entry's localised `label`; the value resolves to the option's
+ * localised label when a discrete match exists, otherwise falls back to the
+ * raw value (e.g. continuous imports stored at non-canonical numeric values).
+ *
+ * Used e.g. for `body-vulva-cervix-position` so tooltips read
+ * "Height: High · Firmness: Soft · Openness: Open" — the dimension is named
+ * even when the imported value falls between option stops.
+ *
+ * Falls through to `formatObject` for free-form composites (e.g.
+ * medication/basic with `name`/`doseValue`/`doseUnit`/`route`) so existing
+ * shape-specific renderers keep working.
+ */
+function formatComposite(content, itemDef) {
+    if (!content || typeof content !== 'object')
+        return String(content);
+    const composite = itemDef?.data?.composite;
+    if (!composite)
+        return formatObject(content);
+    const fieldKeys = Object.keys(composite);
+    const allSelectsWithOptions = fieldKeys.length > 0 && fieldKeys.every(k => composite[k]?.type === 'select' && Array.isArray(composite[k]?.options));
+    if (!allSelectsWithOptions)
+        return formatObject(content);
+    const parts = [];
+    for (const field of fieldKeys) {
+        const value = content[field];
+        if (value === undefined || value === null)
+            continue;
+        const fieldDef = composite[field];
+        const fieldLabel = typeof fieldDef.label === 'string'
+            ? fieldDef.label
+            : ((0, localizeText_ts_1.localizeText)(fieldDef.label) || field);
+        // Prefer exact option match; for continuous numeric values that fall
+        // between stops (e.g. Mira imports), snap to the nearest option so the
+        // tooltip shows a meaningful label instead of a raw number.
+        let opt = fieldDef.options.find((o) => o.value === value);
+        if (!opt && typeof value === 'number') {
+            let nearest = null;
+            let bestDist = Infinity;
+            for (const o of fieldDef.options) {
+                if (typeof o.value !== 'number')
+                    continue;
+                const d = Math.abs(o.value - value);
+                if (d < bestDist) {
+                    bestDist = d;
+                    nearest = o;
+                }
+            }
+            opt = nearest;
+        }
+        let valueText;
+        if (opt?.label) {
+            valueText = typeof opt.label === 'string' ? opt.label : ((0, localizeText_ts_1.localizeText)(opt.label) || String(value));
+        }
+        else {
+            valueText = String(value);
+        }
+        parts.push(`${fieldLabel}: ${valueText}`);
+    }
+    return parts.length > 0 ? parts.join(' · ') : formatObject(content);
+}
+/**
+ * Blood pressure (`blood-pressure/mmhg-bpm`) → "120/80", or "120/80 ♥72" when a
+ * pulse (`rate`) is present. eventType-driven: the `{systolic, diastolic, rate}`
+ * shape is fixed, so it renders correctly even without the itemDef. Returns null
+ * when systolic/diastolic are absent so the caller falls back to normal handling.
+ */
+function formatBloodPressure(content) {
+    const { systolic, diastolic, rate } = content;
+    if (systolic == null || diastolic == null)
+        return null;
+    const base = `${systolic}/${diastolic}`;
+    return (rate != null) ? `${base} ♥${rate}` : base;
+}
 function formatSelect(event, content, itemDef) {
     let valueForSelect = content;
     let prefix = '';
@@ -17097,29 +21823,82 @@ function formatSelect(event, content, itemDef) {
     }
     return prefix + String(valueForSelect);
 }
+/**
+ * `multi-select` content is an array of option values — render the localized labels
+ * joined, e.g. "White, Hispanic or Latino". Truncates on the joined string so a long
+ * selection stays a short text, and tolerates a scalar (an event written before the
+ * item became multi-valued) rather than printing "[object Object]".
+ */
+function formatMultiSelect(content, itemDef) {
+    const values = Array.isArray(content) ? content : [content];
+    const options = itemDef.data.options;
+    const labels = values.map((v) => {
+        const selected = options?.find((o) => o.value === v);
+        if (!selected?.label)
+            return String(v);
+        return typeof selected.label === 'string' ? selected.label : ((0, localizeText_ts_1.localizeText)(selected.label) || String(v));
+    });
+    const text = labels.join(', ');
+    return text.length > 50 ? text.slice(0, 50) + '...' : text;
+}
 function formatDatasource(content) {
     if (!content || typeof content !== 'object')
         return String(content);
-    // medication/coded-v1: {drug: {label}, intake: {doseValue, doseUnit, route}}
-    // legacy flat: {label, codes, doseValue, doseUnit, route}
-    const label = content.drug?.label || content.label;
+    // Resolve the coded value object across shapes:
+    //   medication/coded-v1   → {drug: {label, codes, ...}, intake: {...}}
+    //   treatment/coded-v1    → {regimen: {label, codes, ...}, count?, notes?}
+    //   procedure/coded-v1    → {procedure: {label, codes, ...}, count?, findings?, notes?}
+    //   medication legacy     → {label, codes, doseValue, doseUnit, route}
+    //   generic datasource    → any object with a property whose value carries a `label`
+    let datasourceObj = content.drug ?? content.regimen ?? content.procedure;
+    if (!datasourceObj && content.label)
+        datasourceObj = content; // legacy flat
+    if (!datasourceObj) {
+        for (const v of Object.values(content)) {
+            if (v && typeof v === 'object' && v.label !== undefined) {
+                datasourceObj = v;
+                break;
+            }
+        }
+    }
+    const label = datasourceObj?.label;
     let text;
     if (label) {
-        text = typeof label === 'string' ? label : ((0, localizeText_ts_1.localizeText)(label) || JSON.stringify(content));
+        text = typeof label === 'string' ? label : ((0, localizeText_ts_1.localizeText)(label) || JSON.stringify(datasourceObj));
     }
     else {
         text = JSON.stringify(content);
     }
-    const intake = content.intake || content;
     const parts = [];
-    if (intake.doseValue) {
+    // Medication intake (new {drug, intake} OR legacy flat with doseValue at top level)
+    const intake = content.intake || (datasourceObj === content ? content : null);
+    if (intake?.doseValue) {
         const unitLabel = intake.doseUnit
             ? intake.doseUnit.replace(/^dose\//, '').replace(/^(mass|volume)\//, '')
             : '';
         parts.push(`${intake.doseValue} ${unitLabel}`.trim());
     }
-    if (intake.route)
+    if (intake?.route)
         parts.push(intake.route);
+    // Treatment / procedure scalars (sibling fields on the event content)
+    if (typeof content.count === 'number' && content.count > 1) {
+        parts.push(`×${content.count}`);
+    }
+    if (Array.isArray(content.findings) && content.findings.length > 0) {
+        const labels = content.findings.slice(0, 2).map((f) => {
+            if (typeof f === 'string')
+                return f;
+            if (f?.label)
+                return typeof f.label === 'string' ? f.label : ((0, localizeText_ts_1.localizeText)(f.label) || null);
+            return null;
+        }).filter(Boolean);
+        if (labels.length > 0)
+            parts.push(labels.join(', '));
+    }
+    if (typeof content.notes === 'string' && content.notes.trim() !== '') {
+        const n = content.notes.trim();
+        parts.push(n.length > 30 ? n.slice(0, 30) + '...' : n);
+    }
     if (parts.length > 0)
         text += ' — ' + parts.join(', ');
     return text;
@@ -17137,14 +21916,16 @@ function formatObject(content) {
         const dl = content.drug.label;
         return typeof dl === 'string' ? dl : ((0, localizeText_ts_1.localizeText)(dl) || null);
     }
-    // medication/basic composite: { name, doseValue, doseUnit, route }
+    // medication/basic composite: { name, intake: { doseValue, doseUnit, route } }
+    // (legacy events stored the dose fields flat at the top level — read both).
     if (content.name && typeof content.name === 'string') {
+        const intake = content.intake ?? content;
         const parts = [];
-        if (content.doseValue) {
-            parts.push(`${content.doseValue}${content.doseUnit ? ' ' + content.doseUnit : ''}`);
+        if (intake.doseValue) {
+            parts.push(`${intake.doseValue}${intake.doseUnit ? ' ' + intake.doseUnit : ''}`);
         }
-        if (content.route)
-            parts.push(content.route);
+        if (intake.route)
+            parts.push(intake.route);
         return parts.length > 0 ? `${content.name} — ${parts.join(', ')}` : content.name;
     }
     if (content.value != null)
@@ -17823,6 +22604,7 @@ class MonitorScope {
     _hasMoreOlder = false;
     maxModified = 0;
     stopped = false;
+    paused = false;
     constructor(connection, config, callbacks) {
         this.connection = connection;
         this.config = config;
@@ -17903,12 +22685,27 @@ class MonitorScope {
         if (this.stopped)
             return;
         // Step 3: Start Monitor for real-time updates
-        // modifiedSince trick — initial fetch returns ~nothing
+        await this.attachLiveMonitor();
+    }
+    /**
+     * Build + start the live Monitor with the latest `maxModified` so any
+     * events created since the last seen update are caught up via the
+     * `modifiedSince` trick. Used both during initial start() and on
+     * resume() after a pause/visibilitychange cycle.
+     */
+    async attachLiveMonitor() {
+        if (this.stopped)
+            return;
         const eventsGetScope = {
             fromTime: this.config.fromTime,
-            toTime,
             modifiedSince: this.maxModified,
         };
+        // Bound the live scope only if the consumer asked for one. A frozen
+        // `toTime = now` would exclude every event created after attach time —
+        // the socket's `eventsChanged` push fires, but the follow-up events.get
+        // returns nothing and the UI never updates.
+        if (this.config.toTime != null)
+            eventsGetScope.toTime = this.config.toTime;
         this.monitor = new patchedPryv_ts_1.pryv.Monitor(this.connection, eventsGetScope)
             .on('event', (event) => {
             this.trackEvent(event);
@@ -17932,6 +22729,67 @@ class MonitorScope {
         // Start before adding Socket to avoid race condition
         await this.monitor.start();
         this.monitor.addUpdateMethod(new patchedPryv_ts_1.pryv.Monitor.UpdateMethod.Socket());
+    }
+    /**
+     * Pause the live monitor: closes the socket.io transport but preserves
+     * accumulated state (events, streams, oldestLoadedTime, maxModified).
+     * Use when the consumer's view becomes inactive (e.g. browser tab
+     * hidden) so a backgrounded session doesn't keep an open WebSocket.
+     *
+     * Cheap to call repeatedly — no-op if already paused or stopped.
+     */
+    pause() {
+        if (this.stopped || this.paused)
+            return;
+        if (this.monitor) {
+            try {
+                this.monitor.stop();
+            }
+            catch (_) { /* ignore */ }
+            this.monitor = null;
+        }
+        this.paused = true;
+    }
+    /**
+     * Resume after a pause: rebuilds the Monitor with the current
+     * `maxModified` so the catch-up `events.get` returns only events
+     * created/changed during the pause. No-op if not paused or already
+     * stopped.
+     */
+    async resume() {
+        if (this.stopped || !this.paused)
+            return;
+        this.paused = false;
+        await this.attachLiveMonitor();
+    }
+    /**
+     * Force a live-monitor refresh: tear down the current Monitor (if any)
+     * and re-attach. The fresh `attachLiveMonitor` re-runs
+     * `events.get(modifiedSince=maxModified)` to catch up any events the
+     * socket may have missed, and re-subscribes the socket — picking up
+     * streams that didn't exist when the previous subscription was
+     * established (e.g. streams created by an embedded bridge after our
+     * connection's socket attached).
+     *
+     * Use after a known-good external write (e.g. on `hds-bridge-done`
+     * postMessage) to surface the new events without waiting for the next
+     * visibility-change cycle or user-driven action.
+     *
+     * No-op if already stopped. If currently paused, stays paused.
+     */
+    async refresh() {
+        if (this.stopped)
+            return;
+        if (this.paused)
+            return;
+        if (this.monitor) {
+            try {
+                this.monitor.stop();
+            }
+            catch (_) { /* ignore */ }
+            this.monitor = null;
+        }
+        await this.attachLiveMonitor();
     }
     /**
      * Load older events beyond current scope (triggered by scroll-up).
@@ -18007,230 +22865,28 @@ exports.MonitorScope = MonitorScope;
 
 "use strict";
 
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AppClientAccount = void 0;
-const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
-const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTemplates/Application.ts");
-const CollectorClient_ts_1 = __webpack_require__(/*! ./CollectorClient.js */ "./ts/appTemplates/CollectorClient.ts");
-const Contact_ts_1 = __webpack_require__(/*! ./Contact.js */ "./ts/appTemplates/Contact.ts");
-const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 /**
- * - applications
- *   - [baseStreamId] "Root" stream from this app
+ * Patient-side HDS account wrapper.
+ *
+ * Post-plan-61 Phase C, the patient flow is CMC-only:
+ * - Incoming invites are accepted via `cmc.acceptInvite`
+ * - Active relationships are read via `cmc.listAcceptedRelationships` +
+ *   the patient's local counterparty accesses, aggregated into Contacts
+ *   by `Contact.aggregateCmc()`
+ *
+ * AppClientAccount now provides only the base `Application` surface
+ * (init, connection, baseStreamId) — no legacy CollectorClient lifecycle.
+ * Useful primarily as the target of `HDSSettings.hookToApplication()`.
  */
-const MAX_COLLECTORS = 1000;
 class AppClientAccount extends Application_ts_1.Application {
-    constructor(baseStreamId, connection, appName, features) {
-        super(baseStreamId, connection, appName, features);
-        this.cache.collectorClientsMap = {};
-    }
     get appSettings() {
         return {
             canBePersonnal: true,
             mustBeMaster: true
         };
-    }
-    /**
-     * When the app receives a new request for data sharing
-     */
-    async handleIncomingRequest(apiEndpoint, incomingEventId) {
-        // make sure that collectorClientsMap is initialized
-        await this.getCollectorClients();
-        const requesterConnection = new patchedPryv_ts_1.pryv.Connection(apiEndpoint);
-        const accessInfo = await requesterConnection.accessInfo();
-        // check if request is known
-        const collectorClientKey = CollectorClient_ts_1.CollectorClient.keyFromInfo(accessInfo);
-        logger.debug('AppClient:handleIncomingRequest', { collectorClientKey, accessInfo, incomingEventId });
-        if (this.cache.collectorClientsMap[collectorClientKey]) {
-            const collectorClient = this.cache.collectorClientsMap[collectorClientKey];
-            logger.debug('AppClient:handleIncomingRequest found existing', { collectorClient });
-            // Same access, same endpoint — idempotent, return existing
-            if (collectorClient.requesterApiEndpoint === apiEndpoint) {
-                return collectorClient;
-            }
-            // Different apiEndpoint or eventId for same key — this shouldn't happen with id-based keys
-            // but handle gracefully by logging and creating new (will get a different key from its own accessInfo)
-            logger.info('AppClient:handleIncomingRequest existing key collision, creating new client');
-        }
-        // check if comming form hdsCollector
-        if (!accessInfo?.clientData?.hdsCollector || accessInfo.clientData?.hdsCollector?.version !== 0) {
-            throw new errors_ts_1.HDSLibError('Invalid collector request, cannot find clientData.hdsCollector or wrong version', { clientData: accessInfo?.clientData });
-        }
-        // else create it
-        const collectorClient = await CollectorClient_ts_1.CollectorClient.create(this, apiEndpoint, incomingEventId, accessInfo);
-        this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
-        return collectorClient;
-    }
-    async getCollectorClientByKey(collectorKey) {
-        // ensure collectors are initialized
-        await this.getCollectorClients();
-        return this.cache.collectorClientsMap[collectorKey];
-    }
-    async getCollectorClients(forceRefresh = false) {
-        if (!forceRefresh && this.cache.collectorClientsMapInitialized)
-            return Object.values(this.cache.collectorClientsMap);
-        const apiCalls = [{
-                method: 'accesses.get',
-                params: { includeDeletions: true }
-            }, {
-                method: 'events.get',
-                params: { types: ['request/collector-client-v1'], streams: [this.baseStreamId], limit: MAX_COLLECTORS }
-            }];
-        const [accessesRes, eventRes] = await this.connection.api(apiCalls);
-        const accessHDSCollectorMap = {};
-        for (const access of accessesRes.accesses) {
-            if (access.clientData?.hdsCollectorClient) {
-                accessHDSCollectorMap[access.name] = access;
-            }
-        }
-        for (const event of eventRes.events) {
-            const collectorClient = new CollectorClient_ts_1.CollectorClient(this, event);
-            if (accessHDSCollectorMap[collectorClient.key] != null)
-                collectorClient.accessData = accessHDSCollectorMap[collectorClient.key];
-            // temp process - might be removed
-            await collectorClient.checkConsistency();
-            this.cache.collectorClientsMap[collectorClient.key] = collectorClient;
-        }
-        this.cache.collectorClientsMapInitialized = true;
-        return Object.values(this.cache.collectorClientsMap);
-    }
-    /**
-     * Get all contacts grouped by remote user.
-     * Combines CollectorClients (person-to-person) and bridge/other accesses.
-     * Multiple forms from the same doctor → one Contact with multiple sources.
-     * Contacts are enriched with CollectorClient instances and access objects.
-     * Also checks for pending access update requests on active CollectorClients.
-     */
-    async getContacts(forceRefresh = false) {
-        const collectorClients = await this.getCollectorClients(forceRefresh);
-        // Check for pending update requests in parallel (with timeout)
-        const activeClients = collectorClients.filter(cc => cc.status === 'Active');
-        if (activeClients.length > 0) {
-            const UPDATE_CHECK_TIMEOUT = 10000;
-            await Promise.allSettled(activeClients.map(cc => Promise.race([
-                cc.checkForUpdateRequests(),
-                new Promise(resolve => setTimeout(resolve, UPDATE_CHECK_TIMEOUT))
-            ])));
-        }
-        const sources = [];
-        // Collector clients → person contacts
-        for (const cc of collectorClients) {
-            sources.push(cc.toContactSource());
-        }
-        // Other accesses (bridges, orphan collectors, custom apps)
-        // Include deletions so bridge contacts can match events created by old (recreated) accesses
-        const allAccesses = await this.connection.apiOne('accesses.get', { includeDeletions: true }, 'accesses');
-        const collectorAccessNames = new Set(collectorClients.map(cc => cc.key));
-        for (const access of allAccesses) {
-            if (collectorAccessNames.has(access.name))
-                continue;
-            if (access.type === 'personal')
-                continue;
-            // Orphan collector access: has hdsCollectorClient clientData but no matching event
-            const clientData = access.clientData;
-            if (clientData?.hdsCollectorClient) {
-                const evtData = clientData.hdsCollectorClient.eventData;
-                const requestData = evtData?.content?.requesterEventData?.content;
-                const username = evtData?.content?.accessInfo?.user?.username;
-                if (username && requestData) {
-                    const chatEnabled = requestData.features?.chat != null;
-                    sources.push({
-                        remoteUsername: username,
-                        displayName: requestData.requester?.name || username,
-                        chatStreams: chatEnabled ? { main: `chat-${username}`, incoming: `chat-${username}-in` } : null,
-                        appStreamId: clientData.appStreamId || null,
-                        permissions: access.permissions || requestData.permissions || [],
-                        status: access.deleted ? 'Deactivated' : 'Active',
-                        type: 'collector',
-                        accessId: access.id || null
-                    });
-                    continue;
-                }
-            }
-            // Bridge access: has appStreamId
-            const source = Contact_ts_1.Contact.sourceFromAccess(access);
-            if (source.type === 'bridge') {
-                sources.push(source);
-            }
-        }
-        // Group sources into contacts
-        const contacts = Contact_ts_1.Contact.groupByContact(sources);
-        // Enrich contacts with CollectorClients and access objects
-        const accessById = {};
-        for (const access of allAccesses) {
-            accessById[access.id] = access;
-        }
-        for (const contact of contacts) {
-            // Match CollectorClients to contacts
-            for (const cc of collectorClients) {
-                if (cc.requesterUsername === contact.remoteUsername) {
-                    contact.addCollectorClient(cc);
-                    if (cc.accessData?.id && accessById[cc.accessData.id]) {
-                        contact.addAccessObject(accessById[cc.accessData.id]);
-                    }
-                }
-            }
-            // Add access objects for orphan/bridge sources
-            for (const source of contact.sources) {
-                if (source.accessId && accessById[source.accessId]) {
-                    contact.addAccessObject(accessById[source.accessId]);
-                }
-            }
-            // For bridge contacts: also add deleted accesses with the same name
-            // so eventIsFromContact can match events created by old (recreated) access IDs
-            if (!contact.isPerson) {
-                const contactAccessNames = new Set(contact.accessObjects.map((a) => a.name));
-                for (const access of allAccesses) {
-                    if (!access.deleted)
-                        continue;
-                    if (contactAccessNames.has(access.name) && !contact.accessObjects.some((a) => a.id === access.id)) {
-                        contact.addAccessObject(access);
-                    }
-                }
-            }
-        }
-        return contacts;
-    }
-    /**
-     * - Check connection validity
-     * - Make sure stream structure exists
-     */
-    async init() {
-        return super.init();
     }
 }
 exports.AppClientAccount = AppClientAccount;
@@ -18246,33 +22902,22 @@ exports.AppClientAccount = AppClientAccount;
 
 "use strict";
 
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AppManagingAccount = void 0;
-const short_unique_id_1 = __importDefault(__webpack_require__(/*! short-unique-id */ "./node_modules/short-unique-id/dist/short-unique-id.js"));
 const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTemplates/Application.ts");
-const Collector_ts_1 = __webpack_require__(/*! ./Collector.js */ "./ts/appTemplates/Collector.ts");
-const Contact_ts_1 = __webpack_require__(/*! ./Contact.js */ "./ts/appTemplates/Contact.ts");
-const collectorIdGenerator = new short_unique_id_1.default({ dictionary: 'alphanum_lower', length: 7 });
 /**
- * App which manages Collectors
- * A "Collector" can be seen as a "Request" and set of "Responses"
- * - Responses are authorization tokens from individuals
+ * App that manages a CMC-enabled HDS account (doctor / researcher side).
  *
- * The App can create multiple "collectors e.g. Questionnaires"
+ * Post-plan-61 Phase C, all form-storage and patient-invite management
+ * lives in CMC: form templates are `hds-form-spec/v1` events on
+ * `:_cmc:apps:hds-collector:<collectorId>` (use `cmcFormSpec.listFormSpecs`
+ * + `getFormSpecById` + the consumer-side `cmcDoctor.saveFormSpec`), and
+ * patient invites go through `cmc.createInvite` / `listInvites` /
+ * `acceptInvite`.
  *
- * Stream structure
- * - applications
- *   - [baseStreamId]  "Root" stream for this app
- *     - [baseStreamId]-[collectorsId] Each "questionnaire" or "request for a set of data" has it's own stream
- *       - [baseStreamId]-[collectorsId]-internal Private stuff not to be shared
- *       - [baseStreamId]-[collectorsId]-public Contains events with the current settings of this app (this stream will be shared in "read" with the request)
- *       - [baseStreamId]-[collectorsId]-pending Contains events with "pending" requests
- *       - [baseStreamId]-[collectorsId]-inbox Contains events with "inbox" requests Will be shared in createOnly
- *       - [baseStreamId]-[collectorsId]-active Contains events with "active" users
- *       - [baseStreamId]-[scollectorsId]-errors Contains events with "revoked" or "erroneous" users
+ * AppManagingAccount itself now provides only the base `Application`
+ * surface (init, connection, baseStreamId) — no legacy Collector
+ * lifecycle.
  */
 class AppManagingAccount extends Application_ts_1.Application {
     // used by Application.init();
@@ -18282,111 +22927,6 @@ class AppManagingAccount extends Application_ts_1.Application {
             mustBeMaster: true,
             appNameFromAccessInfo: true // application name will be taken from Access-Info Name
         };
-    }
-    async init() {
-        await super.init();
-        // -- check if stream structure exists
-        await this.getCollectors();
-        return this;
-    }
-    async getCollectors(forceRefresh) {
-        await this.#updateCollectorsIfNeeded(forceRefresh);
-        return Object.values(this.cache.collectorsMap);
-    }
-    async getCollectorById(id) {
-        await this.#updateCollectorsIfNeeded();
-        return this.cache.collectorsMap[id];
-    }
-    async #updateCollectorsIfNeeded(forceRefresh = false) {
-        if (!forceRefresh && this.cache.collectorsMap)
-            return;
-        if (forceRefresh)
-            await this.loadStreamData();
-        // TODO do not replace the map, but update collectors if streamData has changed and add new collectors
-        const streams = this.streamData.children || [];
-        const collectorsMap = {};
-        for (const stream of streams) {
-            const collector = new Collector_ts_1.Collector(this, stream);
-            collectorsMap[collector.id] = collector;
-        }
-        this.cache.collectorsMap = collectorsMap;
-    }
-    /**
-     * Get all patient contacts grouped by username, across all collectors.
-     * Each Contact may have invites from multiple forms.
-     */
-    async getContacts(forceRefresh = false) {
-        const collectors = await this.getCollectors(forceRefresh);
-        const sources = [];
-        // Collect all invites from all collectors in parallel (with error tolerance + timeout)
-        const allInvitePairs = [];
-        const TIMEOUT_MS = 10000;
-        const loadCollector = async (collector) => {
-            await collector.init(forceRefresh);
-            if (forceRefresh)
-                await collector.checkInbox();
-            const invites = await collector.getInvites(forceRefresh);
-            return invites;
-        };
-        const results = await Promise.allSettled(collectors.map(async (collector) => {
-            const race = Promise.race([
-                loadCollector(collector),
-                new Promise((_resolve, reject) => setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS))
-            ]);
-            const invites = await race;
-            return { collector, invites };
-        }));
-        for (const result of results) {
-            if (result.status === 'fulfilled') {
-                const { collector, invites } = result.value;
-                for (const invite of invites) {
-                    sources.push(invite.toContactSource());
-                    allInvitePairs.push({ collector, invite });
-                }
-            }
-            else {
-                console.error('Contact: failed loading collector', result.reason);
-            }
-        }
-        // Group by patient username
-        const contacts = Contact_ts_1.Contact.groupByContact(sources);
-        // Enrich contacts with collector+invite references (no extra API calls — reuse cached invites)
-        for (const contact of contacts) {
-            for (const { collector, invite } of allInvitePairs) {
-                const username = invite.patientUsername;
-                if (username && username === contact.remoteUsername) {
-                    contact.addInvite(collector, invite);
-                }
-            }
-        }
-        return contacts;
-    }
-    /**
-     * Create an initialized Collector
-     */
-    async createCollector(name) {
-        const collector = await this.createCollectorUnitialized(name);
-        await collector.init();
-        return collector;
-    }
-    /**
-     * Create an un-initialized Collector (mostly used by tests)
-     */
-    async createCollectorUnitialized(name) {
-        const streamId = this.baseStreamId + '-' + collectorIdGenerator.rnd();
-        const params = {
-            id: streamId,
-            name,
-            parentId: this.baseStreamId
-        };
-        const stream = await this.connection.apiOne('streams.create', params, 'stream');
-        // add new stream to streamCache
-        if (!this.streamData.children)
-            this.streamData.children = [];
-        this.streamData.children.push(stream);
-        const collector = new Collector_ts_1.Collector(this, stream);
-        this.cache.collectorsMap[collector.streamId] = collector;
-        return collector;
     }
 }
 exports.AppManagingAccount = AppManagingAccount;
@@ -18622,1425 +23162,6 @@ async function createAppStreams(app) {
 
 /***/ },
 
-/***/ "./ts/appTemplates/Collector.ts"
-/*!**************************************!*\
-  !*** ./ts/appTemplates/Collector.ts ***!
-  \**************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var _a;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.Collector = void 0;
-const CollectorRequest_ts_1 = __webpack_require__(/*! ./CollectorRequest.js */ "./ts/appTemplates/CollectorRequest.ts");
-const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
-const utils_ts_1 = __webpack_require__(/*! ../utils.js */ "./ts/utils.ts");
-const CollectorInvite_ts_1 = __webpack_require__(/*! ./CollectorInvite.js */ "./ts/appTemplates/CollectorInvite.ts");
-const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
-const COLLECTOR_STREAMID_SUFFIXES = {
-    archive: 'archive',
-    internal: 'internal',
-    public: 'public',
-    pending: 'pending',
-    inbox: 'inbox',
-    active: 'active',
-    error: 'error'
-};
-Object.freeze(COLLECTOR_STREAMID_SUFFIXES);
-/**
- * Collector is used by AppManagingAccount
- * A "Collector" can be seen as a "Request" and set of "Responses"
- * - Responses are authorization tokens from individuals
- */
-class Collector {
-    static STREAMID_SUFFIXES = COLLECTOR_STREAMID_SUFFIXES;
-    static STATUSES = Object.freeze({
-        draft: 'draft',
-        active: 'active',
-        deactivated: 'deactivated'
-    });
-    appManaging;
-    streamId;
-    name;
-    #streamData;
-    #cache;
-    request;
-    /**
-     * @param appManaging
-     * @param streamData
-     */
-    constructor(appManaging, streamData) {
-        this.streamId = streamData.id;
-        this.name = streamData.name;
-        this.appManaging = appManaging;
-        this.#streamData = streamData;
-        this.request = new CollectorRequest_ts_1.CollectorRequest({
-            id: this.id
-        });
-        this.#cache = {
-            initialized: false,
-            invites: {},
-            invitesInitialized: false,
-            invitesInitializing: false,
-            statusEvent: null
-        };
-    }
-    /**
-     * @property {string} id - shortcut for streamId
-     */
-    get id() {
-        return this.streamId;
-    }
-    /**
-     * @property {string} one of 'draft', 'active', 'deactivated'
-     */
-    get statusCode() {
-        if (this.#cache.statusEvent == null)
-            throw new Error('Init Collector first');
-        return this.#cache.statusEvent.content.status;
-    }
-    /**
-     * Fetch online data
-     */
-    async init(forceRefresh = false) {
-        if (!forceRefresh && this.#cache.initialized)
-            return;
-        await this.checkStreamStructure();
-        await this.#loadStatus(forceRefresh);
-        this.#cache.initialized = true;
-    }
-    /**
-     * @type {StatusEvent} - extends PryvEvent with a specific content
-     * @property {Object} content - content
-     * @property {String} content.status - one of 'draft', 'active', 'deactivated'
-     * @property {CollectorRequestData} content.request - app specific data
-     */
-    /**
-     * Load Collector status,
-     * @param forceRefresh - if true, forces fetching the status from the server
-     */
-    async #loadStatus(forceRefresh = false) {
-        if (!forceRefresh && this.#cache.statusEvent)
-            return this.#cache.statusEvent;
-        const params = { types: ['status/collector-v1'], limit: 1, streams: [this.streamIdFor(_a.STREAMID_SUFFIXES.internal)] };
-        const statusEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
-        if (statusEvents.length === 0) { // non existent set "draft" status
-            return this.#setStatus(_a.STATUSES.draft);
-        }
-        this.#cache.statusEvent = statusEvents[0];
-        this.request.loadFromStatusEvent(statusEvents[0]);
-    }
-    /**
-     * Change the status
-     * @param status one of 'draft', 'active', 'deactivated'
-     * @returns {StatusEvent}
-     */
-    async #setStatus(status) {
-        if (!_a.STATUSES[status])
-            throw new errors_ts_1.HDSLibError('Unknown status key', { status });
-        const event = {
-            type: 'status/collector-v1',
-            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.internal)],
-            content: {
-                status,
-                request: this.request.content
-            }
-        };
-        const statusEvent = await this.appManaging.connection.apiOne('events.create', event, 'event');
-        this.#cache.statusEvent = statusEvent;
-        this.request.loadFromStatusEvent(statusEvent);
-        return this.#cache.statusEvent;
-    }
-    async save() {
-        if (this.statusCode !== _a.STATUSES.draft)
-            throw new Error(`Cannot save when status = "${this.statusCode}".`);
-        return await this.#setStatus(_a.STATUSES.draft);
-    }
-    async publish() {
-        const publicEventData = {
-            type: 'request/collector-v1',
-            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.public)],
-            content: this.request.content
-        };
-        await this.appManaging.connection.apiOne('events.create', publicEventData, 'event');
-        return await this.#setStatus(_a.STATUSES.active);
-    }
-    #addOrUpdateInvite(eventData) {
-        const key = CollectorInvite_ts_1.CollectorInvite.getKeyForEvent(eventData);
-        if (this.#cache.invites[key]) {
-            this.#cache.invites[key].setEventData(eventData);
-        }
-        else {
-            this.#cache.invites[key] = new CollectorInvite_ts_1.CollectorInvite(this, eventData);
-        }
-        return this.#cache.invites[key];
-    }
-    /**
-     * Retrieve an invite by its key
-     */
-    async getInviteByKey(key) {
-        await this.init(); // do not forceRefresh on Init();
-        await this.#initInvites(false);
-        return this.#cache.invites[key];
-    }
-    /**
-     * Retreive all invites
-     * @param {boolean} [forceRefresh]
-     * @returns {Array<CollectorInvite>}
-     */
-    async getInvites(forceRefresh = false) {
-        await this.init(); // do not forceRefresh on Init();
-        await this.#initInvites(forceRefresh);
-        return Object.values(this.#cache.invites);
-    }
-    async #initInvites(forceRefresh) {
-        await (0, utils_ts_1.waitUntilFalse)(() => (this.#cache.invitesInitializing));
-        if (!forceRefresh && this.#cache.invitesInitialized)
-            return;
-        this.#cache.invitesInitializing = true;
-        const queryParams = { types: ['invite/collector-v1'], streams: [this.streamId], fromTime: 0, toTime: 8640000000000000, limit: 10000 };
-        try {
-            await this.appManaging.connection.getEventsStreamed(queryParams, (eventData) => {
-                this.#addOrUpdateInvite(eventData);
-            });
-        }
-        catch (e) {
-            this.#cache.invitesInitialized = true;
-            this.#cache.invitesInitializing = false;
-            throw e;
-        }
-        this.#cache.invitesInitialized = true;
-        this.#cache.invitesInitializing = false;
-    }
-    async checkInbox() {
-        const newCollectorInvites = [];
-        const params = { types: ['response/collector-v1'], limit: 1000, streams: [this.streamIdFor(_a.STREAMID_SUFFIXES.inbox)] };
-        const responseEvents = await this.appManaging.connection.apiOne('events.get', params, 'events');
-        for (const responseEvent of responseEvents) {
-            // fetch corresponding invite
-            const inviteEvent = await this.appManaging.connection.apiOne('events.getOne', { id: responseEvent.content.eventId }, 'event');
-            if (inviteEvent == null)
-                throw new errors_ts_1.HDSLibError(`Cannot find invite event matching id: ${responseEvent.content.eventId}`, responseEvent);
-            const updateInvite = {
-                content: structuredClone(inviteEvent.content)
-            };
-            updateInvite.content.sourceEventId = responseEvent.id;
-            // check type of response
-            switch (responseEvent.content.type) {
-                case 'accept':
-                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.active)];
-                    updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
-                    if (responseEvent.content.chat)
-                        updateInvite.content.chat = responseEvent.content.chat;
-                    if (responseEvent.content.system)
-                        updateInvite.content.system = responseEvent.content.system;
-                    break;
-                case 'update-accept':
-                    // Patient accepted an access update — new apiEndpoint, stays active
-                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.active)];
-                    updateInvite.content.apiEndpoint = responseEvent.content.apiEndpoint;
-                    if (responseEvent.content.chat)
-                        updateInvite.content.chat = responseEvent.content.chat;
-                    if (responseEvent.content.system)
-                        updateInvite.content.system = responseEvent.content.system;
-                    break;
-                case 'update-refuse':
-                    // Patient refused the update — invite stays active with current permissions
-                    // No stream change, just archive the response
-                    break;
-                case 'refuse':
-                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
-                    updateInvite.content.errorType = 'refused';
-                    break;
-                case 'revoke':
-                    updateInvite.streamIds = [this.streamIdFor(_a.STREAMID_SUFFIXES.error)];
-                    updateInvite.content.errorType = 'revoked';
-                    break;
-                default:
-                    throw new errors_ts_1.HDSLibError(`Unkown or undefined ${responseEvent.content.type}`, responseEvent);
-            }
-            // update inviteEvent and archive inbox message
-            const apiCalls = [
-                {
-                    method: 'events.update',
-                    params: {
-                        id: inviteEvent.id,
-                        update: updateInvite
-                    }
-                },
-                {
-                    method: 'events.update',
-                    params: {
-                        id: responseEvent.id,
-                        update: {
-                            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.archive)]
-                        }
-                    }
-                }
-            ];
-            const results = await this.appManaging.connection.api(apiCalls);
-            const errors = results.filter((r) => (!r.event));
-            if (errors.length > 0)
-                throw new errors_ts_1.HDSLibError('Error activating incoming request', errors);
-            const eventUpdated = results[0].event;
-            const inviteUpdated = this.#addOrUpdateInvite(eventUpdated);
-            newCollectorInvites.push(inviteUpdated);
-        }
-        return newCollectorInvites;
-    }
-    /**
-     * Create a "pending" invite to be sent to an app using AppSharingAccount
-     * @param {string} name a default display name for this request
-     * @param {Object} [options]
-     * @param {Object} [options.customData] any data to be used by the client app
-     */
-    async createInvite(name, options = {}) {
-        if (this.statusCode !== _a.STATUSES.active)
-            throw new Error(`Collector must be in "active" state error to create invite, current: ${this.statusCode}`);
-        const eventParams = {
-            type: 'invite/collector-v1',
-            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.pending)],
-            content: {
-                name,
-                customData: options.customData || {}
-            }
-        };
-        const newInvite = await this.appManaging.connection.apiOne('events.create', eventParams, 'event');
-        const invite = this.#addOrUpdateInvite(newInvite);
-        return invite;
-    }
-    /**
-     * Get sharing api endpoint
-     */
-    async sharingApiEndpoint() {
-        if (this.statusCode !== _a.STATUSES.active)
-            throw new Error(`Collector must be in "active" state error to get sharing link, current: ${this.statusCode}`);
-        if (this.#cache.sharingApiEndpoint)
-            return this.#cache.sharingApiEndpoint;
-        // check if sharing present
-        const sharedAccessId = 'a-' + this.streamId;
-        const accesses = await this.appManaging.connection.apiOne('accesses.get', {}, 'accesses');
-        const sharedAccess = accesses.find((access) => access.name === sharedAccessId);
-        // found return it
-        if (sharedAccess) {
-            this.#cache.sharingApiEndpoint = sharedAccess.apiEndpoint;
-            return sharedAccess.apiEndpoint;
-        }
-        // not found create it
-        const permissions = [
-            { streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.inbox), level: 'create-only' },
-            { streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.public), level: 'read' },
-            // for "publicly shared access" always forbid the selfRevoke feature
-            { feature: 'selfRevoke', setting: 'forbidden' },
-            // for "publicly shared access" always forbid the selfAudit feature
-            { feature: 'selfAudit', setting: 'forbidden' }
-        ];
-        const clientData = {
-            hdsCollector: {
-                version: 0,
-                public: {
-                    streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.public)
-                },
-                inbox: {
-                    streamId: this.streamIdFor(_a.STREAMID_SUFFIXES.inbox)
-                }
-            }
-        };
-        const params = { name: sharedAccessId, type: 'shared', permissions, clientData };
-        const access = await this.appManaging.connection.apiOne('accesses.create', params, 'access');
-        const newSharingApiEndpoint = access?.apiEndpoint;
-        if (!newSharingApiEndpoint)
-            throw new errors_ts_1.HDSLibError('Cannot find apiEndpoint in sharing creation request', { result: access, requestParams: params });
-        this.#cache.sharingApiEndpoint = newSharingApiEndpoint;
-        return newSharingApiEndpoint;
-    }
-    /**
-     * Request an access update for a specific invite.
-     * Creates a `request/access-update-v1` event in the public stream
-     * that the patient will discover via their requesterConnection.
-     *
-     * @param inviteKey - the invite key (CollectorInvite.key)
-     * @param permissions - new full permission set
-     * @param options.action - update action type (default: 'update-permissions')
-     * @param options.features - optional features to add (e.g. { chat: { type: 'user' } })
-     * @param options.message - human-readable explanation for the patient
-     */
-    async requestAccessUpdate(inviteKey, permissions, options = {}) {
-        if (this.statusCode !== _a.STATUSES.active) {
-            throw new errors_ts_1.HDSLibError('Collector must be active to request access update');
-        }
-        const invite = await this.getInviteByKey(inviteKey);
-        if (!invite)
-            throw new errors_ts_1.HDSLibError(`Cannot find invite with key: ${inviteKey}`);
-        if (invite.status !== 'active')
-            throw new errors_ts_1.HDSLibError(`Invite must be active to request update, current: ${invite.status}`);
-        // targetAccessName matches CollectorClient.key on the patient side
-        // CC key = doctorUsername + ':' + sharingAccessId (from the sharing access info stored in the CC event)
-        const sharingAccessName = 'a-' + this.streamId;
-        const [accesses, myAccessInfo] = await Promise.all([
-            this.appManaging.connection.apiOne('accesses.get', {}, 'accesses'),
-            this.appManaging.connection.accessInfo()
-        ]);
-        const sharingAccess = accesses.find((a) => a.name === sharingAccessName);
-        if (!sharingAccess)
-            throw new errors_ts_1.HDSLibError('Cannot find sharing access for this collector');
-        const targetAccessName = myAccessInfo.user.username + ':' + sharingAccess.id;
-        const eventData = {
-            type: 'request/access-update-v1',
-            streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.public)],
-            content: {
-                version: 0,
-                targetAccessName,
-                action: options.action || 'update-permissions',
-                permissions,
-                features: options.features || undefined,
-                message: options.message || undefined
-            }
-        };
-        return await this.appManaging.connection.apiOne('events.create', eventData, 'event');
-    }
-    /**
-     * @private
-     * @param {CollectorInvite} invite
-     * @param {boolean} alreadyChecked // to avoid loops
-     * @returns {CollectorInvite}
-     */
-    async revokeInvite(invite, alreadyChecked = false) {
-        // Invalidate Invite APIEndpoint(s)
-        if (invite.status === 'active' && !alreadyChecked) { // invalidate eventual authorization granted
-            const accessInfo = await invite.checkAndGetAccessInfo(true);
-            const deletionResult = await invite.connection.apiOne('accesses.delete', { id: accessInfo.id });
-            if (deletionResult?.accessDeletion?.id == null) {
-                logger.warn(`Failed revoking invite access for ${accessInfo.name}`);
-            }
-        }
-        // invalidate this access
-        const updateInvite = {
-            id: invite.eventData.id,
-            update: {
-                content: structuredClone(invite.eventData.content),
-                streamIds: [this.streamIdFor(_a.STREAMID_SUFFIXES.error)]
-            }
-        };
-        updateInvite.update.content.errorType = 'revoked';
-        const eventData = await this.appManaging.connection.apiOne('events.update', updateInvite, 'event');
-        invite.eventData = eventData;
-        return invite;
-    }
-    /**
-     * check if required streams are present, if not create them
-     */
-    async checkStreamStructure() {
-        // if streamData has correct child structure, we assume all is OK
-        const childrenData = this.#streamData.children;
-        const toCreate = Object.values(_a.STREAMID_SUFFIXES)
-            .filter((suffix) => {
-            if (!childrenData)
-                return true;
-            if (childrenData.find(child => child.id === this.streamIdFor(suffix)))
-                return false;
-            return true;
-        });
-        if (toCreate.length === 0)
-            return { created: [] };
-        // create required streams
-        const apiCalls = toCreate.map(suffix => ({
-            method: 'streams.create',
-            params: {
-                id: this.streamIdFor(suffix),
-                parentId: this.streamId,
-                name: this.name + ' ' + suffix
-            }
-        }));
-        const result = { created: [], errors: [] };
-        const resultsApi = await this.appManaging.connection.api(apiCalls);
-        for (const resultCreate of resultsApi) {
-            if (resultCreate.error) {
-                result.errors.push(resultCreate.error);
-                continue;
-            }
-            if (resultCreate.stream) {
-                result.created.push(resultCreate.stream);
-                if (!this.#streamData.children)
-                    this.#streamData.children = [];
-                this.#streamData.children.push(resultCreate.stream);
-                continue;
-            }
-            result.errors.push({ id: 'unkown-error', message: 'Cannot find stream in result', data: resultCreate });
-        }
-        return result;
-    }
-    /**
-     * @param {string} suffix
-     */
-    streamIdFor(suffix) {
-        return this.streamId + '-' + suffix;
-    }
-    /**
-     * Invite Status for streamId
-     * reverse of streamIdFor
-     */
-    inviteStatusForStreamId(streamId) {
-        // init cache if needed
-        if (!this.#cache.inviteStatusForStreamId) {
-            this.#cache.inviteStatusForStreamId = {};
-            for (const status of [COLLECTOR_STREAMID_SUFFIXES.pending, COLLECTOR_STREAMID_SUFFIXES.active, COLLECTOR_STREAMID_SUFFIXES.error]) {
-                this.#cache.inviteStatusForStreamId[this.streamIdFor(status)] = status;
-            }
-        }
-        // look for status
-        const status = this.#cache.inviteStatusForStreamId[streamId];
-        if (status == null)
-            throw new errors_ts_1.HDSLibError(`Cannot find status for streamId: ${streamId}`);
-        return status;
-    }
-}
-exports.Collector = Collector;
-_a = Collector;
-/**
- * @typedef {CollectorRequest}
- * @property {number} version
- * @property {Localizable} description
- * @property {Localizable} consent
- * @property {Array<Permission>} permissions - Like Pryv permission request
- * @property {Object} app
- * @property {String} app.id
- * @property {String} app.url
- * @property {Object} app.data - to be finalized
- */
-
-
-/***/ },
-
-/***/ "./ts/appTemplates/CollectorClient.ts"
-/*!********************************************!*\
-  !*** ./ts/appTemplates/CollectorClient.ts ***!
-  \********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-var _a;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CollectorClient = void 0;
-const CollectorRequest_ts_1 = __webpack_require__(/*! ./CollectorRequest.js */ "./ts/appTemplates/CollectorRequest.ts");
-const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
-const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
-const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
-/**
- * Client App in relation to an AppManagingAccount/Collector
- */
-class CollectorClient {
-    static STATUSES = Object.freeze({
-        incoming: 'Incoming',
-        active: 'Active',
-        deactivated: 'Deactivated',
-        refused: 'Refused'
-    });
-    app;
-    eventData;
-    accessData;
-    request;
-    /** Pending access update request from the requester, if any */
-    pendingUpdate = null;
-    #requesterConnection;
-    /** @property {String} - identified within user's account - can be used to retrieve a Collector Client from an app */
-    get key() {
-        return _a.keyFromInfo(this.eventData.content.accessInfo);
-    }
-    /** @property {String} - id matching an event within requester's account - used as a reference to communicate with requester */
-    get requesterEventId() {
-        return this.eventData.content.requesterEventId;
-    }
-    /** @property {String}  */
-    get requesterApiEndpoint() {
-        return this.eventData.content.apiEndpoint;
-    }
-    get requesterUsername() {
-        return this.eventData.content.accessInfo.user.username;
-    }
-    get requesterConnection() {
-        if (!this.#requesterConnection) {
-            this.#requesterConnection = new patchedPryv_ts_1.pryv.Connection(this.requesterApiEndpoint);
-        }
-        return this.#requesterConnection;
-    }
-    /** @property {Object} - full content of the request */
-    get requestData() {
-        return this.eventData.content.requesterEventData.content;
-    }
-    get hasChatFeature() {
-        return this.requestData.features?.chat != null;
-    }
-    get chatSettings() {
-        if (!this.hasChatFeature)
-            return null;
-        return {
-            chatStreamIncoming: `chat-${this.requesterUsername}-in`,
-            chatStreamMain: `chat-${this.requesterUsername}`
-        };
-    }
-    /** Convert to ContactSource for Contact grouping */
-    toContactSource() {
-        const chat = this.chatSettings;
-        return {
-            remoteUsername: this.requesterUsername,
-            displayName: this.requestData?.requester?.name || this.requesterUsername,
-            chatStreams: chat ? { main: chat.chatStreamMain, incoming: chat.chatStreamIncoming } : null,
-            appStreamId: this.accessData?.clientData?.appStreamId || null,
-            permissions: this.requestData?.permissions || [],
-            status: this.status,
-            type: 'collector',
-            accessId: this.accessData?.id || null
-        };
-    }
-    /** @property {string} - one of 'Incoming', 'Active', 'Deactivated', 'Refused' */
-    get status() {
-        const eventStatus = this.eventData.content.status;
-        if (eventStatus === _a.STATUSES.deactivated || eventStatus === _a.STATUSES.refused) {
-            if (!this.accessData?.deleted) {
-                logger.error('>> CollectorClient.status TODO check consistency when access is still valid and deactivated or refused', this.accessData);
-            }
-            return eventStatus;
-        }
-        if (this.accessData && !this.accessData.deleted && this.eventData.content.status !== _a.STATUSES.active) {
-            logger.error('>> CollectorClient.status: accessData ', this.accessData);
-            throw new errors_ts_1.HDSLibError('Should be active, try checkConsistency()');
-        }
-        if (!eventStatus) {
-            logger.error('>> CollectorClient.status is null', { eventData: this.eventData, accessData: this.accessData });
-        }
-        return eventStatus;
-    }
-    constructor(app, eventData, accessData = null) {
-        this.app = app;
-        this.eventData = eventData;
-        this.accessData = accessData;
-        this.request = new CollectorRequest_ts_1.CollectorRequest({});
-        this.request.loadFromInviteEvent(eventData.content.requesterEventData);
-    }
-    /**
-     * @private
-     * used by appClientAccount.handleIncomingRequest
-     */
-    static async create(app, apiEndpoint, requesterEventId, accessInfo) {
-        // check content of accessInfo
-        const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
-        // get request event cont
-        const requesterConnection = new patchedPryv_ts_1.pryv.Connection(apiEndpoint);
-        const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
-        if (!requesterEvents[0])
-            throw new errors_ts_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
-        const eventData = {
-            type: 'request/collector-client-v1',
-            streamIds: [app.baseStreamId],
-            content: {
-                apiEndpoint,
-                requesterEventId,
-                requesterEventData: requesterEvents[0],
-                accessInfo,
-                status: _a.STATUSES.incoming
-            }
-        };
-        const event = await app.connection.apiOne('events.create', eventData, 'event');
-        return new _a(app, event);
-    }
-    /**
-     * @private
-     * reset with new request Event of ApiEndpoint
-     * Identical as create but keep current event
-     */
-    async reset(apiEndpoint, requesterEventId) {
-        if (this.accessData && this.accessData?.deleted != null) {
-            logger.error('TODO try to revoke current access');
-        }
-        // get accessInfo
-        const requesterConnection = new patchedPryv_ts_1.pryv.Connection(apiEndpoint);
-        const accessInfo = await requesterConnection.accessInfo();
-        // check content of accessInfo
-        const publicStreamId = accessInfo.clientData.hdsCollector.public.streamId;
-        // get request event cont
-        const requesterEvents = await requesterConnection.apiOne('events.get', { types: ['request/collector-v1'], streams: [publicStreamId], limit: 1 }, 'events');
-        if (!requesterEvents[0])
-            throw new errors_ts_1.HDSLibError('Cannot find requester event in public stream', requesterEvents);
-        const eventData = await this.app.connection.apiOne('events.update', {
-            id: this.eventData.id,
-            update: {
-                content: {
-                    apiEndpoint,
-                    requesterEventId,
-                    requesterEventData: requesterEvents[0],
-                    accessInfo,
-                    status: _a.STATUSES.incoming
-                }
-            }
-        }, 'event');
-        this.eventData = eventData;
-        this.request.loadFromInviteEvent(requesterEvents[0]);
-        return this;
-    }
-    /**
-     * Update business event with new status
-     * @param {string} newStatus
-     * @param {Object} [extraData] - if given this will be added to content ⚠️ - This can overide content!
-     */
-    async #updateStatus(newStatus, extraData = null) {
-        const newContent = structuredClone(this.eventData.content);
-        newContent.status = newStatus;
-        if (extraData !== null)
-            Object.assign(newContent, extraData);
-        const eventData = await this.app.connection.apiOne('events.update', {
-            id: this.eventData.id,
-            update: {
-                content: newContent
-            }
-        }, 'event');
-        this.eventData = eventData;
-    }
-    /**
-     * Accept current request
-     * @param {boolean} forceAndSkipAccessCreation - internal temporary option,
-     */
-    async accept(forceAndSkipAccessCreation = false) {
-        const responseContent = {};
-        if (this.accessData && this.accessData.deleted == null && this.status !== 'Active') {
-            forceAndSkipAccessCreation = true;
-            logger.error('CollectorClient.accept TODO fix accept when access valid');
-        }
-        if (forceAndSkipAccessCreation) {
-            if (!this.accessData?.apiEndpoint || this.accessData?.delete)
-                throw new errors_ts_1.HDSLibError('Cannot force accept with empty or deleted accessData', this.accessData);
-        }
-        else {
-            if (this.status === 'Active')
-                throw new errors_ts_1.HDSLibError('Cannot accept an Active CollectorClient');
-            // create access for requester
-            const cleanedPermissions = this.requestData.permissions.map((p) => {
-                if (p.streamId)
-                    return { streamId: p.streamId, level: p.level };
-                return p;
-            });
-            // ------------- chat ------------------------ //
-            if (this.hasChatFeature) {
-                // user supported mode - might me moved to a lib
-                // 2. create streams
-                const { chatStreamIncoming, chatStreamMain } = this.chatSettings;
-                const chatStreamsCreateApiCalls = [
-                    { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
-                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
-                    { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
-                ];
-                const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
-                streamCreateResults.forEach((r) => {
-                    if (r.stream?.id || r.error?.id === 'item-already-exists')
-                        return;
-                    throw new errors_ts_1.HDSLibError('Failed creating chat stream', streamCreateResults);
-                });
-                // 3. add streams to permissions
-                cleanedPermissions.push(...[
-                    { streamId: chatStreamMain, level: 'read' },
-                    { streamId: chatStreamIncoming, level: 'manage' }
-                ]);
-                responseContent.chat = {
-                    type: 'user',
-                    streamRead: chatStreamMain,
-                    streamWrite: chatStreamIncoming
-                };
-                // ---------- end chat ---------- //
-            }
-            // ------------- existingStreamRefs (Plan 45 mode-3) ------------------------ //
-            const existingStreamRefs = this.requestData.existingStreamRefs || [];
-            if (existingStreamRefs.length > 0) {
-                // 1. Bootstrap-provision `app-system-*` streams if any ref points there and they don't yet exist.
-                //    (Defensive — `hds-webapp` provisions them at account setup; this safety net handles users
-                //    reaching HDS via an invite without ever opening hds-webapp first.)
-                const needsAppSystem = existingStreamRefs.some((r) => r.streamId === 'app-system-out' || r.streamId === 'app-system-in');
-                if (needsAppSystem) {
-                    const appSystemBootstrap = [
-                        { method: 'streams.create', params: { name: 'System', id: 'app-system' } },
-                        {
-                            method: 'streams.create',
-                            params: {
-                                name: 'System out',
-                                id: 'app-system-out',
-                                parentId: 'app-system',
-                                clientData: {
-                                    hdsSystemFeature: {
-                                        'message/system-alert': { version: 'v1', levels: ['info', 'warning', 'critical'] }
-                                    }
-                                }
-                            }
-                        },
-                        {
-                            method: 'streams.create',
-                            params: {
-                                name: 'System in',
-                                id: 'app-system-in',
-                                parentId: 'app-system',
-                                clientData: {
-                                    hdsSystemFeature: {
-                                        'message/system-ack': { version: 'v1' }
-                                    }
-                                }
-                            }
-                        }
-                    ];
-                    const bootstrapResults = await this.app.connection.api(appSystemBootstrap);
-                    bootstrapResults.forEach((r) => {
-                        if (r.stream?.id || r.error?.id === 'item-already-exists')
-                            return;
-                        throw new errors_ts_1.HDSLibError('Failed bootstrapping app-system streams', bootstrapResults);
-                    });
-                }
-                // 2. Append the requested permissions to the access being granted.
-                for (const ref of existingStreamRefs) {
-                    for (const level of ref.permissions) {
-                        cleanedPermissions.push({ streamId: ref.streamId, level });
-                    }
-                }
-                // 3. Surface system-stream wiring on responseContent.system if app-system-* refs are present.
-                const outRef = existingStreamRefs.find((r) => r.streamId === 'app-system-out');
-                const inRef = existingStreamRefs.find((r) => r.streamId === 'app-system-in');
-                if (outRef || inRef) {
-                    responseContent.system = {
-                        ...(outRef ? { streamOut: 'app-system-out' } : {}),
-                        ...(inRef ? { streamIn: 'app-system-in' } : {})
-                    };
-                }
-            }
-            // ---------- end existingStreamRefs ---------- //
-            // ------------- customFields (Plan 45 mode-2 — provision-new template-private streams) ---- //
-            // Each declaration provisions {streamId} (and its parent if needed) carrying
-            // clientData.hdsCustomField[<eventType>] = def. Sandbox prefix is re-checked
-            // here as defence-in-depth (loader.ts is the canonical enforcer).
-            const customFields = this.requestData.customFields || [];
-            if (customFields.length > 0) {
-                // 1. Verify sandbox prefix again (defence-in-depth).
-                for (const cf of customFields) {
-                    const prefix = cf.def?.templateId ? cf.def.templateId + '-' : null;
-                    if (!prefix || !cf.streamId.startsWith(prefix)) {
-                        throw new errors_ts_1.HDSLibError(`customFields[].streamId "${cf.streamId}" violates sandbox prefix (expected to start with "${prefix}")`, cf);
-                    }
-                }
-                // 2. Build streams.create batch — parents first, then children.
-                // Each unique parentId (default `${templateId}-custom`) is created once.
-                const wantedParents = new Map();
-                const childCalls = [];
-                for (const cf of customFields) {
-                    const parentId = cf.parentId || (cf.def.templateId + '-custom');
-                    if (!wantedParents.has(parentId)) {
-                        wantedParents.set(parentId, { id: parentId, name: 'Custom' });
-                    }
-                    childCalls.push({
-                        method: 'streams.create',
-                        params: {
-                            id: cf.streamId,
-                            parentId,
-                            name: cf.name || cf.def.key,
-                            clientData: {
-                                hdsCustomField: { [cf.eventType]: cf.def }
-                            }
-                        }
-                    });
-                }
-                const parentCalls = Array.from(wantedParents.values()).map((p) => ({
-                    method: 'streams.create',
-                    params: { id: p.id, name: p.name }
-                }));
-                // 3. Run idempotently — `item-already-exists` is fine.
-                const cfResults = await this.app.connection.api([...parentCalls, ...childCalls]);
-                cfResults.forEach((r) => {
-                    if (r.stream?.id || r.error?.id === 'item-already-exists')
-                        return;
-                    throw new errors_ts_1.HDSLibError('Failed provisioning customFields streams', cfResults);
-                });
-                // 4. Append `contribute` permission so the requester can read submitted events.
-                for (const cf of customFields) {
-                    cleanedPermissions.push({ streamId: cf.streamId, level: 'contribute' });
-                }
-            }
-            // ---------- end customFields ---------- //
-            const accessCreateData = {
-                name: this.key,
-                type: 'shared',
-                permissions: cleanedPermissions,
-                clientData: {
-                    hdsCollectorClient: {
-                        version: 0,
-                        eventData: this.eventData
-                    }
-                }
-            };
-            const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
-            this.accessData = accessData;
-            if (!this.accessData?.apiEndpoint)
-                throw new errors_ts_1.HDSLibError('Failed creating request access', accessData);
-        }
-        responseContent.apiEndpoint = this.accessData.apiEndpoint;
-        const requesterEvent = await this.#updateRequester('accept', responseContent);
-        if (requesterEvent != null) {
-            await this.#updateStatus(_a.STATUSES.active);
-            return { accessData: this.accessData, requesterEvent };
-        }
-        return null;
-    }
-    async revoke() {
-        if (this.accessData?.deleted && this.status === _a.STATUSES.deactivated) {
-            throw new errors_ts_1.HDSLibError('Already revoked');
-        }
-        // revoke access if it exists and is not already deleted
-        if (this.accessData && !this.accessData.deleted) {
-            await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
-            // lazily flag currentAccess as deleted
-            this.accessData.deleted = Date.now() / 1000;
-        }
-        const responseContent = {};
-        const requesterEvent = await this.#updateRequester('revoke', responseContent);
-        if (requesterEvent != null) {
-            await this.#updateStatus(_a.STATUSES.deactivated);
-            return { requesterEvent };
-        }
-        return null;
-    }
-    async refuse() {
-        const responseContent = {};
-        const requesterEvent = await this.#updateRequester('refuse', responseContent);
-        if (requesterEvent != null) {
-            await this.#updateStatus(_a.STATUSES.refused);
-            return { requesterEvent };
-        }
-        return null;
-    }
-    /**
-     * @param {string} type - one of 'accpet', 'revoke', 'refuse'
-     * @param {object} responseContent - content is related to type
-     * @returns {Object} - response
-     */
-    async #updateRequester(type, responseContent) {
-        // sent access credentials to requester
-        // check content of accessInfo
-        const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.inbox.streamId;
-        const requesterEventId = this.requesterEventId;
-        // add eventId to content
-        const content = Object.assign({ type, eventId: requesterEventId }, responseContent);
-        // acceptEvent to be sent to requester
-        const responseEvent = {
-            type: 'response/collector-v1',
-            streamIds: [publicStreamId],
-            content
-        };
-        try {
-            const requesterEvent = await this.requesterConnection.apiOne('events.create', responseEvent, 'event');
-            return requesterEvent;
-        }
-        catch (e) {
-            const deactivatedDetail = {
-                type: 'error',
-                message: e.message
-            };
-            if (e.innerObject)
-                deactivatedDetail.data = e.innerObject;
-            logger.error('Failed activating', deactivatedDetail);
-            const deactivatedResult = await this.#updateStatus(_a.STATUSES.deactivated, { deactivatedDetail });
-            console.log('***** ', { deactivatedResult });
-            return null;
-        }
-    }
-    /**
-     * Probable temporary internal to fix possible inconsenticies during lib early stages
-     */
-    async checkConsistency() {
-        // accessData but not active
-        if (this.accessData && this.eventData.content.status == null) {
-            logger.info('Found discrepency with accessData and status not active, fixing it');
-            if (!this.accessData.deleted) {
-                await this.accept(true);
-            }
-            else {
-                await this.revoke();
-            }
-        }
-        else {
-            // logger.debug('CollectorClient:checkConsistency', this.accessData);
-        }
-    }
-    /**
-     * return the key to discriminate collectorClients
-     * @param {PryvAccessInfo} accessInfo
-     */
-    static keyFromInfo(info) {
-        // Use access id when available (unique per invite), fall back to name for backwards compat
-        return info.user.username + ':' + (info.id || info.name);
-    }
-    // -------------------- access update requests ------------- //
-    /**
-     * Check the requester's public stream for pending access update requests.
-     * Sets this.pendingUpdate if one is found for this client's key.
-     */
-    async checkForUpdateRequests() {
-        if (this.status !== _a.STATUSES.active)
-            return null;
-        try {
-            const publicStreamId = this.eventData.content.accessInfo.clientData.hdsCollector.public.streamId;
-            const events = await this.requesterConnection.apiOne('events.get', {
-                types: ['request/access-update-v1'],
-                streams: [publicStreamId],
-                limit: 10
-            }, 'events');
-            for (const event of events) {
-                if (event.content?.targetAccessName === this.key) {
-                    this.pendingUpdate = { eventId: event.id, content: event.content };
-                    return this.pendingUpdate;
-                }
-            }
-        }
-        catch (e) {
-            logger.warn('CollectorClient.checkForUpdateRequests failed', { key: this.key, error: e.message });
-        }
-        this.pendingUpdate = null;
-        return null;
-    }
-    /**
-     * Accept a pending update request: delete old access, create new one with updated permissions,
-     * notify requester via inbox with new apiEndpoint.
-     */
-    async acceptUpdate() {
-        if (!this.pendingUpdate)
-            throw new errors_ts_1.HDSLibError('No pending update to accept');
-        if (this.status !== _a.STATUSES.active)
-            throw new errors_ts_1.HDSLibError('Can only accept updates on active CollectorClients');
-        const update = this.pendingUpdate.content;
-        // Build new permissions from the update request
-        const cleanedPermissions = update.permissions.map((p) => {
-            if (p.streamId)
-                return { streamId: p.streamId, level: p.level };
-            return p;
-        });
-        // Handle chat feature if requested
-        const responseContent = {};
-        if (update.features?.chat && !this.hasChatFeature) {
-            const chatStreamMain = `chat-${this.requesterUsername}`;
-            const chatStreamIncoming = `chat-${this.requesterUsername}-in`;
-            const chatStreamsCreateApiCalls = [
-                { method: 'streams.create', params: { name: 'Chats', id: 'chats' } },
-                { method: 'streams.create', params: { name: `Chat ${this.requesterUsername}`, parentId: 'chats', id: chatStreamMain } },
-                { method: 'streams.create', params: { name: `Chat ${this.requesterUsername} In`, parentId: chatStreamMain, id: chatStreamIncoming } }
-            ];
-            const streamCreateResults = await this.app.connection.api(chatStreamsCreateApiCalls);
-            streamCreateResults.forEach((r) => {
-                if (r.stream?.id || r.error?.id === 'item-already-exists')
-                    return;
-                throw new errors_ts_1.HDSLibError('Failed creating chat stream', streamCreateResults);
-            });
-            cleanedPermissions.push({ streamId: chatStreamMain, level: 'read' }, { streamId: chatStreamIncoming, level: 'manage' });
-            responseContent.chat = {
-                type: 'user',
-                streamRead: chatStreamMain,
-                streamWrite: chatStreamIncoming
-            };
-        }
-        else if (this.hasChatFeature) {
-            // Preserve existing chat permissions
-            const { chatStreamMain, chatStreamIncoming } = this.chatSettings;
-            cleanedPermissions.push({ streamId: chatStreamMain, level: 'read' }, { streamId: chatStreamIncoming, level: 'manage' });
-        }
-        // Collect previous access IDs for event attribution (modifiedBy tracking)
-        const previousAccessIds = [];
-        if (this.accessData) {
-            if (this.accessData.id)
-                previousAccessIds.push(this.accessData.id);
-            // Chain: carry forward any IDs from the old access's clientData
-            const oldPrevIds = this.accessData.clientData?.hdsCollectorClient?.previousAccessIds;
-            if (Array.isArray(oldPrevIds)) {
-                for (const id of oldPrevIds) {
-                    if (!previousAccessIds.includes(id))
-                        previousAccessIds.push(id);
-                }
-            }
-        }
-        // Delete old access
-        if (this.accessData && !this.accessData.deleted) {
-            await this.app.connection.apiOne('accesses.delete', { id: this.accessData.id }, 'accessDeletion');
-        }
-        // Create new access with updated permissions
-        const accessCreateData = {
-            name: this.key,
-            type: 'shared',
-            permissions: cleanedPermissions,
-            clientData: {
-                hdsCollectorClient: {
-                    version: 0,
-                    eventData: this.eventData,
-                    previousAccessIds
-                }
-            }
-        };
-        const accessData = await this.app.connection.apiOne('accesses.create', accessCreateData, 'access');
-        this.accessData = accessData;
-        if (!this.accessData?.apiEndpoint)
-            throw new errors_ts_1.HDSLibError('Failed creating updated access', accessData);
-        responseContent.apiEndpoint = this.accessData.apiEndpoint;
-        // Notify requester via inbox
-        const requesterEvent = await this.#updateRequester('update-accept', responseContent);
-        if (requesterEvent != null) {
-            this.pendingUpdate = null;
-            return { accessData: this.accessData, requesterEvent };
-        }
-        return null;
-    }
-    /**
-     * Refuse a pending update request: notify requester via inbox, clear pendingUpdate.
-     */
-    async refuseUpdate() {
-        if (!this.pendingUpdate)
-            throw new errors_ts_1.HDSLibError('No pending update to refuse');
-        const requesterEvent = await this.#updateRequester('update-refuse', {});
-        if (requesterEvent != null) {
-            this.pendingUpdate = null;
-            return { requesterEvent };
-        }
-        return null;
-    }
-    // -------------------- sections and forms ------------- //
-    getSections() {
-        return this.request?.sections;
-    }
-    // -------------------- chat methods ----------------- //
-    chatEventInfos(event) {
-        if (event.streamIds.includes(this.chatSettings.chatStreamIncoming))
-            return { source: 'requester' };
-        if (event.streamIds.includes(this.chatSettings.chatStreamMain))
-            return { source: 'me' };
-        return { source: 'unkown' };
-    }
-    async chatPost(hdsConnection, content) {
-        if (!this.hasChatFeature)
-            throw new errors_ts_1.HDSLibError('Cannot chat with this ColleectorClient');
-        const newEvent = {
-            type: 'message/hds-chat-v1',
-            streamIds: [this.chatSettings.chatStreamMain],
-            content
-        };
-        return await hdsConnection.apiOne('events.create', newEvent, 'event');
-    }
-}
-exports.CollectorClient = CollectorClient;
-_a = CollectorClient;
-
-
-/***/ },
-
-/***/ "./ts/appTemplates/CollectorInvite.ts"
-/*!********************************************!*\
-  !*** ./ts/appTemplates/CollectorInvite.ts ***!
-  \********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CollectorInvite = void 0;
-const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
-const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
-/** Generate a v4-ish UUID. Uses crypto.randomUUID() when available, falls back to a manual impl. */
-function newUuid() {
-    if (typeof globalThis.crypto?.randomUUID === 'function')
-        return globalThis.crypto.randomUUID();
-    // RFC4122-ish v4 fallback
-    const hex = '0123456789abcdef';
-    let s = '';
-    for (let i = 0; i < 36; i++) {
-        if (i === 8 || i === 13 || i === 18 || i === 23)
-            s += '-';
-        else if (i === 14)
-            s += '4';
-        else if (i === 19)
-            s += hex[(Math.random() * 4 | 0) + 8];
-        else
-            s += hex[Math.random() * 16 | 0];
-    }
-    return s;
-}
-/**
- * Collector Invite
- * There is one Collector Invite per Collector => Enduser connection
- */
-class CollectorInvite {
-    /**
-     * get the key that will be assigned to this event;
-     */
-    static getKeyForEvent(eventData) {
-        return eventData.id;
-    }
-    collector;
-    eventData;
-    #connection = null;
-    #accessInfo = null;
-    get key() {
-        return CollectorInvite.getKeyForEvent(this.eventData);
-    }
-    get status() {
-        return this.collector.inviteStatusForStreamId(this.eventData.streamIds[0]);
-    }
-    get apiEndpoint() {
-        if (this.status !== 'active') {
-            throw new errors_ts_1.HDSLibError('invite.apiEndpoint is accessible only when active');
-        }
-        return this.eventData.content.apiEndpoint;
-    }
-    get errorType() {
-        return this.eventData.content?.errorType;
-    }
-    get dateCreation() {
-        return new Date(this.eventData.created * 1000);
-    }
-    get connection() {
-        if (this.#connection == null) {
-            this.#connection = new patchedPryv_ts_1.pryv.Connection(this.apiEndpoint);
-        }
-        return this.#connection;
-    }
-    get hasChat() {
-        return this.eventData.content.chat != null;
-    }
-    get chatSettings() {
-        return this.eventData.content.chat;
-    }
-    // -------------------- chat methods ----------------- //
-    chatEventInfos(event) {
-        if (event.streamIds.includes(this.chatSettings.streamWrite))
-            return { source: 'me' };
-        if (event.streamIds.includes(this.chatSettings.streamRead))
-            return { source: 'user' };
-        return { source: 'unkown' };
-    }
-    async chatPost(content) {
-        if (!this.hasChat)
-            throw new Error('Cannot chat with this contact');
-        const newEvent = {
-            type: 'message/hds-chat-v1',
-            streamIds: [this.chatSettings.streamWrite],
-            content
-        };
-        return await this.connection.apiOne('events.create', newEvent, 'event');
-    }
-    // -------------------- system stream (Plan 45) ----------------- //
-    /** Whether this invite has system-stream access (operator → user alerts + user → operator acks). */
-    get hasSystem() {
-        return this.eventData.content.system != null;
-    }
-    /** Stream wiring for the system feature. streamOut is the operator's write target; streamIn is read. */
-    get systemSettings() {
-        return this.eventData.content.system || {};
-    }
-    /** Identify the source of a system event. */
-    systemEventInfos(event) {
-        const s = this.systemSettings;
-        if (s.streamOut && event.streamIds.includes(s.streamOut))
-            return { source: 'me' };
-        if (s.streamIn && event.streamIds.includes(s.streamIn))
-            return { source: 'user' };
-        return { source: 'unknown' };
-    }
-    /**
-     * Post a system alert to the user. Generates ackId if ackRequired and not provided.
-     * Requires `hasSystem === true` and `systemSettings.streamOut` (manage permission).
-     */
-    async systemPostAlert(alert) {
-        const s = this.systemSettings;
-        if (!s.streamOut)
-            throw new errors_ts_1.HDSLibError('No system streamOut on this invite');
-        const content = { level: alert.level, title: alert.title, body: alert.body };
-        if (alert.ackRequired) {
-            content.ackRequired = true;
-            content.ackId = alert.ackId || newUuid();
-        }
-        else if (alert.ackId) {
-            content.ackId = alert.ackId;
-        }
-        const newEvent = {
-            type: 'message/system-alert',
-            streamIds: [s.streamOut],
-            content
-        };
-        return await this.connection.apiOne('events.create', newEvent, 'event');
-    }
-    /**
-     * Read system-ack events for this invite, optionally filtered by alert ackId.
-     * Returns events sorted ascending by `created`.
-     */
-    async systemPollAcks(filter = {}) {
-        const s = this.systemSettings;
-        if (!s.streamIn)
-            throw new errors_ts_1.HDSLibError('No system streamIn on this invite');
-        const params = {
-            streams: [s.streamIn],
-            types: ['message/system-ack'],
-            limit: filter.limit ?? 100,
-            sortAscending: true
-        };
-        const events = await this.connection.apiOne('events.get', params, 'events');
-        if (filter.ackId) {
-            return events.filter((e) => e.content?.ackId === filter.ackId);
-        }
-        return events;
-    }
-    /**
-     * Check if connection is valid. (only if active)
-     * If result is "forbidden" update and set as revoked
-     * @returns accessInfo if valid.
-     */
-    async checkAndGetAccessInfo(forceRefresh = false) {
-        if (!forceRefresh && this.#accessInfo)
-            return this.#accessInfo;
-        try {
-            this.#accessInfo = await this.connection.accessInfo();
-            return this.#accessInfo;
-        }
-        catch (e) {
-            this.#accessInfo = null;
-            if (e.response?.body?.error?.id === 'invalid-access-token') {
-                await this.collector.revokeInvite(this, true);
-                return null;
-            }
-            throw e;
-        }
-    }
-    /**
-     * revoke the invite
-     */
-    async revoke() {
-        return this.collector.revokeInvite(this);
-    }
-    get displayName() {
-        return this.eventData.content.name;
-    }
-    /** Extract patient username from apiEndpoint (only available for active invites) */
-    get patientUsername() {
-        if (this.status !== 'active')
-            return null;
-        try {
-            const endpoint = this.eventData.content.apiEndpoint;
-            if (!endpoint)
-                return null;
-            // apiEndpoint format: https://token@host/username/
-            const url = new URL(endpoint.replace(/\/\/[^@]+@/, '//'));
-            const path = url.pathname.replace(/^\/|\/$/g, '');
-            return path || null;
-        }
-        catch {
-            return null;
-        }
-    }
-    /** Convert to ContactSource for Contact grouping (doctor side) */
-    toContactSource() {
-        const chat = this.hasChat ? this.chatSettings : null;
-        return {
-            remoteUsername: this.patientUsername,
-            displayName: this.displayName || this.patientUsername || 'Unknown',
-            chatStreams: chat ? { main: chat.streamRead, incoming: chat.streamWrite } : null,
-            appStreamId: null,
-            permissions: [],
-            status: this.status,
-            type: 'collector',
-            accessId: this.key
-        };
-    }
-    constructor(collector, eventData) {
-        if (eventData.type !== 'invite/collector-v1')
-            throw new errors_ts_1.HDSLibError('Wrong type of event', eventData);
-        this.collector = collector;
-        this.eventData = eventData;
-    }
-    /**
-     * private
-     */
-    setEventData(eventData) {
-        if (eventData.id !== this.eventData.id)
-            throw new errors_ts_1.HDSLibError('CollectInvite event id does not match new Event');
-        this.eventData = eventData;
-    }
-    async getSharingData() {
-        if (this.status !== 'pending')
-            throw new errors_ts_1.HDSLibError('Only pendings can be shared');
-        return {
-            apiEndpoint: await this.collector.sharingApiEndpoint(),
-            eventId: this.eventData.id
-        };
-    }
-}
-exports.CollectorInvite = CollectorInvite;
-
-
-/***/ },
-
 /***/ "./ts/appTemplates/CollectorRequest.ts"
 /*!*********************************************!*\
   !*** ./ts/appTemplates/CollectorRequest.ts ***!
@@ -20054,6 +23175,8 @@ exports.CollectorRequest = void 0;
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const Questionnaire_ts_1 = __webpack_require__(/*! ./Questionnaire.js */ "./ts/appTemplates/Questionnaire.ts");
+const questionnaireCoverage_ts_1 = __webpack_require__(/*! ./questionnaireCoverage.js */ "./ts/appTemplates/questionnaireCoverage.ts");
 const VALID_CUSTOM_FIELD_EVENT_TYPES = [
     'note/txt', 'note/html', 'count/generic', 'date/iso-8601', 'activity/plain'
 ];
@@ -20081,6 +23204,7 @@ class CollectorRequest {
     #features;
     #existingStreamRefs;
     #customFields;
+    #questionnaires;
     #extraContent;
     constructor(content) {
         this.#version = CURRENT_VERSION;
@@ -20092,6 +23216,7 @@ class CollectorRequest {
         this.#features = {};
         this.#existingStreamRefs = [];
         this.#customFields = [];
+        this.#questionnaires = [];
         this.setContent(content);
     }
     /**
@@ -20221,6 +23346,21 @@ class CollectorRequest {
             }
             delete futureContent.customFields;
         }
+        // -- questionnaires (Plan 71 — bundle Questionnaire(s) into first-contact
+        //    request; on patient accept the CollectorClient writes one
+        //    questionnaire/request-v1 event per entry in the patient's stream).
+        //    For an established relationship the doctor sends a bare Questionnaire
+        //    directly — no CollectorRequest involved.
+        if (futureContent.questionnaires) {
+            if (!Array.isArray(futureContent.questionnaires)) {
+                throw new errors_ts_1.HDSLibError("CollectorRequest 'questionnaires' must be an array");
+            }
+            this.#questionnaires = [];
+            for (const q of futureContent.questionnaires) {
+                this.addQuestionnaire(q);
+            }
+            delete futureContent.questionnaires;
+        }
         this.#extraContent = futureContent;
     }
     // ------------- getter and setters ------------ //
@@ -20328,9 +23468,9 @@ class CollectorRequest {
     // ---------- existingStreamRefs (Plan 45 mode-3) ----------- //
     get existingStreamRefs() { return this.#existingStreamRefs; }
     /**
-     * Request access on a pre-existing stream (e.g. account-level `app-system-out` /
-     * `app-system-in`). Typing of inner events is owned by the stream's existing
-     * `clientData`; this CollectorRequest only patches access permissions at acceptance.
+     * Request access on a pre-existing stream (Plan 45 mode-3). Typing of inner
+     * events is owned by the stream's existing `clientData`; this CollectorRequest
+     * only patches access permissions at acceptance.
      */
     addExistingStreamRef(ref) {
         if (ref == null || typeof ref !== 'object')
@@ -20396,6 +23536,63 @@ class CollectorRequest {
             ...(cf.name != null ? { name: cf.name } : {})
         });
     }
+    // ---------- questionnaires (Plan 71) ---------- //
+    get questionnaires() {
+        return this.#questionnaires;
+    }
+    /**
+     * Add a Questionnaire to this request. Accepts either a Questionnaire
+     * instance (its `toRequestEventContent()` payload is stored) or a raw
+     * `QuestionnaireRequestContent` object (validated through a Questionnaire
+     * round-trip so we surface errors at add-time rather than at send-time).
+     *
+     * On patient accept (`CollectorClient.acceptInvite` — Plan 71 C6+ work),
+     * one `questionnaire/request-v1` event is written per stored entry, in the
+     * same batch as the access-grant side-effects. For pre-accept inspection
+     * (e.g. preview UI) consumers can iterate `request.questionnaires`.
+     */
+    addQuestionnaire(q) {
+        const content = (q instanceof Questionnaire_ts_1.Questionnaire)
+            ? q.toRequestEventContent()
+            : new Questionnaire_ts_1.Questionnaire(q).toRequestEventContent();
+        this.#questionnaires.push(content);
+        return content;
+    }
+    /** Convenience: return a fresh Questionnaire instance over the stored entry at `index`. */
+    getQuestionnaire(index) {
+        const content = this.#questionnaires[index];
+        if (content == null)
+            return null;
+        return new Questionnaire_ts_1.Questionnaire(content);
+    }
+    /** Remove the entry at `index`. Returns true if it existed. */
+    removeQuestionnaire(index) {
+        if (index < 0 || index >= this.#questionnaires.length)
+            return false;
+        this.#questionnaires.splice(index, 1);
+        return true;
+    }
+    /**
+     * Check whether this request's permissions cover every item referenced by
+     * the given Questionnaire. See `checkQuestionnaireCoverage` for the report
+     * shape. Read-only — does not mutate this request.
+     */
+    checkQuestionnaireCoverage(q) {
+        return (0, questionnaireCoverage_ts_1.checkQuestionnaireCoverage)(q, this);
+    }
+    /**
+     * Compute the coverage report for the given Questionnaire and, if any
+     * permissions are missing, add them to this request in place. Returns the
+     * report so callers can surface unknownItems / proposedPermissions to the
+     * doctor (e.g. "Added 3 permissions to your request: body-weight, ...").
+     */
+    applyQuestionnaireCoverage(q) {
+        const report = (0, questionnaireCoverage_ts_1.checkQuestionnaireCoverage)(q, this);
+        for (const p of report.proposedPermissions) {
+            this.addPermission(p.streamId, p.defaultName, p.level);
+        }
+        return report;
+    }
     // ---------- sections ------------- //
     /**
      * Return Content to comply with initial implementation as an object
@@ -20424,6 +23621,9 @@ class CollectorRequest {
         }
         if (this.#customFields.length > 0) {
             content.customFields = this.#customFields;
+        }
+        if (this.#questionnaires.length > 0) {
+            content.questionnaires = this.#questionnaires;
         }
         Object.assign(content, this.#extraContent);
         return content;
@@ -20557,62 +23757,69 @@ function vo0ToV1(v0Data) {
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Contact = void 0;
-const HDSModel_AppStreams_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModel-AppStreams.js */ "./ts/HDSModel/HDSModel-AppStreams.ts");
 const StreamsTools_ts_1 = __webpack_require__(/*! ../toolkit/StreamsTools.js */ "./ts/toolkit/StreamsTools.ts");
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 /**
- * Groups all accesses/relationships from the same remote user (or service).
+ * Plan 66 composite-id base extractor. Refs serialise as either bare cuid
+ * (`"abc123"`) for never-updated accesses or composite (`"abc123:3"`) for
+ * updated heads / historical writes. Equality must be on the *base* — an
+ * event's `modifiedBy` may carry a serial different from the current
+ * access head, but it still attributes to the same access chain.
  *
- * A Contact represents a person (doctor, researcher) or service (bridge)
- * that has one or more accesses on the current user's account.
- * Multiple forms from the same doctor → one Contact with multiple sources.
- * Each bridge → one Contact per bridge.
+ * Returns the input unchanged when `parseAccessRef` is unavailable
+ * (older pryv lib), letting callers keep working under pre-Plan-66 servers.
+ */
+function refBase(ref) {
+    if (ref == null)
+        return null;
+    const parse = patchedPryv_ts_1.pryv.utils?.parseAccessRef;
+    if (typeof parse !== 'function')
+        return ref;
+    try {
+        return parse(ref).base;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * Groups all CMC relationships from the same remote counterparty
+ * (doctor, researcher, or bridge service).
+ *
+ * A Contact represents a person or service that has one or more CMC
+ * data-grant accesses on the current user's account. Built via
+ * `Contact.aggregateCmc(accesses, accepts, patientScope)` from the
+ * patient's local counterparty accesses.
  */
 class Contact {
     /** Remote user's Pryv username. null for bridge/service contacts. */
     remoteUsername;
-    /** Display name (from first source, can be overridden) */
+    /** Display name (derived from counterparty username, can be overridden) */
     displayName;
-    /** All access sources grouped into this contact */
-    sources;
-    /** CollectorClient instances for collector sources — patient side */
-    collectorClients;
-    /** Doctor-side: collector+invite pairs for this patient */
-    invites;
-    /** Raw Pryv access objects for all sources */
+    /** Raw Pryv counterparty access objects backing the relationships */
     accessObjects;
     /** Cached set of accessible stream IDs (built by initStreamCache) */
     #accessibleStreamIds;
+    // ---- CMC-shaped fields (Plan 59 Phase 5a; canonical Plan 61 Phase C) ---- //
+    /** CMC counterparty identity */
+    counterparty;
+    /** Person (doctor / researcher) or service (bridge) — derived from app-code prefix */
+    kind;
+    /** CMC relationship records — one per active data-grant on the patient side */
+    cmcRelationships;
     constructor(remoteUsername, displayName) {
         this.remoteUsername = remoteUsername;
         this.displayName = displayName;
-        this.sources = [];
-        this.collectorClients = [];
-        this.invites = [];
         this.accessObjects = [];
         this.#accessibleStreamIds = null;
-    }
-    addSource(source) {
-        this.sources.push(source);
-        if (this.displayName === this.remoteUsername && source.displayName !== source.remoteUsername) {
-            this.displayName = source.displayName;
-        }
-    }
-    /** Associate a CollectorClient with this contact */
-    addCollectorClient(cc) {
-        if (!this.collectorClients.includes(cc)) {
-            this.collectorClients.push(cc);
-        }
+        this.counterparty = null;
+        this.kind = 'unknown';
+        this.cmcRelationships = [];
     }
     /** Associate a raw access object with this contact */
     addAccessObject(access) {
         if (!this.accessObjects.find((a) => a.id === access.id)) {
             this.accessObjects.push(access);
-        }
-    }
-    /** Associate a collector+invite pair (doctor side) */
-    addInvite(collector, invite) {
-        if (!this.invites.find(i => i.invite.key === invite.key)) {
-            this.invites.push({ collector, invite });
         }
     }
     // ---- Stream cache & event filtering ---- //
@@ -20644,12 +23851,30 @@ class Contact {
                     this.#accessibleStreamIds.add('*');
                     return; // wildcard covers everything for person contacts
                 }
+                // The granted root is accessible whether or not the stream exists yet —
+                // item streams are auto-created on first entry, AFTER this cache is
+                // built. Skipping unknown roots made first-ever entries invisible
+                // until the next contact rebuild (B-2026-07-02 patient-app flow).
+                this.#accessibleStreamIds.add(p.streamId);
                 const stream = streamsById[p.streamId];
                 if (!stream)
                     continue;
                 const ids = (0, StreamsTools_ts_1.getStreamIdAndChildrenIds)(stream);
                 ids.forEach((id) => this.#accessibleStreamIds.add(id));
             }
+        }
+        // Plan 59 Phase 5a — also accept chat-stream ids from CMC relationships
+        // (both the local outgoing stream on the patient's account and the
+        // remote incoming stream on the doctor's account). Without this, doctor-
+        // side chat events fetched via back-channel wouldn't pass
+        // eventIsAccessible because they're not under any access permission
+        // entry on the patient's side. Bare add — both streams have at most
+        // one event each per chat message so no children to expand.
+        for (const rel of this.cmcRelationships) {
+            if (rel.localChatStreamId)
+                this.#accessibleStreamIds.add(rel.localChatStreamId);
+            if (rel.remoteChatStreamId)
+                this.#accessibleStreamIds.add(rel.remoteChatStreamId);
         }
     }
     /**
@@ -20688,196 +23913,633 @@ class Contact {
     }
     /** Check if an event was created/modified by this contact (including replaced accesses) */
     eventIsFromContact(event) {
+        const eventBase = refBase(event.modifiedBy);
+        if (eventBase == null)
+            return false;
         for (const access of this.accessObjects) {
-            if (access.id && event.modifiedBy === access.id)
+            // Plan 66: access.id may be composite (`<base>:<serial>`) on updated accesses.
+            // An event's modifiedBy carries the serial active at write time, possibly
+            // different from the current head. Compare on base only.
+            if (refBase(access.id) === eventBase)
                 return true;
-            // Check previous access IDs from replaced accesses (collector pattern)
+            // Check previous access IDs from replaced accesses (collector pattern, legacy delete+create).
+            // The historical chain stays in clientData even after Plan 58 switches to in-place update.
             const collectorPrevIds = access.clientData?.hdsCollectorClient?.previousAccessIds;
-            if (Array.isArray(collectorPrevIds) && collectorPrevIds.includes(event.modifiedBy))
-                return true;
-            // Check previous access IDs from bridge access recreate pattern
+            if (Array.isArray(collectorPrevIds)) {
+                for (const prev of collectorPrevIds) {
+                    if (refBase(prev) === eventBase)
+                        return true;
+                }
+            }
+            // Check previous access IDs from bridge access recreate pattern (legacy)
             const bridgePrevIds = access.clientData?.previousAccessIds;
-            if (Array.isArray(bridgePrevIds) && bridgePrevIds.includes(event.modifiedBy))
-                return true;
+            if (Array.isArray(bridgePrevIds)) {
+                for (const prev of bridgePrevIds) {
+                    if (refBase(prev) === eventBase)
+                        return true;
+                }
+            }
         }
         return false;
     }
     /** Determine chat event source: 'me', 'contact', or 'unknown' */
     chatEventInfos(event) {
-        for (const cc of this.collectorClients) {
-            if (!cc.hasChatFeature)
+        // Each relationship has ONE local conversation stream holding BOTH
+        // directions. The CMC plugin stamps `content.from = {username,...}` on
+        // delivered (incoming) events; the local outgoing trigger has no `from`.
+        // So within the local chat stream, classify by `content.from`. (Legacy:
+        // events still arriving on a counterparty's remoteChatStreamId — pre-mirror
+        // back-channel reads — are always the counterparty's.)
+        if (!event.streamIds)
+            return { source: 'unknown' };
+        for (const rel of this.cmcRelationships) {
+            if (!rel.features.chat)
                 continue;
-            const infos = cc.chatEventInfos(event);
-            if (infos.source === 'me')
-                return { source: 'me' };
-            if (infos.source === 'requester')
+            if (rel.localChatStreamId && event.streamIds.includes(rel.localChatStreamId)) {
+                const from = event.content?.from;
+                return { source: from?.username ? 'contact' : 'me' };
+            }
+            if (rel.remoteChatStreamId && event.streamIds.includes(rel.remoteChatStreamId)) {
                 return { source: 'contact' };
+            }
         }
         return { source: 'unknown' };
     }
-    /** Post a chat message via the connection */
-    async chatPost(connection, content) {
-        const chat = this.chatStreams;
-        if (!chat)
-            throw new Error('Cannot chat with this contact — no chat streams');
-        const newEvent = {
-            type: 'message/hds-chat-v1',
-            streamIds: [chat.main],
-            content
-        };
-        return await connection.apiOne('events.create', newEvent, 'event');
-    }
-    // ---- CollectorClient helpers ---- //
-    /** Primary collectorClient (first active, or first available) */
-    get primaryCollectorClient() {
-        return this.collectorClients.find(cc => cc.status === 'Active') ||
-            this.collectorClients[0];
-    }
-    /** CollectorClients with status Incoming — pending accept/refuse */
-    get incomingCollectorClients() {
-        return this.collectorClients.filter(cc => cc.status === 'Incoming');
-    }
-    /** Whether any form is pending (Incoming) and actionable */
-    get isPending() {
-        return this.collectorClients.some(cc => cc.status === 'Incoming');
-    }
-    /** Whether any CollectorClient has a pending access update request */
-    get hasPendingUpdate() {
-        return this.collectorClients.some(cc => cc.pendingUpdate != null);
-    }
-    /** CollectorClients with pending update requests */
-    get pendingUpdateClients() {
-        return this.collectorClients.filter(cc => cc.pendingUpdate != null);
-    }
-    /** The pending CollectorClient, if any */
-    get pendingCollectorClient() {
-        return this.collectorClients.find(cc => cc.status === 'Incoming');
-    }
-    /** Accept the pending invite */
-    async acceptPendingInvite() {
-        const cc = this.pendingCollectorClient;
-        if (!cc)
-            throw new Error('No pending invite to accept');
-        return await cc.accept();
-    }
-    /** Refuse the pending invite */
-    async refusePendingInvite() {
-        const cc = this.pendingCollectorClient;
-        if (!cc)
-            throw new Error('No pending invite to refuse');
-        return await cc.refuse();
-    }
-    /** Aggregated form sections from all active CollectorClients */
-    get formSections() {
-        const sections = [];
-        for (const cc of this.collectorClients) {
-            if (cc.status !== 'Active')
-                continue;
-            try {
-                const s = cc.getSections();
-                if (s)
-                    sections.push(...s);
-            }
-            catch { /* ignore */ }
-        }
-        return sections;
-    }
-    /** Overall status: Active > Incoming > first source status */
+    // ---- Derived getters (CMC-only) ---- //
+    /** Overall status — derived from cmcRelationships. */
     get status() {
-        if (this.sources.some(s => s.status === 'Active' || s.status === 'active'))
+        if (this.cmcRelationships.some(r => r.acceptedAt != null))
             return 'Active';
-        if (this.sources.some(s => s.status === 'Incoming'))
+        if (this.cmcRelationships.length > 0)
             return 'Incoming';
-        return this.sources[0]?.status || null;
-    }
-    // ---- Existing getters ---- //
-    /** Chat streams from any source that has chat enabled */
-    get chatStreams() {
-        for (const source of this.sources) {
-            if (source.chatStreams)
-                return source.chatStreams;
-        }
         return null;
     }
+    /** Any chat-enabled relationship → true. */
     get hasChat() {
-        return this.chatStreams !== null;
+        return this.cmcRelationships.some(r => r.features.chat);
     }
+    /** Distinct CMC app codes attached to this contact. */
     get appStreamIds() {
         const ids = [];
-        for (const source of this.sources) {
-            if (source.appStreamId && !ids.includes(source.appStreamId)) {
-                ids.push(source.appStreamId);
-            }
+        for (const rel of this.cmcRelationships) {
+            if (rel.appCode && !ids.includes(rel.appCode))
+                ids.push(rel.appCode);
         }
         return ids;
     }
+    /** Aggregated granted permissions across CMC relationships, deduped. */
     get allPermissions() {
+        return this.cmcAllPermissions;
+    }
+    /** Any relationship has been accepted. */
+    get isActive() {
+        return this.cmcRelationships.some(r => r.acceptedAt != null);
+    }
+    /** Person (has remote username) vs service. */
+    get isPerson() {
+        return this.remoteUsername !== null;
+    }
+    /** Patient-side counterparty access ids backing this contact. */
+    get accessIds() {
+        return this.accessObjects.map(a => a?.id).filter((id) => typeof id === 'string');
+    }
+    // ---- Plan 59 Phase 5a — CMC getters ---- //
+    /** Active CMC relationships exist (at least one counterparty access) */
+    get cmcIsActive() {
+        return this.cmcRelationships.length > 0;
+    }
+    /** Any relationship has chat negotiated */
+    get cmcHasChat() {
+        return this.cmcRelationships.some(r => r.features.chat);
+    }
+    /**
+     * Chat-stream descriptors, one per chat-enabled relationship.
+     *
+     * `read` is the doctor-side stream id (read via `counterpartyApiEndpoint`
+     * — caller must construct a `pryv.Connection(counterpartyApiEndpoint)`).
+     * `write` is the patient-side stream id on the patient's own connection.
+     */
+    get cmcChatStreams() {
+        return this.cmcRelationships
+            .filter(r => r.features.chat)
+            .map(r => ({
+            read: r.remoteChatStreamId,
+            write: r.localChatStreamId,
+            counterpartyApiEndpoint: r.counterpartyApiEndpoint,
+            accessId: r.accessId
+        }));
+    }
+    /**
+     * Resolved FormSpec snapshots across all active CMC relationships.
+     * Skips relationships whose accept event hasn't been mirrored yet
+     * (hdsFormSpec === null). One entry per relationship that has a spec.
+     */
+    get cmcFormSpecs() {
+        const result = [];
+        for (const rel of this.cmcRelationships) {
+            if (rel.hdsFormSpec)
+                result.push(rel.hdsFormSpec);
+        }
+        return result;
+    }
+    /**
+     * Aggregated form sections across all active CMC relationships (Tasks
+     * page recurring-task loop reads this). Pulled from each relationship's
+     * resolved FormSpec; empty if no FormSpecs are mirrored yet.
+     */
+    get cmcFormSections() {
+        const sections = [];
+        for (const rel of this.cmcRelationships) {
+            const spec = rel.hdsFormSpec;
+            if (!spec || !Array.isArray(spec.sections))
+                continue;
+            // FormSpec sections are AppTemplateSection — cast to the legacy
+            // CollectorSectionInterface for consumer compatibility (same shape
+            // up to a couple of optional fields).
+            for (const s of spec.sections) {
+                sections.push(s);
+            }
+        }
+        return sections;
+    }
+    /** Aggregated granted permissions across all active CMC relationships (deduped by streamId:level) */
+    get cmcAllPermissions() {
         const seen = new Set();
         const result = [];
-        for (const source of this.sources) {
-            if (source.status === 'Deactivated' || source.status === 'Refused')
-                continue;
-            for (const perm of source.permissions) {
-                const key = `${perm.streamId}:${perm.level}`;
+        for (const rel of this.cmcRelationships) {
+            for (const p of rel.grantedPermissions) {
+                const key = `${p.streamId}:${p.level}`;
                 if (!seen.has(key)) {
                     seen.add(key);
-                    result.push(perm);
+                    result.push(p);
                 }
             }
         }
         return result;
     }
-    get isActive() {
-        return this.sources.some(s => s.status === 'Active' || s.status === 'active');
+    // ---- Plan 59 Phase 5a — CMC static helpers ---- //
+    /**
+     * Person vs service detection from CMC app-code (Q-C1 resolution).
+     * `hds-bridge-*` → service; anything else non-null → person; null → unknown.
+     */
+    static cmcDetectKind(appCode) {
+        if (!appCode)
+            return 'unknown';
+        if (appCode.startsWith('hds-bridge-'))
+            return 'service';
+        return 'person';
     }
-    get isPerson() {
-        return this.remoteUsername !== null;
-    }
-    get collectorSources() {
-        return this.sources.filter(s => s.type === 'collector');
-    }
-    get bridgeSources() {
-        return this.sources.filter(s => s.type === 'bridge');
-    }
-    get accessIds() {
-        return this.sources.map(s => s.accessId).filter((id) => id !== null);
-    }
-    // ---- Static helpers ---- //
-    static sourceFromAccess(access) {
-        const appStreamId = HDSModel_AppStreams_ts_1.HDSModelAppStreams.getAppStreamId(access);
-        return {
-            remoteUsername: null,
-            displayName: access.name || 'Unknown',
-            chatStreams: null,
-            appStreamId,
-            permissions: access.permissions || [],
-            status: access.deleted ? 'Deleted' : 'active',
-            type: appStreamId ? 'bridge' : 'other',
-            accessId: access.id || null
-        };
-    }
-    static groupByContact(sources) {
-        const byUsername = new Map();
-        const standalone = [];
-        for (const source of sources) {
-            if (source.remoteUsername) {
-                let contact = byUsername.get(source.remoteUsername);
-                if (!contact) {
-                    contact = new Contact(source.remoteUsername, source.displayName);
-                    byUsername.set(source.remoteUsername, contact);
-                }
-                contact.addSource(source);
+    /**
+     * Build Contacts from the patient's local counterparty accesses.
+     *
+     * The counterparty access (`clientData.cmc.role === 'counterparty'`) is
+     * the source of truth: it carries the counterparty's apiEndpoint +
+     * remote stream ids in `clientData.cmc.counterparty.*`. Accept events
+     * (from `cmc.listAcceptedRelationships`) are used only to enrich
+     * relationships with `acceptedAt` + `acceptEventId`.
+     *
+     * Per Q-C2 (CMC plugin Q-C2 resolution 2026-05-21): stale accept events
+     * whose backing counterparty access has been revoked are simply dropped —
+     * no access → no relationship in the output.
+     *
+     * @param accesses Patient's accesses from `connection.api('accesses.get')`.
+     * @param accepts  Patient's accepted relationships from `cmc.listAcceptedRelationships`.
+     * @param patientScopeStreamId The patient's hds-webapp scope (e.g. `:_cmc:apps:hds-patient`).
+     *                              Used to build the local chat-stream id.
+     */
+    static aggregateCmc(accesses, accepts, patientScopeStreamId) {
+        const byCounterparty = new Map();
+        for (const access of accesses) {
+            if (access.deleted)
+                continue;
+            const cmcData = access.clientData?.cmc;
+            if (cmcData?.role !== 'counterparty')
+                continue;
+            const cp = cmcData.counterparty;
+            if (!cp?.username || !cp?.host)
+                continue;
+            const key = `${cp.username.toLowerCase()}@${cp.host.toLowerCase()}`;
+            let contact = byCounterparty.get(key);
+            if (!contact) {
+                contact = new Contact(cp.username, cp.username);
+                contact.counterparty = { username: cp.username, host: cp.host };
+                contact.kind = Contact.cmcDetectKind(cmcData.appCode);
+                byCounterparty.set(key, contact);
+            }
+            const appCode = cmcData.appCode || 'unknown';
+            // peerSlug for the LOCAL chat stream — slug of the counterparty.
+            // Use cmc.counterpartySlug to stay aligned with the SDK / plugin
+            // (which canonicalize host casing + strip ports).
+            let peerSlug;
+            try {
+                peerSlug = patchedPryv_ts_1.cmc.counterpartySlug({ username: cp.username, host: cp.host });
+            }
+            catch {
+                // Fallback if the SDK helper is missing in some environment — shouldn't happen
+                // in practice, but keeps the aggregator side-effect-free under tests.
+                peerSlug = `${cp.username.toLowerCase()}--${cp.host.toLowerCase().replace(/:\d+$/, '').replace(/\./g, '-')}`;
+            }
+            // Local outgoing chat stream. The CMC plugin provisions the relationship's
+            // chat streams under the INVITING app's scope (e.g. the collector's
+            // `:_cmc:apps:hds-collector:<collectorId>`) and mirrors that scope onto the
+            // accepter's account — NOT under a generic patient app scope. On accept it
+            // grants this access `contribute` on the accepter's own per-counterparty
+            // chat stream. Prefer that server-granted stream (authoritative: it exists
+            // and is writable); else derive from the remote chat stream's scope; else
+            // fall back to the legacy patientScopeStreamId. (`clientData.cmc.appCode`
+            // is null on counterparty accesses, so the scope can't come from appCode.)
+            const grantedChat = (access.permissions ?? []).find(p => typeof p.streamId === 'string' &&
+                p.streamId.endsWith(`:chats:${peerSlug}`) &&
+                (p.level === 'contribute' || p.level === 'manage'));
+            let localChatStreamId;
+            if (grantedChat) {
+                localChatStreamId = grantedChat.streamId;
+            }
+            else if (cp.remoteChatStreamId) {
+                const remoteScope = cp.remoteChatStreamId.replace(/:chats:[^:]+$/, '');
+                localChatStreamId = `${remoteScope}:chats:${peerSlug}`;
             }
             else {
-                const contact = new Contact(null, source.displayName);
-                contact.addSource(source);
-                standalone.push(contact);
+                localChatStreamId = `${patientScopeStreamId}:chats:${peerSlug}`;
             }
+            // Same derivation for the system channel (collectors anchor), used for
+            // data-export requests and their acks. No legacy fallback: the anchor only
+            // exists where the plugin provisioned it.
+            const grantedCollector = (access.permissions ?? []).find(p => typeof p.streamId === 'string' &&
+                p.streamId.endsWith(`:collectors:${peerSlug}`) &&
+                (p.level === 'contribute' || p.level === 'manage'));
+            const localCollectorStreamId = grantedCollector
+                ? grantedCollector.streamId
+                : (cp.remoteCollectorStreamId
+                    ? `${cp.remoteCollectorStreamId.replace(/:collectors:[^:]+$/, '')}:collectors:${peerSlug}`
+                    : null);
+            // Match accept event by (counterparty, appCode). Same counterparty
+            // can have multiple accept events for multiple data sets; we just
+            // need ANY one of them for acceptedAt enrichment.
+            const matchingAccept = accepts.find(a => a.counterparty?.username?.toLowerCase() === cp.username.toLowerCase() &&
+                a.counterparty?.host?.toLowerCase() === cp.host.toLowerCase() &&
+                (a.appCode || 'unknown') === appCode);
+            const f = cmcData.features ?? null;
+            const features = {
+                chat: !!f?.chat,
+                systemMessaging: !!(f?.systemMessaging ?? f?.system)
+            };
+            const rel = {
+                accessId: access.id,
+                acceptEventId: matchingAccept?.acceptEventId ?? null,
+                counterparty: { username: cp.username, host: cp.host },
+                counterpartyApiEndpoint: cp.apiEndpoint ?? null,
+                remoteChatStreamId: cp.remoteChatStreamId ?? null,
+                remoteCollectorStreamId: cp.remoteCollectorStreamId ?? null,
+                localChatStreamId,
+                localCollectorStreamId,
+                appCode,
+                features,
+                grantedPermissions: access.permissions ?? [],
+                acceptedAt: matchingAccept?.acceptedAt ?? null,
+                hdsFormSpec: matchingAccept?.hdsFormSpec ?? null
+            };
+            contact.cmcRelationships.push(rel);
+            contact.addAccessObject(access);
         }
-        return [...byUsername.values(), ...standalone];
+        return Array.from(byCounterparty.values());
     }
 }
 exports.Contact = Contact;
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/Questionnaire.ts"
+/*!******************************************!*\
+  !*** ./ts/appTemplates/Questionnaire.ts ***!
+  \******************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Questionnaire = void 0;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+/**
+ * Plan 71 — questionnaire template.
+ *
+ * A `Questionnaire` is the doctor-side reusable template for a set of questions
+ * with temporal scope. It serializes into the `questionnaire/request-v1` event
+ * content shape that the form-renderer (hds-forms-js) instantiates per patient.
+ *
+ * Sibling to `CollectorRequest`: a Questionnaire is reusable across multiple
+ * requests; the request event written into a patient's stream is the
+ * per-patient instantiation produced by `toRequestEventContent()`.
+ *
+ * See `data-model/documentation/QUESTIONNAIRE.md` for the storage shape and
+ * the `clientData.related.<eventId>: true` cross-reference convention answer
+ * writers must mirror.
+ */
+/** Pryv content-query path grammar — question keys must match for queryability. */
+const QUESTION_KEY_PATTERN = /^[a-zA-Z0-9_-]+$/;
+const SUB_FIELD_TYPES = ['select-segmented', 'text', 'number'];
+const ANSWER_STATUSES = ['answered', 'no', 'unknown', 'declined'];
+class Questionnaire {
+    #title;
+    #description;
+    #templateRef;
+    #questions;
+    constructor(content) {
+        this.#title = null;
+        this.#description = null;
+        this.#templateRef = null;
+        this.#questions = new Map();
+        if (content != null)
+            this.setContent(content);
+    }
+    setContent(content) {
+        const futureContent = structuredClone(content);
+        if (futureContent.title != null) {
+            (0, localizeText_ts_1.validateLocalizableText)('title', futureContent.title);
+            this.#title = futureContent.title;
+        }
+        if (futureContent.description != null) {
+            (0, localizeText_ts_1.validateLocalizableText)('description', futureContent.description);
+            this.#description = futureContent.description;
+        }
+        if (futureContent.templateRef != null) {
+            if (typeof futureContent.templateRef !== 'string') {
+                throw new errors_ts_1.HDSLibError('Questionnaire.templateRef must be a string');
+            }
+            this.#templateRef = futureContent.templateRef;
+        }
+        if (futureContent.questions != null) {
+            this.#questions = new Map();
+            for (const [key, def] of Object.entries(futureContent.questions)) {
+                this.addQuestion(key, def);
+            }
+        }
+    }
+    // ---------- title / description / templateRef ---------- //
+    get title() { return this.#title; }
+    set title(value) {
+        (0, localizeText_ts_1.validateLocalizableText)('title', value);
+        this.#title = value;
+    }
+    get description() { return this.#description; }
+    set description(value) {
+        (0, localizeText_ts_1.validateLocalizableText)('description', value);
+        this.#description = value;
+    }
+    get templateRef() { return this.#templateRef; }
+    set templateRef(value) {
+        if (typeof value !== 'string')
+            throw new errors_ts_1.HDSLibError('templateRef must be a string');
+        this.#templateRef = value;
+    }
+    // ---------- questions ---------- //
+    /**
+     * Add a question. Throws if the key violates the Pryv path grammar or the
+     * definition fails shape validation (scope/subField checks).
+     */
+    addQuestion(key, def) {
+        Questionnaire.#validateQuestionKey(key);
+        if (this.#questions.has(key)) {
+            throw new errors_ts_1.HDSLibError(`Questionnaire already has a question with key '${key}'`);
+        }
+        Questionnaire.#validateQuestionDef(key, def);
+        this.#questions.set(key, def);
+        return def;
+    }
+    /** Remove a question by key. Returns true if it existed. */
+    removeQuestion(key) {
+        return this.#questions.delete(key);
+    }
+    getQuestion(key) {
+        return this.#questions.get(key) ?? null;
+    }
+    get questionKeys() {
+        return [...this.#questions.keys()];
+    }
+    get questions() {
+        return Object.fromEntries(this.#questions);
+    }
+    // ---------- serialization ---------- //
+    /**
+     * Serialize as the content shape of a `questionnaire/request-v1` event. The
+     * caller writes it as `event.content`; `streamIds` and `time` are the
+     * caller's concern.
+     */
+    toRequestEventContent() {
+        if (this.#questions.size === 0) {
+            throw new errors_ts_1.HDSLibError('Questionnaire requires at least one question');
+        }
+        const out = {
+            questions: structuredClone(this.questions)
+        };
+        if (this.#title != null)
+            out.title = structuredClone(this.#title);
+        if (this.#description != null)
+            out.description = structuredClone(this.#description);
+        if (this.#templateRef != null)
+            out.templateRef = this.#templateRef;
+        return out;
+    }
+    /**
+     * Load a Questionnaire from a `questionnaire/request-v1` event (the patient's
+     * renderer needs this to know how to render the form).
+     */
+    static fromRequestEvent(event) {
+        if (event?.content == null || typeof event.content !== 'object') {
+            throw new errors_ts_1.HDSLibError('Cannot load Questionnaire: event has no content');
+        }
+        return new Questionnaire(event.content);
+    }
+    /**
+     * Build a ready-to-write `questionnaire/request-v1` event payload.
+     * Convenience for the doctor-side flow that materializes bundled
+     * questionnaires (`CollectorRequest.questionnaires`) into events after the
+     * patient accepts and the data-grant access is in hand. The consumer
+     * batches the returned payloads via `connection.api()`.
+     */
+    static makeRequestEvent(content, streamIds, timeSeconds) {
+        if (!Array.isArray(streamIds) || streamIds.length === 0) {
+            throw new errors_ts_1.HDSLibError('makeRequestEvent: streamIds must be a non-empty array');
+        }
+        // Roundtrip through a Questionnaire instance to validate the shape — the
+        // caller may pass content from anywhere (a CollectorRequest's bundled
+        // entry, a saved template, or a fresh build).
+        const roundTripped = new Questionnaire(content).toRequestEventContent();
+        return {
+            type: 'questionnaire/request-v1',
+            streamIds,
+            time: timeSeconds ?? Math.floor(Date.now() / 1000),
+            content: roundTripped
+        };
+    }
+    /**
+     * Materialize a CollectorRequest's bundled questionnaires into
+     * `questionnaire/request-v1` events on the given Pryv connection. The
+     * patient-side accept flow calls this AFTER `cmc.acceptInvite` succeeds,
+     * so the request events land in the patient's own stream and the
+     * questionnaires become "pending" for the patient app to render and fill.
+     *
+     * Returns the Pryv batch result array (one entry per event) — entries with
+     * `error` need caller-side handling; entries with `event` are successful
+     * writes. If the request carries no bundled questionnaires, returns []
+     * without making an API call.
+     *
+     * Atomicity: Pryv `events.batch` is best-effort per-entry — a single failed
+     * write doesn't roll back the others. Callers needing transactional
+     * guarantees must inspect the result and reconcile.
+     */
+    static async writeBundled(connection, request, streamIds, options) {
+        if (!Array.isArray(streamIds) || streamIds.length === 0) {
+            throw new errors_ts_1.HDSLibError('writeBundled: streamIds must be a non-empty array');
+        }
+        const list = request?.questionnaires ?? [];
+        if (list.length === 0)
+            return [];
+        const time = options?.timeSeconds ?? Math.floor(Date.now() / 1000);
+        const calls = list.map((content) => ({
+            method: 'events.create',
+            params: Questionnaire.makeRequestEvent(content, streamIds, time)
+        }));
+        return await connection.api(calls);
+    }
+    // ---------- answer-side helper ---------- //
+    /**
+     * Build a valid `questionnaire/answer-v1` event payload (content + clientData)
+     * from a map of question-key → AnswerEntry, against the request event the
+     * patient is responding to.
+     *
+     * Returns:
+     *   - `content`: the answer-event content payload.
+     *   - `clientData`: the `{ related: { <eventId>: true, ... } }` keyed-object
+     *     cross-reference mirror per the Pryv §7 convention.
+     *
+     * Throws if any answer references an unknown question key, if an `answered`
+     * entry has empty references, or if a status is unknown.
+     */
+    static buildAnswerEvent(requestEventId, answers, knownQuestionKeys) {
+        if (typeof requestEventId !== 'string' || requestEventId.length === 0) {
+            throw new errors_ts_1.HDSLibError('buildAnswerEvent: requestEventId must be a non-empty string');
+        }
+        const validKeys = knownQuestionKeys ? new Set(knownQuestionKeys) : null;
+        const related = { [requestEventId]: true };
+        const outAnswers = {};
+        for (const [key, entry] of Object.entries(answers)) {
+            Questionnaire.#validateQuestionKey(key);
+            if (validKeys && !validKeys.has(key)) {
+                throw new errors_ts_1.HDSLibError(`buildAnswerEvent: answer key '${key}' is not a question on the request`);
+            }
+            Questionnaire.#validateAnswerEntry(key, entry);
+            outAnswers[key] = structuredClone(entry);
+            if (entry.status === 'answered') {
+                for (const refId of entry.references) {
+                    related[refId] = true;
+                }
+            }
+        }
+        return {
+            content: { requestEventId, answers: outAnswers },
+            clientData: { related }
+        };
+    }
+    // ---------- validation ---------- //
+    static #validateQuestionKey(key) {
+        if (typeof key !== 'string' || key.length === 0) {
+            throw new errors_ts_1.HDSLibError('Question key must be a non-empty string');
+        }
+        if (!QUESTION_KEY_PATTERN.test(key)) {
+            throw new errors_ts_1.HDSLibError(`Question key '${key}' does not match the Pryv path grammar [a-zA-Z0-9_-]+ (no colons, dots, brackets, or wildcards)`);
+        }
+    }
+    static #validateQuestionDef(key, def) {
+        if (def == null || typeof def !== 'object') {
+            throw new errors_ts_1.HDSLibError(`Question '${key}' definition must be an object`);
+        }
+        if (def.label == null) {
+            throw new errors_ts_1.HDSLibError(`Question '${key}' is missing 'label'`);
+        }
+        (0, localizeText_ts_1.validateLocalizableText)(`questions[${key}].label`, def.label);
+        if (typeof def.itemRef !== 'string' || def.itemRef.length === 0) {
+            throw new errors_ts_1.HDSLibError(`Question '${key}' is missing 'itemRef' (must be a non-empty string)`);
+        }
+        Questionnaire.#validateScope(key, def.scope);
+        if (def.subField != null)
+            Questionnaire.#validateSubField(key, def.subField);
+        if (def.params != null && typeof def.params !== 'object') {
+            throw new errors_ts_1.HDSLibError(`Question '${key}'.params must be an object`);
+        }
+    }
+    static #validateScope(key, scope) {
+        if (scope == null || typeof scope !== 'object') {
+            throw new errors_ts_1.HDSLibError(`Question '${key}' is missing 'scope'`);
+        }
+        if (scope.type === 'ever') {
+            if (Object.keys(scope).length !== 1) {
+                throw new errors_ts_1.HDSLibError(`Question '${key}'.scope: 'ever' must not carry extra fields`);
+            }
+            return;
+        }
+        if (scope.type === 'window' || scope.type === 'latest') {
+            if (typeof scope.withinDays !== 'number' || scope.withinDays <= 0) {
+                throw new errors_ts_1.HDSLibError(`Question '${key}'.scope.${scope.type}: 'withinDays' must be a positive number`);
+            }
+            return;
+        }
+        throw new errors_ts_1.HDSLibError(`Question '${key}'.scope.type '${scope.type}' is not recognized (valid: ever, window, latest)`);
+    }
+    static #validateSubField(key, subField) {
+        if (subField == null || typeof subField !== 'object') {
+            throw new errors_ts_1.HDSLibError(`Question '${key}'.subField must be an object`);
+        }
+        if (!SUB_FIELD_TYPES.includes(subField.type)) {
+            throw new errors_ts_1.HDSLibError(`Question '${key}'.subField.type must be one of ${SUB_FIELD_TYPES.join(' / ')}`);
+        }
+        if (subField.label != null)
+            (0, localizeText_ts_1.validateLocalizableText)(`questions[${key}].subField.label`, subField.label);
+        if (subField.options != null) {
+            if (!Array.isArray(subField.options)) {
+                throw new errors_ts_1.HDSLibError(`Question '${key}'.subField.options must be an array`);
+            }
+            for (const [i, opt] of subField.options.entries()) {
+                if (opt == null || typeof opt !== 'object') {
+                    throw new errors_ts_1.HDSLibError(`Question '${key}'.subField.options[${i}] must be an object`);
+                }
+                if (typeof opt.value !== 'string' && typeof opt.value !== 'number') {
+                    throw new errors_ts_1.HDSLibError(`Question '${key}'.subField.options[${i}].value must be a string or number`);
+                }
+                (0, localizeText_ts_1.validateLocalizableText)(`questions[${key}].subField.options[${i}].label`, opt.label);
+            }
+        }
+    }
+    static #validateAnswerEntry(key, entry) {
+        if (entry == null || typeof entry !== 'object') {
+            throw new errors_ts_1.HDSLibError(`Answer for question '${key}' must be an object`);
+        }
+        if (!ANSWER_STATUSES.includes(entry.status)) {
+            throw new errors_ts_1.HDSLibError(`Answer for question '${key}': status must be one of ${ANSWER_STATUSES.join(' / ')}`);
+        }
+        if (entry.status === 'answered') {
+            if (!Array.isArray(entry.references) || entry.references.length === 0) {
+                throw new errors_ts_1.HDSLibError(`Answer for question '${key}': 'answered' status requires non-empty 'references' array`);
+            }
+            for (const [i, refId] of entry.references.entries()) {
+                if (typeof refId !== 'string' || refId.length === 0) {
+                    throw new errors_ts_1.HDSLibError(`Answer for question '${key}'.references[${i}] must be a non-empty string`);
+                }
+            }
+            return;
+        }
+        // For no / unknown / declined statuses: reject references presence
+        if (entry.references != null) {
+            throw new errors_ts_1.HDSLibError(`Answer for question '${key}': status '${entry.status}' must not carry 'references'`);
+        }
+        if (entry.status === 'declined' && entry.reason != null && typeof entry.reason !== 'string') {
+            throw new errors_ts_1.HDSLibError(`Answer for question '${key}'.reason must be a string (v1 — coded values deferred)`);
+        }
+    }
+}
+exports.Questionnaire = Questionnaire;
 
 
 /***/ },
@@ -20891,38 +24553,34 @@ exports.Contact = Contact;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamSystemFeatureDetailed = exports.resolveStreamSystemFeature = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.Contact = exports.CollectorRequest = exports.CollectorInvite = exports.CollectorClient = exports.Collector = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.ensureBridgeAccess = exports.recreateBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
+exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
 const AppManagingAccount_ts_1 = __webpack_require__(/*! ./AppManagingAccount.js */ "./ts/appTemplates/AppManagingAccount.ts");
 Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_ts_1.AppManagingAccount; } }));
 const AppClientAccount_ts_1 = __webpack_require__(/*! ./AppClientAccount.js */ "./ts/appTemplates/AppClientAccount.ts");
 Object.defineProperty(exports, "AppClientAccount", ({ enumerable: true, get: function () { return AppClientAccount_ts_1.AppClientAccount; } }));
 const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTemplates/Application.ts");
 Object.defineProperty(exports, "Application", ({ enumerable: true, get: function () { return Application_ts_1.Application; } }));
-const Collector_ts_1 = __webpack_require__(/*! ./Collector.js */ "./ts/appTemplates/Collector.ts");
-Object.defineProperty(exports, "Collector", ({ enumerable: true, get: function () { return Collector_ts_1.Collector; } }));
-const CollectorClient_ts_1 = __webpack_require__(/*! ./CollectorClient.js */ "./ts/appTemplates/CollectorClient.ts");
-Object.defineProperty(exports, "CollectorClient", ({ enumerable: true, get: function () { return CollectorClient_ts_1.CollectorClient; } }));
-const CollectorInvite_ts_1 = __webpack_require__(/*! ./CollectorInvite.js */ "./ts/appTemplates/CollectorInvite.ts");
-Object.defineProperty(exports, "CollectorInvite", ({ enumerable: true, get: function () { return CollectorInvite_ts_1.CollectorInvite; } }));
 const CollectorRequest_ts_1 = __webpack_require__(/*! ./CollectorRequest.js */ "./ts/appTemplates/CollectorRequest.ts");
 Object.defineProperty(exports, "CollectorRequest", ({ enumerable: true, get: function () { return CollectorRequest_ts_1.CollectorRequest; } }));
 const Contact_ts_1 = __webpack_require__(/*! ./Contact.js */ "./ts/appTemplates/Contact.ts");
 Object.defineProperty(exports, "Contact", ({ enumerable: true, get: function () { return Contact_ts_1.Contact; } }));
+const Questionnaire_ts_1 = __webpack_require__(/*! ./Questionnaire.js */ "./ts/appTemplates/Questionnaire.ts");
+Object.defineProperty(exports, "Questionnaire", ({ enumerable: true, get: function () { return Questionnaire_ts_1.Questionnaire; } }));
 var bridgeAccess_ts_1 = __webpack_require__(/*! ./bridgeAccess.js */ "./ts/appTemplates/bridgeAccess.ts");
 Object.defineProperty(exports, "getOrCreateBridgeAccess", ({ enumerable: true, get: function () { return bridgeAccess_ts_1.getOrCreateBridgeAccess; } }));
-Object.defineProperty(exports, "recreateBridgeAccess", ({ enumerable: true, get: function () { return bridgeAccess_ts_1.recreateBridgeAccess; } }));
 Object.defineProperty(exports, "ensureBridgeAccess", ({ enumerable: true, get: function () { return bridgeAccess_ts_1.ensureBridgeAccess; } }));
 var itemLabels_ts_1 = __webpack_require__(/*! ./itemLabels.js */ "./ts/appTemplates/itemLabels.ts");
 Object.defineProperty(exports, "getSectionItemLabels", ({ enumerable: true, get: function () { return itemLabels_ts_1.getSectionItemLabels; } }));
 Object.defineProperty(exports, "collectItemLabelsFromSections", ({ enumerable: true, get: function () { return itemLabels_ts_1.collectItemLabelsFromSections; } }));
 Object.defineProperty(exports, "collectItemLabels", ({ enumerable: true, get: function () { return itemLabels_ts_1.collectItemLabels; } }));
-// Plan 45 — custom-fields & system-stream resolvers + types.
+// Plan 71 — Questionnaire coverage check against a CollectorRequest's permissions.
+var questionnaireCoverage_ts_1 = __webpack_require__(/*! ./questionnaireCoverage.js */ "./ts/appTemplates/questionnaireCoverage.ts");
+Object.defineProperty(exports, "checkQuestionnaireCoverage", ({ enumerable: true, get: function () { return questionnaireCoverage_ts_1.checkQuestionnaireCoverage; } }));
+// Plan 45 — custom-fields resolvers + types.
 var resolveStream_ts_1 = __webpack_require__(/*! ./resolveStream.js */ "./ts/appTemplates/resolveStream.ts");
 Object.defineProperty(exports, "buildStreamMap", ({ enumerable: true, get: function () { return resolveStream_ts_1.buildStreamMap; } }));
 Object.defineProperty(exports, "resolveStreamCustomField", ({ enumerable: true, get: function () { return resolveStream_ts_1.resolveStreamCustomField; } }));
 Object.defineProperty(exports, "resolveStreamCustomFieldDetailed", ({ enumerable: true, get: function () { return resolveStream_ts_1.resolveStreamCustomFieldDetailed; } }));
-Object.defineProperty(exports, "resolveStreamSystemFeature", ({ enumerable: true, get: function () { return resolveStream_ts_1.resolveStreamSystemFeature; } }));
-Object.defineProperty(exports, "resolveStreamSystemFeatureDetailed", ({ enumerable: true, get: function () { return resolveStream_ts_1.resolveStreamSystemFeatureDetailed; } }));
 Object.defineProperty(exports, "streamCustomFieldToVirtualItem", ({ enumerable: true, get: function () { return resolveStream_ts_1.streamCustomFieldToVirtualItem; } }));
 Object.defineProperty(exports, "customFieldDeclarationToVirtualItem", ({ enumerable: true, get: function () { return resolveStream_ts_1.customFieldDeclarationToVirtualItem; } }));
 var customFieldTypes_ts_1 = __webpack_require__(/*! ./customFieldTypes.js */ "./ts/appTemplates/customFieldTypes.ts");
@@ -20979,8 +24637,8 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getOrCreateBridgeAccess = getOrCreateBridgeAccess;
-exports.recreateBridgeAccess = recreateBridgeAccess;
 exports.ensureBridgeAccess = ensureBridgeAccess;
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 /**
  * Get or create a bridge access on a user's account.
@@ -20997,7 +24655,7 @@ async function getOrCreateBridgeAccess(connection, options) {
             apiEndpoint: existing.apiEndpoint,
             accessId: existing.id,
             created: false,
-            recreated: false
+            updated: false
         };
     }
     const access = await connection.apiOne('accesses.create', {
@@ -21009,119 +24667,86 @@ async function getOrCreateBridgeAccess(connection, options) {
         apiEndpoint: access.apiEndpoint,
         accessId: access.id,
         created: true,
-        recreated: false
-    };
-}
-/**
- * Recreate a bridge access with updated permissions/clientData.
- * Deletes the old access and creates a new one, carrying forward previousAccessIds
- * so that events created under old accesses are still attributable.
- *
- * @param connection - Pryv connection to the user's account (personal token)
- * @param options - new access configuration
- */
-async function recreateBridgeAccess(connection, options) {
-    const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
-    const existing = accesses.find((a) => a.name === options.name);
-    // Build previousAccessIds chain
-    const previousAccessIds = [];
-    if (existing) {
-        if (existing.id)
-            previousAccessIds.push(existing.id);
-        const oldPrevIds = existing.clientData?.previousAccessIds;
-        if (Array.isArray(oldPrevIds)) {
-            for (const id of oldPrevIds) {
-                if (!previousAccessIds.includes(id))
-                    previousAccessIds.push(id);
-            }
-        }
-        // Delete old access
-        await connection.apiOne('accesses.delete', { id: existing.id }, 'accessDeletion');
-        logger.info('Deleted old bridge access for recreation', { name: options.name, oldId: existing.id });
-    }
-    // Merge previousAccessIds into clientData
-    const clientData = {
-        ...options.clientData,
-        previousAccessIds: previousAccessIds.length > 0 ? previousAccessIds : undefined
-    };
-    const access = await connection.apiOne('accesses.create', {
-        name: options.name,
-        permissions: options.permissions,
-        clientData
-    }, 'access');
-    return {
-        apiEndpoint: access.apiEndpoint,
-        accessId: access.id,
-        created: true,
-        recreated: existing != null
+        updated: false
     };
 }
 /**
  * Get or create a bridge access, with optional permission update detection.
- * If the access exists but permissions differ, recreates it with the new permissions
- * while preserving previousAccessIds for event attribution.
+ *
+ * If the access exists and `updateIfDifferent` is set and permissions differ,
+ * updates it in place via `accesses.update` (Plan 66). The access id becomes
+ * composite (`<base>:<serial>`) but the token and apiEndpoint are preserved.
+ *
+ * Server-side `clientData` merge means any pre-existing keys on the access
+ * (notably `previousAccessIds` from the legacy delete+create era) are
+ * preserved automatically — we only send the keys we want to set.
+ *
+ * `StaleAccessIdError` handling: if another writer updates the access between
+ * our `accesses.get` and our `accesses.update`, we refetch + retry once.
+ * Two consecutive stale errors propagate.
  *
  * @param connection - Pryv connection to the user's account (personal token)
  * @param options - access configuration
- * @param options.updateIfDifferent - if true, recreate when permissions differ (default: false)
+ * @param options.updateIfDifferent - if true, update permissions in place when they differ (default: false)
  */
 async function ensureBridgeAccess(connection, options) {
-    const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
-    const existing = accesses.find((a) => a.name === options.name);
-    if (existing) {
-        // Check if permissions match
-        if (options.updateIfDifferent && !permissionsMatch(existing.permissions, options.permissions)) {
-            logger.info('Bridge access permissions differ, recreating', { name: options.name });
-            // Can't re-fetch — pass existing directly to avoid double API call
-            return await _recreateFromExisting(connection, existing, options);
+    let attempt = 0;
+    while (true) {
+        const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
+        const existing = accesses.find((a) => a.name === options.name);
+        if (!existing) {
+            const access = await connection.apiOne('accesses.create', {
+                name: options.name,
+                permissions: options.permissions,
+                clientData: options.clientData || {}
+            }, 'access');
+            return {
+                apiEndpoint: access.apiEndpoint,
+                accessId: access.id,
+                created: true,
+                updated: false
+            };
         }
-        return {
-            apiEndpoint: existing.apiEndpoint,
-            accessId: existing.id,
-            created: false,
-            recreated: false
-        };
-    }
-    const access = await connection.apiOne('accesses.create', {
-        name: options.name,
-        permissions: options.permissions,
-        clientData: options.clientData || {}
-    }, 'access');
-    return {
-        apiEndpoint: access.apiEndpoint,
-        accessId: access.id,
-        created: true,
-        recreated: false
-    };
-}
-/** @private recreate from an already-fetched existing access */
-async function _recreateFromExisting(connection, existing, options) {
-    const previousAccessIds = [];
-    if (existing.id)
-        previousAccessIds.push(existing.id);
-    const oldPrevIds = existing.clientData?.previousAccessIds;
-    if (Array.isArray(oldPrevIds)) {
-        for (const id of oldPrevIds) {
-            if (!previousAccessIds.includes(id))
-                previousAccessIds.push(id);
+        if (!options.updateIfDifferent || permissionsMatch(existing.permissions, options.permissions)) {
+            return {
+                apiEndpoint: existing.apiEndpoint,
+                accessId: existing.id,
+                created: false,
+                updated: false
+            };
+        }
+        // Update in place. Server merges clientData; we only send our new keys.
+        // accesses.update's permissions schema is strict (rejects defaultName / name);
+        // strip to canonical {streamId,level} | {feature,setting} regardless of caller input.
+        const cleanedPermissions = options.permissions.map((p) => {
+            if (p.streamId)
+                return { streamId: p.streamId, level: p.level };
+            if (p.feature)
+                return { feature: p.feature, setting: p.setting };
+            return p;
+        });
+        const updatePayload = { permissions: cleanedPermissions };
+        if (options.clientData != null)
+            updatePayload.clientData = options.clientData;
+        try {
+            logger.info('Bridge access permissions differ, updating', { name: options.name, id: existing.id });
+            const updated = await connection.updateAccess(existing.id, updatePayload);
+            return {
+                apiEndpoint: updated.apiEndpoint,
+                accessId: updated.id,
+                created: false,
+                updated: true
+            };
+        }
+        catch (e) {
+            if (e instanceof patchedPryv_ts_1.pryv.StaleAccessIdError && attempt === 0) {
+                attempt++;
+                logger.info('Bridge access stale on update, refetching and retrying once', { name: options.name });
+                continue;
+            }
+            throw e;
         }
     }
-    await connection.apiOne('accesses.delete', { id: existing.id }, 'accessDeletion');
-    const clientData = {
-        ...options.clientData,
-        previousAccessIds: previousAccessIds.length > 0 ? previousAccessIds : undefined
-    };
-    const access = await connection.apiOne('accesses.create', {
-        name: options.name,
-        permissions: options.permissions,
-        clientData
-    }, 'access');
-    return {
-        apiEndpoint: access.apiEndpoint,
-        accessId: access.id,
-        created: true,
-        recreated: true
-    };
 }
 /** Compare two permission arrays (order-independent) */
 function permissionsMatch(a, b) {
@@ -21227,25 +24852,32 @@ function collectItemLabelsFromSections(itemKey, sources, opts = {}) {
     return out;
 }
 /**
- * Gather labels for itemKey from every active CollectorClient on the given
- * contacts. Each entry is attributed to the contact and form it came from.
+ * Gather labels for itemKey from every CMC relationship on the given contacts.
+ * Each entry is attributed to the contact and form (FormSpec) it came from.
+ *
+ * Post-plan-61 Phase C: walks `contact.cmcRelationships[].hdsFormSpec.sections`
+ * (no more legacy CollectorClient). Relationships without a mirrored FormSpec
+ * snapshot are skipped.
  */
 function collectItemLabels(itemKey, contacts, opts = {}) {
     const sources = [];
     for (const contact of contacts) {
-        for (const cc of contact.collectorClients) {
-            if (cc.status !== 'Active')
+        for (const rel of contact.cmcRelationships) {
+            const spec = rel.hdsFormSpec;
+            if (!spec || !Array.isArray(spec.sections))
                 continue;
-            const formTitle = cc.request?.title;
-            const sections = cc.getSections() || [];
-            for (const section of sections) {
+            const formTitle = spec.title;
+            for (const sec of spec.sections) {
+                // FormSpec sections (AppTemplateSection) are structurally compatible
+                // with CollectorSectionInterface for label-extraction purposes.
+                const section = sec;
                 sources.push({
                     section,
                     source: {
                         contactName: contact.displayName,
                         formTitle,
                         sectionKey: section.key,
-                        requestKey: cc.key
+                        requestKey: rel.accessId
                     }
                 });
             }
@@ -21329,6 +24961,9 @@ const appTemplate_schema_json_1 = __importDefault(__webpack_require__(/*! ./sche
 // or the namespace depending on bundler. Resolve once at load.
 const Ajv = AjvNs.default ?? AjvNs;
 const ajv = new Ajv({ allErrors: true, strict: false });
+// ajv core ships without formats; absent this, compile() logs
+// `unknown format "uri" ignored in schema` to the console on import.
+ajv.addFormat('uri', /^[a-zA-Z][a-zA-Z0-9+.-]*:\S+$/);
 const validate = ajv.compile(appTemplate_schema_json_1.default);
 /** Validate the JSON shape (Ajv) and run cross-field rules. Returns the validated AppTemplate or throws HDSLibError. */
 function loadTemplate(json) {
@@ -21424,6 +25059,154 @@ function isExistingStreamRef(v) {
 
 /***/ },
 
+/***/ "./ts/appTemplates/questionnaireCoverage.ts"
+/*!**************************************************!*\
+  !*** ./ts/appTemplates/questionnaireCoverage.ts ***!
+  \**************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Plan 71 — Questionnaire coverage check.
+ *
+ * A bundled Questionnaire is only useful if the surrounding CollectorRequest
+ * grants permissions on every stream the questionnaire's referenced items live
+ * on. When a doctor (or a generator) adds a Questionnaire to a request that
+ * doesn't already cover its items, the bundled questionnaire's prefill /
+ * answer-related-event flow can't reach the patient's existing typed events.
+ *
+ * This helper compares a Questionnaire against a CollectorRequest's
+ * permissions, surfaces any gaps (per question), and proposes the additional
+ * permissions needed. The companion convenience
+ * `CollectorRequest#applyQuestionnaireCoverage` mutates the request in place.
+ *
+ * Scope: permissions only. Sections and customFields are doctor-curated UX
+ * surfaces, not correctness constraints — a question's item does NOT need a
+ * matching section entry; it only needs a permission so the answer event's
+ * `references[]` can be resolved on the doctor's side.
+ *
+ * Unknown itemRefs (no matching item in the loaded HDS model) are surfaced as
+ * `unknownItem: true` rows; the helper never throws on them. Callers should
+ * decide whether to block submission or just warn the doctor.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.checkQuestionnaireCoverage = checkQuestionnaireCoverage;
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const Questionnaire_ts_1 = __webpack_require__(/*! ./Questionnaire.js */ "./ts/appTemplates/Questionnaire.ts");
+/** Normalize either a `Questionnaire` instance or a raw content payload to content. */
+function asQuestionnaireContent(q) {
+    if (q instanceof Questionnaire_ts_1.Questionnaire)
+        return q.toRequestEventContent();
+    return q;
+}
+/** Normalize either a `CollectorRequest` instance or any object exposing `permissions[]`. */
+function asRequest(request) {
+    // CollectorRequest exposes `.permissions` as a getter and `.content.permissions`; both work.
+    const r = request;
+    if (Array.isArray(r.permissions))
+        return r;
+    const c = request.content;
+    if (c && Array.isArray(c.permissions))
+        return { permissions: c.permissions };
+    return { permissions: [] };
+}
+/**
+ * Compute the coverage report. Read-only — does not mutate either input.
+ */
+function checkQuestionnaireCoverage(questionnaire, request) {
+    const content = asQuestionnaireContent(questionnaire);
+    const req = asRequest(request);
+    const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    const existingByStreamId = {};
+    for (const p of req.permissions) {
+        if (typeof p?.streamId === 'string')
+            existingByStreamId[p.streamId] = { streamId: p.streamId, level: p.level };
+    }
+    function findCoveringPermission(streamId) {
+        if (existingByStreamId[streamId])
+            return existingByStreamId[streamId];
+        // Walk ancestors via the model — a parent permission covers descendants.
+        const ancestors = model.streams.getParentsIds(streamId, false);
+        for (const parent of ancestors) {
+            if (existingByStreamId[parent])
+                return existingByStreamId[parent];
+        }
+        return null;
+    }
+    const perQuestion = [];
+    const unknownItems = [];
+    const missingItemKeysSet = new Set();
+    for (const [key, q] of Object.entries(content.questions ?? {})) {
+        const itemRef = q.itemRef;
+        const itemDef = model.itemsDefs.forKey(itemRef, false);
+        if (itemDef == null) {
+            if (!unknownItems.includes(itemRef))
+                unknownItems.push(itemRef);
+            perQuestion.push({
+                questionKey: key,
+                itemRef,
+                streamId: null,
+                coveredBy: null,
+                missing: false,
+                unknownItem: true
+            });
+            continue;
+        }
+        const streamId = itemDef.data?.streamId ?? null;
+        if (streamId == null) {
+            // Item exists in the model but has no streamId — shouldn't happen for
+            // real items, but be defensive: treat as a missing-but-unactionable row.
+            perQuestion.push({
+                questionKey: key,
+                itemRef,
+                streamId: null,
+                coveredBy: null,
+                missing: true,
+                unknownItem: false
+            });
+            continue;
+        }
+        const coveredBy = findCoveringPermission(streamId);
+        const missing = coveredBy == null;
+        if (missing)
+            missingItemKeysSet.add(itemRef);
+        perQuestion.push({
+            questionKey: key,
+            itemRef,
+            streamId,
+            coveredBy,
+            missing,
+            unknownItem: false
+        });
+    }
+    let proposedPermissions = [];
+    if (missingItemKeysSet.size > 0) {
+        // Reuse the same min-permission computation that CollectorRequest.buildPermissions uses.
+        // Pass existing permissions as `preRequest` so the result merges cleanly with what's there.
+        const preRequest = req.permissions
+            .filter((p) => typeof p?.streamId === 'string')
+            .map((p) => ({ streamId: p.streamId, defaultName: p.defaultName, level: p.level }));
+        const merged = model.authorizations.forItemKeys(Array.from(missingItemKeysSet), { preRequest: preRequest });
+        // Only return entries the request doesn't already have (same streamId + same level).
+        proposedPermissions = merged.filter((p) => {
+            const existing = existingByStreamId[p.streamId];
+            if (!existing)
+                return true;
+            return existing.level !== p.level;
+        });
+    }
+    return {
+        ok: perQuestion.every((c) => !c.missing),
+        perQuestion,
+        unknownItems,
+        proposedPermissions
+    };
+}
+
+
+/***/ },
+
 /***/ "./ts/appTemplates/resolveStream.ts"
 /*!******************************************!*\
   !*** ./ts/appTemplates/resolveStream.ts ***!
@@ -21436,7 +25219,7 @@ function isExistingStreamRef(v) {
  * Stream-tree resolver helpers (Plan 45 §6).
  *
  * Walk the parent chain of a runtime Pryv stream tree looking for
- * `clientData.hdsCustomField[eventType]` or `clientData.hdsSystemFeature[messageType]`.
+ * `clientData.hdsCustomField[eventType]`.
  *
  * Inheritance semantics (Plan 45 §2.4):
  *   - present non-empty def → use it
@@ -21451,8 +25234,6 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.buildStreamMap = buildStreamMap;
 exports.resolveStreamCustomFieldDetailed = resolveStreamCustomFieldDetailed;
 exports.resolveStreamCustomField = resolveStreamCustomField;
-exports.resolveStreamSystemFeatureDetailed = resolveStreamSystemFeatureDetailed;
-exports.resolveStreamSystemFeature = resolveStreamSystemFeature;
 exports.streamCustomFieldToVirtualItem = streamCustomFieldToVirtualItem;
 exports.customFieldDeclarationToVirtualItem = customFieldDeclarationToVirtualItem;
 const customFieldTypes_ts_1 = __webpack_require__(/*! ./customFieldTypes.js */ "./ts/appTemplates/customFieldTypes.ts");
@@ -21499,34 +25280,6 @@ function resolveStreamCustomFieldDetailed(streamTreeOrMap, streamId, eventType) 
 /** Convenience: returns the def or null (collapses opt-out and none). */
 function resolveStreamCustomField(streamTreeOrMap, streamId, eventType) {
     const r = resolveStreamCustomFieldDetailed(streamTreeOrMap, streamId, eventType);
-    return r.kind === 'def' ? r.def : null;
-}
-/**
- * Walk parent chain looking for `clientData.hdsSystemFeature[messageType]`.
- * Same semantics as `resolveStreamCustomFieldDetailed` (`def` / `optOut` / `none`).
- */
-function resolveStreamSystemFeatureDetailed(streamTreeOrMap, streamId, messageType) {
-    const map = isStreamMap(streamTreeOrMap) ? streamTreeOrMap : buildStreamMap(streamTreeOrMap);
-    const visited = new Set();
-    let cur = map.get(streamId);
-    while (cur) {
-        if (visited.has(cur.id))
-            return { kind: 'none' };
-        visited.add(cur.id);
-        const cd = cur.clientData;
-        const decl = cd?.hdsSystemFeature?.[messageType];
-        if (decl !== undefined) {
-            if ((0, customFieldTypes_ts_1.isEmptyDef)(decl))
-                return { kind: 'optOut' };
-            return { kind: 'def', def: decl };
-        }
-        const parentId = cur.parentId;
-        cur = parentId ? map.get(parentId) : undefined;
-    }
-    return { kind: 'none' };
-}
-function resolveStreamSystemFeature(streamTreeOrMap, streamId, messageType) {
-    const r = resolveStreamSystemFeatureDetailed(streamTreeOrMap, streamId, messageType);
     return r.kind === 'def' ? r.def : null;
 }
 const EVENT_TYPE_TO_FORM_TYPE = {
@@ -21617,6 +25370,721 @@ function customFieldDeclarationToVirtualItem(decl) {
         customField: def,
         eventTemplate() { return { streamIds: [decl.streamId], type: decl.eventType }; }
     };
+}
+
+
+/***/ },
+
+/***/ "./ts/cmc/appScope.ts"
+/*!****************************!*\
+  !*** ./ts/cmc/appScope.ts ***!
+  \****************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Idempotently provision streams under `:_cmc:apps` on a CMC-enabled account.
+ *
+ * The CMC plugin owns the `:_cmc:apps` namespace. The per-app leaf
+ * (`:_cmc:apps:<appCode>`) is auto-provisioned server-side by the
+ * `cmcAccessProvisionAppScopeHook` post-hook on `accesses.create` /
+ * `accesses.update`, whenever the access references a matching
+ * `:_cmc:apps:<appCode>:*` permission (deployed 2026-05-26, plan-61
+ * upstream fix). Callers therefore do not need to `streams.create` the
+ * leaf — this helper returns its id directly.
+ *
+ * Sub-scopes (`:_cmc:apps:<appCode>:<subPath>`) are NOT auto-provisioned
+ * and still require a `streams.create` here.
+ *
+ * Hoisted from three independent copies that had drifted across the
+ * doctor-dashboard, the Mira bridge, and an archived migration script.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.pryvErrorCode = pryvErrorCode;
+exports.ensureAppScope = ensureAppScope;
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+/** Extract a Pryv API error-code id from a thrown error, regardless of nesting depth. */
+function pryvErrorCode(e) {
+    const inner = e?.innerObject?.id;
+    if (inner != null)
+        return inner;
+    return e?.id;
+}
+/**
+ * Resolve `:_cmc:apps:<appCode>` (and optionally provision
+ * `:_cmc:apps:<appCode>:<subPath>`) on the caller's account.
+ *
+ * @param connection  caller's Pryv connection (doctor / patient / bridge).
+ * @param appCode     `hds-collector`, `hds-patient`, `hds-bridge-mira`, etc.
+ * @param subPath     optional leaf scope under the appScope (e.g. a collectorId).
+ * @returns           the streamId of the deepest scope.
+ */
+async function ensureAppScope(connection, appCode, subPath) {
+    const appScope = patchedPryv_ts_1.cmc.appScope(appCode); // :_cmc:apps:<appCode>
+    if (subPath == null)
+        return appScope;
+    const sub = appScope + ':' + subPath;
+    try {
+        await connection.apiOne('streams.create', { id: sub, parentId: appScope, name: subPath });
+    }
+    catch (e) {
+        const code = pryvErrorCode(e);
+        if (code !== 'item-already-exists')
+            throw e;
+    }
+    return sub;
+}
+
+
+/***/ },
+
+/***/ "./ts/cmc/constants.ts"
+/*!*****************************!*\
+  !*** ./ts/cmc/constants.ts ***!
+  \*****************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * Canonical constants for the HDS x CMC integration.
+ *
+ * Centralizes:
+ * - **App codes** — the `:_cmc:apps:<code>` namespace identifiers for each
+ *   HDS surface (patient app, doctor's collector flow, per-bridge services).
+ * - **CMC event types** — the well-known consent trigger/accept types the
+ *   CMC plugin emits.
+ * - **Stream-ID helpers** — build / extract the `:_cmc:apps:<appCode>:<sub>`
+ *   sub-scope pattern used by collector forms and chat anchors.
+ *
+ * Hoisted in Plan 60 B2 from per-file literals + per-file constants.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CMC_EVENT_TYPES = exports.CMC_APP_CODES = void 0;
+exports.appSubScope = appSubScope;
+exports.extractAppSubScopeSuffix = extractAppSubScopeSuffix;
+/** Locked HDS app codes for the `:_cmc:apps:<appCode>` namespace. */
+exports.CMC_APP_CODES = {
+    /** Patient-side HDS-webapp scope (chats anchor, inbox routing). */
+    PATIENT: 'hds-patient',
+    /** Doctor-side collector flow scope (form-spec sub-scopes + invites). */
+    COLLECTOR: 'hds-collector',
+    /** bridge-mira service-account scope (Mira API ingest). */
+    BRIDGE_MIRA: 'hds-bridge-mira',
+    /** bridge-athena service-account scope (Athena/EHR ingest; CMC wiring pending). */
+    BRIDGE_ATHENA: 'hds-bridge-athena'
+};
+/** Well-known CMC consent event types. */
+exports.CMC_EVENT_TYPES = {
+    /** Doctor's invite trigger event under their collector sub-scope. */
+    INVITE_TRIGGER: 'consent/request-cmc',
+    /** Patient's accept event (mirrored to the doctor's inbox via the plugin). */
+    ACCEPT: 'consent/accept-cmc'
+};
+/**
+ * Build `:_cmc:apps:<appCode>:<sub>` — the per-sub-scope stream id used by
+ * collector forms (`:<collectorId>`), chat anchors (`:chats:<peerSlug>`), etc.
+ *
+ * Mirrors the upstream `cmc.appScope(appCode)` builder which only handles the
+ * top-level appScope; this helper handles the one-level-deeper case the HDS
+ * integration uses pervasively.
+ */
+function appSubScope(appCode, sub) {
+    return ':_cmc:apps:' + appCode + ':' + sub;
+}
+/**
+ * Extract the trailing `<sub>` from a stream id of the form
+ * `:_cmc:apps:<appCode>:<sub>` (tolerant of any leading prefix — matches the
+ * `^.*?:_cmc:apps:<appCode>:` pattern used in the original sites).
+ * Returns the original streamId unchanged if the prefix is not found.
+ */
+function extractAppSubScopeSuffix(streamId, appCode) {
+    const escaped = appCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return streamId.replace(new RegExp('^.*?:_cmc:apps:' + escaped + ':'), '');
+}
+
+
+/***/ },
+
+/***/ "./ts/cmc/dataExport.ts"
+/*!******************************!*\
+  !*** ./ts/cmc/dataExport.ts ***!
+  \******************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * Data-export requests over the CMC system channel.
+ *
+ * GDPR / HIPAA portability: a patient asks the doctor for an export of the data
+ * the doctor holds on them, and the doctor marks the request fulfilled. Today this
+ * is an out-of-band email; here it is a structured, auditable exchange.
+ *
+ * No new event type: the CMC plugin only forwards its own types, so the request
+ * travels as a `notification/alert-cmc` (with `ackRequired`) and the fulfilment as
+ * the matching `notification/ack-cmc`. The plugin validates `level`, `title`,
+ * `body`, `ackRequired`, `ackId` and delivers every other content key verbatim,
+ * which is where the typed part lives:
+ *
+ *   content.hds = { kind: 'data-export-request', requestedAt, dueAt?, note? }
+ *
+ * Both sides use the same helpers on their OWN per-counterparty collectors stream
+ * (`<scope>:collectors:<peerSlug>`): the patient writes the alert there (the plugin
+ * delivers it to the doctor's collectors stream for the patient), the doctor writes
+ * the ack on its side (delivered back). Incoming events carry `content.from`
+ * stamped by the plugin; outgoing ones do not.
+ *
+ * Documented in data-model `documentation/CUSTOM-FIELDS-AND-SYSTEM.md`.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ET_ACK = exports.ET_ALERT = exports.DATA_EXPORT_ACK_PREFIX = exports.DATA_EXPORT_KIND = void 0;
+exports.buildDataExportRequestContent = buildDataExportRequestContent;
+exports.requestDataExport = requestDataExport;
+exports.fulfillDataExportRequest = fulfillDataExportRequest;
+exports.listDataExportRequests = listDataExportRequests;
+exports.parseDataExportEvents = parseDataExportEvents;
+exports.DATA_EXPORT_KIND = 'data-export-request';
+/** `ackId` prefix that marks an alert as a data-export request (the `hds` block is authoritative). */
+exports.DATA_EXPORT_ACK_PREFIX = 'hds-data-export:';
+exports.ET_ALERT = 'notification/alert-cmc';
+exports.ET_ACK = 'notification/ack-cmc';
+/** Alert content for a data-export request. Exported for tests and custom senders. */
+function buildDataExportRequestContent(params) {
+    const requestedAt = params.requestedAt ?? Math.floor(Date.now() / 1000);
+    const ackId = params.ackId ?? exports.DATA_EXPORT_ACK_PREFIX + randomId();
+    const locale = params.locale || 'en';
+    const lines = [TEXT[locale]?.body ?? TEXT.en.body];
+    if (params.dueAt != null)
+        lines.push((TEXT[locale]?.due ?? TEXT.en.due) + ' ' + new Date(params.dueAt * 1000).toISOString().slice(0, 10));
+    if (params.note)
+        lines.push(params.note);
+    return {
+        level: 'info',
+        title: { [locale]: TEXT[locale]?.title ?? TEXT.en.title },
+        body: { [locale]: lines.join('\n') },
+        ackRequired: true,
+        ackId,
+        hds: {
+            kind: exports.DATA_EXPORT_KIND,
+            requestedAt,
+            ...(params.dueAt != null ? { dueAt: params.dueAt } : {}),
+            ...(params.note ? { note: params.note } : {})
+        }
+    };
+}
+/** Patient side: post the request on the own collectors stream; the plugin delivers it to the doctor. */
+async function requestDataExport(connection, params) {
+    if (!params?.collectorStreamId)
+        throw new Error('requestDataExport: collectorStreamId is required');
+    const content = buildDataExportRequestContent(params);
+    const event = await connection.apiOne('events.create', {
+        streamIds: [params.collectorStreamId],
+        type: exports.ET_ALERT,
+        content
+    }, 'event');
+    return { alertEventId: event.id, ackId: content.ackId };
+}
+/** Doctor side: acknowledge a received request; the plugin delivers the ack to the patient. */
+async function fulfillDataExportRequest(connection, params) {
+    if (!params?.collectorStreamId || !params.alertEventId || !params.ackId) {
+        throw new Error('fulfillDataExportRequest: collectorStreamId, alertEventId and ackId are required');
+    }
+    const event = await connection.apiOne('events.create', {
+        streamIds: [params.collectorStreamId],
+        type: exports.ET_ACK,
+        content: { alertEventId: params.alertEventId, ackId: params.ackId }
+    }, 'event');
+    return { ackEventId: event.id };
+}
+/** Either side: the data-export requests on one collectors stream, newest first, joined with their acks. */
+async function listDataExportRequests(connection, collectorStreamId, opts = {}) {
+    const events = await connection.apiOne('events.get', {
+        streams: [collectorStreamId],
+        types: [exports.ET_ALERT, exports.ET_ACK],
+        limit: opts.limit ?? 500,
+        sortAscending: false
+    }, 'events');
+    return parseDataExportEvents(events);
+}
+/** Pure join of alert + ack events into request records (exported for tests). */
+function parseDataExportEvents(events) {
+    const acks = new Map();
+    for (const e of events) {
+        if (e.type !== exports.ET_ACK)
+            continue;
+        const c = e.content || {};
+        for (const key of [c.ackId, c.alertEventId]) {
+            if (typeof key === 'string' && key.length > 0 && !acks.has(key))
+                acks.set(key, { id: e.id, time: e.time ?? 0 });
+        }
+    }
+    const out = [];
+    for (const e of events) {
+        if (e.type !== exports.ET_ALERT)
+            continue;
+        const c = e.content || {};
+        const hds = c.hds;
+        const isExport = (hds && hds.kind === exports.DATA_EXPORT_KIND) || (typeof c.ackId === 'string' && c.ackId.startsWith(exports.DATA_EXPORT_ACK_PREFIX));
+        if (!isExport)
+            continue;
+        const ackId = typeof c.ackId === 'string' ? c.ackId : '';
+        const ack = acks.get(ackId) ?? acks.get(e.id) ?? null;
+        const from = c.from && typeof c.from.username === 'string' ? { username: c.from.username, host: String(c.from.host ?? '') } : null;
+        out.push({
+            alertEventId: e.id,
+            ackId,
+            requestedAt: typeof hds?.requestedAt === 'number' ? hds.requestedAt : (e.time ?? 0),
+            dueAt: typeof hds?.dueAt === 'number' ? hds.dueAt : null,
+            note: typeof hds?.note === 'string' ? hds.note : null,
+            direction: from ? 'received' : 'sent',
+            from,
+            status: ack ? 'fulfilled' : 'pending',
+            fulfilledAt: ack ? ack.time : null,
+            ackEventId: ack ? ack.id : null
+        });
+    }
+    out.sort((a, b) => b.requestedAt - a.requestedAt);
+    return out;
+}
+const TEXT = {
+    en: { title: 'Data export request', body: 'Please provide an export of the data you hold about me.', due: 'Requested by:' },
+    fr: { title: 'Demande d’export de données', body: 'Merci de me fournir un export des données que vous détenez à mon sujet.', due: 'Souhaité avant le :' },
+    es: { title: 'Solicitud de exportación de datos', body: 'Por favor, facilíteme una exportación de los datos que tiene sobre mí.', due: 'Antes del:' }
+};
+function randomId() {
+    const g = globalThis;
+    if (g.crypto?.randomUUID)
+        return g.crypto.randomUUID();
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+
+/***/ },
+
+/***/ "./ts/cmc/formSpec.ts"
+/*!****************************!*\
+  !*** ./ts/cmc/formSpec.ts ***!
+  \****************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Plan 59 Phase 5a/5b — FormSpec helpers for the HDS x CMC integration.
+ *
+ * The FormSpec is HDS's data-set template (title, description, consent,
+ * permissions, sections, custom-field/existing-stream refs, features).
+ * It lives independently of CMC, but is consumed at invite-time to
+ * derive the CMC `requestedPermissions` and is mirrored as a snapshot
+ * onto the per-invite trigger event content (Q-F6 lock: snapshot-frozen).
+ *
+ * Storage (Q-F5 lock: hds-form-spec/v1 — slash separator required by Pryv events.get types regex):
+ * - **Doctor side**: one canonical template event per data-set, stored
+ *   on the doctor's `:_cmc:apps:hds-collector:<collectorId>` scope stream.
+ * - **Per-invite snapshot**: doctor's `consent/request-cmc` trigger event
+ *   carries `content.hdsFormSpec: <full snapshot>` (Candidate C). Q-F2
+ *   lock confirms the plugin accepts unknown content keys.
+ * - **Patient side**: mirrored to the patient's own `consent/accept-cmc`
+ *   event content via `mirrorFormSpecOnAcceptEvent` post-accept (post-
+ *   acceptInvite the trigger event becomes unreachable from the patient
+ *   side, so the snapshot must live with the patient's accept event).
+ *
+ * Chat-only data sets (Q-F4 lock): when a FormSpec has no real
+ * permissions, `deriveCmcPermissions` injects the `:hds:noop` placeholder
+ * so `cmc.createInvite`'s non-empty-permissions check passes. The
+ * patient's hds-webapp provisions `:hds:noop` on first launch.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDS_NOOP_PERMISSION = exports.HDS_NOOP_STREAM_ID = exports.FORM_SPEC_EVENT_TYPE = void 0;
+exports.validateFormSpecItemKeys = validateFormSpecItemKeys;
+exports.saveFormSpec = saveFormSpec;
+exports.loadFormSpec = loadFormSpec;
+exports.eventToFormSpecRecord = eventToFormSpecRecord;
+exports.listFormSpecs = listFormSpecs;
+exports.getFormSpecById = getFormSpecById;
+exports.createInviteWithFormSpec = createInviteWithFormSpec;
+exports.mirrorFormSpecOnAcceptEvent = mirrorFormSpecOnAcceptEvent;
+exports.readOfferWithFormSpec = readOfferWithFormSpec;
+exports.deriveCmcPermissions = deriveCmcPermissions;
+exports.provisionHdsNoop = provisionHdsNoop;
+exports.isChatOnlyFormSpec = isChatOnlyFormSpec;
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const constants_ts_1 = __webpack_require__(/*! ./constants.js */ "./ts/cmc/constants.ts");
+/**
+ * Event type for the canonical FormSpec template event on the doctor side.
+ *
+ * Must satisfy Pryv's events.get `types` filter regex
+ * `^(series:)?[a-z0-9-]+/(\*|[a-z0-9-]+)$` — i.e. `<category>/<name>` with
+ * `/` (not `:`) separator. Original Plan 59 Phase 5a value was
+ * `'hds:form-spec-v1'` which `events.create` accepted silently but
+ * `events.get` rejected with `invalid-parameters-format` when used in a
+ * types filter; corrected to slash form in plan 61 C1.a verification
+ * (Round 7, 2026-05-27). No production data was migrated — the only
+ * consumer of saveFormSpec was added in C1.a itself.
+ */
+exports.FORM_SPEC_EVENT_TYPE = 'hds-form-spec/v1';
+/** The HDS no-op permission stream — see Q-F3/F4 in the FormSpec design brief. */
+exports.HDS_NOOP_STREAM_ID = 'hds-noop';
+/** Permission level used by the chat-only placeholder. Read on an empty stream is a no-op. */
+exports.HDS_NOOP_PERMISSION = { streamId: exports.HDS_NOOP_STREAM_ID, level: 'read' };
+/**
+ * Check every `sections[].itemKeys` entry of a FormSpec against the published
+ * data-model.
+ *
+ * **Why this exists.** FormSpecs reference item keys *directly*, while events
+ * resolve through `forEvent(streamId + eventType)`. An item rename that keeps
+ * streamId and eventType therefore orphans nothing in stored events and looks
+ * safe — but it silently strands every spec naming the old key. That is exactly
+ * how data-model 2.3.0 (`b867215`) withdrew the `fertility-hormone-{fsh,hcg,pdg,e3g}`
+ * rename aliases on the reasoning that "no stored event referenced the item key",
+ * which was true of events and false of specs. Consumers now skip unresolvable
+ * keys rather than throwing (`B-2026-09-03-3`), so the failure is silent: the
+ * item simply never appears in the form and the subject cannot enter it.
+ *
+ * Read-only and model-only — it does not look at stored data. Returns `[]` for a
+ * clean spec, so the result doubles as a boolean.
+ *
+ * @param formSpec The spec to check.
+ * @param model Defaults to the initialised singleton. Pass one explicitly in tests.
+ */
+function validateFormSpecItemKeys(formSpec, model) {
+    const m = model ?? (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    const issues = [];
+    const activeByStreamId = new Map();
+    for (const def of m.itemsDefs.getAllActive()) {
+        const streamId = def.data?.streamId;
+        if (typeof streamId !== 'string')
+            continue;
+        const list = activeByStreamId.get(streamId);
+        if (list)
+            list.push(def.key);
+        else
+            activeByStreamId.set(streamId, [def.key]);
+    }
+    for (const section of (formSpec.sections ?? [])) {
+        for (const itemKey of (section.itemKeys ?? [])) {
+            const def = m.itemsDefs.forKey(itemKey, false);
+            if (def == null) {
+                issues.push({ sectionKey: section.key, itemKey, reason: 'unknown' });
+                continue;
+            }
+            if (!def.isDeprecated)
+                continue;
+            // Only suggest a replacement when it is unambiguous. Several active items
+            // can share a streamId (they differ by eventType), and picking one of those
+            // would be a guess that changes the unit data is recorded in.
+            const candidates = activeByStreamId.get(def.data?.streamId) ?? [];
+            const issue = { sectionKey: section.key, itemKey, reason: 'deprecated' };
+            if (candidates.length === 1)
+                issue.replacement = candidates[0];
+            issues.push(issue);
+        }
+    }
+    return issues;
+}
+/** One-line rendering of an issue, shared by the save-time warning and callers. */
+function describeItemKeyIssue(issue) {
+    const where = `${issue.sectionKey}/${issue.itemKey}`;
+    if (issue.reason === 'unknown')
+        return `${where} (not defined by the published data-model)`;
+    return issue.replacement
+        ? `${where} (deprecated — use ${issue.replacement})`
+        : `${where} (deprecated)`;
+}
+/**
+ * Idempotent upsert of the canonical FormSpec event on the doctor's CMC
+ * scope stream. One event per data-set. Re-saving with the same
+ * collectorScopeStreamId updates the existing event in place.
+ *
+ * Item keys are checked against the published data-model and any problem is
+ * **logged, not thrown** — a collector re-saving an already-stale spec must not
+ * be locked out of their own data set, and the authoring UI is the right place
+ * to act on {@link validateFormSpecItemKeys} before it gets this far.
+ *
+ * @param connection Doctor's master connection.
+ * @param collectorScopeStreamId `:_cmc:apps:hds-collector:<collectorId>` (must already exist).
+ * @param formSpec The FormSpec to persist.
+ * @returns The created or updated event.
+ */
+async function saveFormSpec(connection, collectorScopeStreamId, formSpec) {
+    if (formSpec.version !== 1) {
+        throw new Error(`saveFormSpec: unsupported FormSpec version ${formSpec.version}`);
+    }
+    // Advisory only, and skipped outright when the caller never ran initHDSModel:
+    // there is nothing to check against, and a save must not depend on it. Any
+    // failure inside the validator itself is a real bug and is left to propagate.
+    const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    if (model.isLoaded) {
+        const issues = validateFormSpecItemKeys(formSpec, model);
+        if (issues.length > 0) {
+            logger.warn(`saveFormSpec: ${issues.length} item key(s) in "${collectorScopeStreamId}" do not resolve ` +
+                `cleanly against the published data-model — ${issues.map(describeItemKeyIssue).join(', ')}`);
+        }
+    }
+    const existing = await loadFormSpec(connection, collectorScopeStreamId);
+    if (existing) {
+        return await connection.apiOne('events.update', {
+            id: existing.id,
+            update: { content: formSpec }
+        }, 'event');
+    }
+    return await connection.apiOne('events.create', {
+        streamIds: [collectorScopeStreamId],
+        type: exports.FORM_SPEC_EVENT_TYPE,
+        content: formSpec
+    }, 'event');
+}
+/**
+ * Read the canonical FormSpec event from the doctor's CMC scope stream.
+ * Returns null if no event exists yet (fresh data-set).
+ */
+async function loadFormSpec(connection, collectorScopeStreamId) {
+    const events = await connection.apiOne('events.get', {
+        streams: [collectorScopeStreamId],
+        types: [exports.FORM_SPEC_EVENT_TYPE],
+        limit: 1
+    }, 'events');
+    return (events && events.length > 0) ? events[0] : null;
+}
+/**
+ * Pure helper: lift a raw `hds-form-spec/v1` event onto its scope-stream
+ * `collectorId`. Exported for unit-testing in isolation from the I/O layer.
+ *
+ * @param event   a `hds-form-spec/v1` event read from a `:_cmc:apps:<appCode>:*` stream.
+ * @param appCode defaults to `CMC_APP_CODES.COLLECTOR`.
+ */
+function eventToFormSpecRecord(event, appCode = constants_ts_1.CMC_APP_CODES.COLLECTOR) {
+    const streamIds = (event.streamIds || []);
+    const marker = ':_cmc:apps:' + appCode + ':';
+    const subScope = streamIds.find(s => s.indexOf(marker) !== -1) ?? streamIds[0] ?? '';
+    const collectorId = (0, constants_ts_1.extractAppSubScopeSuffix)(subScope, appCode);
+    return {
+        collectorId,
+        formSpec: event.content,
+        event
+    };
+}
+/**
+ * Doctor-side: list every FormSpec the doctor owns under their
+ * `:_cmc:apps:<appCode>` scope (one per data-set). Every result is
+ * "published" — saveFormSpec writes the canonical event immediately
+ * (no draft state in the CMC model).
+ *
+ * Phase C (plan 61): replaces `appManaging.getCollectors()`.
+ */
+async function listFormSpecs(connection, opts) {
+    const appCode = opts?.appCode ?? constants_ts_1.CMC_APP_CODES.COLLECTOR;
+    const parentStream = patchedPryv_ts_1.cmc.appScope(appCode);
+    const events = await connection.apiOne('events.get', {
+        streams: [parentStream],
+        types: [exports.FORM_SPEC_EVENT_TYPE],
+        limit: opts?.limit ?? 1000
+    }, 'events');
+    return (events ?? []).map(e => eventToFormSpecRecord(e, appCode));
+}
+/**
+ * Doctor-side: load a single FormSpec by its `collectorId`. Returns null
+ * if no FormSpec event exists yet on `:_cmc:apps:<appCode>:<collectorId>`.
+ *
+ * Phase C (plan 61): replaces `appManaging.getCollectorById()`.
+ */
+async function getFormSpecById(connection, collectorId, opts) {
+    const appCode = opts?.appCode ?? constants_ts_1.CMC_APP_CODES.COLLECTOR;
+    const subScope = (0, constants_ts_1.appSubScope)(appCode, collectorId);
+    const event = await loadFormSpec(connection, subScope);
+    if (!event)
+        return null;
+    return eventToFormSpecRecord(event, appCode);
+}
+/**
+ * Doctor-side: mint a CMC invite with the FormSpec snapshot embedded on
+ * the trigger event content at events.create time.
+ *
+ * **Critical:** this is the ONLY way to get the snapshot to propagate
+ * to the patient's capability access. The CMC plugin's capability-mint
+ * hook copies the trigger event content into a separate offer event
+ * (under `:_cmc:_internal:offer:<capId>`) AT MINT TIME — once. Later
+ * `events.update` on the trigger event does NOT update the offer event,
+ * so `cmc.readOffer` (which reads the offer event) won't see anything
+ * stamped post-mint. (Verified by `verify-formspec.mjs` 2026-05-21.)
+ *
+ * Therefore we bypass `cmc.createInvite` (which doesn't accept arbitrary
+ * extra content keys) and call `events.create` directly with `hdsFormSpec`
+ * already in content. The capability-mint hook fires inside the
+ * events.create chain, copies the content (including hdsFormSpec) to
+ * the offer event, and stamps capabilityUrl + capabilityAccessId +
+ * capabilityExpiresAt on the returned event.
+ *
+ * @returns the same shape as `cmc.createInvite` for caller compatibility.
+ */
+async function createInviteWithFormSpec(connection, params) {
+    const requesterMeta = Object.assign({ displayName: params.displayName, appId: params.appCode }, params.requesterMeta ?? {});
+    const request = {
+        title: params.title ?? params.formSpec.title ?? { en: params.displayName },
+        description: params.description ?? params.formSpec.description ?? { en: '' },
+        consent: params.consent ?? params.formSpec.consent ?? { en: '' },
+        permissions: params.requestedPermissions
+    };
+    if (params.features)
+        request.features = params.features;
+    if (params.expiresAt)
+        request.expiresAt = params.expiresAt;
+    if (params.accessType)
+        request.accessType = params.accessType;
+    const content = {
+        to: params.to === undefined ? null : params.to,
+        capabilityRequested: true,
+        request,
+        requesterMeta,
+        // HDS-extension: snapshot the FormSpec on the trigger event content
+        // so the capability-mint hook copies it into the offer event.
+        hdsFormSpec: params.formSpec
+    };
+    if (params.mode && params.mode !== 'single-use') {
+        content.capability = { mode: params.mode };
+    }
+    const event = await connection.apiOne('events.create', {
+        streamIds: [params.scopeStreamId],
+        type: constants_ts_1.CMC_EVENT_TYPES.INVITE_TRIGGER,
+        content
+    }, 'event');
+    return {
+        inviteEventId: event.id,
+        capabilityUrl: event?.content?.capabilityUrl,
+        mode: event?.content?.capability?.mode ?? params.mode ?? 'single-use',
+        expiresAt: event?.content?.capabilityExpiresAt ?? event?.content?.request?.expiresAt
+    };
+}
+/**
+ * Patient-side: mirror the FormSpec snapshot onto the patient's own
+ * `consent/accept-cmc` event content post-accept. Without this the
+ * snapshot is unreachable on the patient side (the doctor's trigger
+ * event is gone behind the consumed capability).
+ *
+ * @param connection Patient's master connection.
+ * @param acceptEventId The patient's accept event id (from `cmc.acceptInvite`'s return).
+ * @param formSpec Snapshot read pre-accept (e.g. via `readOfferWithFormSpec`).
+ */
+async function mirrorFormSpecOnAcceptEvent(connection, acceptEventId, formSpec) {
+    const current = await connection.apiOne('events.getOne', {
+        id: acceptEventId
+    }, 'event');
+    const mergedContent = { ...(current?.content || {}), hdsFormSpec: formSpec };
+    return await connection.apiOne('events.update', {
+        id: acceptEventId,
+        update: { content: mergedContent }
+    }, 'event');
+}
+/**
+ * Patient-side: pre-accept, read the full offer trigger-event content
+ * including any `hdsFormSpec` snapshot. The SDK's `cmc.readOffer` filters
+ * to a fixed shape and drops HDS-extension fields, so this is a thin
+ * variant that returns the raw content.
+ *
+ * Single-use capabilities consume on accept — call this BEFORE `cmc.acceptInvite`.
+ */
+async function readOfferWithFormSpec(capabilityUrl, opts) {
+    const pryvMod = (opts && opts.pryv) || patchedPryv_ts_1.pryv;
+    const cap = new pryvMod.Connection(capabilityUrl);
+    const events = await cap.apiOne('events.get', {
+        types: [constants_ts_1.CMC_EVENT_TYPES.INVITE_TRIGGER],
+        limit: 1
+    }, 'events');
+    if (!events || events.length === 0) {
+        throw new Error('readOfferWithFormSpec: capability offer stream empty');
+    }
+    const content = events[0]?.content || {};
+    return {
+        content,
+        hdsFormSpec: content.hdsFormSpec ?? null
+    };
+}
+/**
+ * Derive the `requestedPermissions` array for `cmc.createInvite` from a
+ * FormSpec. If the FormSpec has no real permissions (chat-only data set),
+ * inject the `hds-noop` placeholder so the CMC schema's non-empty-
+ * permissions check passes (Q-F4 lock).
+ *
+ * The placeholder grants `read` on an empty patient-side stream — a
+ * functional no-op. The patient's hds-webapp provisions `hds-noop` at
+ * first launch (Q-F3: patient-only).
+ *
+ * Note: the stream is plain `hds-noop` (no colon prefix) — `:hds:` is
+ * not a registered system-stream namespace on open-pryv.io, so the
+ * api-server's streams.create rejects `:hds:noop` with `invalid-request-
+ * structure`. A regular user stream works fine.
+ */
+function deriveCmcPermissions(formSpec) {
+    const perms = (formSpec.permissions || []).filter(p => p && p.streamId && p.level);
+    if (perms.length > 0)
+        return perms;
+    return [{ ...exports.HDS_NOOP_PERMISSION }];
+}
+/**
+ * Patient-side: provision the `hds-noop` stream used by the chat-only
+ * placeholder permission. Idempotent — re-runs OK.
+ */
+async function provisionHdsNoop(connection) {
+    try {
+        await connection.apiOne('streams.create', {
+            id: exports.HDS_NOOP_STREAM_ID,
+            name: 'HDS no-op (CMC chat-only placeholder)'
+        });
+    }
+    catch (e) {
+        const code = e?.innerObject?.id ?? e?.id;
+        if (code === 'item-already-exists')
+            return;
+        throw e;
+    }
+}
+/**
+ * Doctor-side helper: did the FormSpec produce a chat-only invite (i.e.
+ * its only granted permission is `:hds:noop`)? Used by listInviteRecordsFor
+ * + PatientsTable to surface "chat-only relationship" badges.
+ */
+function isChatOnlyFormSpec(formSpec) {
+    if (!formSpec)
+        return false;
+    const perms = (formSpec.permissions || []).filter(p => p && p.streamId && p.level);
+    return perms.length === 0;
 }
 
 
@@ -22035,7 +26503,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -22043,6 +26511,8 @@ const settings = __importStar(__webpack_require__(/*! ./settings.js */ "./ts/set
 exports.settings = settings;
 const patchedPryv_ts_1 = __webpack_require__(/*! ./patchedPryv.js */ "./ts/patchedPryv.ts");
 Object.defineProperty(exports, "pryv", ({ enumerable: true, get: function () { return patchedPryv_ts_1.pryv; } }));
+Object.defineProperty(exports, "cmc", ({ enumerable: true, get: function () { return patchedPryv_ts_1.cmc; } }));
+Object.defineProperty(exports, "encryption", ({ enumerable: true, get: function () { return patchedPryv_ts_1.encryption; } }));
 const HDSModel_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel.js */ "./ts/HDSModel/HDSModel.ts");
 Object.defineProperty(exports, "HDSModel", ({ enumerable: true, get: function () { return HDSModel_ts_1.HDSModel; } }));
 const appTemplates = __importStar(__webpack_require__(/*! ./appTemplates/appTemplates.js */ "./ts/appTemplates/appTemplates.ts"));
@@ -22070,6 +26540,9 @@ Object.defineProperty(exports, "SETTING_TYPES", ({ enumerable: true, get: functi
 const HDSProfile_ts_1 = __webpack_require__(/*! ./settings/HDSProfile.js */ "./ts/settings/HDSProfile.ts");
 Object.defineProperty(exports, "HDSProfile", ({ enumerable: true, get: function () { return HDSProfile_ts_1.HDSProfile; } }));
 Object.defineProperty(exports, "PROFILE_FIELDS", ({ enumerable: true, get: function () { return HDSProfile_ts_1.PROFILE_FIELDS; } }));
+const accountPreferences_ts_1 = __webpack_require__(/*! ./settings/accountPreferences.js */ "./ts/settings/accountPreferences.ts");
+Object.defineProperty(exports, "resolveAccountPreference", ({ enumerable: true, get: function () { return accountPreferences_ts_1.resolveAccountPreference; } }));
+Object.defineProperty(exports, "hasAccountPreference", ({ enumerable: true, get: function () { return accountPreferences_ts_1.hasAccountPreference; } }));
 const HDSModel_Conversions_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Conversions.js */ "./ts/HDSModel/HDSModel-Conversions.ts");
 Object.defineProperty(exports, "HDSModelConversions", ({ enumerable: true, get: function () { return HDSModel_Conversions_ts_1.HDSModelConversions; } }));
 const HDSModel_Converters_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Converters.js */ "./ts/HDSModel/HDSModel-Converters.ts");
@@ -22086,6 +26559,14 @@ const errors_ts_1 = __webpack_require__(/*! ./errors.js */ "./ts/errors.ts");
 Object.defineProperty(exports, "HDSLibError", ({ enumerable: true, get: function () { return errors_ts_1.HDSLibError; } }));
 const overloadExtract_ts_1 = __webpack_require__(/*! ./HDSModel/overloadExtract.js */ "./ts/HDSModel/overloadExtract.ts");
 Object.defineProperty(exports, "extractOverloadAsDefinitions", ({ enumerable: true, get: function () { return overloadExtract_ts_1.extractOverloadAsDefinitions; } }));
+const cmcFormSpec = __importStar(__webpack_require__(/*! ./cmc/formSpec.js */ "./ts/cmc/formSpec.ts"));
+exports.cmcFormSpec = cmcFormSpec;
+const cmcAppScope = __importStar(__webpack_require__(/*! ./cmc/appScope.js */ "./ts/cmc/appScope.ts"));
+exports.cmcAppScope = cmcAppScope;
+const cmcConstants = __importStar(__webpack_require__(/*! ./cmc/constants.js */ "./ts/cmc/constants.ts"));
+exports.cmcConstants = cmcConstants;
+const cmcDataExport = __importStar(__webpack_require__(/*! ./cmc/dataExport.js */ "./ts/cmc/dataExport.ts"));
+exports.cmcDataExport = cmcDataExport;
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
 exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
@@ -22093,6 +26574,8 @@ const HDSLib = {
     getHDSModel: exports.getHDSModel,
     initHDSModel: exports.initHDSModel,
     pryv: patchedPryv_ts_1.pryv,
+    cmc: patchedPryv_ts_1.cmc,
+    encryption: patchedPryv_ts_1.encryption,
     settings,
     HDSService: HDSService_ts_1.HDSService,
     HDSModel: HDSModel_ts_1.HDSModel,
@@ -22111,10 +26594,16 @@ const HDSLib = {
     SETTING_TYPES: HDSSettings_ts_1.SETTING_TYPES,
     HDSProfile: HDSProfile_ts_1.HDSProfile,
     PROFILE_FIELDS: HDSProfile_ts_1.PROFILE_FIELDS,
+    resolveAccountPreference: accountPreferences_ts_1.resolveAccountPreference,
+    hasAccountPreference: accountPreferences_ts_1.hasAccountPreference,
     HDSModelConversions: HDSModel_Conversions_ts_1.HDSModelConversions,
     HDSModelConverters: HDSModel_Converters_ts_1.HDSModelConverters,
     EuclidianDistanceEngine: EuclidianDistanceEngine_ts_1.EuclidianDistanceEngine,
-    extractOverloadAsDefinitions: overloadExtract_ts_1.extractOverloadAsDefinitions
+    extractOverloadAsDefinitions: overloadExtract_ts_1.extractOverloadAsDefinitions,
+    cmcFormSpec,
+    cmcAppScope,
+    cmcConstants,
+    cmcDataExport
 };
 exports["default"] = HDSLib;
 
@@ -22133,6 +26622,7 @@ exports["default"] = HDSLib;
  * basic localization functions
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.onPreferredLocalesChange = onPreferredLocalesChange;
 exports.getPreferredLocales = getPreferredLocales;
 exports.getSupportedLocales = getSupportedLocales;
 exports.resetPreferredLocales = resetPreferredLocales;
@@ -22143,6 +26633,23 @@ const errors_ts_1 = __webpack_require__(/*! ./errors.js */ "./ts/errors.ts");
 const supportedLocales = ['en', 'fr', 'es'];
 Object.freeze(supportedLocales);
 let preferredLocales = [...supportedLocales];
+const localesListeners = new Set();
+/**
+ * Subscribe to preferred-locale changes. Returns an unsubscribe function.
+ *
+ * Why this exists: `localizeText()` reads module-level state at call time, so a
+ * consumer that already rendered a string has no way to learn the locale moved
+ * underneath it. Without a notification the caller only re-localizes on a full
+ * reload — which was `BUGS.md` B-2026-07-10-1 (hds-webapp's live language switch
+ * left data-model / method-spec strings in the old language until reload).
+ *
+ * Listeners fire only when the effective locale ORDER actually changes, so a
+ * redundant `setPreferredLocales` with the same result does not churn consumers.
+ */
+function onPreferredLocalesChange(listener) {
+    localesListeners.add(listener);
+    return () => { localesListeners.delete(listener); };
+}
 /**
  * get the current preferred locales
  */
@@ -22163,15 +26670,21 @@ function resetPreferredLocales() {
 }
 /**
  * return the translation of this item considering the setting of preffered language
+ *
+ * Empty strings `""` are valid translations (the author chose "no text"); the
+ * function returns them as-is and falls through to less-preferred locales only
+ * when a translation is genuinely `null`/`undefined`. Only a missing `en` key
+ * throws.
  */
 function localizeText(textItem) {
     if (textItem == null)
         return null;
-    if (!textItem.en)
+    if (textItem.en == null)
         throw new errors_ts_1.HDSLibError('textItems must have an english translation', { textItem });
     for (const l of preferredLocales) {
-        if (textItem[l])
-            return textItem[l];
+        const v = textItem[l];
+        if (v != null)
+            return v;
     }
     return textItem.en;
 }
@@ -22186,7 +26699,22 @@ function setPreferredLocales(arrayOfLocals) {
     if (unsupportedLocales.length > 0) {
         throw new errors_ts_1.HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
     }
-    preferredLocales = [...new Set([...arrayOfLocals, ...preferredLocales])];
+    const next = [...new Set([...arrayOfLocals, ...preferredLocales])];
+    // Compare BEFORE assigning so listeners fire only on a real change.
+    const changed = next.length !== preferredLocales.length || next.some((l, i) => l !== preferredLocales[i]);
+    preferredLocales = next;
+    if (!changed)
+        return;
+    const snapshot = [...preferredLocales];
+    for (const listener of [...localesListeners]) {
+        // One bad listener must not break a locale change for every other consumer.
+        try {
+            listener(snapshot);
+        }
+        catch (e) {
+            console.error('onPreferredLocalesChange listener threw', e);
+        }
+    }
 }
 /**
  * throw errors if an item is not of type localizableText
@@ -22256,11 +26784,44 @@ function log(type) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.pryv = void 0;
+exports.encryption = exports.cmc = exports.pryv = void 0;
 /**
  * CJS→ESM interop for the pryv package with plugin patching.
  *
@@ -22271,15 +26832,19 @@ exports.pryv = void 0;
 const pryv_1 = __importDefault(__webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js"));
 const monitor_1 = __importDefault(__webpack_require__(/*! @pryv/monitor */ "./node_modules/@pryv/monitor/src/index.js"));
 const socket_io_1 = __importDefault(__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js"));
+const _cmc = __importStar(__webpack_require__(/*! @pryv/cmc */ "./node_modules/@pryv/cmc/src/index.js"));
+const _encryption = __importStar(__webpack_require__(/*! @pryv/encryption */ "./node_modules/@pryv/encryption/src/index.js"));
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
 (0, monitor_1.default)(pryv_1.default);
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
 (0, socket_io_1.default)(pryv_1.default);
-// Declaration merging: the exported `pryv` const provides the runtime value,
-// and the namespace augments it with all the types from pryv's .d.ts.
-// This lets consumers write both `new pryv.Connection(...)` and `x: pryv.Connection`.
 // eslint-disable-next-line import-x/export -- declaration merging: value + type namespace
 exports.pryv = pryv_1.default;
+exports.cmc = _cmc;
+// Official client-side encryption add-on (EventsCipher + Keyring, WebCrypto, zero runtime deps).
+// Re-exported so consumers reach it through hds-lib and version-alignment with the embedded
+// pryv ecosystem stays hds-lib's responsibility (see healthdatasafe/hds-lib-js#12).
+exports.encryption = _encryption;
 
 
 /***/ },
@@ -22293,13 +26858,15 @@ exports.pryv = pryv_1.default;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.setPreferredLocales = void 0;
+exports.onPreferredLocalesChange = exports.setPreferredLocales = void 0;
 exports.setServiceInfoURL = setServiceInfoURL;
 exports.getServiceInfoURL = getServiceInfoURL;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "setPreferredLocales", ({ enumerable: true, get: function () { return localizeText_ts_1.setPreferredLocales; } }));
-// todo change when in production
-let serviceInfoUrl = 'https://demo.datasafe.dev/reg/service/info';
+Object.defineProperty(exports, "onPreferredLocalesChange", ({ enumerable: true, get: function () { return localizeText_ts_1.onPreferredLocalesChange; } }));
+// Production HDS registry. Apps targeting another platform (demo, local
+// backloop) must call setServiceInfoURL() before any HDSService/HDSModel use.
+let serviceInfoUrl = 'https://reg.api.datasafe.dev/service/info';
 /**
  * Set default service info URL
  */
@@ -22327,9 +26894,18 @@ function getServiceInfoURL() {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HDSProfile = exports.PROFILE_FIELDS = void 0;
 const getAttachmentUrl_ts_1 = __webpack_require__(/*! ../toolkit/getAttachmentUrl.js */ "./ts/toolkit/getAttachmentUrl.ts");
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 /**
  * Profile field definitions — each maps to a Pryv event in the profile/ stream tree.
  * These are account-level, shared across all connections (unlike HDSSettings which is per-app).
+ *
+ * Two groups:
+ * - **Identity** (displayName…country) — who the account holder is.
+ * - **Account preferences** (preferredLocales…unitSystem) — how they want data presented,
+ *   shared across every HDS app. They reuse the `settings/*` event types of the per-app
+ *   HDSSettings (so no new data-model types are needed) but live on the account-level
+ *   `profile-preferences` stream, which is what makes them interoperable. `theme` is
+ *   deliberately NOT here — it stays per-app on HDSSettings.
  */
 exports.PROFILE_FIELDS = {
     displayName: { streamId: 'profile-display-name', eventType: 'contact/display-name' },
@@ -22339,6 +26915,10 @@ exports.PROFILE_FIELDS = {
     dateOfBirth: { streamId: 'profile-date-of-birth', eventType: 'date/iso-8601' },
     sex: { streamId: 'profile-sex', eventType: 'attributes/biological-sex' },
     country: { streamId: 'profile-address', eventType: 'contact/country' },
+    preferredLocales: { streamId: 'profile-preferences', eventType: 'settings/preferred-locales' },
+    timezone: { streamId: 'profile-preferences', eventType: 'settings/timezone' },
+    dateFormat: { streamId: 'profile-preferences', eventType: 'settings/date-format' },
+    unitSystem: { streamId: 'profile-preferences', eventType: 'settings/unit-system' },
 };
 const DEFAULTS = {
     displayName: null,
@@ -22348,7 +26928,55 @@ const DEFAULTS = {
     dateOfBirth: null,
     sex: null,
     country: null,
+    preferredLocales: ['en'],
+    timezone: 'Europe/Zurich',
+    dateFormat: 'DD.MM.YYYY',
+    unitSystem: 'metric',
 };
+/**
+ * Browser-inferred defaults for the preferences that can be detected. Applied over
+ * DEFAULTS but under stored values. Same inference as HDSSettings.
+ */
+function browserDefaults() {
+    if (typeof navigator === 'undefined')
+        return {};
+    const result = {};
+    try {
+        const lang = navigator.language?.split('-')[0];
+        if (lang)
+            result.preferredLocales = [lang];
+    }
+    catch { /* ignore */ }
+    try {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (tz)
+            result.timezone = tz;
+    }
+    catch { /* ignore */ }
+    return result;
+}
+/**
+ * Push the profile's locale to the localizer — but ONLY when it is genuinely **stored**.
+ *
+ * L1 fix (plan 78): the profile is the account-level source of truth for locale, but an
+ * *unstored* profile has no opinion. Applying its default (`['en']` / browser inference)
+ * unconditionally silently clobbered a legacy per-app language: `setPreferredLocales`
+ * prepends, and consumers (e.g. doctor-dashboard) hook HDSProfile *after* HDSSettings, so
+ * HDSProfile's default landed last and won. A user who had picked Français in the old
+ * per-app selector (stored in HDSSettings; profile empty) flipped to English on next load.
+ *
+ * Gating on `isStored` mirrors `resolveAccountPreference` exactly: profile locale wins only
+ * when the user explicitly stored an account-level value; otherwise the per-app / browser
+ * value already applied by HDSSettings stands.
+ */
+function applyLocaleIfStored() {
+    if (_cache.preferredLocales === undefined)
+        return;
+    try {
+        (0, localizeText_ts_1.setPreferredLocales)(_values.preferredLocales);
+    }
+    catch { /* locale may not be supported — ignore */ }
+}
 /** @internal */
 let _connection = null;
 /** @internal */
@@ -22401,6 +27029,8 @@ function resolveAvatarUrl(event, conn = _connection) {
  * Returns null values for fields the connection cannot access.
  */
 async function readProfileFromConnection(conn) {
+    // No browserDefaults() here: this reads *someone else's* profile, and inferring a
+    // contact's locale/timezone from the local browser would be plainly wrong.
     const values = { ...DEFAULTS };
     let events;
     try {
@@ -22410,9 +27040,13 @@ async function readProfileFromConnection(conn) {
         // Connection may not have access to profile/ streams
         return values;
     }
+    // First event per field wins. Tracked with a Set rather than a `=== null` test:
+    // the preference fields have non-null defaults, so a null-check would never match.
+    const seen = new Set();
     for (const event of events) {
         const key = matchField(event);
-        if (key && values[key] === null) {
+        if (key && !seen.has(key)) {
+            seen.add(key);
             if (key === 'avatar') {
                 values.avatar = resolveAvatarUrl(event, conn);
             }
@@ -22451,40 +27085,62 @@ async function ensureStream(streamId) {
 async function load() {
     if (!_connection)
         return;
-    _values = { ...DEFAULTS };
-    _cache = {};
     let events;
     try {
         events = await _connection.apiOne('events.get', { streams: ['profile'], limit: 100 }, 'events');
     }
     catch {
-        // Connection may not have access to profile/ streams (e.g. app-scoped permission)
+        // Connection may not have access to profile/ streams (e.g. app-scoped permission), or a
+        // transient fetch error. Either way, do NOT wipe already-loaded values (P1): a failed
+        // *reload* must not un-store account preferences. On a first-ever load establish the
+        // defaults so getters work; on a reload keep the last good values.
+        if (!_hooked) {
+            _values = { ...DEFAULTS, ...browserDefaults() };
+            _cache = {};
+        }
+        // Nothing newly stored → do not assert a locale (would clobber a legacy per-app value — L1).
         _hooked = true;
         return;
     }
+    // Build into locals and swap in only after a successful fetch (P1) — so a failed reload
+    // never transiently drops account values to defaults. Precedence: stored > browser > DEFAULTS.
+    const nextValues = { ...DEFAULTS, ...browserDefaults() };
+    const nextCache = {};
     for (const event of events) {
         const key = matchField(event);
-        if (key && !_cache[key]) {
-            _cache[key] = event;
+        if (key && !nextCache[key]) {
+            nextCache[key] = event;
             if (key === 'avatar') {
-                _values.avatar = resolveAvatarUrl(event);
+                nextValues.avatar = resolveAvatarUrl(event);
             }
             else {
-                _values[key] = event.content;
+                nextValues[key] = event.content;
             }
         }
     }
+    _values = nextValues;
+    _cache = nextCache;
+    applyLocaleIfStored();
     _hooked = true;
 }
 /**
- * HDSProfile — singleton for account-level profile data stored in profile/ streams.
+ * HDSProfile — singleton for account-level data stored in profile/ streams.
  *
- * Unlike HDSSettings (per-app preferences), profile data is shared across all connections.
+ * Unlike HDSSettings (per-app), profile data is shared across all connections. It holds
+ * both **identity** (displayName, avatar, name, …) and, since plan 78 §C 7.1b, the
+ * **account preferences** every HDS app should agree on:
+ * `preferredLocales`, `timezone`, `dateFormat`, `unitSystem`.
+ *
+ * Why here and not HDSSettings: HDSSettings binds to an app's baseStream, so each app gets
+ * its own private copy (hds-webapp → `applications/app-client-dr-form`, doctor-dashboard →
+ * `applications/app-dr-hds`) and the values never interoperate. Account-level preferences
+ * must outlive any single app, so they live on the account's own `profile-preferences`
+ * stream. `theme` stays on HDSSettings — it is legitimately per-app.
  *
  * Usage:
  *   await HDSProfile.hookToConnection(connection);
  *   const name = HDSProfile.get('displayName');
- *   await HDSProfile.set('displayName', 'Alice');
+ *   await HDSProfile.set('dateFormat', 'YYYY-MM-DD');
  *
  * Fallback chain for displayName:
  *   HDSSettings.get('displayName') ?? HDSProfile.get('displayName') ?? null
@@ -22522,6 +27178,18 @@ const HDSProfile = {
         return { ..._values };
     },
     /**
+     * Whether a field is actually stored on the server, as opposed to resolving to a
+     * default or browser inference.
+     *
+     * Needed because the account preferences never read as `null`: a caller choosing
+     * between an account-level value and a legacy per-app HDSSettings one must not let
+     * an unset profile default mask a value the user really did set. See
+     * `resolveAccountPreference`.
+     */
+    isStored(key) {
+        return _cache[key] !== undefined;
+    },
+    /**
      * Set a profile value — persists to HDS server and updates cache.
      */
     async set(key, value) {
@@ -22540,6 +27208,9 @@ const HDSProfile = {
             _cache[key] = created;
         }
         _values[key] = value;
+        // _cache[key] was just set above, so this now applies (the value is stored).
+        if (key === 'preferredLocales')
+            applyLocaleIfStored();
     },
     /**
      * Get avatar URL — resolves from attachment, data URL, or plain URL.
@@ -22595,6 +27266,19 @@ const HDSProfile = {
      */
     async reload() {
         await load();
+    },
+    /**
+     * @internal Test-only: mark as hooked and inject stored values without a server.
+     * Values passed here read as *stored* (`isStored` true), matching a loaded event;
+     * omitted fields stay at their default and read as not stored.
+     */
+    _testHook(stored = {}) {
+        _values = { ...DEFAULTS, ...stored };
+        _cache = {};
+        for (const key of Object.keys(stored)) {
+            _cache[key] = { id: `test-${key}`, content: stored[key] };
+        }
+        _hooked = true;
     },
     /**
      * Reset to defaults (in-memory only — does not delete server events).
@@ -22807,10 +27491,15 @@ const HDSSettings = {
     },
     /**
      * Set a typed setting value — persists to HDS server and updates cache.
+     * When not hooked (no Pryv connection), accepts the value into the
+     * in-memory cache only (memory-only mode — useful for standalone demos
+     * where settings don't need to survive the session).
      */
     async set(key, value) {
         if (!_connection || !_streamId) {
-            throw new Error('HDSSettings: call hookToApplication() or hookToConnection() first');
+            _values[key] = value;
+            applySideEffects(_values, key);
+            return;
         }
         const eventType = exports.SETTING_TYPES[key];
         const existing = _cache[key];
@@ -22829,14 +27518,22 @@ const HDSSettings = {
      * Set a dynamic setting value — persists to HDS server.
      * Key must match a known prefix (e.g. 'preferred-display-wellbeing-mood').
      * Pass null to delete the setting.
+     * When not hooked (no Pryv connection), accepts the value into the
+     * in-memory map only (memory-only mode — useful for standalone demos).
      */
     async setDynamic(key, value) {
-        if (!_connection || !_streamId) {
-            throw new Error('HDSSettings: call hookToApplication() or hookToConnection() first');
-        }
         const dp = findDynamicPrefix(key);
         if (!dp)
             throw new Error(`Unknown dynamic setting prefix for key: "${key}"`);
+        if (!_connection || !_streamId) {
+            if (value === null || value === undefined) {
+                delete _dynamicValues[key];
+            }
+            else {
+                _dynamicValues[key] = value;
+            }
+            return;
+        }
         const existing = _dynamicCache[key];
         if (value === null || value === undefined) {
             // Delete
@@ -22909,6 +27606,55 @@ const HDSSettings = {
 };
 exports.HDSSettings = HDSSettings;
 exports["default"] = HDSSettings;
+
+
+/***/ },
+
+/***/ "./ts/settings/accountPreferences.ts"
+/*!*******************************************!*\
+  !*** ./ts/settings/accountPreferences.ts ***!
+  \*******************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.resolveAccountPreference = resolveAccountPreference;
+exports.hasAccountPreference = hasAccountPreference;
+const HDSProfile_ts_1 = __importDefault(__webpack_require__(/*! ./HDSProfile.js */ "./ts/settings/HDSProfile.ts"));
+const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ./HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
+/**
+ * Resolution order for a preference that moved from per-app HDSSettings to account-level
+ * HDSProfile (plan 78 §C 7.1b):
+ *
+ *   1. HDSProfile — only when the value is genuinely **stored**. The account app owns these,
+ *      so an explicit account-level value wins.
+ *   2. HDSSettings — the legacy per-app value, for apps not yet migrated.
+ *   3. HDSProfile defaults (incl. browser inference).
+ *
+ * Step 1 checks `isStored` rather than `isHooked` on purpose: the profile's preferences always
+ * read as a non-null default, so hooking alone would let `DD.MM.YYYY` silently override a
+ * date format the user really had set per-app. That would be a regression for any app that
+ * already hooks HDSProfile (hds-webapp does).
+ */
+function resolveAccountPreference(key) {
+    if (HDSProfile_ts_1.default.isHooked && HDSProfile_ts_1.default.isStored(key))
+        return HDSProfile_ts_1.default.get(key);
+    if (HDSSettings_ts_1.default.isHooked)
+        return HDSSettings_ts_1.default.get(key);
+    return HDSProfile_ts_1.default.get(key);
+}
+/**
+ * Whether *some* source can supply this preference — i.e. it is stored at account level or
+ * an app has hooked its settings. Callers use this to keep "nothing hooked" behaviour
+ * (e.g. formatEventDate falling back to ISO) instead of silently adopting a default.
+ */
+function hasAccountPreference(key) {
+    return (HDSProfile_ts_1.default.isHooked && HDSProfile_ts_1.default.isStored(key)) || HDSSettings_ts_1.default.isHooked;
+}
 
 
 /***/ },
@@ -25188,7 +29934,7 @@ class SocketWithoutUpgrade extends component_emitter_1.Emitter {
     /**
      * Sends a packet.
      *
-     * @param {String} type: packet type.
+     * @param {String} type - packet type.
      * @param {String} data.
      * @param {Object} options.
      * @param {Function} fn - callback function.
@@ -25510,14 +30256,15 @@ exports.SocketWithUpgrade = SocketWithUpgrade;
  */
 class Socket extends SocketWithUpgrade {
     constructor(uri, opts = {}) {
-        const o = typeof uri === "object" ? uri : opts;
+        const isOptionsOnly = typeof uri === "object";
+        const o = isOptionsOnly ? { ...uri } : { ...opts };
         if (!o.transports ||
             (o.transports && typeof o.transports[0] === "string")) {
             o.transports = (o.transports || ["polling", "websocket", "webtransport"])
                 .map((transportName) => index_js_1.transports[transportName])
                 .filter((t) => !!t);
         }
-        super(uri, o);
+        super(isOptionsOnly ? o : uri, o);
     }
 }
 exports.Socket = Socket;
@@ -25828,8 +30575,8 @@ class BaseXHR extends polling_js_1.Polling {
     /**
      * Sends data.
      *
-     * @param {String} data to send.
-     * @param {Function} called upon flush.
+     * @param {String} data - data to send.
+     * @param {Function} fn - called upon flush.
      * @private
      */
     doWrite(data, fn) {
@@ -27015,8 +31762,23 @@ exports.protocol = 4;
 "use strict";
 
 
-const { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizeComponentEncoding, isIPv4, nonSimpleDomain } = __webpack_require__(/*! ./lib/utils */ "./node_modules/fast-uri/lib/utils.js")
+const { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, serializePathEncoding, normalizeQueryFragmentEncoding, encodeQuery, encodeFragment, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = __webpack_require__(/*! ./lib/utils */ "./node_modules/fast-uri/lib/utils.js")
 const { SCHEMES, getSchemeHandler } = __webpack_require__(/*! ./lib/schemes */ "./node_modules/fast-uri/lib/schemes.js")
+
+const VALID_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*$/u
+const MALFORMED_SCHEME_ERROR = 'URI scheme is malformed.'
+
+/**
+ * @param {string} scheme
+ * @returns {string}
+ */
+function decodeValidScheme (scheme) {
+  const decodedScheme = unescape(String(scheme))
+  if (!VALID_SCHEME.test(decodedScheme)) {
+    throw new TypeError(MALFORMED_SCHEME_ERROR)
+  }
+  return decodedScheme
+}
 
 /**
  * @template {import('./types/index').URIComponent|string} T
@@ -27026,7 +31788,7 @@ const { SCHEMES, getSchemeHandler } = __webpack_require__(/*! ./lib/schemes */ "
  */
 function normalize (uri, options) {
   if (typeof uri === 'string') {
-    uri = /** @type {T} */ (serialize(parse(uri, options), options))
+    uri = /** @type {T} */ (normalizeString(uri, options))
   } else if (typeof uri === 'object') {
     uri = /** @type {T} */ (parse(serialize(uri, options), options))
   }
@@ -27041,7 +31803,50 @@ function normalize (uri, options) {
  */
 function resolve (baseURI, relativeURI, options) {
   const schemelessOptions = options ? Object.assign({ scheme: 'null' }, options) : { scheme: 'null' }
-  const resolved = resolveComponent(parse(baseURI, schemelessOptions), parse(relativeURI, schemelessOptions), schemelessOptions, true)
+  const {
+    parsed: baseParsed,
+    malformedAuthorityOrPort: baseMalformed,
+    malformedPercentEncoding: baseMalformedPercentEncoding,
+    malformedSchemeSpecific: baseMalformedSchemeSpecific,
+    malformedHost: baseMalformedHost,
+    malformedScheme: baseMalformedScheme
+  } = parseWithStatus(baseURI, schemelessOptions)
+  const {
+    parsed: relativeParsed,
+    malformedAuthorityOrPort: relativeMalformed,
+    malformedPercentEncoding: relativeMalformedPercentEncoding,
+    malformedSchemeSpecific: relativeMalformedSchemeSpecific,
+    malformedHost: relativeMalformedHost,
+    malformedScheme: relativeMalformedScheme
+  } = parseWithStatus(relativeURI, schemelessOptions)
+  if (
+    baseMalformed ||
+    relativeMalformed ||
+    baseMalformedPercentEncoding ||
+    relativeMalformedPercentEncoding ||
+    baseMalformedSchemeSpecific ||
+    relativeMalformedSchemeSpecific ||
+    baseMalformedHost ||
+    relativeMalformedHost ||
+    baseMalformedScheme ||
+    relativeMalformedScheme
+  ) {
+    throw new Error(baseParsed.error || relativeParsed.error || 'URI is malformed.')
+  }
+  const resolved = resolveComponent(baseParsed, relativeParsed, schemelessOptions, true)
+  const resolvedSchemeHandler = getSchemeHandler((options && options.scheme) || resolved.scheme)
+  const resolvedHost = resolved.host
+  const resolvedHostIsIP = resolvedHost !== undefined && resolvedHost !== '' &&
+    (isIPv4(resolvedHost) || normalizeIPv6(resolvedHost).isIPV6)
+  canonicalizeHost(resolved, options || {}, resolvedSchemeHandler, resolvedHostIsIP)
+  // Percent escapes in an ASCII reg-name are encoded data. The WHATWG hostname
+  // parser can reject them even though fast-uri preserves them safely as RFC
+  // 3986 data. A raw non-ASCII host must still fail closed if conversion fails.
+  const encodedASCIIHost = resolvedHost && resolvedHost.indexOf('%') !== -1 &&
+    !/\P{ASCII}/u.test(resolvedHost)
+  if (resolved.error && !encodedASCIIHost) {
+    throw new Error(resolved.error)
+  }
   schemelessOptions.skipEscape = true
   return serialize(resolved, schemelessOptions)
 }
@@ -27121,21 +31926,10 @@ function resolveComponent (base, relative, options, skipNormalization) {
  * @returns {boolean}
  */
 function equal (uriA, uriB, options) {
-  if (typeof uriA === 'string') {
-    uriA = unescape(uriA)
-    uriA = serialize(normalizeComponentEncoding(parse(uriA, options), true), { ...options, skipEscape: true })
-  } else if (typeof uriA === 'object') {
-    uriA = serialize(normalizeComponentEncoding(uriA, true), { ...options, skipEscape: true })
-  }
+  const normalizedA = normalizeComparableURI(uriA, options)
+  const normalizedB = normalizeComparableURI(uriB, options)
 
-  if (typeof uriB === 'string') {
-    uriB = unescape(uriB)
-    uriB = serialize(normalizeComponentEncoding(parse(uriB, options), true), { ...options, skipEscape: true })
-  } else if (typeof uriB === 'object') {
-    uriB = serialize(normalizeComponentEncoding(uriB, true), { ...options, skipEscape: true })
-  }
-
-  return uriA.toLowerCase() === uriB.toLowerCase()
+  return normalizedA !== undefined && normalizedB !== undefined && normalizedA === normalizedB
 }
 
 /**
@@ -27163,25 +31957,30 @@ function serialize (cmpts, opts) {
   const options = Object.assign({}, opts)
   const uriTokens = []
 
+  if (component.scheme) {
+    component.scheme = decodeValidScheme(component.scheme)
+  }
+
   // find scheme handler
   const schemeHandler = getSchemeHandler(options.scheme || component.scheme)
 
   // perform scheme specific serialization
   if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(component, options)
 
+  const hasAuthority = component.userinfo !== undefined || component.host !== undefined || component.port !== undefined
+  const pathNoScheme = !options.skipEscape && component.scheme === undefined && !hasAuthority
+
   if (component.path !== undefined) {
     if (!options.skipEscape) {
-      component.path = escape(component.path)
-
-      if (component.scheme !== undefined) {
-        component.path = component.path.split('%3A').join(':')
-      }
+      component.path = serializePathEncoding(component.path, pathNoScheme)
     } else {
-      component.path = unescape(component.path)
+      component.path = normalizePercentEncoding(component.path)
     }
   }
 
   if (options.reference !== 'suffix' && component.scheme) {
+    // Scheme handlers may replace the scheme during serialization.
+    component.scheme = decodeValidScheme(component.scheme)
     uriTokens.push(component.scheme, ':')
   }
 
@@ -27204,6 +32003,13 @@ function serialize (cmpts, opts) {
       s = removeDotSegments(s)
     }
 
+    // Dot-segment removal can expose a colon that was not originally in the
+    // first segment (for example, "./a:b"). Reapply path-noscheme encoding so
+    // the serialized relative reference cannot be reparsed as a URI scheme.
+    if (pathNoScheme) {
+      s = serializePathEncoding(s, true)
+    }
+
     if (
       authority === undefined &&
       s[0] === '/' &&
@@ -27217,23 +32023,129 @@ function serialize (cmpts, opts) {
   }
 
   if (component.query !== undefined) {
-    uriTokens.push('?', component.query)
+    uriTokens.push('?', encodeQuery(component.query))
   }
 
   if (component.fragment !== undefined) {
-    uriTokens.push('#', component.fragment)
+    uriTokens.push('#', encodeFragment(component.fragment))
   }
   return uriTokens.join('')
 }
 
 const URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u
 
+// Captures the authority component (between "//" and the next "/", "?" or "#"),
+// with or without a scheme prefix, for the literal-backslash rejection below.
+const AUTHORITY_PREFIX = /^(?:[^#/:?]+:)?\/\/([^/?#]*)/
+
+// Captures the leading authority-introducer region after an optional scheme: a
+// run of forward slashes, backslashes, and the characters the WHATWG URL parser
+// removes before parsing (TAB U+0009, LF U+000A, CR U+000D). A valid introducer
+// is exactly "//". Node treats "\" as "/" on special schemes and strips those
+// characters first, so forms like "\\", "/\", "\/", "/<TAB>/", or a leading
+// "<TAB>//" reach an authority in Node while fast-uri's URI_PARSE folds them into
+// the path group (host confusion / SSRF / redirect bypass).
+const AUTHORITY_INTRODUCER_REGION = /^(?:[^#/:?]+:)?([/\\\t\n\r]*)/
+
+/**
+ * @param {import('./types/index').URIComponent} parsed
+ * @param {RegExpMatchArray} matches
+ * @returns {string|undefined}
+ */
+function getParseError (parsed, matches) {
+  if (matches[2] !== undefined && parsed.path && parsed.path[0] !== '/') {
+    return 'URI path must start with "/" when authority is present.'
+  }
+
+  if (typeof parsed.port === 'number' && (parsed.port < 0 || parsed.port > 65535)) {
+    return 'URI port is malformed.'
+  }
+
+  return undefined
+}
+
+/**
+ * Checks percent syntax without decoding the represented octets. RFC 3986
+ * percent-encoding is byte-oriented, so sequences such as `%FF` are valid even
+ * though they are not independently valid UTF-8.
+ *
+ * @param {string|undefined} component
+ * @returns {boolean}
+ */
+function hasMalformedPercentEncoding (component) {
+  if (component === undefined) return false
+
+  let percent = component.indexOf('%')
+  while (percent !== -1) {
+    if (percent + 2 >= component.length || !/^[\da-f]{2}$/iu.test(component.slice(percent + 1, percent + 3))) {
+      return true
+    }
+    percent = component.indexOf('%', percent + 3)
+  }
+
+  return false
+}
+
+/**
+ * Whether the host is a bracketed IP literal (RFC 3986 `IP-literal`).
+ * An unterminated `[` is not a literal, so it must still be validated as a
+ * reg-name instead of being waved through as an IP.
+ *
+ * @param {string} host
+ * @returns {boolean}
+ */
+function isIPLiteral (host) {
+  return host[0] === '[' && host[host.length - 1] === ']'
+}
+
+/**
+ * @param {RegExpMatchArray} matches
+ * @returns {boolean}
+ */
+function hasMalformedComponentPercentEncoding (matches) {
+  // Bracketed IP literals use a raw "%" as the zone separator for historical
+  // compatibility. Their parsing is intentionally left to normalizeIPv6.
+  const host = matches[4]
+  return hasMalformedPercentEncoding(matches[3]) ||
+    (host !== undefined && !isIPLiteral(host) && hasMalformedPercentEncoding(host)) ||
+    hasMalformedPercentEncoding(matches[6]) ||
+    hasMalformedPercentEncoding(matches[7]) ||
+    hasMalformedPercentEncoding(matches[8])
+}
+
+/**
+ * @param {import('./types/index').URIComponent} parsed
+ * @param {import('./types/index').Options} options
+ * @param {{ domainHost?: boolean, unicodeSupport?: boolean }|undefined} schemeHandler
+ * @param {boolean} isIP
+ * @returns {boolean} whether host conversion failed
+ */
+function canonicalizeHost (parsed, options, schemeHandler, isIP) {
+  if (
+    !options.unicodeSupport &&
+    (!schemeHandler || !schemeHandler.unicodeSupport) &&
+    parsed.host &&
+    !isIPLiteral(parsed.host) &&
+    (options.domainHost || (schemeHandler && schemeHandler.domainHost)) &&
+    isIP === false &&
+    nonSimpleDomain(parsed.host)
+  ) {
+    try {
+      parsed.host = new URL('http://' + parsed.host).hostname
+    } catch (e) {
+      parsed.error = parsed.error || "Host's domain name can not be converted to ASCII: " + e
+      return true
+    }
+  }
+  return false
+}
+
 /**
  * @param {string} uri
  * @param {import('./types/index').Options} [opts]
- * @returns
+ * @returns {{ parsed: import('./types/index').URIComponent, malformedAuthorityOrPort: boolean, malformedPercentEncoding: boolean, malformedSchemeSpecific: boolean, malformedHost: boolean, malformedScheme: boolean }}
  */
-function parse (uri, opts) {
+function parseWithStatus (uri, opts) {
   const options = Object.assign({}, opts)
   /** @type {import('./types/index').URIComponent} */
   const parsed = {
@@ -27246,12 +32158,54 @@ function parse (uri, opts) {
     fragment: undefined
   }
 
+  let malformedAuthorityOrPort = false
+  let malformedPercentEncoding = false
+  let malformedSchemeSpecific = false
+  let malformedHost = false
+  let malformedIPLiteral = false
+  let malformedScheme = false
+
   let isIP = false
   if (options.reference === 'suffix') {
     if (options.scheme) {
       uri = options.scheme + ':' + uri
     } else {
       uri = '//' + uri
+    }
+  }
+
+  // A literal backslash (U+005C) is not a valid RFC 3986 URI character and is
+  // not an authority delimiter. Reject it in the authority rather than
+  // rewriting it: normalizing "\" -> "/" (WHATWG error recovery) could silently
+  // change the resource identified by an otherwise-invalid input, and lets "\"
+  // act as a host delimiter here while Node's native URL parses a different
+  // host (SSRF / redirect / origin-allowlist bypass). Percent-encoded %5C is
+  // untouched and remains valid encoded data.
+  const authorityMatch = uri.match(AUTHORITY_PREFIX)
+  if (authorityMatch !== null && authorityMatch[1].indexOf('\\') !== -1) {
+    parsed.error = 'URI authority must not contain a literal backslash.'
+    malformedAuthorityOrPort = true
+  }
+
+  // Reject a malformed or whitespace-smuggled authority introducer. fast-uri
+  // only recognizes a literal "//"; anything else in the leading separator run
+  // (a backslash, or a "//" that appears only after removing the TAB/LF/CR that
+  // Node strips) means the authority fast-uri parses differs from the one Node's
+  // URL resolves. Reject rather than rewrite, mirroring the literal-backslash
+  // guard above. Percent-encoded forms (%5C, %09) are untouched, valid data.
+  const introducerMatch = uri.match(AUTHORITY_INTRODUCER_REGION)
+  if (introducerMatch !== null) {
+    const region = introducerMatch[1]
+    const normalizedRegion = region.replace(/[\t\n\r]/g, '')
+    // Two or more leading separators introduce an authority.
+    if (normalizedRegion.length >= 2) {
+      if (normalizedRegion.slice(0, 2) !== '//') {
+        parsed.error = parsed.error || 'URI authority must not contain a literal backslash.'
+        malformedAuthorityOrPort = true
+      } else if (region.length !== normalizedRegion.length) {
+        parsed.error = parsed.error || 'URI authority introducer must not contain whitespace.'
+        malformedAuthorityOrPort = true
+      }
     }
   }
 
@@ -27267,16 +32221,46 @@ function parse (uri, opts) {
     parsed.query = matches[7]
     parsed.fragment = matches[8]
 
+    if (parsed.scheme !== undefined) {
+      const decodedScheme = unescape(parsed.scheme)
+      if (VALID_SCHEME.test(decodedScheme)) {
+        parsed.scheme = decodedScheme.toLowerCase()
+      } else {
+        parsed.error = parsed.error || MALFORMED_SCHEME_ERROR
+        malformedScheme = true
+      }
+    }
+
+    malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches)
+    if (malformedPercentEncoding) {
+      parsed.error = parsed.error || 'URI contains malformed percent-encoding.'
+    }
+
     // fix port number
     if (isNaN(parsed.port)) {
       parsed.port = matches[5]
     }
+
+    const parseError = getParseError(parsed, matches)
+    if (parseError !== undefined) {
+      parsed.error = parsed.error || parseError
+      malformedAuthorityOrPort = true
+    }
+
     if (parsed.host) {
       const ipv4result = isIPv4(parsed.host)
       if (ipv4result === false) {
+        const bracketedIPLiteral = isIPLiteral(parsed.host)
+        const hasIPLiteralBracket = parsed.host.indexOf('[') !== -1 || parsed.host.indexOf(']') !== -1
         const ipv6result = normalizeIPv6(parsed.host)
-        parsed.host = ipv6result.host.toLowerCase()
-        isIP = ipv6result.isIPV6
+        isIP = ipv6result.isIPV6 || ipv6result.isIPVFuture === true
+        malformedIPLiteral = hasIPLiteralBracket && (!bracketedIPLiteral || ipv6result.error === true)
+        parsed.host = isIP ? ipv6result.host : ipv6result.host.toLowerCase()
+
+        if (malformedIPLiteral) {
+          parsed.error = parsed.error || 'URI host is malformed.'
+          malformedAuthorityOrPort = true
+        }
       } else {
         isIP = true
       }
@@ -27299,45 +32283,95 @@ function parse (uri, opts) {
     // find scheme handler
     const schemeHandler = getSchemeHandler(options.scheme || parsed.scheme)
 
-    // check if scheme can't handle IRIs
-    if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
-      // if host component is a domain name
-      if (parsed.host && (options.domainHost || (schemeHandler && schemeHandler.domainHost)) && isIP === false && nonSimpleDomain(parsed.host)) {
-        // convert Unicode IDN -> ASCII IDN
-        try {
-          parsed.host = URL.domainToASCII(parsed.host.toLowerCase())
-        } catch (e) {
-          parsed.error = parsed.error || "Host's domain name can not be converted to ASCII: " + e
-        }
-      }
-      // convert IRI -> URI
+    // convert Unicode IDN -> ASCII IDN when the effective scheme uses domain hosts
+    if (!malformedIPLiteral) {
+      malformedHost = canonicalizeHost(parsed, options, schemeHandler, isIP)
     }
 
     if (!schemeHandler || (schemeHandler && !schemeHandler.skipNormalize)) {
       if (uri.indexOf('%') !== -1) {
-        if (parsed.scheme !== undefined) {
-          parsed.scheme = unescape(parsed.scheme)
-        }
-        if (parsed.host !== undefined) {
-          parsed.host = unescape(parsed.host)
+        if (parsed.host !== undefined && !malformedIPLiteral) {
+          const host = isIP ? parsed.host : normalizePercentEncoding(parsed.host, true)
+          parsed.host = reescapeHostDelimiters(host, isIP)
         }
       }
       if (parsed.path) {
-        parsed.path = escape(unescape(parsed.path))
+        parsed.path = normalizePathEncoding(parsed.path)
+      }
+      if (parsed.query) {
+        parsed.query = normalizeQueryFragmentEncoding(parsed.query)
       }
       if (parsed.fragment) {
-        parsed.fragment = encodeURI(decodeURIComponent(parsed.fragment))
+        parsed.fragment = normalizeQueryFragmentEncoding(parsed.fragment)
       }
     }
 
     // perform scheme specific parsing
     if (schemeHandler && schemeHandler.parse) {
       schemeHandler.parse(parsed, options)
+      if (schemeHandler === SCHEMES.urn && parsed.nid === undefined) {
+        malformedSchemeSpecific = true
+      }
     }
   } else {
     parsed.error = parsed.error || 'URI can not be parsed.'
   }
-  return parsed
+  return { parsed, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme }
+}
+
+/**
+ * @param {string} uri
+ * @param {import('./types/index').Options} [opts]
+ * @returns
+ */
+function parse (uri, opts) {
+  return parseWithStatus(uri, opts).parsed
+}
+
+/**
+ * @param {string} uri
+ * @param {import('./types/index').Options} [opts]
+ * @returns {string}
+ */
+function normalizeString (uri, opts) {
+  return normalizeStringWithStatus(uri, opts).normalized
+}
+
+/**
+ * @param {string} uri
+ * @param {import('./types/index').Options} [opts]
+ * @returns {{ normalized: string, malformedAuthorityOrPort: boolean, malformedPercentEncoding: boolean, malformedSchemeSpecific: boolean, malformedHost: boolean, malformedScheme: boolean }}
+ */
+function normalizeStringWithStatus (uri, opts) {
+  const { parsed, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme } = parseWithStatus(uri, opts)
+  return {
+    normalized: malformedAuthorityOrPort || malformedPercentEncoding || malformedSchemeSpecific || malformedHost || malformedScheme ? uri : serialize(parsed, opts),
+    malformedAuthorityOrPort,
+    malformedPercentEncoding,
+    malformedSchemeSpecific,
+    malformedHost,
+    malformedScheme
+  }
+}
+
+/**
+ * @param {import ('./types/index').URIComponent|string} uri
+ * @param {import('./types/index').Options} [opts]
+ * @returns {string|undefined}
+ */
+function normalizeComparableURI (uri, opts) {
+  if (typeof uri !== 'string' && typeof uri !== 'object') {
+    return undefined
+  }
+
+  let value
+  try {
+    value = typeof uri === 'string' ? uri : serialize(uri, opts)
+  } catch {
+    return undefined
+  }
+  const { normalized, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme } = normalizeStringWithStatus(value, opts)
+  return malformedAuthorityOrPort || malformedPercentEncoding || malformedSchemeSpecific || malformedHost || malformedScheme ? undefined : normalized
 }
 
 const fastUri = {
@@ -27367,7 +32401,7 @@ module.exports.fastUri = fastUri
 
 
 const { isUUID } = __webpack_require__(/*! ./utils */ "./node_modules/fast-uri/lib/utils.js")
-const URN_REG = /([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-.:;=@]|%[\da-f]{2})+)/iu
+const URN_REG = /^([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-./:;=@]|%[\da-f]{2})+)$/iu
 
 const supportedSchemeNames = /** @type {const} */ (['http', 'https', 'ws',
   'wss', 'urn', 'urn:uuid'])
@@ -27479,9 +32513,14 @@ function wsSerialize (wsComponent) {
 
   // reconstruct path from resource name
   if (wsComponent.resourceName) {
-    const [path, query] = wsComponent.resourceName.split('?')
+    const queryIndex = wsComponent.resourceName.indexOf('?')
+    const path = queryIndex === -1
+      ? wsComponent.resourceName
+      : wsComponent.resourceName.slice(0, queryIndex)
     wsComponent.path = (path && path !== '/' ? path : undefined)
-    wsComponent.query = query
+    wsComponent.query = queryIndex === -1
+      ? undefined
+      : wsComponent.resourceName.slice(queryIndex + 1)
     wsComponent.resourceName = undefined
   }
 
@@ -27498,7 +32537,7 @@ function urnParse (urnComponent, options) {
     return urnComponent
   }
   const matches = urnComponent.path.match(URN_REG)
-  if (matches) {
+  if (matches && matches[0] === urnComponent.path) {
     const scheme = options.scheme || urnComponent.scheme || 'urn'
     urnComponent.nid = matches[1].toLowerCase()
     urnComponent.nss = matches[2]
@@ -27650,6 +32689,47 @@ const isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\d
 /** @type {(value: string) => boolean} */
 const isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u)
 
+/** @type {(value: string) => boolean} */
+const isPort = RegExp.prototype.test.bind(/^\d*$/u)
+
+/** @type {(value: string) => boolean} */
+const isHexPair = RegExp.prototype.test.bind(/^[\da-f]{2}$/iu)
+
+/** @type {(value: string) => boolean} */
+const isUnreserved = RegExp.prototype.test.bind(/^[\da-z\-._~]$/iu)
+
+/** @type {(value: string) => boolean} */
+const isPathCharacter = RegExp.prototype.test.bind(/^[A-Za-z0-9\-._~!$&'()*+,;=:@/]$/u)
+
+/** @type {(value: string) => boolean} */
+const isQueryFragmentCharacter = RegExp.prototype.test.bind(/^[A-Za-z0-9\-._~!$&'()*+,;=:@/?]$/u)
+
+/** @type {(value: string) => boolean} */
+const isUserinfoCharacter = RegExp.prototype.test.bind(/^[A-Za-z0-9\-._~!$&'()*+,;=:]$/u)
+
+const BYTE_HEX = new Array(256)
+{
+  const HEX_DIGITS = '0123456789ABCDEF'
+  for (let i = 0; i < 256; i++) {
+    BYTE_HEX[i] = '%' + HEX_DIGITS[i >> 4] + HEX_DIGITS[i & 0xF]
+  }
+}
+function percentEncodeNonAscii (cp) {
+  if (cp < 0x800) {
+    return BYTE_HEX[0xC0 | (cp >> 6)] +
+           BYTE_HEX[0x80 | (cp & 0x3F)]
+  }
+  if (cp < 0x10000) {
+    return BYTE_HEX[0xE0 | (cp >> 12)] +
+           BYTE_HEX[0x80 | ((cp >> 6) & 0x3F)] +
+           BYTE_HEX[0x80 | (cp & 0x3F)]
+  }
+  return BYTE_HEX[0xF0 | (cp >> 18)] +
+         BYTE_HEX[0x80 | ((cp >> 12) & 0x3F)] +
+         BYTE_HEX[0x80 | ((cp >> 6) & 0x3F)] +
+         BYTE_HEX[0x80 | (cp & 0x3F)]
+}
+
 /**
  * @param {Array<string>} input
  * @returns {string}
@@ -27681,12 +32761,14 @@ function stringArrayToHexStripped (input) {
   return acc
 }
 
-/**
- * @typedef {Object} GetIPV6Result
- * @property {boolean} error - Indicates if there was an error parsing the IPv6 address.
- * @property {string} address - The parsed IPv6 address.
- * @property {string} [zone] - The zone identifier, if present.
- */
+/** @type {(value: string) => boolean} */
+const isHextet = RegExp.prototype.test.bind(/^[\dA-Fa-f]{1,4}$/)
+
+/** @type {(value: string) => boolean} */
+const isIPvFuture = RegExp.prototype.test.bind(/^[vV][\dA-Fa-f]+\.[A-Za-z\d\-._~!$&'()*+,;=:]+$/)
+
+/** @type {(value: string) => boolean} */
+const isZoneCharacter = RegExp.prototype.test.bind(/^[A-Za-z\d\-._~]$/)
 
 /**
  * @param {string} value
@@ -27695,88 +32777,104 @@ function stringArrayToHexStripped (input) {
 const nonSimpleDomain = RegExp.prototype.test.bind(/[^!"$&'()*+,\-.;=_`a-z{}~]/u)
 
 /**
- * @param {Array<string>} buffer
+ * @param {string} zone
  * @returns {boolean}
  */
-function consumeIsZone (buffer) {
-  buffer.length = 0
-  return true
-}
+function isZoneIdentifier (zone) {
+  if (zone.length === 0) return false
 
-/**
- * @param {Array<string>} buffer
- * @param {Array<string>} address
- * @param {GetIPV6Result} output
- * @returns {boolean}
- */
-function consumeHextets (buffer, address, output) {
-  if (buffer.length) {
-    const hex = stringArrayToHexStripped(buffer)
-    if (hex !== '') {
-      address.push(hex)
-    } else {
-      output.error = true
-      return false
+  for (let i = 0; i < zone.length; i++) {
+    if (isZoneCharacter(zone[i])) continue
+    if (zone[i] === '%' && i + 2 < zone.length && isHexPair(zone.slice(i + 1, i + 3))) {
+      i += 2
+      continue
     }
-    buffer.length = 0
+    return false
   }
+
   return true
 }
 
 /**
+ * Compresses the longest run of zero hextets to "::" per RFC 5952. A run of a
+ * single zero hextet is left uncompressed. On ties the leftmost run wins.
+ *
+ * @param {string[]} hextets
+ * @returns {string}
+ */
+function compressIPv6ZeroRun (hextets) {
+  let bestStart = -1
+  let bestLength = 0
+  let runStart = -1
+  let runLength = 0
+  for (let i = 0; i < hextets.length; i++) {
+    if (hextets[i] === '0') {
+      if (runStart === -1) runStart = i
+      runLength++
+      if (runLength > bestLength) {
+        bestLength = runLength
+        bestStart = runStart
+      }
+    } else {
+      runStart = -1
+      runLength = 0
+    }
+  }
+
+  if (bestLength < 2) return hextets.join(':')
+
+  const head = hextets.slice(0, bestStart).join(':')
+  const tail = hextets.slice(bestStart + bestLength).join(':')
+  return head + '::' + tail
+}
+
+/**
+ * Validates an IPv6 address against the alternatives in RFC 3986 section
+ * 3.2.2 and returns the same address with leading hextet zeroes removed.
+ * An embedded IPv4 address counts as two hextets and is only valid at the end.
+ *
  * @param {string} input
- * @returns {GetIPV6Result}
+ * @returns {string|undefined}
  */
-function getIPV6 (input) {
-  let tokenCount = 0
-  const output = { error: false, address: '', zone: '' }
-  /** @type {Array<string>} */
-  const address = []
-  /** @type {Array<string>} */
-  const buffer = []
-  let endipv6Encountered = false
-  let endIpv6 = false
+function normalizeIPv6Address (input) {
+  const compression = input.indexOf('::')
+  if (compression !== -1 && input.indexOf('::', compression + 1) !== -1) return undefined
 
-  let consume = consumeHextets
+  const left = compression === -1 ? input.split(':') : input.slice(0, compression).split(':')
+  const right = compression === -1 ? [] : input.slice(compression + 2).split(':')
+  if (compression !== -1) {
+    if (left.length === 1 && left[0] === '') left.length = 0
+    if (right.length === 1 && right[0] === '') right.length = 0
+  }
 
-  for (let i = 0; i < input.length; i++) {
-    const cursor = input[i]
-    if (cursor === '[' || cursor === ']') { continue }
-    if (cursor === ':') {
-      if (endipv6Encountered === true) {
-        endIpv6 = true
-      }
-      if (!consume(buffer, address, output)) { break }
-      if (++tokenCount > 7) {
-        // not valid
-        output.error = true
-        break
-      }
-      if (i > 0 && input[i - 1] === ':') {
-        endipv6Encountered = true
-      }
-      address.push(':')
-      continue
-    } else if (cursor === '%') {
-      if (!consume(buffer, address, output)) { break }
-      // switch to zone detection
-      consume = consumeIsZone
-    } else {
-      buffer.push(cursor)
+  const parts = left.concat(right)
+  let hextetCount = 0
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]
+    if (part === '') return undefined
+
+    if (part.indexOf('.') !== -1) {
+      if (i !== parts.length - 1 || (compression !== -1 && right.length === 0) || !isIPv4(part)) return undefined
+      hextetCount += 2
       continue
     }
+
+    if (!isHextet(part)) return undefined
+    parts[i] = parseInt(part, 16).toString(16)
+    hextetCount++
   }
-  if (buffer.length) {
-    if (consume === consumeIsZone) {
-      output.zone = buffer.join('')
-    } else if (endIpv6) {
-      address.push(buffer.join(''))
-    } else {
-      address.push(stringArrayToHexStripped(buffer))
-    }
+
+  if (compression === -1) {
+    if (hextetCount !== 8) return undefined
+    return compressIPv6ZeroRun(parts)
   }
-  output.address = address.join('')
-  return output
+  if (hextetCount >= 8) return undefined
+
+  // expand "::" then re-compress the longest run for a canonical result
+  const expanded = parts.slice(0, left.length)
+  for (let i = hextetCount; i < 8; i++) expanded.push('0')
+  for (let i = left.length; i < parts.length; i++) expanded.push(parts[i])
+  return compressIPv6ZeroRun(expanded)
 }
 
 /**
@@ -27784,26 +32882,49 @@ function getIPV6 (input) {
  * @property {string} host - The normalized host.
  * @property {string} [escapedHost] - The escaped host.
  * @property {boolean} isIPV6 - Indicates if the host is an IPv6 address.
+ * @property {boolean} [isIPVFuture] - Indicates if the host is an IPvFuture literal.
+ * @property {boolean} [error] - Indicates if a bracketed IP literal is malformed.
  */
 
 /**
+ * Validates and normalizes a bracketed IP literal. Raw zone separators remain
+ * accepted for backwards compatibility, while encoded separators and zone
+ * contents follow RFC 6874.
+ *
  * @param {string} host
  * @returns {NormalizeIPv6Result}
  */
 function normalizeIPv6 (host) {
-  if (findToken(host, ':') < 2) { return { host, isIPV6: false } }
-  const ipv6 = getIPV6(host)
+  const bracketed = host[0] === '[' && host[host.length - 1] === ']'
+  const hasBracket = host[0] === '[' || host[host.length - 1] === ']'
+  if (hasBracket && !bracketed) return { host, isIPV6: false, error: true }
 
-  if (!ipv6.error) {
-    let newHost = ipv6.address
-    let escapedHost = ipv6.address
-    if (ipv6.zone) {
-      newHost += '%' + ipv6.zone
-      escapedHost += '%25' + ipv6.zone
-    }
-    return { host: newHost, isIPV6: true, escapedHost }
-  } else {
-    return { host, isIPV6: false }
+  let input = bracketed ? host.slice(1, -1) : host
+  if (bracketed && isIPvFuture(input)) {
+    input = input.toLowerCase()
+    return { host: `[${input}]`, escapedHost: input, isIPV6: false, isIPVFuture: true }
+  }
+
+  if (findToken(input, ':') < 2) {
+    return { host, isIPV6: false, error: bracketed }
+  }
+
+  let zoneIdentifier = ''
+  const zoneSeparator = input.indexOf('%')
+  if (zoneSeparator !== -1) {
+    const separatorLength = input.slice(zoneSeparator, zoneSeparator + 3).toLowerCase() === '%25' ? 3 : 1
+    zoneIdentifier = input.slice(zoneSeparator + separatorLength)
+    if (!isZoneIdentifier(zoneIdentifier)) return { host, isIPV6: false, error: true }
+    input = input.slice(0, zoneSeparator)
+  }
+
+  const address = normalizeIPv6Address(input)
+  if (address === undefined) return { host, isIPV6: false, error: true }
+
+  return {
+    host: address + (zoneIdentifier ? '%' + zoneIdentifier : ''),
+    escapedHost: address + (zoneIdentifier ? '%25' + zoneIdentifier : ''),
+    isIPV6: true
   }
 }
 
@@ -27908,31 +33029,342 @@ function removeDotSegments (path) {
 }
 
 /**
- * @param {import('../types/index').URIComponent} component
- * @param {boolean} esc
- * @returns {import('../types/index').URIComponent}
+ * Re-escape RFC 3986 gen-delims that must not appear literally in the host.
+ * After the URI regex parses, these characters cannot be literal in the host
+ * field, so any that appear after decoding came from percent-encoding and
+ * must be restored to prevent authority structure changes.
+ *
+ * @param {string} host
+ * @param {boolean} isIP - true for IPv4/IPv6 hosts (skip colon re-escaping)
+ * @returns {string}
  */
-function normalizeComponentEncoding (component, esc) {
-  const func = esc !== true ? escape : unescape
-  if (component.scheme !== undefined) {
-    component.scheme = func(component.scheme)
+const HOST_DELIMS = { '@': '%40', '/': '%2F', '?': '%3F', '#': '%23', ':': '%3A' }
+const HOST_DELIM_RE = /[@/?#:]/g
+const HOST_DELIM_NO_COLON_RE = /[@/?#]/g
+
+function reescapeHostDelimiters (host, isIP) {
+  const re = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE
+  re.lastIndex = 0
+  return host.replace(re, (ch) => HOST_DELIMS[ch])
+}
+
+/**
+ * Normalizes percent escapes and optionally decodes only unreserved ASCII bytes.
+ * Reserved delimiters such as `%2F` stay escaped; `%2E` is unreserved.
+ *
+ * @param {string} input
+ * @param {boolean} [decodeUnreserved=false]
+ * @returns {string}
+ */
+function normalizePercentEncoding (input, decodeUnreserved = false) {
+  if (input.indexOf('%') === -1) {
+    return input
   }
-  if (component.userinfo !== undefined) {
-    component.userinfo = func(component.userinfo)
+
+  let output = ''
+
+  for (let i = 0; i < input.length; i++) {
+    if (input[i] === '%' && i + 2 < input.length) {
+      const hex = input.slice(i + 1, i + 3)
+      if (isHexPair(hex)) {
+        const normalizedHex = hex.toUpperCase()
+        const decoded = String.fromCharCode(parseInt(normalizedHex, 16))
+
+        if (decodeUnreserved && isUnreserved(decoded)) {
+          output += decoded
+        } else {
+          output += '%' + normalizedHex
+        }
+
+        i += 2
+        continue
+      }
+    }
+
+    output += input[i]
   }
-  if (component.host !== undefined) {
-    component.host = func(component.host)
+
+  return output
+}
+
+/**
+ * Normalizes path data without turning reserved escapes into live path syntax.
+ * Valid escapes are uppercased, raw unsafe characters are escaped, and only
+ * unreserved bytes that are not `.` are decoded.
+ *
+ * @param {string} input
+ * @returns {string}
+ */
+function normalizePathEncoding (input) {
+  let output = ''
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (ch === '%' && i + 2 < input.length) {
+      const hex = input.slice(i + 1, i + 3)
+      if (isHexPair(hex)) {
+        const normalizedHex = hex.toUpperCase()
+        const decoded = String.fromCharCode(parseInt(normalizedHex, 16))
+
+        if (decoded !== '.' && isUnreserved(decoded)) {
+          output += decoded
+        } else {
+          output += '%' + normalizedHex
+        }
+
+        i += 2
+        continue
+      }
+    }
+
+    if (isPathCharacter(ch)) {
+      output += ch
+    } else {
+      const code = input.charCodeAt(i)
+      if (code < 0x80) {
+        output += isEscapeSafe(code) ? ch : BYTE_HEX[code]
+      } else if (code < 0xD800 || code > 0xDFFF) {
+        output += percentEncodeNonAscii(code)
+      } else if (code <= 0xDBFF && i + 1 < input.length) {
+        const low = input.charCodeAt(i + 1)
+        if (low >= 0xDC00 && low <= 0xDFFF) {
+          output += percentEncodeNonAscii(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+          i++
+        } else {
+          output += percentEncodeNonAscii(0xFFFD)
+        }
+      } else {
+        output += percentEncodeNonAscii(0xFFFD)
+      }
+    }
   }
-  if (component.path !== undefined) {
-    component.path = func(component.path)
+
+  return output
+}
+
+/**
+ * Serializes a path without rewriting reserved data. Raw RFC 3986 path
+ * characters remain literal, valid escapes are preserved and uppercased, and
+ * everything else is UTF-8 percent-encoded. In a path-noscheme, a colon in the
+ * first segment must be escaped so the result cannot be parsed as a scheme.
+ *
+ * @param {string} input
+ * @param {boolean} [pathNoScheme=false]
+ * @returns {string}
+ */
+function serializePathEncoding (input, pathNoScheme = false) {
+  let output = ''
+  let firstSegment = pathNoScheme && input[0] !== '/'
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (ch === '%' && i + 2 < input.length) {
+      const hex = input.slice(i + 1, i + 3)
+      if (isHexPair(hex)) {
+        output += '%' + hex.toUpperCase()
+        i += 2
+        continue
+      }
+    }
+
+    if (ch === '/') {
+      firstSegment = false
+    }
+
+    if (isPathCharacter(ch) && (ch !== ':' || !firstSegment)) {
+      output += ch
+    } else {
+      const code = input.charCodeAt(i)
+      if (code < 0x80) {
+        output += BYTE_HEX[code]
+      } else if (code < 0xD800 || code > 0xDFFF) {
+        output += percentEncodeNonAscii(code)
+      } else if (code <= 0xDBFF && i + 1 < input.length) {
+        const low = input.charCodeAt(i + 1)
+        if (low >= 0xDC00 && low <= 0xDFFF) {
+          output += percentEncodeNonAscii(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+          i++
+        } else {
+          output += percentEncodeNonAscii(0xFFFD)
+        }
+      } else {
+        output += percentEncodeNonAscii(0xFFFD)
+      }
+    }
   }
-  if (component.query !== undefined) {
-    component.query = func(component.query)
+
+  return output
+}
+
+/**
+ * Percent-encodes a URI component using its RFC 3986 literal character set.
+ * Existing valid escapes are preserved and normalized to uppercase hex.
+ *
+ * @param {string} input
+ * @param {(value: string) => boolean} isAllowed
+ * @returns {string}
+ */
+function encodeComponent (input, isAllowed) {
+  let output = ''
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (ch === '%' && i + 2 < input.length) {
+      const hex = input.slice(i + 1, i + 3)
+      if (isHexPair(hex)) {
+        output += '%' + hex.toUpperCase()
+        i += 2
+        continue
+      }
+    }
+
+    if (isAllowed(ch)) {
+      output += ch
+    } else {
+      const code = input.charCodeAt(i)
+      if (code < 0x80) {
+        output += BYTE_HEX[code]
+      } else if (code < 0xD800 || code > 0xDFFF) {
+        output += percentEncodeNonAscii(code)
+      } else if (code <= 0xDBFF && i + 1 < input.length) {
+        const low = input.charCodeAt(i + 1)
+        if (low >= 0xDC00 && low <= 0xDFFF) {
+          output += percentEncodeNonAscii(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+          i++
+        } else {
+          output += percentEncodeNonAscii(0xFFFD)
+        }
+      } else {
+        output += percentEncodeNonAscii(0xFFFD)
+      }
+    }
   }
-  if (component.fragment !== undefined) {
-    component.fragment = func(component.fragment)
+
+  return output
+}
+
+/**
+ * Encodes userinfo while preserving its RFC 3986 §3.2.1 literal characters.
+ * In particular, authority delimiters such as `@`, `/`, `?`, and `#` are data.
+ *
+ * @param {string} input
+ * @returns {string}
+ */
+function encodeUserinfo (input) {
+  return encodeComponent(input, isUserinfoCharacter)
+}
+
+/**
+ * Encodes query data using the RFC 3986 §3.4 grammar. A literal `#` must be
+ * escaped because it would otherwise begin the fragment component.
+ *
+ * @param {string} input
+ * @returns {string}
+ */
+function encodeQuery (input) {
+  return encodeComponent(input, isQueryFragmentCharacter)
+}
+
+/**
+ * Encodes fragment data using the RFC 3986 §3.5 grammar.
+ *
+ * @param {string} input
+ * @returns {string}
+ */
+function encodeFragment (input) {
+  return encodeComponent(input, isQueryFragmentCharacter)
+}
+
+function isEscapeSafe (cp) {
+  return (
+    (cp >= 0x30 && cp <= 0x39) ||
+    (cp >= 0x41 && cp <= 0x5A) ||
+    (cp >= 0x61 && cp <= 0x7A) ||
+    cp === 0x2A || cp === 0x2B || cp === 0x2D || cp === 0x2E ||
+    cp === 0x2F || cp === 0x40 || cp === 0x5F
+  )
+}
+
+/**
+ * Normalizes the percent-encoding of a query or fragment component.
+ *
+ * Like `normalizePathEncoding`, but uses the query/fragment character set
+ * (which additionally allows `?`) and decodes `.` since it has no dot-segment
+ * meaning outside of a path.
+ *
+ * @param {string} input
+ * @returns {string}
+ */
+function normalizeQueryFragmentEncoding (input) {
+  let output = ''
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (ch === '%' && i + 2 < input.length) {
+      const hex = input.slice(i + 1, i + 3)
+      if (isHexPair(hex)) {
+        const normalizedHex = hex.toUpperCase()
+        const decoded = String.fromCharCode(parseInt(normalizedHex, 16))
+
+        if (isUnreserved(decoded)) {
+          output += decoded
+        } else {
+          output += '%' + normalizedHex
+        }
+
+        i += 2
+        continue
+      }
+    }
+
+    if (isQueryFragmentCharacter(ch)) {
+      output += ch
+    } else {
+      const code = input.charCodeAt(i)
+      if (code < 0x80) {
+        output += isEscapeSafe(code) ? ch : BYTE_HEX[code]
+      } else if (code < 0xD800 || code > 0xDFFF) {
+        output += percentEncodeNonAscii(code)
+      } else if (code <= 0xDBFF && i + 1 < input.length) {
+        const low = input.charCodeAt(i + 1)
+        if (low >= 0xDC00 && low <= 0xDFFF) {
+          output += percentEncodeNonAscii(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+          i++
+        } else {
+          output += percentEncodeNonAscii(0xFFFD)
+        }
+      } else {
+        output += percentEncodeNonAscii(0xFFFD)
+      }
+    }
   }
-  return component
+
+  return output
+}
+
+/**
+ * Escapes a component while preserving existing valid percent escapes.
+ *
+ * @param {string} input
+ * @returns {string}
+ */
+function escapePreservingEscapes (input) {
+  let output = ''
+
+  for (let i = 0; i < input.length; i++) {
+    if (input[i] === '%' && i + 2 < input.length) {
+      const hex = input.slice(i + 1, i + 3)
+      if (isHexPair(hex)) {
+        output += '%' + hex.toUpperCase()
+        i += 2
+        continue
+      }
+    }
+
+    output += escape(input[i])
+  }
+
+  return output
 }
 
 /**
@@ -27943,26 +33375,36 @@ function recomposeAuthority (component) {
   const uriTokens = []
 
   if (component.userinfo !== undefined) {
-    uriTokens.push(component.userinfo)
+    uriTokens.push(encodeUserinfo(component.userinfo))
     uriTokens.push('@')
   }
 
   if (component.host !== undefined) {
-    let host = unescape(component.host)
+    let host = component.host
     if (!isIPv4(host)) {
-      const ipV6res = normalizeIPv6(host)
-      if (ipV6res.isIPV6 === true) {
+      let ipV6res = normalizeIPv6(host)
+      if (ipV6res.isIPV6 !== true && ipV6res.isIPVFuture !== true) {
+        // Decode only unreserved bytes, once. In particular, keep %25 encoded
+        // so it cannot introduce a second escape during recomposition.
+        host = normalizePercentEncoding(host, true)
+        ipV6res = normalizeIPv6(host)
+      }
+      if (ipV6res.isIPV6 === true || ipV6res.isIPVFuture === true) {
         host = `[${ipV6res.escapedHost}]`
       } else {
-        host = component.host
+        host = reescapeHostDelimiters(host, false)
       }
     }
     uriTokens.push(host)
   }
 
   if (typeof component.port === 'number' || typeof component.port === 'string') {
+    const port = String(component.port)
+    if (!isPort(port)) {
+      throw new TypeError('URI port is malformed.')
+    }
     uriTokens.push(':')
-    uriTokens.push(String(component.port))
+    uriTokens.push(port)
   }
 
   return uriTokens.length ? uriTokens.join('') : undefined
@@ -27971,7 +33413,15 @@ function recomposeAuthority (component) {
 module.exports = {
   nonSimpleDomain,
   recomposeAuthority,
-  normalizeComponentEncoding,
+  reescapeHostDelimiters,
+  normalizePercentEncoding,
+  normalizePathEncoding,
+  serializePathEncoding,
+  normalizeQueryFragmentEncoding,
+  encodeUserinfo,
+  encodeQuery,
+  encodeFragment,
+  escapePreservingEscapes,
   removeDotSegments,
   isIPv4,
   isUUID,
@@ -29623,7 +35073,7 @@ function deconstructPacket(packet) {
     pack.attachments = buffers.length; // number of binary 'attachments'
     return { packet: pack, buffers: buffers };
 }
-function _deconstructPacket(data, buffers) {
+function _deconstructPacket(data, buffers, toJSON) {
     if (!data)
         return data;
     if ((0, is_binary_js_1.isBinary)(data)) {
@@ -29639,6 +35089,9 @@ function _deconstructPacket(data, buffers) {
         return newData;
     }
     else if (typeof data === "object" && !(data instanceof Date)) {
+        if (data.toJSON && typeof data.toJSON === "function" && !toJSON) {
+            return _deconstructPacket(data.toJSON(), buffers, true);
+        }
         const newData = {};
         for (const key in data) {
             if (Object.prototype.hasOwnProperty.call(data, key)) {
@@ -29702,13 +35155,16 @@ function _reconstructPacket(data, buffers) {
 
 "use strict";
 
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Decoder = exports.Encoder = exports.PacketType = exports.protocol = void 0;
 exports.isPacketValid = isPacketValid;
 const component_emitter_1 = __webpack_require__(/*! @socket.io/component-emitter */ "./node_modules/@socket.io/component-emitter/lib/esm/index.js");
 const binary_js_1 = __webpack_require__(/*! ./binary.js */ "./node_modules/socket.io-parser/build/cjs/binary.js");
 const is_binary_js_1 = __webpack_require__(/*! ./is-binary.js */ "./node_modules/socket.io-parser/build/cjs/is-binary.js");
-const debug_1 = __webpack_require__(/*! debug */ "./node_modules/debug/src/browser.js"); // debug()
+const debug_1 = __importDefault(__webpack_require__(/*! debug */ "./node_modules/debug/src/browser.js")); // debug()
 const debug = (0, debug_1.default)("socket.io-parser"); // debug()
 /**
  * These strings must not be used as event names, as they have a special meaning.
@@ -29820,12 +35276,13 @@ exports.Encoder = Encoder;
 class Decoder extends component_emitter_1.Emitter {
     /**
      * Decoder constructor
-     *
-     * @param {function} reviver - custom reviver to pass down to JSON.stringify
      */
-    constructor(reviver) {
+    constructor(opts) {
         super();
-        this.reviver = reviver;
+        this.opts = Object.assign({
+            reviver: undefined,
+            maxAttachments: 10,
+        }, typeof opts === "function" ? { reviver: opts } : opts);
     }
     /**
      * Decodes an encoded packet string into packet JSON.
@@ -29844,10 +35301,6 @@ class Decoder extends component_emitter_1.Emitter {
                 packet.type = isBinaryEvent ? PacketType.EVENT : PacketType.ACK;
                 // binary packet's json
                 this.reconstructor = new BinaryReconstructor(packet);
-                // no attachments, labeled binary but no binary data to follow
-                if (packet.attachments === 0) {
-                    super.emitReserved("decoded", packet);
-                }
             }
             else {
                 // non-binary full packet
@@ -29896,7 +35349,14 @@ class Decoder extends component_emitter_1.Emitter {
             if (buf != Number(buf) || str.charAt(i) !== "-") {
                 throw new Error("Illegal attachments");
             }
-            p.attachments = Number(buf);
+            const n = Number(buf);
+            if (!isInteger(n) || n < 1) {
+                throw new Error("Illegal attachments");
+            }
+            else if (n > this.opts.maxAttachments) {
+                throw new Error("too many attachments");
+            }
+            p.attachments = n;
         }
         // look up namespace (if any)
         if ("/" === str.charAt(i + 1)) {
@@ -29943,7 +35403,7 @@ class Decoder extends component_emitter_1.Emitter {
     }
     tryParse(str) {
         try {
-            return JSON.parse(str, this.reviver);
+            return JSON.parse(str, this.opts.reviver);
         }
         catch (e) {
             return false;
@@ -30313,6 +35773,2620 @@ Emitter.prototype.hasListeners = function(event){
 
 /***/ },
 
+/***/ "./node_modules/oauth4webapi/build/index.js"
+/*!**************************************************!*\
+  !*** ./node_modules/oauth4webapi/build/index.js ***!
+  \**************************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AUTHORIZATION_RESPONSE_ERROR: () => (/* binding */ AUTHORIZATION_RESPONSE_ERROR),
+/* harmony export */   AuthorizationResponseError: () => (/* binding */ AuthorizationResponseError),
+/* harmony export */   ClientSecretBasic: () => (/* binding */ ClientSecretBasic),
+/* harmony export */   ClientSecretJwt: () => (/* binding */ ClientSecretJwt),
+/* harmony export */   ClientSecretPost: () => (/* binding */ ClientSecretPost),
+/* harmony export */   DPoP: () => (/* binding */ DPoP),
+/* harmony export */   HTTP_REQUEST_FORBIDDEN: () => (/* binding */ HTTP_REQUEST_FORBIDDEN),
+/* harmony export */   INVALID_REQUEST: () => (/* binding */ INVALID_REQUEST),
+/* harmony export */   INVALID_RESPONSE: () => (/* binding */ INVALID_RESPONSE),
+/* harmony export */   INVALID_SERVER_METADATA: () => (/* binding */ INVALID_SERVER_METADATA),
+/* harmony export */   JSON_ATTRIBUTE_COMPARISON: () => (/* binding */ JSON_ATTRIBUTE_COMPARISON),
+/* harmony export */   JWT_CLAIM_COMPARISON: () => (/* binding */ JWT_CLAIM_COMPARISON),
+/* harmony export */   JWT_TIMESTAMP_CHECK: () => (/* binding */ JWT_TIMESTAMP_CHECK),
+/* harmony export */   JWT_USERINFO_EXPECTED: () => (/* binding */ JWT_USERINFO_EXPECTED),
+/* harmony export */   KEY_SELECTION: () => (/* binding */ KEY_SELECTION),
+/* harmony export */   MISSING_SERVER_METADATA: () => (/* binding */ MISSING_SERVER_METADATA),
+/* harmony export */   None: () => (/* binding */ None),
+/* harmony export */   OperationProcessingError: () => (/* binding */ OperationProcessingError),
+/* harmony export */   PARSE_ERROR: () => (/* binding */ PARSE_ERROR),
+/* harmony export */   PrivateKeyJwt: () => (/* binding */ PrivateKeyJwt),
+/* harmony export */   REQUEST_PROTOCOL_FORBIDDEN: () => (/* binding */ REQUEST_PROTOCOL_FORBIDDEN),
+/* harmony export */   RESPONSE_BODY_ERROR: () => (/* binding */ RESPONSE_BODY_ERROR),
+/* harmony export */   RESPONSE_IS_NOT_CONFORM: () => (/* binding */ RESPONSE_IS_NOT_CONFORM),
+/* harmony export */   RESPONSE_IS_NOT_JSON: () => (/* binding */ RESPONSE_IS_NOT_JSON),
+/* harmony export */   ResponseBodyError: () => (/* binding */ ResponseBodyError),
+/* harmony export */   TlsClientAuth: () => (/* binding */ TlsClientAuth),
+/* harmony export */   UNSUPPORTED_OPERATION: () => (/* binding */ UNSUPPORTED_OPERATION),
+/* harmony export */   UnsupportedOperationError: () => (/* binding */ UnsupportedOperationError),
+/* harmony export */   WWWAuthenticateChallengeError: () => (/* binding */ WWWAuthenticateChallengeError),
+/* harmony export */   WWW_AUTHENTICATE_CHALLENGE: () => (/* binding */ WWW_AUTHENTICATE_CHALLENGE),
+/* harmony export */   _expectedIssuer: () => (/* binding */ _expectedIssuer),
+/* harmony export */   _nodiscoverycheck: () => (/* binding */ _nodiscoverycheck),
+/* harmony export */   _nopkce: () => (/* binding */ _nopkce),
+/* harmony export */   allowInsecureRequests: () => (/* binding */ allowInsecureRequests),
+/* harmony export */   authorizationCodeGrantRequest: () => (/* binding */ authorizationCodeGrantRequest),
+/* harmony export */   backchannelAuthenticationGrantRequest: () => (/* binding */ backchannelAuthenticationGrantRequest),
+/* harmony export */   backchannelAuthenticationRequest: () => (/* binding */ backchannelAuthenticationRequest),
+/* harmony export */   calculatePKCECodeChallenge: () => (/* binding */ calculatePKCECodeChallenge),
+/* harmony export */   checkProtocol: () => (/* binding */ checkProtocol),
+/* harmony export */   clientCredentialsGrantRequest: () => (/* binding */ clientCredentialsGrantRequest),
+/* harmony export */   clockSkew: () => (/* binding */ clockSkew),
+/* harmony export */   clockTolerance: () => (/* binding */ clockTolerance),
+/* harmony export */   customFetch: () => (/* binding */ customFetch),
+/* harmony export */   deviceAuthorizationRequest: () => (/* binding */ deviceAuthorizationRequest),
+/* harmony export */   deviceCodeGrantRequest: () => (/* binding */ deviceCodeGrantRequest),
+/* harmony export */   discoveryRequest: () => (/* binding */ discoveryRequest),
+/* harmony export */   dynamicClientRegistrationRequest: () => (/* binding */ dynamicClientRegistrationRequest),
+/* harmony export */   expectNoNonce: () => (/* binding */ expectNoNonce),
+/* harmony export */   expectNoState: () => (/* binding */ expectNoState),
+/* harmony export */   formPostResponse: () => (/* binding */ formPostResponse),
+/* harmony export */   generateKeyPair: () => (/* binding */ generateKeyPair),
+/* harmony export */   generateRandomCodeVerifier: () => (/* binding */ generateRandomCodeVerifier),
+/* harmony export */   generateRandomNonce: () => (/* binding */ generateRandomNonce),
+/* harmony export */   generateRandomState: () => (/* binding */ generateRandomState),
+/* harmony export */   genericTokenEndpointRequest: () => (/* binding */ genericTokenEndpointRequest),
+/* harmony export */   getContentType: () => (/* binding */ getContentType),
+/* harmony export */   getValidatedIdTokenClaims: () => (/* binding */ getValidatedIdTokenClaims),
+/* harmony export */   introspectionRequest: () => (/* binding */ introspectionRequest),
+/* harmony export */   isDPoPNonceError: () => (/* binding */ isDPoPNonceError),
+/* harmony export */   issueRequestObject: () => (/* binding */ issueRequestObject),
+/* harmony export */   jweDecrypt: () => (/* binding */ jweDecrypt),
+/* harmony export */   jwksCache: () => (/* binding */ jwksCache),
+/* harmony export */   modifyAssertion: () => (/* binding */ modifyAssertion),
+/* harmony export */   nopkce: () => (/* binding */ nopkce),
+/* harmony export */   processAuthorizationCodeResponse: () => (/* binding */ processAuthorizationCodeResponse),
+/* harmony export */   processBackchannelAuthenticationGrantResponse: () => (/* binding */ processBackchannelAuthenticationGrantResponse),
+/* harmony export */   processBackchannelAuthenticationResponse: () => (/* binding */ processBackchannelAuthenticationResponse),
+/* harmony export */   processClientCredentialsResponse: () => (/* binding */ processClientCredentialsResponse),
+/* harmony export */   processDeviceAuthorizationResponse: () => (/* binding */ processDeviceAuthorizationResponse),
+/* harmony export */   processDeviceCodeResponse: () => (/* binding */ processDeviceCodeResponse),
+/* harmony export */   processDiscoveryResponse: () => (/* binding */ processDiscoveryResponse),
+/* harmony export */   processDynamicClientRegistrationResponse: () => (/* binding */ processDynamicClientRegistrationResponse),
+/* harmony export */   processGenericTokenEndpointResponse: () => (/* binding */ processGenericTokenEndpointResponse),
+/* harmony export */   processIntrospectionResponse: () => (/* binding */ processIntrospectionResponse),
+/* harmony export */   processPushedAuthorizationResponse: () => (/* binding */ processPushedAuthorizationResponse),
+/* harmony export */   processRefreshTokenResponse: () => (/* binding */ processRefreshTokenResponse),
+/* harmony export */   processResourceDiscoveryResponse: () => (/* binding */ processResourceDiscoveryResponse),
+/* harmony export */   processRevocationResponse: () => (/* binding */ processRevocationResponse),
+/* harmony export */   processUserInfoResponse: () => (/* binding */ processUserInfoResponse),
+/* harmony export */   protectedResourceRequest: () => (/* binding */ protectedResourceRequest),
+/* harmony export */   pushedAuthorizationRequest: () => (/* binding */ pushedAuthorizationRequest),
+/* harmony export */   refreshTokenGrantRequest: () => (/* binding */ refreshTokenGrantRequest),
+/* harmony export */   resolveEndpoint: () => (/* binding */ resolveEndpoint),
+/* harmony export */   resourceDiscoveryRequest: () => (/* binding */ resourceDiscoveryRequest),
+/* harmony export */   revocationRequest: () => (/* binding */ revocationRequest),
+/* harmony export */   skipAuthTimeCheck: () => (/* binding */ skipAuthTimeCheck),
+/* harmony export */   skipStateCheck: () => (/* binding */ skipStateCheck),
+/* harmony export */   skipSubjectCheck: () => (/* binding */ skipSubjectCheck),
+/* harmony export */   userInfoRequest: () => (/* binding */ userInfoRequest),
+/* harmony export */   validateApplicationLevelSignature: () => (/* binding */ validateApplicationLevelSignature),
+/* harmony export */   validateAuthResponse: () => (/* binding */ validateAuthResponse),
+/* harmony export */   validateCodeIdTokenResponse: () => (/* binding */ validateCodeIdTokenResponse),
+/* harmony export */   validateDetachedSignatureResponse: () => (/* binding */ validateDetachedSignatureResponse),
+/* harmony export */   validateJwtAccessToken: () => (/* binding */ validateJwtAccessToken),
+/* harmony export */   validateJwtAuthResponse: () => (/* binding */ validateJwtAuthResponse)
+/* harmony export */ });
+let USER_AGENT;
+if (typeof navigator === 'undefined' || !navigator.userAgent?.startsWith?.('Mozilla/5.0 ')) {
+    const NAME = 'oauth4webapi';
+    const VERSION = 'v3.8.6';
+    USER_AGENT = `${NAME}/${VERSION}`;
+}
+function looseInstanceOf(input, expected) {
+    if (input == null) {
+        return false;
+    }
+    try {
+        return (input instanceof expected ||
+            Object.getPrototypeOf(input)[Symbol.toStringTag] === expected.prototype[Symbol.toStringTag]);
+    }
+    catch {
+        return false;
+    }
+}
+const ERR_INVALID_ARG_VALUE = 'ERR_INVALID_ARG_VALUE';
+const ERR_INVALID_ARG_TYPE = 'ERR_INVALID_ARG_TYPE';
+function CodedTypeError(message, code, cause) {
+    const err = new TypeError(message, { cause });
+    Object.assign(err, { code });
+    return err;
+}
+const allowInsecureRequests = Symbol();
+const clockSkew = Symbol();
+const clockTolerance = Symbol();
+const customFetch = Symbol();
+const modifyAssertion = Symbol();
+const jweDecrypt = Symbol();
+const jwksCache = Symbol();
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+function buf(input) {
+    if (typeof input === 'string') {
+        return encoder.encode(input);
+    }
+    return decoder.decode(input);
+}
+let encodeBase64Url;
+if (Uint8Array.prototype.toBase64) {
+    encodeBase64Url = (input) => {
+        if (input instanceof ArrayBuffer) {
+            input = new Uint8Array(input);
+        }
+        return input.toBase64({ alphabet: 'base64url', omitPadding: true });
+    };
+}
+else {
+    const CHUNK_SIZE = 0x8000;
+    encodeBase64Url = (input) => {
+        if (input instanceof ArrayBuffer) {
+            input = new Uint8Array(input);
+        }
+        const arr = [];
+        for (let i = 0; i < input.byteLength; i += CHUNK_SIZE) {
+            arr.push(String.fromCharCode.apply(null, input.subarray(i, i + CHUNK_SIZE)));
+        }
+        return btoa(arr.join('')).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    };
+}
+let decodeBase64Url;
+if (Uint8Array.fromBase64) {
+    decodeBase64Url = (input) => {
+        try {
+            return Uint8Array.fromBase64(input, { alphabet: 'base64url' });
+        }
+        catch (cause) {
+            throw CodedTypeError('The input to be decoded is not correctly encoded.', ERR_INVALID_ARG_VALUE, cause);
+        }
+    };
+}
+else {
+    decodeBase64Url = (input) => {
+        try {
+            const binary = atob(input.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, ''));
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+        catch (cause) {
+            throw CodedTypeError('The input to be decoded is not correctly encoded.', ERR_INVALID_ARG_VALUE, cause);
+        }
+    };
+}
+function b64u(input) {
+    if (typeof input === 'string') {
+        return decodeBase64Url(input);
+    }
+    return encodeBase64Url(input);
+}
+class UnsupportedOperationError extends Error {
+    code;
+    constructor(message, options) {
+        super(message, options);
+        this.name = this.constructor.name;
+        this.code = UNSUPPORTED_OPERATION;
+        Error.captureStackTrace?.(this, this.constructor);
+    }
+}
+class OperationProcessingError extends Error {
+    code;
+    constructor(message, options) {
+        super(message, options);
+        this.name = this.constructor.name;
+        if (options?.code) {
+            this.code = options?.code;
+        }
+        Error.captureStackTrace?.(this, this.constructor);
+    }
+}
+function OPE(message, code, cause) {
+    return new OperationProcessingError(message, { code, cause });
+}
+async function calculateJwkThumbprint(jwk) {
+    let components;
+    switch (jwk.kty) {
+        case 'EC':
+            components = {
+                crv: jwk.crv,
+                kty: jwk.kty,
+                x: jwk.x,
+                y: jwk.y,
+            };
+            break;
+        case 'OKP':
+            components = {
+                crv: jwk.crv,
+                kty: jwk.kty,
+                x: jwk.x,
+            };
+            break;
+        case 'AKP':
+            components = {
+                alg: jwk.alg,
+                kty: jwk.kty,
+                pub: jwk.pub,
+            };
+            break;
+        case 'RSA':
+            components = {
+                e: jwk.e,
+                kty: jwk.kty,
+                n: jwk.n,
+            };
+            break;
+        default:
+            throw new UnsupportedOperationError('unsupported JWK key type', { cause: jwk });
+    }
+    return b64u(await crypto.subtle.digest('SHA-256', buf(JSON.stringify(components))));
+}
+function assertCryptoKey(key, it) {
+    if (!(key instanceof CryptoKey)) {
+        throw CodedTypeError(`${it} must be a CryptoKey`, ERR_INVALID_ARG_TYPE);
+    }
+}
+function assertPrivateKey(key, it) {
+    assertCryptoKey(key, it);
+    if (key.type !== 'private') {
+        throw CodedTypeError(`${it} must be a private CryptoKey`, ERR_INVALID_ARG_VALUE);
+    }
+}
+function assertPublicKey(key, it) {
+    assertCryptoKey(key, it);
+    if (key.type !== 'public') {
+        throw CodedTypeError(`${it} must be a public CryptoKey`, ERR_INVALID_ARG_VALUE);
+    }
+}
+function normalizeTyp(value) {
+    return value.toLowerCase().replace(/^application\//, '');
+}
+function isJsonObject(input) {
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+        return false;
+    }
+    return true;
+}
+function prepareHeaders(input) {
+    if (looseInstanceOf(input, Headers)) {
+        input = Object.fromEntries(input.entries());
+    }
+    const headers = new Headers(input ?? {});
+    if (USER_AGENT && !headers.has('user-agent')) {
+        headers.set('user-agent', USER_AGENT);
+    }
+    if (headers.has('authorization')) {
+        throw CodedTypeError('"options.headers" must not include the "authorization" header name', ERR_INVALID_ARG_VALUE);
+    }
+    return headers;
+}
+function signal(url, value) {
+    if (value !== undefined) {
+        if (typeof value === 'function') {
+            value = value(url.href);
+        }
+        if (!(value instanceof AbortSignal)) {
+            throw CodedTypeError('"options.signal" must return or be an instance of AbortSignal', ERR_INVALID_ARG_TYPE);
+        }
+        return value;
+    }
+    return undefined;
+}
+function replaceDoubleSlash(pathname) {
+    if (pathname.includes('//')) {
+        return pathname.replace('//', '/');
+    }
+    return pathname;
+}
+function prependWellKnown(url, wellKnown, allowTerminatingSlash = false) {
+    if (url.pathname === '/') {
+        url.pathname = wellKnown;
+    }
+    else {
+        url.pathname = replaceDoubleSlash(`${wellKnown}/${allowTerminatingSlash ? url.pathname : url.pathname.replace(/(\/)$/, '')}`);
+    }
+    return url;
+}
+function appendWellKnown(url, wellKnown) {
+    url.pathname = replaceDoubleSlash(`${url.pathname}/${wellKnown}`);
+    return url;
+}
+async function performDiscovery(input, urlName, transform, options) {
+    if (!(input instanceof URL)) {
+        throw CodedTypeError(`"${urlName}" must be an instance of URL`, ERR_INVALID_ARG_TYPE);
+    }
+    checkProtocol(input, options?.[allowInsecureRequests] !== true);
+    const url = transform(new URL(input.href));
+    const headers = prepareHeaders(options?.headers);
+    headers.set('accept', 'application/json');
+    return (options?.[customFetch] || fetch)(url.href, {
+        body: undefined,
+        headers: Object.fromEntries(headers.entries()),
+        method: 'GET',
+        redirect: 'manual',
+        signal: signal(url, options?.signal),
+    });
+}
+async function discoveryRequest(issuerIdentifier, options) {
+    return performDiscovery(issuerIdentifier, 'issuerIdentifier', (url) => {
+        switch (options?.algorithm) {
+            case undefined:
+            case 'oidc':
+                appendWellKnown(url, '.well-known/openid-configuration');
+                break;
+            case 'oauth2':
+                prependWellKnown(url, '.well-known/oauth-authorization-server');
+                break;
+            default:
+                throw CodedTypeError('"options.algorithm" must be "oidc" (default), or "oauth2"', ERR_INVALID_ARG_VALUE);
+        }
+        return url;
+    }, options);
+}
+function assertNumber(input, allow0, it, code, cause) {
+    try {
+        if (typeof input !== 'number' || !Number.isFinite(input)) {
+            throw CodedTypeError(`${it} must be a number`, ERR_INVALID_ARG_TYPE, cause);
+        }
+        if (input > 0)
+            return;
+        if (allow0) {
+            if (input !== 0) {
+                throw CodedTypeError(`${it} must be a non-negative number`, ERR_INVALID_ARG_VALUE, cause);
+            }
+            return;
+        }
+        throw CodedTypeError(`${it} must be a positive number`, ERR_INVALID_ARG_VALUE, cause);
+    }
+    catch (err) {
+        if (code) {
+            throw OPE(err.message, code, cause);
+        }
+        throw err;
+    }
+}
+function assertString(input, it, code, cause) {
+    try {
+        if (typeof input !== 'string') {
+            throw CodedTypeError(`${it} must be a string`, ERR_INVALID_ARG_TYPE, cause);
+        }
+        if (input.length === 0) {
+            throw CodedTypeError(`${it} must not be empty`, ERR_INVALID_ARG_VALUE, cause);
+        }
+    }
+    catch (err) {
+        if (code) {
+            throw OPE(err.message, code, cause);
+        }
+        throw err;
+    }
+}
+async function processDiscoveryResponse(expectedIssuerIdentifier, response) {
+    const expected = expectedIssuerIdentifier;
+    if (!(expected instanceof URL) && expected !== _nodiscoverycheck) {
+        throw CodedTypeError('"expectedIssuerIdentifier" must be an instance of URL', ERR_INVALID_ARG_TYPE);
+    }
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    if (response.status !== 200) {
+        throw OPE('"response" is not a conform Authorization Server Metadata response (unexpected HTTP status code)', RESPONSE_IS_NOT_CONFORM, response);
+    }
+    assertReadableResponse(response);
+    const json = await getResponseJsonBody(response);
+    assertString(json.issuer, '"response" body "issuer" property', INVALID_RESPONSE, { body: json });
+    if (expected !== _nodiscoverycheck && new URL(json.issuer).href !== expected.href) {
+        throw OPE('"response" body "issuer" property does not match the expected value', JSON_ATTRIBUTE_COMPARISON, { expected: expected.href, body: json, attribute: 'issuer' });
+    }
+    return json;
+}
+function assertApplicationJson(response) {
+    assertContentType(response, 'application/json');
+}
+function notJson(response, ...types) {
+    let msg = '"response" content-type must be ';
+    if (types.length > 2) {
+        const last = types.pop();
+        msg += `${types.join(', ')}, or ${last}`;
+    }
+    else if (types.length === 2) {
+        msg += `${types[0]} or ${types[1]}`;
+    }
+    else {
+        msg += types[0];
+    }
+    return OPE(msg, RESPONSE_IS_NOT_JSON, response);
+}
+function assertContentTypes(response, ...types) {
+    if (!types.includes(getContentType(response))) {
+        throw notJson(response, ...types);
+    }
+}
+function assertContentType(response, contentType) {
+    if (getContentType(response) !== contentType) {
+        throw notJson(response, contentType);
+    }
+}
+function randomBytes() {
+    return b64u(crypto.getRandomValues(new Uint8Array(32)));
+}
+function generateRandomCodeVerifier() {
+    return randomBytes();
+}
+function generateRandomState() {
+    return randomBytes();
+}
+function generateRandomNonce() {
+    return randomBytes();
+}
+async function calculatePKCECodeChallenge(codeVerifier) {
+    assertString(codeVerifier, 'codeVerifier');
+    return b64u(await crypto.subtle.digest('SHA-256', buf(codeVerifier)));
+}
+function getKeyAndKid(input) {
+    if (input instanceof CryptoKey) {
+        return { key: input };
+    }
+    if (!(input?.key instanceof CryptoKey)) {
+        return {};
+    }
+    if (input.kid !== undefined) {
+        assertString(input.kid, '"kid"');
+    }
+    return {
+        key: input.key,
+        kid: input.kid,
+    };
+}
+function psAlg(key) {
+    switch (key.algorithm.hash.name) {
+        case 'SHA-256':
+            return 'PS256';
+        case 'SHA-384':
+            return 'PS384';
+        case 'SHA-512':
+            return 'PS512';
+        default:
+            throw new UnsupportedOperationError('unsupported RsaHashedKeyAlgorithm hash name', {
+                cause: key,
+            });
+    }
+}
+function rsAlg(key) {
+    switch (key.algorithm.hash.name) {
+        case 'SHA-256':
+            return 'RS256';
+        case 'SHA-384':
+            return 'RS384';
+        case 'SHA-512':
+            return 'RS512';
+        default:
+            throw new UnsupportedOperationError('unsupported RsaHashedKeyAlgorithm hash name', {
+                cause: key,
+            });
+    }
+}
+function esAlg(key) {
+    switch (key.algorithm.namedCurve) {
+        case 'P-256':
+            return 'ES256';
+        case 'P-384':
+            return 'ES384';
+        case 'P-521':
+            return 'ES512';
+        default:
+            throw new UnsupportedOperationError('unsupported EcKeyAlgorithm namedCurve', { cause: key });
+    }
+}
+function keyToJws(key) {
+    switch (key.algorithm.name) {
+        case 'RSA-PSS':
+            return psAlg(key);
+        case 'RSASSA-PKCS1-v1_5':
+            return rsAlg(key);
+        case 'ECDSA':
+            return esAlg(key);
+        case 'Ed25519':
+        case 'ML-DSA-44':
+        case 'ML-DSA-65':
+        case 'ML-DSA-87':
+            return key.algorithm.name;
+        case 'EdDSA':
+            return 'Ed25519';
+        default:
+            throw new UnsupportedOperationError('unsupported CryptoKey algorithm name', { cause: key });
+    }
+}
+function getClockSkew(client) {
+    const skew = client?.[clockSkew];
+    return typeof skew === 'number' && Number.isFinite(skew) ? skew : 0;
+}
+function getClockTolerance(client) {
+    const tolerance = client?.[clockTolerance];
+    return typeof tolerance === 'number' && Number.isFinite(tolerance) && Math.sign(tolerance) !== -1
+        ? tolerance
+        : 30;
+}
+function epochTime() {
+    return Math.floor(Date.now() / 1000);
+}
+function assertAs(as) {
+    if (typeof as !== 'object' || as === null) {
+        throw CodedTypeError('"as" must be an object', ERR_INVALID_ARG_TYPE);
+    }
+    assertString(as.issuer, '"as.issuer"');
+}
+function assertClient(client) {
+    if (typeof client !== 'object' || client === null) {
+        throw CodedTypeError('"client" must be an object', ERR_INVALID_ARG_TYPE);
+    }
+    assertString(client.client_id, '"client.client_id"');
+}
+function formUrlEncode(token) {
+    return encodeURIComponent(token).replace(/(?:[-_.!~*'()]|%20)/g, (substring) => {
+        switch (substring) {
+            case '-':
+            case '_':
+            case '.':
+            case '!':
+            case '~':
+            case '*':
+            case "'":
+            case '(':
+            case ')':
+                return `%${substring.charCodeAt(0).toString(16).toUpperCase()}`;
+            case '%20':
+                return '+';
+            default:
+                throw new Error();
+        }
+    });
+}
+function ClientSecretPost(clientSecret) {
+    assertString(clientSecret, '"clientSecret"');
+    return (_as, client, body, _headers) => {
+        body.set('client_id', client.client_id);
+        body.set('client_secret', clientSecret);
+    };
+}
+function ClientSecretBasic(clientSecret) {
+    assertString(clientSecret, '"clientSecret"');
+    return (_as, client, _body, headers) => {
+        const username = formUrlEncode(client.client_id);
+        const password = formUrlEncode(clientSecret);
+        const credentials = btoa(`${username}:${password}`);
+        headers.set('authorization', `Basic ${credentials}`);
+    };
+}
+function clientAssertionPayload(as, client) {
+    const now = epochTime() + getClockSkew(client);
+    return {
+        jti: randomBytes(),
+        aud: as.issuer,
+        exp: now + 60,
+        iat: now,
+        nbf: now,
+        iss: client.client_id,
+        sub: client.client_id,
+    };
+}
+function PrivateKeyJwt(clientPrivateKey, options) {
+    const { key, kid } = getKeyAndKid(clientPrivateKey);
+    assertPrivateKey(key, '"clientPrivateKey.key"');
+    return async (as, client, body, _headers) => {
+        const header = { alg: keyToJws(key), kid };
+        const payload = clientAssertionPayload(as, client);
+        options?.[modifyAssertion]?.(header, payload);
+        body.set('client_id', client.client_id);
+        body.set('client_assertion_type', 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer');
+        body.set('client_assertion', await signJwt(header, payload, key));
+    };
+}
+function ClientSecretJwt(clientSecret, options) {
+    assertString(clientSecret, '"clientSecret"');
+    const modify = options?.[modifyAssertion];
+    let key;
+    return async (as, client, body, _headers) => {
+        key ||= await crypto.subtle.importKey('raw', buf(clientSecret), { hash: 'SHA-256', name: 'HMAC' }, false, ['sign']);
+        const header = { alg: 'HS256' };
+        const payload = clientAssertionPayload(as, client);
+        modify?.(header, payload);
+        const data = `${b64u(buf(JSON.stringify(header)))}.${b64u(buf(JSON.stringify(payload)))}`;
+        const hmac = await crypto.subtle.sign(key.algorithm, key, buf(data));
+        body.set('client_id', client.client_id);
+        body.set('client_assertion_type', 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer');
+        body.set('client_assertion', `${data}.${b64u(new Uint8Array(hmac))}`);
+    };
+}
+function None() {
+    return (_as, client, body, _headers) => {
+        body.set('client_id', client.client_id);
+    };
+}
+function TlsClientAuth() {
+    return None();
+}
+async function signJwt(header, payload, key) {
+    if (!key.usages.includes('sign')) {
+        throw CodedTypeError('CryptoKey instances used for signing assertions must include "sign" in their "usages"', ERR_INVALID_ARG_VALUE);
+    }
+    const input = `${b64u(buf(JSON.stringify(header)))}.${b64u(buf(JSON.stringify(payload)))}`;
+    const signature = b64u(await crypto.subtle.sign(keyToSubtle(key), key, buf(input)));
+    return `${input}.${signature}`;
+}
+async function issueRequestObject(as, client, parameters, privateKey, options) {
+    assertAs(as);
+    assertClient(client);
+    parameters = new URLSearchParams(parameters);
+    const { key, kid } = getKeyAndKid(privateKey);
+    assertPrivateKey(key, '"privateKey.key"');
+    parameters.set('client_id', client.client_id);
+    const now = epochTime() + getClockSkew(client);
+    const claims = {
+        ...Object.fromEntries(parameters.entries()),
+        jti: randomBytes(),
+        aud: as.issuer,
+        exp: now + 60,
+        iat: now,
+        nbf: now,
+        iss: client.client_id,
+    };
+    let resource;
+    if (parameters.has('resource') &&
+        (resource = parameters.getAll('resource')) &&
+        resource.length > 1) {
+        claims.resource = resource;
+    }
+    {
+        let value = parameters.get('max_age');
+        if (value !== null) {
+            claims.max_age = parseInt(value, 10);
+            assertNumber(claims.max_age, true, '"max_age" parameter');
+        }
+    }
+    {
+        let value = parameters.get('claims');
+        if (value !== null) {
+            try {
+                claims.claims = JSON.parse(value);
+            }
+            catch (cause) {
+                throw OPE('failed to parse the "claims" parameter as JSON', PARSE_ERROR, cause);
+            }
+            if (!isJsonObject(claims.claims)) {
+                throw CodedTypeError('"claims" parameter must be a JSON with a top level object', ERR_INVALID_ARG_VALUE);
+            }
+        }
+    }
+    {
+        let value = parameters.get('authorization_details');
+        if (value !== null) {
+            try {
+                claims.authorization_details = JSON.parse(value);
+            }
+            catch (cause) {
+                throw OPE('failed to parse the "authorization_details" parameter as JSON', PARSE_ERROR, cause);
+            }
+            if (!Array.isArray(claims.authorization_details)) {
+                throw CodedTypeError('"authorization_details" parameter must be a JSON with a top level array', ERR_INVALID_ARG_VALUE);
+            }
+        }
+    }
+    const header = {
+        alg: keyToJws(key),
+        typ: 'oauth-authz-req+jwt',
+        kid,
+    };
+    options?.[modifyAssertion]?.(header, claims);
+    return signJwt(header, claims, key);
+}
+let jwkCache;
+async function getSetPublicJwkCache(key, alg) {
+    const { kty, e, n, x, y, crv, pub } = await crypto.subtle.exportKey('jwk', key);
+    const jwk = { kty, e, n, x, y, crv, pub };
+    if (kty === 'AKP')
+        jwk.alg = alg;
+    jwkCache.set(key, jwk);
+    return jwk;
+}
+async function publicJwk(key, alg) {
+    jwkCache ||= new WeakMap();
+    return jwkCache.get(key) || getSetPublicJwkCache(key, alg);
+}
+const URLParse = URL.parse
+    ?
+        (url, base) => URL.parse(url, base)
+    : (url, base) => {
+        try {
+            return new URL(url, base);
+        }
+        catch {
+            return null;
+        }
+    };
+function checkProtocol(url, enforceHttps) {
+    if (enforceHttps && url.protocol !== 'https:') {
+        throw OPE('only requests to HTTPS are allowed', HTTP_REQUEST_FORBIDDEN, url);
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+        throw OPE('only HTTP and HTTPS requests are allowed', REQUEST_PROTOCOL_FORBIDDEN, url);
+    }
+}
+function validateEndpoint(value, endpoint, useMtlsAlias, enforceHttps) {
+    let url;
+    if (typeof value !== 'string' || !(url = URLParse(value))) {
+        throw OPE(`authorization server metadata does not contain a valid ${useMtlsAlias ? `"as.mtls_endpoint_aliases.${endpoint}"` : `"as.${endpoint}"`}`, value === undefined ? MISSING_SERVER_METADATA : INVALID_SERVER_METADATA, { attribute: useMtlsAlias ? `mtls_endpoint_aliases.${endpoint}` : endpoint });
+    }
+    checkProtocol(url, enforceHttps);
+    return url;
+}
+function resolveEndpoint(as, endpoint, useMtlsAlias, enforceHttps) {
+    if (useMtlsAlias && as.mtls_endpoint_aliases && endpoint in as.mtls_endpoint_aliases) {
+        return validateEndpoint(as.mtls_endpoint_aliases[endpoint], endpoint, useMtlsAlias, enforceHttps);
+    }
+    return validateEndpoint(as[endpoint], endpoint, useMtlsAlias, enforceHttps);
+}
+async function pushedAuthorizationRequest(as, client, clientAuthentication, parameters, options) {
+    assertAs(as);
+    assertClient(client);
+    const url = resolveEndpoint(as, 'pushed_authorization_request_endpoint', client.use_mtls_endpoint_aliases, options?.[allowInsecureRequests] !== true);
+    const body = new URLSearchParams(parameters);
+    body.set('client_id', client.client_id);
+    const headers = prepareHeaders(options?.headers);
+    headers.set('accept', 'application/json');
+    if (options?.DPoP !== undefined) {
+        assertDPoP(options.DPoP);
+        await options.DPoP.addProof(url, headers, 'POST');
+    }
+    const response = await authenticatedRequest(as, client, clientAuthentication, url, body, headers, options);
+    options?.DPoP?.cacheNonce(response, url);
+    return response;
+}
+class DPoPHandler {
+    #header;
+    #privateKey;
+    #publicKey;
+    #clockSkew;
+    #modifyAssertion;
+    #map;
+    #jkt;
+    constructor(client, keyPair, options) {
+        assertPrivateKey(keyPair?.privateKey, '"DPoP.privateKey"');
+        assertPublicKey(keyPair?.publicKey, '"DPoP.publicKey"');
+        if (!keyPair.publicKey.extractable) {
+            throw CodedTypeError('"DPoP.publicKey.extractable" must be true', ERR_INVALID_ARG_VALUE);
+        }
+        this.#modifyAssertion = options?.[modifyAssertion];
+        this.#clockSkew = getClockSkew(client);
+        this.#privateKey = keyPair.privateKey;
+        this.#publicKey = keyPair.publicKey;
+        branded.add(this);
+    }
+    #get(key) {
+        this.#map ||= new Map();
+        let item = this.#map.get(key);
+        if (item) {
+            this.#map.delete(key);
+            this.#map.set(key, item);
+        }
+        return item;
+    }
+    #set(key, val) {
+        this.#map ||= new Map();
+        this.#map.delete(key);
+        if (this.#map.size === 100) {
+            this.#map.delete(this.#map.keys().next().value);
+        }
+        this.#map.set(key, val);
+    }
+    async calculateThumbprint() {
+        if (!this.#jkt) {
+            const jwk = await crypto.subtle.exportKey('jwk', this.#publicKey);
+            this.#jkt ||= await calculateJwkThumbprint(jwk);
+        }
+        return this.#jkt;
+    }
+    async addProof(url, headers, htm, accessToken) {
+        const alg = keyToJws(this.#privateKey);
+        this.#header ||= {
+            alg,
+            typ: 'dpop+jwt',
+            jwk: await publicJwk(this.#publicKey, alg),
+        };
+        const nonce = this.#get(url.origin);
+        const now = epochTime() + this.#clockSkew;
+        const payload = {
+            iat: now,
+            jti: randomBytes(),
+            htm,
+            nonce,
+            htu: `${url.origin}${url.pathname}`,
+            ath: accessToken
+                ? b64u(await crypto.subtle.digest('SHA-256', buf(accessToken)))
+                : undefined,
+        };
+        this.#modifyAssertion?.(this.#header, payload);
+        headers.set('dpop', await signJwt(this.#header, payload, this.#privateKey));
+    }
+    cacheNonce(response, url) {
+        try {
+            const nonce = response.headers.get('dpop-nonce');
+            if (nonce) {
+                this.#set(url.origin, nonce);
+            }
+        }
+        catch { }
+    }
+}
+function isDPoPNonceError(err) {
+    if (err instanceof WWWAuthenticateChallengeError) {
+        const { 0: challenge, length } = err.cause;
+        return (length === 1 && challenge.scheme === 'dpop' && challenge.parameters.error === 'use_dpop_nonce');
+    }
+    if (err instanceof ResponseBodyError) {
+        return err.error === 'use_dpop_nonce';
+    }
+    return false;
+}
+function DPoP(client, keyPair, options) {
+    return new DPoPHandler(client, keyPair, options);
+}
+class ResponseBodyError extends Error {
+    cause;
+    code;
+    error;
+    status;
+    error_description;
+    response;
+    constructor(message, options) {
+        super(message, options);
+        this.name = this.constructor.name;
+        this.code = RESPONSE_BODY_ERROR;
+        this.cause = options.cause;
+        this.error = options.cause.error;
+        this.status = options.response.status;
+        this.error_description = options.cause.error_description;
+        Object.defineProperty(this, 'response', { enumerable: false, value: options.response });
+        Error.captureStackTrace?.(this, this.constructor);
+    }
+}
+class AuthorizationResponseError extends Error {
+    cause;
+    code;
+    error;
+    error_description;
+    constructor(message, options) {
+        super(message, options);
+        this.name = this.constructor.name;
+        this.code = AUTHORIZATION_RESPONSE_ERROR;
+        this.cause = options.cause;
+        this.error = options.cause.get('error');
+        this.error_description = options.cause.get('error_description') ?? undefined;
+        Error.captureStackTrace?.(this, this.constructor);
+    }
+}
+class WWWAuthenticateChallengeError extends Error {
+    cause;
+    code;
+    response;
+    status;
+    constructor(message, options) {
+        super(message, options);
+        this.name = this.constructor.name;
+        this.code = WWW_AUTHENTICATE_CHALLENGE;
+        this.cause = options.cause;
+        this.status = options.response.status;
+        this.response = options.response;
+        Object.defineProperty(this, 'response', { enumerable: false });
+        Error.captureStackTrace?.(this, this.constructor);
+    }
+}
+const tokenMatch = "[a-zA-Z0-9!#$%&\\'\\*\\+\\-\\.\\^_`\\|~]+";
+const token68Match = '[a-zA-Z0-9\\-\\._\\~\\+\\/]+={0,2}';
+const quotedMatch = '"((?:[^"\\\\]|\\\\[\\s\\S])*)"';
+const quotedParamMatcher = '(' + tokenMatch + ')\\s*=\\s*' + quotedMatch;
+const paramMatcher = '(' + tokenMatch + ')\\s*=\\s*(' + tokenMatch + ')';
+const schemeRE = new RegExp('^[,\\s]*(' + tokenMatch + ')');
+const quotedParamRE = new RegExp('^[,\\s]*' + quotedParamMatcher + '[,\\s]*(.*)');
+const unquotedParamRE = new RegExp('^[,\\s]*' + paramMatcher + '[,\\s]*(.*)');
+const token68ParamRE = new RegExp('^(' + token68Match + ')(?:$|[,\\s])(.*)');
+function parseWwwAuthenticateChallenges(response) {
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    const header = response.headers.get('www-authenticate');
+    if (header === null) {
+        return undefined;
+    }
+    const challenges = [];
+    let rest = header;
+    while (rest) {
+        let match = rest.match(schemeRE);
+        const scheme = match?.['1'].toLowerCase();
+        if (!scheme) {
+            return undefined;
+        }
+        const afterScheme = rest.substring(match[0].length);
+        if (afterScheme && !afterScheme.match(/^[\s,]/)) {
+            return undefined;
+        }
+        const spaceMatch = afterScheme.match(/^\s+(.*)$/);
+        const hasParameters = !!spaceMatch;
+        rest = spaceMatch ? spaceMatch[1] : undefined;
+        const parameters = {};
+        let token68;
+        if (hasParameters) {
+            while (rest) {
+                let key;
+                let value;
+                if ((match = rest.match(quotedParamRE))) {
+                    ;
+                    [, key, value, rest] = match;
+                    if (value.includes('\\')) {
+                        try {
+                            value = JSON.parse(`"${value}"`);
+                        }
+                        catch { }
+                    }
+                    parameters[key.toLowerCase()] = value;
+                    continue;
+                }
+                if ((match = rest.match(unquotedParamRE))) {
+                    ;
+                    [, key, value, rest] = match;
+                    parameters[key.toLowerCase()] = value;
+                    continue;
+                }
+                if ((match = rest.match(token68ParamRE))) {
+                    if (Object.keys(parameters).length) {
+                        break;
+                    }
+                    ;
+                    [, token68, rest] = match;
+                    break;
+                }
+                return undefined;
+            }
+        }
+        else {
+            rest = afterScheme || undefined;
+        }
+        const challenge = { scheme, parameters };
+        if (token68) {
+            challenge.token68 = token68;
+        }
+        challenges.push(challenge);
+    }
+    if (!challenges.length) {
+        return undefined;
+    }
+    return challenges;
+}
+async function processPushedAuthorizationResponse(as, client, response) {
+    assertAs(as);
+    assertClient(client);
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    await checkOAuthBodyError(response, 201, 'Pushed Authorization Request Endpoint');
+    assertReadableResponse(response);
+    const json = await getResponseJsonBody(response);
+    assertString(json.request_uri, '"response" body "request_uri" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    let expiresIn = typeof json.expires_in !== 'number' ? parseFloat(json.expires_in) : json.expires_in;
+    assertNumber(expiresIn, true, '"response" body "expires_in" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    json.expires_in = expiresIn;
+    return json;
+}
+async function parseOAuthResponseErrorBody(response) {
+    if (response.status > 399 && response.status < 500) {
+        assertReadableResponse(response);
+        assertApplicationJson(response);
+        try {
+            const json = await response.clone().json();
+            if (isJsonObject(json) && typeof json.error === 'string' && json.error.length) {
+                return json;
+            }
+        }
+        catch { }
+    }
+    return undefined;
+}
+async function checkOAuthBodyError(response, expected, label) {
+    if (response.status !== expected) {
+        checkAuthenticationChallenges(response);
+        let err;
+        if ((err = await parseOAuthResponseErrorBody(response))) {
+            await response.body?.cancel();
+            throw new ResponseBodyError('server responded with an error in the response body', {
+                cause: err,
+                response,
+            });
+        }
+        throw OPE(`"response" is not a conform ${label} response (unexpected HTTP status code)`, RESPONSE_IS_NOT_CONFORM, response);
+    }
+}
+function assertDPoP(option) {
+    if (!branded.has(option)) {
+        throw CodedTypeError('"options.DPoP" is not a valid DPoPHandle', ERR_INVALID_ARG_VALUE);
+    }
+}
+async function resourceRequest(accessToken, method, url, headers, body, options) {
+    assertString(accessToken, '"accessToken"');
+    if (!(url instanceof URL)) {
+        throw CodedTypeError('"url" must be an instance of URL', ERR_INVALID_ARG_TYPE);
+    }
+    checkProtocol(url, options?.[allowInsecureRequests] !== true);
+    headers = prepareHeaders(headers);
+    if (options?.DPoP) {
+        assertDPoP(options.DPoP);
+        await options.DPoP.addProof(url, headers, method.toUpperCase(), accessToken);
+    }
+    headers.set('authorization', `${headers.has('dpop') ? 'DPoP' : 'Bearer'} ${accessToken}`);
+    const response = await (options?.[customFetch] || fetch)(url.href, {
+        duplex: looseInstanceOf(body, ReadableStream) ? 'half' : undefined,
+        body,
+        headers: Object.fromEntries(headers.entries()),
+        method,
+        redirect: 'manual',
+        signal: signal(url, options?.signal),
+    });
+    options?.DPoP?.cacheNonce(response, url);
+    return response;
+}
+async function protectedResourceRequest(accessToken, method, url, headers, body, options) {
+    const response = await resourceRequest(accessToken, method, url, headers, body, options);
+    checkAuthenticationChallenges(response);
+    return response;
+}
+async function userInfoRequest(as, client, accessToken, options) {
+    assertAs(as);
+    assertClient(client);
+    const url = resolveEndpoint(as, 'userinfo_endpoint', client.use_mtls_endpoint_aliases, options?.[allowInsecureRequests] !== true);
+    const headers = prepareHeaders(options?.headers);
+    if (client.userinfo_signed_response_alg) {
+        headers.set('accept', 'application/jwt');
+    }
+    else {
+        headers.set('accept', 'application/json');
+        headers.append('accept', 'application/jwt');
+    }
+    return resourceRequest(accessToken, 'GET', url, headers, null, {
+        ...options,
+        [clockSkew]: getClockSkew(client),
+    });
+}
+let jwksMap;
+function setJwksCache(as, jwks, uat, cache) {
+    jwksMap ||= new WeakMap();
+    jwksMap.set(as, {
+        jwks,
+        uat,
+        get age() {
+            return epochTime() - this.uat;
+        },
+    });
+    if (cache) {
+        Object.assign(cache, { jwks: structuredClone(jwks), uat });
+    }
+}
+function isFreshJwksCache(input) {
+    if (typeof input !== 'object' || input === null) {
+        return false;
+    }
+    if (!('uat' in input) || typeof input.uat !== 'number' || epochTime() - input.uat >= 300) {
+        return false;
+    }
+    if (!('jwks' in input) ||
+        !isJsonObject(input.jwks) ||
+        !Array.isArray(input.jwks.keys) ||
+        !Array.prototype.every.call(input.jwks.keys, isJsonObject)) {
+        return false;
+    }
+    return true;
+}
+function clearJwksCache(as, cache) {
+    jwksMap?.delete(as);
+    delete cache?.jwks;
+    delete cache?.uat;
+}
+async function getPublicSigKeyFromIssuerJwksUri(as, options, header) {
+    const { alg, kid } = header;
+    checkSupportedJwsAlg(header);
+    if (!jwksMap?.has(as) && isFreshJwksCache(options?.[jwksCache])) {
+        setJwksCache(as, options?.[jwksCache].jwks, options?.[jwksCache].uat);
+    }
+    let jwks;
+    let age;
+    if (jwksMap?.has(as)) {
+        ;
+        ({ jwks, age } = jwksMap.get(as));
+        if (age >= 300) {
+            clearJwksCache(as, options?.[jwksCache]);
+            return getPublicSigKeyFromIssuerJwksUri(as, options, header);
+        }
+    }
+    else {
+        jwks = await jwksRequest(as, options).then(processJwksResponse);
+        age = 0;
+        setJwksCache(as, jwks, epochTime(), options?.[jwksCache]);
+    }
+    let kty;
+    switch (alg.slice(0, 2)) {
+        case 'RS':
+        case 'PS':
+            kty = 'RSA';
+            break;
+        case 'ES':
+            kty = 'EC';
+            break;
+        case 'Ed':
+            kty = 'OKP';
+            break;
+        case 'ML':
+            kty = 'AKP';
+            break;
+        default:
+            throw new UnsupportedOperationError('unsupported JWS algorithm', { cause: { alg } });
+    }
+    const candidates = jwks.keys.filter((jwk) => {
+        if (jwk.kty !== kty) {
+            return false;
+        }
+        if (kid !== undefined && kid !== jwk.kid) {
+            return false;
+        }
+        if (jwk.alg !== undefined && alg !== jwk.alg) {
+            return false;
+        }
+        if (jwk.use !== undefined && jwk.use !== 'sig') {
+            return false;
+        }
+        if (jwk.key_ops?.includes('verify') === false) {
+            return false;
+        }
+        switch (true) {
+            case alg === 'ES256' && jwk.crv !== 'P-256':
+            case alg === 'ES384' && jwk.crv !== 'P-384':
+            case alg === 'ES512' && jwk.crv !== 'P-521':
+            case alg === 'Ed25519' && jwk.crv !== 'Ed25519':
+            case alg === 'EdDSA' && jwk.crv !== 'Ed25519':
+                return false;
+        }
+        return true;
+    });
+    const { 0: jwk, length } = candidates;
+    if (!length) {
+        if (age >= 60) {
+            clearJwksCache(as, options?.[jwksCache]);
+            return getPublicSigKeyFromIssuerJwksUri(as, options, header);
+        }
+        throw OPE('error when selecting a JWT verification key, no applicable keys found', KEY_SELECTION, { header, candidates, jwks_uri: new URL(as.jwks_uri) });
+    }
+    if (length !== 1) {
+        throw OPE('error when selecting a JWT verification key, multiple applicable keys found, a "kid" JWT Header Parameter is required', KEY_SELECTION, { header, candidates, jwks_uri: new URL(as.jwks_uri) });
+    }
+    return importJwk(alg, jwk);
+}
+const skipSubjectCheck = Symbol();
+function getContentType(input) {
+    return input.headers.get('content-type')?.split(';')[0];
+}
+async function processUserInfoResponse(as, client, expectedSubject, response, options) {
+    assertAs(as);
+    assertClient(client);
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    checkAuthenticationChallenges(response);
+    if (response.status !== 200) {
+        throw OPE('"response" is not a conform UserInfo Endpoint response (unexpected HTTP status code)', RESPONSE_IS_NOT_CONFORM, response);
+    }
+    assertReadableResponse(response);
+    let json;
+    if (getContentType(response) === 'application/jwt') {
+        const { claims, jwt } = await validateJwt(await response.text(), checkSigningAlgorithm.bind(undefined, client.userinfo_signed_response_alg, as.userinfo_signing_alg_values_supported, undefined), getClockSkew(client), getClockTolerance(client), options?.[jweDecrypt])
+            .then(validateOptionalAudience.bind(undefined, client.client_id))
+            .then(validateOptionalIssuer.bind(undefined, as));
+        jwtRefs.set(response, jwt);
+        json = claims;
+    }
+    else {
+        if (client.userinfo_signed_response_alg) {
+            throw OPE('JWT UserInfo Response expected', JWT_USERINFO_EXPECTED, response);
+        }
+        json = await getResponseJsonBody(response);
+    }
+    assertString(json.sub, '"response" body "sub" property', INVALID_RESPONSE, { body: json });
+    switch (expectedSubject) {
+        case skipSubjectCheck:
+            break;
+        default:
+            assertString(expectedSubject, '"expectedSubject"');
+            if (json.sub !== expectedSubject) {
+                throw OPE('unexpected "response" body "sub" property value', JSON_ATTRIBUTE_COMPARISON, {
+                    expected: expectedSubject,
+                    body: json,
+                    attribute: 'sub',
+                });
+            }
+    }
+    return json;
+}
+async function authenticatedRequest(as, client, clientAuthentication, url, body, headers, options) {
+    await clientAuthentication(as, client, body, headers);
+    headers.set('content-type', 'application/x-www-form-urlencoded;charset=UTF-8');
+    return (options?.[customFetch] || fetch)(url.href, {
+        body,
+        headers: Object.fromEntries(headers.entries()),
+        method: 'POST',
+        redirect: 'manual',
+        signal: signal(url, options?.signal),
+    });
+}
+async function tokenEndpointRequest(as, client, clientAuthentication, grantType, parameters, options) {
+    const url = resolveEndpoint(as, 'token_endpoint', client.use_mtls_endpoint_aliases, options?.[allowInsecureRequests] !== true);
+    parameters.set('grant_type', grantType);
+    const headers = prepareHeaders(options?.headers);
+    headers.set('accept', 'application/json');
+    if (options?.DPoP !== undefined) {
+        assertDPoP(options.DPoP);
+        await options.DPoP.addProof(url, headers, 'POST');
+    }
+    const response = await authenticatedRequest(as, client, clientAuthentication, url, parameters, headers, options);
+    options?.DPoP?.cacheNonce(response, url);
+    return response;
+}
+async function refreshTokenGrantRequest(as, client, clientAuthentication, refreshToken, options) {
+    assertAs(as);
+    assertClient(client);
+    assertString(refreshToken, '"refreshToken"');
+    const parameters = new URLSearchParams(options?.additionalParameters);
+    parameters.set('refresh_token', refreshToken);
+    return tokenEndpointRequest(as, client, clientAuthentication, 'refresh_token', parameters, options);
+}
+const idTokenClaims = new WeakMap();
+const jwtRefs = new WeakMap();
+function getValidatedIdTokenClaims(ref) {
+    if (!ref.id_token) {
+        return undefined;
+    }
+    const claims = idTokenClaims.get(ref);
+    if (!claims) {
+        throw CodedTypeError('"ref" was already garbage collected or did not resolve from the proper sources', ERR_INVALID_ARG_VALUE);
+    }
+    return claims;
+}
+async function validateApplicationLevelSignature(as, ref, options) {
+    assertAs(as);
+    if (!jwtRefs.has(ref)) {
+        throw CodedTypeError('"ref" does not contain a processed JWT Response to verify the signature of', ERR_INVALID_ARG_VALUE);
+    }
+    const { 0: protectedHeader, 1: payload, 2: encodedSignature } = jwtRefs.get(ref).split('.');
+    const header = JSON.parse(buf(b64u(protectedHeader)));
+    if (header.alg.startsWith('HS')) {
+        throw new UnsupportedOperationError('unsupported JWS algorithm', { cause: { alg: header.alg } });
+    }
+    let key;
+    key = await getPublicSigKeyFromIssuerJwksUri(as, options, header);
+    await validateJwsSignature(protectedHeader, payload, key, b64u(encodedSignature));
+}
+async function processGenericAccessTokenResponse(as, client, response, additionalRequiredIdTokenClaims, decryptFn, recognizedTokenTypes) {
+    assertAs(as);
+    assertClient(client);
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    await checkOAuthBodyError(response, 200, 'Token Endpoint');
+    assertReadableResponse(response);
+    const json = await getResponseJsonBody(response);
+    assertString(json.access_token, '"response" body "access_token" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    assertString(json.token_type, '"response" body "token_type" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    json.token_type = json.token_type.toLowerCase();
+    if (json.expires_in !== undefined) {
+        let expiresIn = typeof json.expires_in !== 'number' ? parseFloat(json.expires_in) : json.expires_in;
+        assertNumber(expiresIn, true, '"response" body "expires_in" property', INVALID_RESPONSE, {
+            body: json,
+        });
+        json.expires_in = expiresIn;
+    }
+    if (json.refresh_token !== undefined) {
+        assertString(json.refresh_token, '"response" body "refresh_token" property', INVALID_RESPONSE, {
+            body: json,
+        });
+    }
+    if (json.scope !== undefined && typeof json.scope !== 'string') {
+        throw OPE('"response" body "scope" property must be a string', INVALID_RESPONSE, { body: json });
+    }
+    if (json.id_token !== undefined) {
+        assertString(json.id_token, '"response" body "id_token" property', INVALID_RESPONSE, {
+            body: json,
+        });
+        const requiredClaims = ['aud', 'exp', 'iat', 'iss', 'sub'];
+        if (client.require_auth_time === true) {
+            requiredClaims.push('auth_time');
+        }
+        if (client.default_max_age !== undefined) {
+            assertNumber(client.default_max_age, true, '"client.default_max_age"');
+            requiredClaims.push('auth_time');
+        }
+        if (additionalRequiredIdTokenClaims?.length) {
+            requiredClaims.push(...additionalRequiredIdTokenClaims);
+        }
+        const { claims, jwt } = await validateJwt(json.id_token, checkSigningAlgorithm.bind(undefined, client.id_token_signed_response_alg, as.id_token_signing_alg_values_supported, 'RS256'), getClockSkew(client), getClockTolerance(client), decryptFn)
+            .then(validatePresence.bind(undefined, requiredClaims))
+            .then(validateIssuer.bind(undefined, as))
+            .then(validateAudience.bind(undefined, client.client_id));
+        if (Array.isArray(claims.aud) && claims.aud.length !== 1) {
+            if (claims.azp === undefined) {
+                throw OPE('ID Token "aud" (audience) claim includes additional untrusted audiences', JWT_CLAIM_COMPARISON, { claims, claim: 'aud' });
+            }
+            if (claims.azp !== client.client_id) {
+                throw OPE('unexpected ID Token "azp" (authorized party) claim value', JWT_CLAIM_COMPARISON, { expected: client.client_id, claims, claim: 'azp' });
+            }
+        }
+        if (claims.auth_time !== undefined) {
+            assertNumber(claims.auth_time, true, 'ID Token "auth_time" (authentication time)', INVALID_RESPONSE, { claims });
+        }
+        jwtRefs.set(response, jwt);
+        idTokenClaims.set(json, claims);
+    }
+    if (recognizedTokenTypes?.[json.token_type] !== undefined) {
+        recognizedTokenTypes[json.token_type](response, json);
+    }
+    else if (json.token_type !== 'dpop' && json.token_type !== 'bearer') {
+        throw new UnsupportedOperationError('unsupported `token_type` value', { cause: { body: json } });
+    }
+    return json;
+}
+function checkAuthenticationChallenges(response) {
+    let challenges;
+    if ((challenges = parseWwwAuthenticateChallenges(response))) {
+        throw new WWWAuthenticateChallengeError('server responded with a challenge in the WWW-Authenticate HTTP Header', { cause: challenges, response });
+    }
+}
+async function processRefreshTokenResponse(as, client, response, options) {
+    return processGenericAccessTokenResponse(as, client, response, undefined, options?.[jweDecrypt], options?.recognizedTokenTypes);
+}
+function validateOptionalAudience(expected, result) {
+    if (result.claims.aud !== undefined) {
+        return validateAudience(expected, result);
+    }
+    return result;
+}
+function validateAudience(expected, result) {
+    if (Array.isArray(result.claims.aud)) {
+        if (!result.claims.aud.includes(expected)) {
+            throw OPE('unexpected JWT "aud" (audience) claim value', JWT_CLAIM_COMPARISON, {
+                expected,
+                claims: result.claims,
+                claim: 'aud',
+            });
+        }
+    }
+    else if (result.claims.aud !== expected) {
+        throw OPE('unexpected JWT "aud" (audience) claim value', JWT_CLAIM_COMPARISON, {
+            expected,
+            claims: result.claims,
+            claim: 'aud',
+        });
+    }
+    return result;
+}
+function validateOptionalIssuer(as, result) {
+    if (result.claims.iss !== undefined) {
+        return validateIssuer(as, result);
+    }
+    return result;
+}
+function validateIssuer(as, result) {
+    const expected = as[_expectedIssuer]?.(result) ?? as.issuer;
+    if (result.claims.iss !== expected) {
+        throw OPE('unexpected JWT "iss" (issuer) claim value', JWT_CLAIM_COMPARISON, {
+            expected,
+            claims: result.claims,
+            claim: 'iss',
+        });
+    }
+    return result;
+}
+const branded = new WeakSet();
+function brand(searchParams) {
+    branded.add(searchParams);
+    return searchParams;
+}
+const nopkce = Symbol();
+async function authorizationCodeGrantRequest(as, client, clientAuthentication, callbackParameters, redirectUri, codeVerifier, options) {
+    assertAs(as);
+    assertClient(client);
+    if (!branded.has(callbackParameters)) {
+        throw CodedTypeError('"callbackParameters" must be an instance of URLSearchParams obtained from "validateAuthResponse()", or "validateJwtAuthResponse()', ERR_INVALID_ARG_VALUE);
+    }
+    assertString(redirectUri, '"redirectUri"');
+    const code = getURLSearchParameter(callbackParameters, 'code');
+    if (!code) {
+        throw OPE('no authorization code in "callbackParameters"', INVALID_RESPONSE);
+    }
+    const parameters = new URLSearchParams(options?.additionalParameters);
+    parameters.set('redirect_uri', redirectUri);
+    parameters.set('code', code);
+    if (codeVerifier !== nopkce) {
+        assertString(codeVerifier, '"codeVerifier"');
+        parameters.set('code_verifier', codeVerifier);
+    }
+    return tokenEndpointRequest(as, client, clientAuthentication, 'authorization_code', parameters, options);
+}
+const jwtClaimNames = {
+    aud: 'audience',
+    c_hash: 'code hash',
+    client_id: 'client id',
+    exp: 'expiration time',
+    iat: 'issued at',
+    iss: 'issuer',
+    jti: 'jwt id',
+    nonce: 'nonce',
+    s_hash: 'state hash',
+    sub: 'subject',
+    ath: 'access token hash',
+    htm: 'http method',
+    htu: 'http uri',
+    cnf: 'confirmation',
+    auth_time: 'authentication time',
+};
+function validatePresence(required, result) {
+    for (const claim of required) {
+        if (result.claims[claim] === undefined) {
+            throw OPE(`JWT "${claim}" (${jwtClaimNames[claim]}) claim missing`, INVALID_RESPONSE, {
+                claims: result.claims,
+            });
+        }
+    }
+    return result;
+}
+const expectNoNonce = Symbol();
+const skipAuthTimeCheck = Symbol();
+async function processAuthorizationCodeResponse(as, client, response, options) {
+    if (typeof options?.expectedNonce === 'string' ||
+        typeof options?.maxAge === 'number' ||
+        options?.requireIdToken) {
+        return processAuthorizationCodeOpenIDResponse(as, client, response, options.expectedNonce, options.maxAge, options[jweDecrypt], options.recognizedTokenTypes);
+    }
+    return processAuthorizationCodeOAuth2Response(as, client, response, options?.[jweDecrypt], options?.recognizedTokenTypes);
+}
+async function processAuthorizationCodeOpenIDResponse(as, client, response, expectedNonce, maxAge, decryptFn, recognizedTokenTypes) {
+    const additionalRequiredClaims = [];
+    switch (expectedNonce) {
+        case undefined:
+            expectedNonce = expectNoNonce;
+            break;
+        case expectNoNonce:
+            break;
+        default:
+            assertString(expectedNonce, '"expectedNonce" argument');
+            additionalRequiredClaims.push('nonce');
+    }
+    maxAge ??= client.default_max_age;
+    switch (maxAge) {
+        case undefined:
+            maxAge = skipAuthTimeCheck;
+            break;
+        case skipAuthTimeCheck:
+            break;
+        default:
+            assertNumber(maxAge, true, '"maxAge" argument');
+            additionalRequiredClaims.push('auth_time');
+    }
+    const result = await processGenericAccessTokenResponse(as, client, response, additionalRequiredClaims, decryptFn, recognizedTokenTypes);
+    assertString(result.id_token, '"response" body "id_token" property', INVALID_RESPONSE, {
+        body: result,
+    });
+    const claims = getValidatedIdTokenClaims(result);
+    if (maxAge !== skipAuthTimeCheck) {
+        const now = epochTime() + getClockSkew(client);
+        const tolerance = getClockTolerance(client);
+        if (claims.auth_time + maxAge < now - tolerance) {
+            throw OPE('too much time has elapsed since the last End-User authentication', JWT_TIMESTAMP_CHECK, { claims, now, tolerance, claim: 'auth_time' });
+        }
+    }
+    if (expectedNonce === expectNoNonce) {
+        if (claims.nonce !== undefined) {
+            throw OPE('unexpected ID Token "nonce" claim value', JWT_CLAIM_COMPARISON, {
+                expected: undefined,
+                claims,
+                claim: 'nonce',
+            });
+        }
+    }
+    else if (claims.nonce !== expectedNonce) {
+        throw OPE('unexpected ID Token "nonce" claim value', JWT_CLAIM_COMPARISON, {
+            expected: expectedNonce,
+            claims,
+            claim: 'nonce',
+        });
+    }
+    return result;
+}
+async function processAuthorizationCodeOAuth2Response(as, client, response, decryptFn, recognizedTokenTypes) {
+    const result = await processGenericAccessTokenResponse(as, client, response, undefined, decryptFn, recognizedTokenTypes);
+    const claims = getValidatedIdTokenClaims(result);
+    if (claims) {
+        if (client.default_max_age !== undefined) {
+            assertNumber(client.default_max_age, true, '"client.default_max_age"');
+            const now = epochTime() + getClockSkew(client);
+            const tolerance = getClockTolerance(client);
+            if (claims.auth_time + client.default_max_age < now - tolerance) {
+                throw OPE('too much time has elapsed since the last End-User authentication', JWT_TIMESTAMP_CHECK, { claims, now, tolerance, claim: 'auth_time' });
+            }
+        }
+        if (claims.nonce !== undefined) {
+            throw OPE('unexpected ID Token "nonce" claim value', JWT_CLAIM_COMPARISON, {
+                expected: undefined,
+                claims,
+                claim: 'nonce',
+            });
+        }
+    }
+    return result;
+}
+const WWW_AUTHENTICATE_CHALLENGE = 'OAUTH_WWW_AUTHENTICATE_CHALLENGE';
+const RESPONSE_BODY_ERROR = 'OAUTH_RESPONSE_BODY_ERROR';
+const UNSUPPORTED_OPERATION = 'OAUTH_UNSUPPORTED_OPERATION';
+const AUTHORIZATION_RESPONSE_ERROR = 'OAUTH_AUTHORIZATION_RESPONSE_ERROR';
+const JWT_USERINFO_EXPECTED = 'OAUTH_JWT_USERINFO_EXPECTED';
+const PARSE_ERROR = 'OAUTH_PARSE_ERROR';
+const INVALID_RESPONSE = 'OAUTH_INVALID_RESPONSE';
+const INVALID_REQUEST = 'OAUTH_INVALID_REQUEST';
+const RESPONSE_IS_NOT_JSON = 'OAUTH_RESPONSE_IS_NOT_JSON';
+const RESPONSE_IS_NOT_CONFORM = 'OAUTH_RESPONSE_IS_NOT_CONFORM';
+const HTTP_REQUEST_FORBIDDEN = 'OAUTH_HTTP_REQUEST_FORBIDDEN';
+const REQUEST_PROTOCOL_FORBIDDEN = 'OAUTH_REQUEST_PROTOCOL_FORBIDDEN';
+const JWT_TIMESTAMP_CHECK = 'OAUTH_JWT_TIMESTAMP_CHECK_FAILED';
+const JWT_CLAIM_COMPARISON = 'OAUTH_JWT_CLAIM_COMPARISON_FAILED';
+const JSON_ATTRIBUTE_COMPARISON = 'OAUTH_JSON_ATTRIBUTE_COMPARISON_FAILED';
+const KEY_SELECTION = 'OAUTH_KEY_SELECTION_FAILED';
+const MISSING_SERVER_METADATA = 'OAUTH_MISSING_SERVER_METADATA';
+const INVALID_SERVER_METADATA = 'OAUTH_INVALID_SERVER_METADATA';
+function checkJwtType(expected, result) {
+    if (typeof result.header.typ !== 'string' || normalizeTyp(result.header.typ) !== expected) {
+        throw OPE('unexpected JWT "typ" header parameter value', INVALID_RESPONSE, {
+            header: result.header,
+        });
+    }
+    return result;
+}
+async function clientCredentialsGrantRequest(as, client, clientAuthentication, parameters, options) {
+    assertAs(as);
+    assertClient(client);
+    return tokenEndpointRequest(as, client, clientAuthentication, 'client_credentials', new URLSearchParams(parameters), options);
+}
+async function genericTokenEndpointRequest(as, client, clientAuthentication, grantType, parameters, options) {
+    assertAs(as);
+    assertClient(client);
+    assertString(grantType, '"grantType"');
+    return tokenEndpointRequest(as, client, clientAuthentication, grantType, new URLSearchParams(parameters), options);
+}
+async function processGenericTokenEndpointResponse(as, client, response, options) {
+    return processGenericAccessTokenResponse(as, client, response, undefined, options?.[jweDecrypt], options?.recognizedTokenTypes);
+}
+async function processClientCredentialsResponse(as, client, response, options) {
+    return processGenericAccessTokenResponse(as, client, response, undefined, options?.[jweDecrypt], options?.recognizedTokenTypes);
+}
+async function revocationRequest(as, client, clientAuthentication, token, options) {
+    assertAs(as);
+    assertClient(client);
+    assertString(token, '"token"');
+    const url = resolveEndpoint(as, 'revocation_endpoint', client.use_mtls_endpoint_aliases, options?.[allowInsecureRequests] !== true);
+    const body = new URLSearchParams(options?.additionalParameters);
+    body.set('token', token);
+    const headers = prepareHeaders(options?.headers);
+    headers.delete('accept');
+    return authenticatedRequest(as, client, clientAuthentication, url, body, headers, options);
+}
+async function processRevocationResponse(response) {
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    await checkOAuthBodyError(response, 200, 'Revocation Endpoint');
+    return undefined;
+}
+function assertReadableResponse(response) {
+    if (response.bodyUsed) {
+        throw CodedTypeError('"response" body has been used already', ERR_INVALID_ARG_VALUE);
+    }
+}
+async function introspectionRequest(as, client, clientAuthentication, token, options) {
+    assertAs(as);
+    assertClient(client);
+    assertString(token, '"token"');
+    const url = resolveEndpoint(as, 'introspection_endpoint', client.use_mtls_endpoint_aliases, options?.[allowInsecureRequests] !== true);
+    const body = new URLSearchParams(options?.additionalParameters);
+    body.set('token', token);
+    const headers = prepareHeaders(options?.headers);
+    if (options?.requestJwtResponse ?? client.introspection_signed_response_alg) {
+        headers.set('accept', 'application/token-introspection+jwt');
+    }
+    else {
+        headers.set('accept', 'application/json');
+    }
+    return authenticatedRequest(as, client, clientAuthentication, url, body, headers, options);
+}
+async function processIntrospectionResponse(as, client, response, options) {
+    assertAs(as);
+    assertClient(client);
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    await checkOAuthBodyError(response, 200, 'Introspection Endpoint');
+    let json;
+    if (getContentType(response) === 'application/token-introspection+jwt') {
+        assertReadableResponse(response);
+        const { claims, jwt } = await validateJwt(await response.text(), checkSigningAlgorithm.bind(undefined, client.introspection_signed_response_alg, as.introspection_signing_alg_values_supported, 'RS256'), getClockSkew(client), getClockTolerance(client), options?.[jweDecrypt])
+            .then(checkJwtType.bind(undefined, 'token-introspection+jwt'))
+            .then(validatePresence.bind(undefined, ['aud', 'iat', 'iss']))
+            .then(validateIssuer.bind(undefined, as))
+            .then(validateAudience.bind(undefined, client.client_id));
+        jwtRefs.set(response, jwt);
+        if (!isJsonObject(claims.token_introspection)) {
+            throw OPE('JWT "token_introspection" claim must be a JSON object', INVALID_RESPONSE, {
+                claims,
+            });
+        }
+        json = claims.token_introspection;
+    }
+    else {
+        assertReadableResponse(response);
+        json = await getResponseJsonBody(response);
+    }
+    if (typeof json.active !== 'boolean') {
+        throw OPE('"response" body "active" property must be a boolean', INVALID_RESPONSE, {
+            body: json,
+        });
+    }
+    return json;
+}
+async function jwksRequest(as, options) {
+    assertAs(as);
+    const url = resolveEndpoint(as, 'jwks_uri', false, options?.[allowInsecureRequests] !== true);
+    const headers = prepareHeaders(options?.headers);
+    headers.set('accept', 'application/json');
+    headers.append('accept', 'application/jwk-set+json');
+    return (options?.[customFetch] || fetch)(url.href, {
+        body: undefined,
+        headers: Object.fromEntries(headers.entries()),
+        method: 'GET',
+        redirect: 'manual',
+        signal: signal(url, options?.signal),
+    });
+}
+async function processJwksResponse(response) {
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    if (response.status !== 200) {
+        throw OPE('"response" is not a conform JSON Web Key Set response (unexpected HTTP status code)', RESPONSE_IS_NOT_CONFORM, response);
+    }
+    assertReadableResponse(response);
+    const json = await getResponseJsonBody(response, (response) => assertContentTypes(response, 'application/json', 'application/jwk-set+json'));
+    if (!Array.isArray(json.keys)) {
+        throw OPE('"response" body "keys" property must be an array', INVALID_RESPONSE, { body: json });
+    }
+    if (!Array.prototype.every.call(json.keys, isJsonObject)) {
+        throw OPE('"response" body "keys" property members must be JWK formatted objects', INVALID_RESPONSE, { body: json });
+    }
+    return json;
+}
+function supported(alg) {
+    switch (alg) {
+        case 'PS256':
+        case 'ES256':
+        case 'RS256':
+        case 'PS384':
+        case 'ES384':
+        case 'RS384':
+        case 'PS512':
+        case 'ES512':
+        case 'RS512':
+        case 'Ed25519':
+        case 'EdDSA':
+        case 'ML-DSA-44':
+        case 'ML-DSA-65':
+        case 'ML-DSA-87':
+            return true;
+        default:
+            return false;
+    }
+}
+function checkSupportedJwsAlg(header) {
+    if (!supported(header.alg)) {
+        throw new UnsupportedOperationError('unsupported JWS "alg" identifier', {
+            cause: { alg: header.alg },
+        });
+    }
+}
+function checkRsaKeyAlgorithm(key) {
+    const { algorithm } = key;
+    if (typeof algorithm.modulusLength !== 'number' || algorithm.modulusLength < 2048) {
+        throw new UnsupportedOperationError(`unsupported ${algorithm.name} modulusLength`, {
+            cause: key,
+        });
+    }
+}
+function ecdsaHashName(key) {
+    const { algorithm } = key;
+    switch (algorithm.namedCurve) {
+        case 'P-256':
+            return 'SHA-256';
+        case 'P-384':
+            return 'SHA-384';
+        case 'P-521':
+            return 'SHA-512';
+        default:
+            throw new UnsupportedOperationError('unsupported ECDSA namedCurve', { cause: key });
+    }
+}
+function keyToSubtle(key) {
+    switch (key.algorithm.name) {
+        case 'ECDSA':
+            return {
+                name: key.algorithm.name,
+                hash: ecdsaHashName(key),
+            };
+        case 'RSA-PSS': {
+            checkRsaKeyAlgorithm(key);
+            switch (key.algorithm.hash.name) {
+                case 'SHA-256':
+                case 'SHA-384':
+                case 'SHA-512':
+                    return {
+                        name: key.algorithm.name,
+                        saltLength: parseInt(key.algorithm.hash.name.slice(-3), 10) >> 3,
+                    };
+                default:
+                    throw new UnsupportedOperationError('unsupported RSA-PSS hash name', { cause: key });
+            }
+        }
+        case 'RSASSA-PKCS1-v1_5':
+            checkRsaKeyAlgorithm(key);
+            return key.algorithm.name;
+        case 'ML-DSA-44':
+        case 'ML-DSA-65':
+        case 'ML-DSA-87':
+        case 'Ed25519':
+            return key.algorithm.name;
+    }
+    throw new UnsupportedOperationError('unsupported CryptoKey algorithm name', { cause: key });
+}
+async function validateJwsSignature(protectedHeader, payload, key, signature) {
+    const data = buf(`${protectedHeader}.${payload}`);
+    const algorithm = keyToSubtle(key);
+    const verified = await crypto.subtle.verify(algorithm, key, signature, data);
+    if (!verified) {
+        throw OPE('JWT signature verification failed', INVALID_RESPONSE, {
+            key,
+            data,
+            signature,
+            algorithm,
+        });
+    }
+}
+async function validateJwt(jws, checkAlg, clockSkew, clockTolerance, decryptJwt) {
+    let { 0: protectedHeader, 1: payload, length } = jws.split('.');
+    if (length === 5) {
+        if (decryptJwt !== undefined) {
+            jws = await decryptJwt(jws);
+            ({ 0: protectedHeader, 1: payload, length } = jws.split('.'));
+        }
+        else {
+            throw new UnsupportedOperationError('JWE decryption is not configured', { cause: jws });
+        }
+    }
+    if (length !== 3) {
+        throw OPE('Invalid JWT', INVALID_RESPONSE, jws);
+    }
+    let header;
+    try {
+        header = JSON.parse(buf(b64u(protectedHeader)));
+    }
+    catch (cause) {
+        throw OPE('failed to parse JWT Header body as base64url encoded JSON', PARSE_ERROR, cause);
+    }
+    if (!isJsonObject(header)) {
+        throw OPE('JWT Header must be a top level object', INVALID_RESPONSE, jws);
+    }
+    checkAlg(header);
+    if (header.crit !== undefined) {
+        throw new UnsupportedOperationError('no JWT "crit" header parameter extensions are supported', {
+            cause: { header },
+        });
+    }
+    let claims;
+    try {
+        claims = JSON.parse(buf(b64u(payload)));
+    }
+    catch (cause) {
+        throw OPE('failed to parse JWT Payload body as base64url encoded JSON', PARSE_ERROR, cause);
+    }
+    if (!isJsonObject(claims)) {
+        throw OPE('JWT Payload must be a top level object', INVALID_RESPONSE, jws);
+    }
+    const now = epochTime() + clockSkew;
+    if (claims.exp !== undefined) {
+        if (typeof claims.exp !== 'number') {
+            throw OPE('unexpected JWT "exp" (expiration time) claim type', INVALID_RESPONSE, { claims });
+        }
+        if (claims.exp <= now - clockTolerance) {
+            throw OPE('unexpected JWT "exp" (expiration time) claim value, expiration is past current timestamp', JWT_TIMESTAMP_CHECK, { claims, now, tolerance: clockTolerance, claim: 'exp' });
+        }
+    }
+    if (claims.iat !== undefined) {
+        if (typeof claims.iat !== 'number') {
+            throw OPE('unexpected JWT "iat" (issued at) claim type', INVALID_RESPONSE, { claims });
+        }
+    }
+    if (claims.iss !== undefined) {
+        if (typeof claims.iss !== 'string') {
+            throw OPE('unexpected JWT "iss" (issuer) claim type', INVALID_RESPONSE, { claims });
+        }
+    }
+    if (claims.nbf !== undefined) {
+        if (typeof claims.nbf !== 'number') {
+            throw OPE('unexpected JWT "nbf" (not before) claim type', INVALID_RESPONSE, { claims });
+        }
+        if (claims.nbf > now + clockTolerance) {
+            throw OPE('unexpected JWT "nbf" (not before) claim value', JWT_TIMESTAMP_CHECK, {
+                claims,
+                now,
+                tolerance: clockTolerance,
+                claim: 'nbf',
+            });
+        }
+    }
+    if (claims.aud !== undefined) {
+        if (typeof claims.aud !== 'string' && !Array.isArray(claims.aud)) {
+            throw OPE('unexpected JWT "aud" (audience) claim type', INVALID_RESPONSE, { claims });
+        }
+    }
+    return { header, claims, jwt: jws };
+}
+async function validateJwtAuthResponse(as, client, parameters, expectedState, options) {
+    assertAs(as);
+    assertClient(client);
+    if (parameters instanceof URL) {
+        parameters = parameters.searchParams;
+    }
+    if (!(parameters instanceof URLSearchParams)) {
+        throw CodedTypeError('"parameters" must be an instance of URLSearchParams, or URL', ERR_INVALID_ARG_TYPE);
+    }
+    const response = getURLSearchParameter(parameters, 'response');
+    if (!response) {
+        throw OPE('"parameters" does not contain a JARM response', INVALID_RESPONSE);
+    }
+    const { claims, header, jwt } = await validateJwt(response, checkSigningAlgorithm.bind(undefined, client.authorization_signed_response_alg, as.authorization_signing_alg_values_supported, 'RS256'), getClockSkew(client), getClockTolerance(client), options?.[jweDecrypt])
+        .then(validatePresence.bind(undefined, ['aud', 'exp', 'iss']))
+        .then(validateIssuer.bind(undefined, as))
+        .then(validateAudience.bind(undefined, client.client_id));
+    const { 0: protectedHeader, 1: payload, 2: encodedSignature } = jwt.split('.');
+    const signature = b64u(encodedSignature);
+    const key = await getPublicSigKeyFromIssuerJwksUri(as, options, header);
+    await validateJwsSignature(protectedHeader, payload, key, signature);
+    const result = new URLSearchParams();
+    for (const [key, value] of Object.entries(claims)) {
+        if (typeof value === 'string' && key !== 'aud') {
+            result.set(key, value);
+        }
+    }
+    return validateAuthResponse(as, client, result, expectedState);
+}
+async function idTokenHash(data, header, claimName) {
+    let algorithm;
+    switch (header.alg) {
+        case 'RS256':
+        case 'PS256':
+        case 'ES256':
+            algorithm = 'SHA-256';
+            break;
+        case 'RS384':
+        case 'PS384':
+        case 'ES384':
+            algorithm = 'SHA-384';
+            break;
+        case 'RS512':
+        case 'PS512':
+        case 'ES512':
+        case 'Ed25519':
+        case 'EdDSA':
+            algorithm = 'SHA-512';
+            break;
+        case 'ML-DSA-44':
+        case 'ML-DSA-65':
+        case 'ML-DSA-87':
+            algorithm = { name: 'cSHAKE256', length: 512, outputLength: 512 };
+            break;
+        default:
+            throw new UnsupportedOperationError(`unsupported JWS algorithm for ${claimName} calculation`, { cause: { alg: header.alg } });
+    }
+    const digest = await crypto.subtle.digest(algorithm, buf(data));
+    return b64u(digest.slice(0, digest.byteLength / 2));
+}
+async function idTokenHashMatches(data, actual, header, claimName) {
+    const expected = await idTokenHash(data, header, claimName);
+    return actual === expected;
+}
+async function validateDetachedSignatureResponse(as, client, parameters, expectedNonce, expectedState, maxAge, options) {
+    return validateHybridResponse(as, client, parameters, expectedNonce, expectedState, maxAge, options, true);
+}
+async function validateCodeIdTokenResponse(as, client, parameters, expectedNonce, expectedState, maxAge, options) {
+    return validateHybridResponse(as, client, parameters, expectedNonce, expectedState, maxAge, options, false);
+}
+async function consumeStream(request) {
+    if (request.bodyUsed) {
+        throw CodedTypeError('form_post Request instances must contain a readable body', ERR_INVALID_ARG_VALUE, { cause: request });
+    }
+    return request.text();
+}
+async function formPostResponse(request) {
+    if (request.method !== 'POST') {
+        throw CodedTypeError('form_post responses are expected to use the POST method', ERR_INVALID_ARG_VALUE, { cause: request });
+    }
+    if (getContentType(request) !== 'application/x-www-form-urlencoded') {
+        throw CodedTypeError('form_post responses are expected to use the application/x-www-form-urlencoded content-type', ERR_INVALID_ARG_VALUE, { cause: request });
+    }
+    return consumeStream(request);
+}
+async function validateHybridResponse(as, client, parameters, expectedNonce, expectedState, maxAge, options, fapi) {
+    assertAs(as);
+    assertClient(client);
+    if (parameters instanceof URL) {
+        if (!parameters.hash.length) {
+            throw CodedTypeError('"parameters" as an instance of URL must contain a hash (fragment) with the Authorization Response parameters', ERR_INVALID_ARG_VALUE);
+        }
+        parameters = new URLSearchParams(parameters.hash.slice(1));
+    }
+    else if (looseInstanceOf(parameters, Request)) {
+        parameters = new URLSearchParams(await formPostResponse(parameters));
+    }
+    else if (parameters instanceof URLSearchParams) {
+        parameters = new URLSearchParams(parameters);
+    }
+    else {
+        throw CodedTypeError('"parameters" must be an instance of URLSearchParams, URL, or Response', ERR_INVALID_ARG_TYPE);
+    }
+    const id_token = getURLSearchParameter(parameters, 'id_token');
+    parameters.delete('id_token');
+    switch (expectedState) {
+        case undefined:
+        case expectNoState:
+            break;
+        default:
+            assertString(expectedState, '"expectedState" argument');
+    }
+    const result = validateAuthResponse({
+        ...as,
+        authorization_response_iss_parameter_supported: false,
+    }, client, parameters, expectedState);
+    if (!id_token) {
+        throw OPE('"parameters" does not contain an ID Token', INVALID_RESPONSE);
+    }
+    const code = getURLSearchParameter(parameters, 'code');
+    if (!code) {
+        throw OPE('"parameters" does not contain an Authorization Code', INVALID_RESPONSE);
+    }
+    const requiredClaims = [
+        'aud',
+        'exp',
+        'iat',
+        'iss',
+        'sub',
+        'nonce',
+        'c_hash',
+    ];
+    const state = parameters.get('state');
+    if (fapi && (typeof expectedState === 'string' || state !== null)) {
+        requiredClaims.push('s_hash');
+    }
+    if (maxAge !== undefined) {
+        assertNumber(maxAge, true, '"maxAge" argument');
+    }
+    else if (client.default_max_age !== undefined) {
+        assertNumber(client.default_max_age, true, '"client.default_max_age"');
+    }
+    maxAge ??= client.default_max_age ?? skipAuthTimeCheck;
+    if (client.require_auth_time || maxAge !== skipAuthTimeCheck) {
+        requiredClaims.push('auth_time');
+    }
+    const { claims, header, jwt } = await validateJwt(id_token, checkSigningAlgorithm.bind(undefined, client.id_token_signed_response_alg, as.id_token_signing_alg_values_supported, 'RS256'), getClockSkew(client), getClockTolerance(client), options?.[jweDecrypt])
+        .then(validatePresence.bind(undefined, requiredClaims))
+        .then(validateIssuer.bind(undefined, as))
+        .then(validateAudience.bind(undefined, client.client_id));
+    const clockSkew = getClockSkew(client);
+    const now = epochTime() + clockSkew;
+    if (claims.iat < now - 3600) {
+        throw OPE('unexpected JWT "iat" (issued at) claim value, it is too far in the past', JWT_TIMESTAMP_CHECK, { now, claims, claim: 'iat' });
+    }
+    assertString(claims.c_hash, 'ID Token "c_hash" (code hash) claim value', INVALID_RESPONSE, {
+        claims,
+    });
+    if (claims.auth_time !== undefined) {
+        assertNumber(claims.auth_time, true, 'ID Token "auth_time" (authentication time)', INVALID_RESPONSE, { claims });
+    }
+    if (maxAge !== skipAuthTimeCheck) {
+        const now = epochTime() + getClockSkew(client);
+        const tolerance = getClockTolerance(client);
+        if (claims.auth_time + maxAge < now - tolerance) {
+            throw OPE('too much time has elapsed since the last End-User authentication', JWT_TIMESTAMP_CHECK, { claims, now, tolerance, claim: 'auth_time' });
+        }
+    }
+    assertString(expectedNonce, '"expectedNonce" argument');
+    if (claims.nonce !== expectedNonce) {
+        throw OPE('unexpected ID Token "nonce" claim value', JWT_CLAIM_COMPARISON, {
+            expected: expectedNonce,
+            claims,
+            claim: 'nonce',
+        });
+    }
+    if (Array.isArray(claims.aud) && claims.aud.length !== 1) {
+        if (claims.azp === undefined) {
+            throw OPE('ID Token "aud" (audience) claim includes additional untrusted audiences', JWT_CLAIM_COMPARISON, { claims, claim: 'aud' });
+        }
+        if (claims.azp !== client.client_id) {
+            throw OPE('unexpected ID Token "azp" (authorized party) claim value', JWT_CLAIM_COMPARISON, {
+                expected: client.client_id,
+                claims,
+                claim: 'azp',
+            });
+        }
+    }
+    const { 0: protectedHeader, 1: payload, 2: encodedSignature } = jwt.split('.');
+    const signature = b64u(encodedSignature);
+    const key = await getPublicSigKeyFromIssuerJwksUri(as, options, header);
+    await validateJwsSignature(protectedHeader, payload, key, signature);
+    if ((await idTokenHashMatches(code, claims.c_hash, header, 'c_hash')) !== true) {
+        throw OPE('invalid ID Token "c_hash" (code hash) claim value', JWT_CLAIM_COMPARISON, {
+            code,
+            alg: header.alg,
+            claim: 'c_hash',
+            claims,
+        });
+    }
+    if ((fapi && state !== null) || claims.s_hash !== undefined) {
+        assertString(claims.s_hash, 'ID Token "s_hash" (state hash) claim value', INVALID_RESPONSE, {
+            claims,
+        });
+        assertString(state, '"state" response parameter', INVALID_RESPONSE, { parameters });
+        if ((await idTokenHashMatches(state, claims.s_hash, header, 's_hash')) !== true) {
+            throw OPE('invalid ID Token "s_hash" (state hash) claim value', JWT_CLAIM_COMPARISON, {
+                state,
+                alg: header.alg,
+                claim: 's_hash',
+                claims,
+            });
+        }
+    }
+    return result;
+}
+function checkSigningAlgorithm(client, issuer, fallback, header) {
+    if (client !== undefined) {
+        if (typeof client === 'string' ? header.alg !== client : !client.includes(header.alg)) {
+            throw OPE('unexpected JWT "alg" header parameter', INVALID_RESPONSE, {
+                header,
+                expected: client,
+                reason: 'client configuration',
+            });
+        }
+        return;
+    }
+    if (Array.isArray(issuer)) {
+        if (!issuer.includes(header.alg)) {
+            throw OPE('unexpected JWT "alg" header parameter', INVALID_RESPONSE, {
+                header,
+                expected: issuer,
+                reason: 'authorization server metadata',
+            });
+        }
+        return;
+    }
+    if (fallback !== undefined) {
+        if (typeof fallback === 'string'
+            ? header.alg !== fallback
+            : typeof fallback === 'function'
+                ? !fallback(header.alg)
+                : !fallback.includes(header.alg)) {
+            throw OPE('unexpected JWT "alg" header parameter', INVALID_RESPONSE, {
+                header,
+                expected: fallback,
+                reason: 'default value',
+            });
+        }
+        return;
+    }
+    throw OPE('missing client or server configuration to verify used JWT "alg" header parameter', undefined, { client, issuer, fallback });
+}
+function getURLSearchParameter(parameters, name) {
+    const { 0: value, length } = parameters.getAll(name);
+    if (length > 1) {
+        throw OPE(`"${name}" parameter must be provided only once`, INVALID_RESPONSE);
+    }
+    return value;
+}
+const skipStateCheck = Symbol();
+const expectNoState = Symbol();
+function validateAuthResponse(as, client, parameters, expectedState) {
+    assertAs(as);
+    assertClient(client);
+    if (parameters instanceof URL) {
+        parameters = parameters.searchParams;
+    }
+    if (!(parameters instanceof URLSearchParams)) {
+        throw CodedTypeError('"parameters" must be an instance of URLSearchParams, or URL', ERR_INVALID_ARG_TYPE);
+    }
+    if (getURLSearchParameter(parameters, 'response')) {
+        throw OPE('"parameters" contains a JARM response, use validateJwtAuthResponse() instead of validateAuthResponse()', INVALID_RESPONSE, { parameters });
+    }
+    const iss = getURLSearchParameter(parameters, 'iss');
+    const state = getURLSearchParameter(parameters, 'state');
+    if (!iss && as.authorization_response_iss_parameter_supported) {
+        throw OPE('response parameter "iss" (issuer) missing', INVALID_RESPONSE, { parameters });
+    }
+    if (iss && iss !== as.issuer) {
+        throw OPE('unexpected "iss" (issuer) response parameter value', INVALID_RESPONSE, {
+            expected: as.issuer,
+            parameters,
+        });
+    }
+    switch (expectedState) {
+        case undefined:
+        case expectNoState:
+            if (state !== undefined) {
+                throw OPE('unexpected "state" response parameter encountered', INVALID_RESPONSE, {
+                    expected: undefined,
+                    parameters,
+                });
+            }
+            break;
+        case skipStateCheck:
+            break;
+        default:
+            assertString(expectedState, '"expectedState" argument');
+            if (state !== expectedState) {
+                throw OPE(state === undefined
+                    ? 'response parameter "state" missing'
+                    : 'unexpected "state" response parameter value', INVALID_RESPONSE, { expected: expectedState, parameters });
+            }
+    }
+    const error = getURLSearchParameter(parameters, 'error');
+    if (error) {
+        throw new AuthorizationResponseError('authorization response from the server is an error', {
+            cause: parameters,
+        });
+    }
+    const id_token = getURLSearchParameter(parameters, 'id_token');
+    const token = getURLSearchParameter(parameters, 'token');
+    if (id_token !== undefined || token !== undefined) {
+        throw new UnsupportedOperationError('implicit and hybrid flows are not supported');
+    }
+    return brand(new URLSearchParams(parameters));
+}
+function algToSubtle(alg) {
+    switch (alg) {
+        case 'PS256':
+        case 'PS384':
+        case 'PS512':
+            return { name: 'RSA-PSS', hash: `SHA-${alg.slice(-3)}` };
+        case 'RS256':
+        case 'RS384':
+        case 'RS512':
+            return { name: 'RSASSA-PKCS1-v1_5', hash: `SHA-${alg.slice(-3)}` };
+        case 'ES256':
+        case 'ES384':
+            return { name: 'ECDSA', namedCurve: `P-${alg.slice(-3)}` };
+        case 'ES512':
+            return { name: 'ECDSA', namedCurve: 'P-521' };
+        case 'EdDSA':
+            return 'Ed25519';
+        case 'Ed25519':
+        case 'ML-DSA-44':
+        case 'ML-DSA-65':
+        case 'ML-DSA-87':
+            return alg;
+        default:
+            throw new UnsupportedOperationError('unsupported JWS algorithm', { cause: { alg } });
+    }
+}
+async function importJwk(alg, jwk) {
+    const { ext, key_ops, use, ...key } = jwk;
+    return crypto.subtle.importKey('jwk', key, algToSubtle(alg), true, ['verify']);
+}
+async function deviceAuthorizationRequest(as, client, clientAuthentication, parameters, options) {
+    assertAs(as);
+    assertClient(client);
+    const url = resolveEndpoint(as, 'device_authorization_endpoint', client.use_mtls_endpoint_aliases, options?.[allowInsecureRequests] !== true);
+    const body = new URLSearchParams(parameters);
+    body.set('client_id', client.client_id);
+    const headers = prepareHeaders(options?.headers);
+    headers.set('accept', 'application/json');
+    return authenticatedRequest(as, client, clientAuthentication, url, body, headers, options);
+}
+async function processDeviceAuthorizationResponse(as, client, response) {
+    assertAs(as);
+    assertClient(client);
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    await checkOAuthBodyError(response, 200, 'Device Authorization Endpoint');
+    assertReadableResponse(response);
+    const json = await getResponseJsonBody(response);
+    assertString(json.device_code, '"response" body "device_code" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    assertString(json.user_code, '"response" body "user_code" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    assertString(json.verification_uri, '"response" body "verification_uri" property', INVALID_RESPONSE, { body: json });
+    let expiresIn = typeof json.expires_in !== 'number' ? parseFloat(json.expires_in) : json.expires_in;
+    assertNumber(expiresIn, true, '"response" body "expires_in" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    json.expires_in = expiresIn;
+    if (json.verification_uri_complete !== undefined) {
+        assertString(json.verification_uri_complete, '"response" body "verification_uri_complete" property', INVALID_RESPONSE, { body: json });
+    }
+    if (json.interval !== undefined) {
+        assertNumber(json.interval, false, '"response" body "interval" property', INVALID_RESPONSE, {
+            body: json,
+        });
+    }
+    return json;
+}
+async function deviceCodeGrantRequest(as, client, clientAuthentication, deviceCode, options) {
+    assertAs(as);
+    assertClient(client);
+    assertString(deviceCode, '"deviceCode"');
+    const parameters = new URLSearchParams(options?.additionalParameters);
+    parameters.set('device_code', deviceCode);
+    return tokenEndpointRequest(as, client, clientAuthentication, 'urn:ietf:params:oauth:grant-type:device_code', parameters, options);
+}
+async function processDeviceCodeResponse(as, client, response, options) {
+    return processGenericAccessTokenResponse(as, client, response, undefined, options?.[jweDecrypt], options?.recognizedTokenTypes);
+}
+async function generateKeyPair(alg, options) {
+    assertString(alg, '"alg"');
+    const algorithm = algToSubtle(alg);
+    if (alg.startsWith('PS') || alg.startsWith('RS')) {
+        Object.assign(algorithm, {
+            modulusLength: options?.modulusLength ?? 2048,
+            publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
+        });
+    }
+    return crypto.subtle.generateKey(algorithm, options?.extractable ?? false, [
+        'sign',
+        'verify',
+    ]);
+}
+function normalizeHtu(htu) {
+    const url = new URL(htu);
+    url.search = '';
+    url.hash = '';
+    return url.href;
+}
+async function validateDPoP(request, accessToken, accessTokenClaims, options) {
+    const headerValue = request.headers.get('dpop');
+    if (headerValue === null) {
+        throw OPE('operation indicated DPoP use but the request has no DPoP HTTP Header', INVALID_REQUEST, { headers: request.headers });
+    }
+    if (request.headers.get('authorization')?.toLowerCase().startsWith('dpop ') === false) {
+        throw OPE(`operation indicated DPoP use but the request's Authorization HTTP Header scheme is not DPoP`, INVALID_REQUEST, { headers: request.headers });
+    }
+    if (typeof accessTokenClaims.cnf?.jkt !== 'string') {
+        throw OPE('operation indicated DPoP use but the JWT Access Token has no jkt confirmation claim', INVALID_REQUEST, { claims: accessTokenClaims });
+    }
+    const clockSkew = getClockSkew(options);
+    const proof = await validateJwt(headerValue, checkSigningAlgorithm.bind(undefined, options?.signingAlgorithms, undefined, supported), clockSkew, getClockTolerance(options), undefined)
+        .then(checkJwtType.bind(undefined, 'dpop+jwt'))
+        .then(validatePresence.bind(undefined, ['iat', 'jti', 'ath', 'htm', 'htu']));
+    const now = epochTime() + clockSkew;
+    const diff = Math.abs(now - proof.claims.iat);
+    if (diff > 300) {
+        throw OPE('DPoP Proof iat is not recent enough', JWT_TIMESTAMP_CHECK, {
+            now,
+            claims: proof.claims,
+            claim: 'iat',
+        });
+    }
+    if (proof.claims.htm !== request.method) {
+        throw OPE('DPoP Proof htm mismatch', JWT_CLAIM_COMPARISON, {
+            expected: request.method,
+            claims: proof.claims,
+            claim: 'htm',
+        });
+    }
+    if (typeof proof.claims.htu !== 'string' ||
+        normalizeHtu(proof.claims.htu) !== normalizeHtu(request.url)) {
+        throw OPE('DPoP Proof htu mismatch', JWT_CLAIM_COMPARISON, {
+            expected: normalizeHtu(request.url),
+            claims: proof.claims,
+            claim: 'htu',
+        });
+    }
+    {
+        const expected = b64u(await crypto.subtle.digest('SHA-256', buf(accessToken)));
+        if (proof.claims.ath !== expected) {
+            throw OPE('DPoP Proof ath mismatch', JWT_CLAIM_COMPARISON, {
+                expected,
+                claims: proof.claims,
+                claim: 'ath',
+            });
+        }
+    }
+    const { jwk, alg } = proof.header;
+    if (!isJsonObject(jwk)) {
+        throw OPE('DPoP Proof jwk header parameter must be a JSON object', INVALID_REQUEST, {
+            header: proof.header,
+        });
+    }
+    {
+        const expected = await calculateJwkThumbprint(jwk);
+        if (accessTokenClaims.cnf.jkt !== expected) {
+            throw OPE('JWT Access Token confirmation mismatch', JWT_CLAIM_COMPARISON, {
+                expected,
+                claims: accessTokenClaims,
+                claim: 'cnf.jkt',
+            });
+        }
+    }
+    const { 0: protectedHeader, 1: payload, 2: encodedSignature } = headerValue.split('.');
+    const signature = b64u(encodedSignature);
+    const key = await importJwk(alg, jwk);
+    if (key.type !== 'public') {
+        throw OPE('DPoP Proof jwk header parameter must contain a public key', INVALID_REQUEST, {
+            header: proof.header,
+        });
+    }
+    await validateJwsSignature(protectedHeader, payload, key, signature);
+}
+async function validateJwtAccessToken(as, request, expectedAudience, options) {
+    assertAs(as);
+    if (!looseInstanceOf(request, Request)) {
+        throw CodedTypeError('"request" must be an instance of Request', ERR_INVALID_ARG_TYPE);
+    }
+    assertString(expectedAudience, '"expectedAudience"');
+    const authorization = request.headers.get('authorization');
+    if (authorization === null) {
+        throw OPE('"request" is missing an Authorization HTTP Header', INVALID_REQUEST, {
+            headers: request.headers,
+        });
+    }
+    let { 0: scheme, 1: accessToken, length } = authorization.split(' ');
+    scheme = scheme.toLowerCase();
+    switch (scheme) {
+        case 'dpop':
+        case 'bearer':
+            break;
+        default:
+            throw new UnsupportedOperationError('unsupported Authorization HTTP Header scheme', {
+                cause: { headers: request.headers },
+            });
+    }
+    if (length !== 2) {
+        throw OPE('invalid Authorization HTTP Header format', INVALID_REQUEST, {
+            headers: request.headers,
+        });
+    }
+    const requiredClaims = [
+        'iss',
+        'exp',
+        'aud',
+        'sub',
+        'iat',
+        'jti',
+        'client_id',
+    ];
+    if (options?.requireDPoP || scheme === 'dpop' || request.headers.has('dpop')) {
+        requiredClaims.push('cnf');
+    }
+    const { claims, header } = await validateJwt(accessToken, checkSigningAlgorithm.bind(undefined, options?.signingAlgorithms, undefined, supported), getClockSkew(options), getClockTolerance(options), undefined)
+        .then(checkJwtType.bind(undefined, 'at+jwt'))
+        .then(validatePresence.bind(undefined, requiredClaims))
+        .then(validateIssuer.bind(undefined, as))
+        .then(validateAudience.bind(undefined, expectedAudience))
+        .catch(reassignRSCode);
+    for (const claim of ['client_id', 'jti', 'sub']) {
+        if (typeof claims[claim] !== 'string') {
+            throw OPE(`unexpected JWT "${claim}" claim type`, INVALID_REQUEST, { claims });
+        }
+    }
+    if ('cnf' in claims) {
+        if (!isJsonObject(claims.cnf)) {
+            throw OPE('unexpected JWT "cnf" (confirmation) claim value', INVALID_REQUEST, { claims });
+        }
+        const { 0: cnf, length } = Object.keys(claims.cnf);
+        if (length) {
+            if (length !== 1) {
+                throw new UnsupportedOperationError('multiple confirmation claims are not supported', {
+                    cause: { claims },
+                });
+            }
+            if (cnf !== 'jkt') {
+                throw new UnsupportedOperationError('unsupported JWT Confirmation method', {
+                    cause: { claims },
+                });
+            }
+        }
+    }
+    const { 0: protectedHeader, 1: payload, 2: encodedSignature } = accessToken.split('.');
+    const signature = b64u(encodedSignature);
+    const key = await getPublicSigKeyFromIssuerJwksUri(as, options, header);
+    await validateJwsSignature(protectedHeader, payload, key, signature);
+    if (options?.requireDPoP ||
+        scheme === 'dpop' ||
+        claims.cnf?.jkt !== undefined ||
+        request.headers.has('dpop')) {
+        await validateDPoP(request, accessToken, claims, options).catch(reassignRSCode);
+    }
+    return claims;
+}
+function reassignRSCode(err) {
+    if (err instanceof OperationProcessingError && err?.code === INVALID_REQUEST) {
+        err.code = INVALID_RESPONSE;
+    }
+    throw err;
+}
+async function backchannelAuthenticationRequest(as, client, clientAuthentication, parameters, options) {
+    assertAs(as);
+    assertClient(client);
+    const url = resolveEndpoint(as, 'backchannel_authentication_endpoint', client.use_mtls_endpoint_aliases, options?.[allowInsecureRequests] !== true);
+    const body = new URLSearchParams(parameters);
+    body.set('client_id', client.client_id);
+    const headers = prepareHeaders(options?.headers);
+    headers.set('accept', 'application/json');
+    return authenticatedRequest(as, client, clientAuthentication, url, body, headers, options);
+}
+async function processBackchannelAuthenticationResponse(as, client, response) {
+    assertAs(as);
+    assertClient(client);
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    await checkOAuthBodyError(response, 200, 'Backchannel Authentication Endpoint');
+    assertReadableResponse(response);
+    const json = await getResponseJsonBody(response);
+    assertString(json.auth_req_id, '"response" body "auth_req_id" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    let expiresIn = typeof json.expires_in !== 'number' ? parseFloat(json.expires_in) : json.expires_in;
+    assertNumber(expiresIn, true, '"response" body "expires_in" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    json.expires_in = expiresIn;
+    if (json.interval !== undefined) {
+        assertNumber(json.interval, false, '"response" body "interval" property', INVALID_RESPONSE, {
+            body: json,
+        });
+    }
+    return json;
+}
+async function backchannelAuthenticationGrantRequest(as, client, clientAuthentication, authReqId, options) {
+    assertAs(as);
+    assertClient(client);
+    assertString(authReqId, '"authReqId"');
+    const parameters = new URLSearchParams(options?.additionalParameters);
+    parameters.set('auth_req_id', authReqId);
+    return tokenEndpointRequest(as, client, clientAuthentication, 'urn:openid:params:grant-type:ciba', parameters, options);
+}
+async function processBackchannelAuthenticationGrantResponse(as, client, response, options) {
+    return processGenericAccessTokenResponse(as, client, response, undefined, options?.[jweDecrypt], options?.recognizedTokenTypes);
+}
+async function dynamicClientRegistrationRequest(as, metadata, options) {
+    assertAs(as);
+    const url = resolveEndpoint(as, 'registration_endpoint', metadata.use_mtls_endpoint_aliases, options?.[allowInsecureRequests] !== true);
+    const headers = prepareHeaders(options?.headers);
+    headers.set('accept', 'application/json');
+    headers.set('content-type', 'application/json');
+    const method = 'POST';
+    if (options?.DPoP) {
+        assertDPoP(options.DPoP);
+        await options.DPoP.addProof(url, headers, method, options.initialAccessToken);
+    }
+    if (options?.initialAccessToken) {
+        headers.set('authorization', `${headers.has('dpop') ? 'DPoP' : 'Bearer'} ${options.initialAccessToken}`);
+    }
+    const response = await (options?.[customFetch] || fetch)(url.href, {
+        body: JSON.stringify(metadata),
+        headers: Object.fromEntries(headers.entries()),
+        method,
+        redirect: 'manual',
+        signal: signal(url, options?.signal),
+    });
+    options?.DPoP?.cacheNonce(response, url);
+    return response;
+}
+async function processDynamicClientRegistrationResponse(response) {
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    await checkOAuthBodyError(response, 201, 'Dynamic Client Registration Endpoint');
+    assertReadableResponse(response);
+    const json = await getResponseJsonBody(response);
+    assertString(json.client_id, '"response" body "client_id" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    if (json.client_secret !== undefined) {
+        assertString(json.client_secret, '"response" body "client_secret" property', INVALID_RESPONSE, {
+            body: json,
+        });
+    }
+    if (json.client_secret) {
+        assertNumber(json.client_secret_expires_at, true, '"response" body "client_secret_expires_at" property', INVALID_RESPONSE, {
+            body: json,
+        });
+    }
+    return json;
+}
+async function resourceDiscoveryRequest(resourceIdentifier, options) {
+    return performDiscovery(resourceIdentifier, 'resourceIdentifier', (url) => {
+        prependWellKnown(url, '.well-known/oauth-protected-resource', true);
+        return url;
+    }, options);
+}
+async function processResourceDiscoveryResponse(expectedResourceIdentifier, response) {
+    const expected = expectedResourceIdentifier;
+    if (!(expected instanceof URL) && expected !== _nodiscoverycheck) {
+        throw CodedTypeError('"expectedResourceIdentifier" must be an instance of URL', ERR_INVALID_ARG_TYPE);
+    }
+    if (!looseInstanceOf(response, Response)) {
+        throw CodedTypeError('"response" must be an instance of Response', ERR_INVALID_ARG_TYPE);
+    }
+    if (response.status !== 200) {
+        throw OPE('"response" is not a conform Resource Server Metadata response (unexpected HTTP status code)', RESPONSE_IS_NOT_CONFORM, response);
+    }
+    assertReadableResponse(response);
+    const json = await getResponseJsonBody(response);
+    assertString(json.resource, '"response" body "resource" property', INVALID_RESPONSE, {
+        body: json,
+    });
+    if (expected !== _nodiscoverycheck && new URL(json.resource).href !== expected.href) {
+        throw OPE('"response" body "resource" property does not match the expected value', JSON_ATTRIBUTE_COMPARISON, { expected: expected.href, body: json, attribute: 'resource' });
+    }
+    return json;
+}
+async function getResponseJsonBody(response, check = assertApplicationJson) {
+    let json;
+    try {
+        json = await response.json();
+    }
+    catch (cause) {
+        check(response);
+        throw OPE('failed to parse "response" body as JSON', PARSE_ERROR, cause);
+    }
+    if (!isJsonObject(json)) {
+        throw OPE('"response" body must be a top level object', INVALID_RESPONSE, { body: json });
+    }
+    return json;
+}
+const _nopkce = nopkce;
+const _nodiscoverycheck = Symbol();
+const _expectedIssuer = Symbol();
+//# sourceMappingURL=index.js.map
+
+/***/ },
+
 /***/ "./tests/HDSProfile.test.js"
 /*!**********************************!*\
   !*** ./tests/HDSProfile.test.js ***!
@@ -30339,6 +38413,22 @@ describe('[PRFL] PROFILE_FIELDS', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.dateOfBirth.eventType, 'date/iso-8601');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.sex.eventType, 'attributes/biological-sex');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.country.eventType, 'contact/country');
+  });
+
+  it('[PRFL2] account preferences share the profile-preferences stream and reuse settings/* types', () => {
+    // Reusing HDSSettings' event types means no new data-model types are required;
+    // the account-level streamId is what makes them interoperable across apps.
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.preferredLocales.eventType, 'settings/preferred-locales');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.timezone.eventType, 'settings/timezone');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.dateFormat.eventType, 'settings/date-format');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.unitSystem.eventType, 'settings/unit-system');
+    for (const key of ['preferredLocales', 'timezone', 'dateFormat', 'unitSystem']) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS[key].streamId, 'profile-preferences', `${key} streamId`);
+    }
+  });
+
+  it('[PRFL3] theme is NOT a profile field — it stays per-app on HDSSettings', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.theme, undefined);
   });
 });
 
@@ -30385,8 +38475,20 @@ describe('[HDSP] HDSProfile (dev API)', function () {
 
     it('[HDSP-U3] getAll returns all defaults', () => {
       const all = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAll();
+      // Identity fields default to null; account preferences always resolve to a
+      // usable value so callers never have to null-guard formatting (plan 78 §C 7.1b).
+      const PREFERENCE_DEFAULTS = {
+        preferredLocales: ['en'],
+        timezone: 'Europe/Zurich',
+        dateFormat: 'DD.MM.YYYY',
+        unitSystem: 'metric',
+      };
       for (const key of Object.keys(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS)) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all[key], null, `${key} should be null`);
+        if (key in PREFERENCE_DEFAULTS) {
+          _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(all[key], PREFERENCE_DEFAULTS[key], `${key} should hold its default`);
+        } else {
+          _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all[key], null, `${key} should be null`);
+        }
       }
     });
 
@@ -30473,6 +38575,33 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('dateOfBirth'), '1985-03-15');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('sex'), 'male');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('country'), 'Switzerland');
+    });
+
+    it('[HDSP-S6] set account preferences round-trips (auto-creates profile-preferences)', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+
+      // profile-preferences is deliberately NOT pre-created in `before` — ensureStream
+      // must create it on first write.
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('preferredLocales', ['fr', 'en']);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('timezone', 'America/New_York');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('dateFormat', 'YYYY-MM-DD');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('unitSystem', 'imperial');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('preferredLocales'), ['fr', 'en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('timezone'), 'America/New_York');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('dateFormat'), 'YYYY-MM-DD');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('unitSystem'), 'imperial');
+    });
+
+    it('[HDSP-S7] stored preferences survive a re-hook (interop across apps)', async () => {
+      // The point of 7.1b: a second app hooking the same account reads what the
+      // account app wrote, rather than its own per-app copy.
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('preferredLocales'), ['en']); // back to default
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('dateFormat'), 'YYYY-MM-DD');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('unitSystem'), 'imperial');
     });
 
     it('[HDSP-S5] getAll returns all set values', async () => {
@@ -30797,11 +38926,11 @@ describe('[HDSS] HDSSettings', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(updateCall.params.update, { content: 'dark' });
     });
 
-    it('[HDSS-S3] throws when not hooked', async () => {
-      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
-        () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('theme', 'dark'),
-        /hookToApplication|hookToConnection/
-      );
+    it('[HDSS-S3] set without hook is memory-only (no Pryv write, value cached)', async () => {
+      // Reset singleton state — no connection means memory-only mode.
+      // The call must not throw and a subsequent get() must return the value.
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('theme', 'dark');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'dark');
     });
 
     it('[HDSS-S4] displayName uses same set/get as other settings', async () => {
@@ -30980,10 +39109,14 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
     );
   });
 
-  it('[HDSD10] setDynamic throws when not hooked', async () => {
+  it('[HDSD10] setDynamic without hook is memory-only (no Pryv write, value cached)', async () => {
+    // Memory-only mode: no connection, no error, get() reads back the value.
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), 'billings');
+    // Unknown prefix still throws.
     await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
-      () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings'),
-      /hookToApplication|hookToConnection/
+      () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('not-a-known-prefix', 'foo'),
+      /Unknown dynamic setting prefix/
     );
   });
 });
@@ -31312,6 +39445,70 @@ describe('[MSC] MonitorScope', () => {
 
 /***/ },
 
+/***/ "./tests/accountPreferences.test.js"
+/*!******************************************!*\
+  !*** ./tests/accountPreferences.test.js ***!
+  \******************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+/**
+ * Precedence for preferences that moved from per-app HDSSettings to account-level
+ * HDSProfile (plan 78 §C 7.1b): stored profile value > per-app value > default.
+ */
+describe('[ACCP] resolveAccountPreference', () => {
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testClear('dateFormat');
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testClear('unitSystem');
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+  });
+
+  it('[ACCP1] falls back to the default when nothing is hooked', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.hasAccountPreference)('dateFormat'), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.resolveAccountPreference)('dateFormat'), 'DD.MM.YYYY');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.resolveAccountPreference)('unitSystem'), 'metric');
+  });
+
+  it('[ACCP2] uses the per-app HDSSettings value when only that is hooked', () => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('dateFormat', 'MM/DD/YYYY');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.hasAccountPreference)('dateFormat'), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.resolveAccountPreference)('dateFormat'), 'MM/DD/YYYY');
+  });
+
+  it('[ACCP3] an unstored profile default does NOT mask a real per-app value', () => {
+    // The regression guard. HDSProfile always reads a non-null default, so a naive
+    // "profile wins when hooked" would override a date format the user really set.
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('dateFormat', 'MM/DD/YYYY');
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile._testHook(); // hooked, but nothing stored for dateFormat
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isHooked, true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('dateFormat'), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.resolveAccountPreference)('dateFormat'), 'MM/DD/YYYY');
+  });
+
+  it('[ACCP4] a stored account value wins over the per-app value', () => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('dateFormat', 'MM/DD/YYYY');
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile._testHook({ dateFormat: 'YYYY-MM-DD' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('dateFormat'), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.resolveAccountPreference)('dateFormat'), 'YYYY-MM-DD');
+  });
+
+  it('[ACCP5] a stored account value is used when no app has hooked settings', () => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile._testHook({ unitSystem: 'imperial' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.hasAccountPreference)('unitSystem'), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.resolveAccountPreference)('unitSystem'), 'imperial');
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/applicationClass.test.js"
 /*!****************************************!*\
   !*** ./tests/applicationClass.test.js ***!
@@ -31323,8 +39520,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
-/* harmony import */ var _test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
-
 
 
 
@@ -31463,38 +39658,6 @@ describe('[APAX] Application class', function () {
     });
   });
 
-  describe('[AMGX] AppManagingAccount tests', function () {
-    it('[AMGA] getCollectorById returns collector when exists', async () => {
-      const testBaseStreamId = 'amga-test';
-      const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppManaging)(testBaseStreamId, 'test-AMGA');
-      const collector = await appManaging.createCollector('Test Collector AMGA');
-
-      const foundCollector = await appManaging.getCollectorById(collector.id);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(foundCollector);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(foundCollector.id, collector.id);
-    });
-
-    it('[AMGB] getCollectorById returns undefined when not exists', async () => {
-      const testBaseStreamId = 'amgb-test';
-      const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppManaging)(testBaseStreamId, 'test-AMGB');
-
-      const foundCollector = await appManaging.getCollectorById('non-existent-id');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(foundCollector, undefined);
-    });
-
-    it('[AMGC] getCollectors with forceRefresh reloads data', async () => {
-      const testBaseStreamId = 'amgc-test';
-      const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppManaging)(testBaseStreamId, 'test-AMGC');
-
-      const collectors1 = await appManaging.getCollectors();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectors1.length, 0);
-
-      await appManaging.createCollector('Test Collector AMGC');
-      const collectors2 = await appManaging.getCollectors(true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectors2.length, 1);
-    });
-  });
-
   describe('[ACSX] Application setCustomSetting tests', function () {
     it('[ACSA] setCustomSetting adds a key', async () => {
       class Dummy extends Application {
@@ -31531,567 +39694,6 @@ describe('[APAX] Application class', function () {
 
 /***/ },
 
-/***/ "./tests/apptemplates.test.js"
-/*!************************************!*\
-  !*** ./tests/apptemplates.test.js ***!
-  \************************************/
-(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
-/* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
-/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
-/* harmony import */ var _test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
-
-
-
-
-const { AppManagingAccount, AppClientAccount, Collector, CollectorClient } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.appTemplates;
-
-describe('[APTX] appTemplates', function () {
-  this.timeout(10000);
-
-  let managingUser, appManaging, clientUser, _clientUserResultPermissions, appClient;
-  const baseStreamIdManager = 'test-app-template-manager';
-  const baseStreamIdClient = 'test-app-template-client';
-  const appName = 'Test HDSLib.appTemplates';
-  const appClientName = 'Test Client HDSLib.appTemplates';
-
-  before(async () => {
-    ({ managingUser, appManaging, clientUser, clientUserResultPermissions: _clientUserResultPermissions, appClient } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppAndUsers)(baseStreamIdManager, appName, baseStreamIdClient, appClientName));
-    await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.initHDSModel)();
-  });
-
-  it('[APTA] Full flow create collector and sharing', async () => {
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(appManaging.appName, appName);
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(appManaging.baseStreamId, baseStreamIdManager);
-
-    const collectorEmpty = await appManaging.getCollectors();
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(Array.isArray(collectorEmpty), 'Collectors should be an array');
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorEmpty.length, 0, 'Collectors should be an empty array');
-
-    const collectorName = 'Test';
-    // create a Collector
-    const newCollector = await appManaging.createCollectorUnitialized(collectorName);
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newCollector.streamId.startsWith(baseStreamIdManager), 'Collectors id should start with baseStreamId');
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newCollector.name, collectorName);
-    // check that streams has been addes to streamData
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(appManaging.streamData.children[0].name, collectorName);
-
-    // Create a Collector with the same name should fail
-    try {
-      await appManaging.createCollectorUnitialized(collectorName);
-      throw new Error('Creating a Collector with the same name should fail');
-    } catch (e) {
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(e.message.endsWith('>> Result: {"id":"item-already-exists","message":"A stream with name \\"Test\\" already exists","data":{"name":"Test"}}"'));
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.innerObject?.id, 'item-already-exists');
-    }
-
-    // check if collector is in the list
-    const collectors = await appManaging.getCollectors();
-    const found = collectors.find(c => c.name === collectorName);
-    if (!found) throw new Error('Should find collector with name: ' + collectorName);
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(found, newCollector);
-
-    // check StreamStructure
-    const resultCheckStructure = await newCollector.checkStreamStructure();
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(resultCheckStructure.created.length, 7, 'Should create 7 streams');
-    for (const created of resultCheckStructure.created) {
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(created.parentId, newCollector.streamId, 'Should have collector stream as parentid');
-    }
-
-    // 2nd call of StreamStructure should be empty
-    const resultCheckStructure2 = await newCollector.checkStreamStructure();
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(resultCheckStructure2.created.length, 0, 'Should create 0 streams');
-
-    // Should throw error as status is not yet set
-    try {
-      newCollector.statusCode;
-      throw new Error('Should throw error');
-    } catch (e) {
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Init Collector first');
-    }
-
-    await newCollector.init();
-
-    // Get status
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(newCollector.statusCode, 'draft');
-
-    // trying to get a sharing token in draft should throw an error
-    try {
-      await newCollector.sharingApiEndpoint();
-      throw new Error('Should throw error');
-    } catch (e) {
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Collector must be in "active" state error to get sharing link, current: draft');
-    }
-
-    // trying to create an invite in draft should throw an error
-    try {
-      await newCollector.createInvite({});
-      throw new Error('Should throw error');
-    } catch (e) {
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Collector must be in "active" state error to create invite, current: draft');
-    }
-
-    // Publish
-    await newCollector.publish();
-
-    // Sharing token creation
-    const sharingApiEndpoint = await newCollector.sharingApiEndpoint();
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(sharingApiEndpoint.startsWith('https://'));
-
-    // Should return the same
-    const sharingApiEndpoint2 = await newCollector.sharingApiEndpoint();
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(sharingApiEndpoint2, sharingApiEndpoint);
-
-    // ---------- creation of a manager on existing structure ---------- //
-
-    // creating a new Manager with same connection should load the structure
-    const connection2 = new _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(appManaging.connection.apiEndpoint);
-    const appManaging2 = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection2);
-    // check if collector is in the list
-    const collectors2 = await appManaging2.getCollectors();
-    const collector2 = collectors2.find(c => c.name === collectorName);
-    if (!collector2) throw new Error('Should find collector with name: ' + collectorName);
-    // init collector found;
-    await collector2.init();
-    // call of StreamStructure should be empty as already created
-    const resultCheckStructure3 = await collector2.checkStreamStructure();
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(resultCheckStructure3.created.length, 0, 'Should create 0 streams');
-    // should return the same access access point
-    const sharingApiEndpoint3 = await collector2.sharingApiEndpoint();
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(sharingApiEndpoint3, sharingApiEndpoint);
-  });
-
-  describe('[APIX] Collector invite flows & internals', async function () {
-    this.timeout(10000);
-
-    it('[APTI] Collector invite accept full flow testing internal', async () => {
-      const newCollector = await appManaging.createCollector('Invite test 1');
-      (0,_test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert)(newCollector.statusCode, 'draft');
-
-      // set request content
-      const requestContent = {
-        version: 1,
-        requester: {
-          name: 'Test requester name'
-        },
-        title: {
-          en: 'Title of the request'
-        },
-        description: {
-          en: 'Short Description'
-        },
-        consent: {
-          en: 'This is a consent message'
-        },
-        features: { },
-        permissionsExtra: [],
-        permissions: [
-          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
-          {
-            streamId: 'profile-date-of-birth',
-            defaultName: 'Date of Birth',
-            level: 'read'
-          }
-        ],
-        app: { // may have "url" in the future
-          id: 'test-app',
-          url: 'https://xxx.yyy',
-          data: { // settings for the app
-            dummy: 'dummy'
-          }
-        },
-        sections: [{
-          itemKeys: [
-            'profile-name',
-            'profile-surname'
-          ],
-          key: 'profile',
-          name: {
-            en: 'Profile'
-          },
-          type: 'permanent'
-        },
-        {
-          itemKeys: ['fertility-ttc-tta', 'body-weight'],
-          key: 'history',
-          name: {
-            en: 'History'
-          },
-          type: 'recurring'
-        }
-        ]
-      };
-      newCollector.request.setContent(requestContent);
-
-      // save
-      await newCollector.save();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newCollector.request.content, requestContent);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newCollector.request.content !== requestContent, 'Should be the same content but different objects');
-      // publish
-      await newCollector.publish();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(newCollector.statusCode, Collector.STATUSES.active);
-
-      // create invite
-      const options = { customData: { hello: 'bob' } };
-      const invite = await newCollector.createInvite('Invite One', options);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'pending');
-      const inviteSharingData = await invite.getSharingData();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(inviteSharingData.apiEndpoint, await newCollector.sharingApiEndpoint());
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.key.length > 5);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(inviteSharingData.eventId.length > 5);
-
-      // check invite can be found in "pendings"
-      const inviteEvent = await appManaging.connection.apiOne('events.getOne', { id: inviteSharingData.eventId }, 'event');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(inviteEvent.type, 'invite/collector-v1');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(inviteEvent.streamIds[0].endsWith('-pending'));
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(inviteEvent.content, { name: 'Invite One', customData: options.customData });
-
-      // also on current invites
-      const invites1 = await newCollector.getInvites();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites1.length, 1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites1[0].status, 'pending');
-
-      // Invitee receives the invite
-      const permissionsClient = [{ streamId: '*', level: 'manage' }];
-      const myClientUserPermissionsResult = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserPermissions)(clientUser, permissionsClient, [], appClientName + 'APTI');
-
-      const myAppClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, myClientUserPermissionsResult.appApiEndpoint, appClientName);
-      const collectorClient = await myAppClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.eventData.streamIds[0], myAppClient.baseStreamId);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.eventData.content.apiEndpoint, inviteSharingData.apiEndpoint);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.eventData.content.requesterEventId, inviteSharingData.eventId);
-
-      // TODO check collectorClient.eventData.accessInfo
-
-      // check collectorClients
-      const collectorClientsCached = await myAppClient.getCollectorClients();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClientsCached.length, 1);
-      const collectorClients = await myAppClient.getCollectorClients(true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClients.length, 1);
-
-      // collectorClients can be retrieved by key
-      const found = await myAppClient.getCollectorClientByKey(collectorClient.key);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(found, collectorClients[0]);
-
-      // check requestData
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(collectorClient.requestData, requestContent);
-
-      // accept
-      const acceptResult = await collectorClient.accept();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(acceptResult.requesterEvent.content.eventId, inviteSharingData.eventId);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!!acceptResult.requesterEvent.content.apiEndpoint);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.status, 'Active');
-
-      // try to re-accept throws an error
-      try {
-        await collectorClient.accept();
-        throw new Error('should throw error');
-      } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Cannot accept an Active CollectorClient');
-      }
-
-      // force refresh and check online
-      const collectorClients2 = await myAppClient.getCollectorClients(true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClients2.length, 1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(collectorClients2[0].accessData, acceptResult.accessData);
-
-      // Continue on Collector side
-      const invitesFromInbox = await newCollector.checkInbox();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].status, 'active');
-
-      // check current invites
-      const invites2 = await newCollector.getInvites(true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites2.length, 1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites2[0], invitesFromInbox[0]);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invites2[0].status, 'active');
-    });
-
-    it('[APIA] Collector invite accept', async () => {
-      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APIA');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.status, 'pending');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!collectorClient.hasChatFeature);
-      await collectorClient.accept();
-      await collector.checkInbox();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.status, 'active');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!invite.hasChat);
-    });
-
-    it('[APIZ] Collector - with chat', async () => {
-      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APIZ', { addChat: true });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(collectorClient.hasChatFeature);
-      await collectorClient.accept();
-      await collector.checkInbox();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.hasChat);
-      const expectedChatSettings = {
-        type: 'user',
-        streamRead: `chat-${managingUser.username}`,
-        streamWrite: `chat-${managingUser.username}-in`
-      };
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(invite.chatSettings, expectedChatSettings);
-      // -- post Chat From Doctor
-      await invite.chatPost('Hello Patient');
-
-      // -- post Chat From Patient
-      await collectorClient.chatPost(appClient.connection, 'Hello Dr.');
-
-      // check events on patient side
-      const eventsOnPatient = await appClient.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(eventsOnPatient[0].content, 'Hello Dr.');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[0]), { source: 'me' });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(eventsOnPatient[1].content, 'Hello Patient');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(collectorClient.chatEventInfos(eventsOnPatient[1]), { source: 'requester' });
-
-      // check events on patient side
-      const eventsOnDr = await invite.connection.apiOne('events.get', { types: ['message/hds-chat-v1'] }, 'events');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(eventsOnDr[0].content, 'Hello Dr.');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(invite.chatEventInfos(eventsOnDr[0]), { source: 'user' });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(eventsOnDr[1].content, 'Hello Patient');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(invite.chatEventInfos(eventsOnDr[1]), { source: 'me' });
-    });
-
-    it('[APII] Collector invite internals', async () => {
-      const beforeCreation = Date.now() - 5000; // 5s tolerance for server clock drift
-      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APII');
-      const afterCreation = Date.now() + 5000;
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(invite.dateCreation.getTime() > beforeCreation && invite.dateCreation.getTime() < afterCreation);
-
-      // apiEndpoint should throw Error
-      try {
-        invite.apiEndpoint;
-        throw new _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError('Should throw error');
-      } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'invite.apiEndpoint is accessible only when active');
-      }
-
-      await collectorClient.accept();
-      await collector.checkInbox();
-
-      invite.apiEndpoint; // should not throw error
-
-      // connection is cached and valid
-      const connection = invite.connection;
-      const inviteInfo = await connection.accessInfo();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!!inviteInfo.clientData.hdsCollectorClient);
-    });
-
-    it('[APTR] Collector invite refuse', async () => {
-      const { collector, collectorClient, inviteSharingData } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APTR');
-      const refuseResult = await collectorClient.refuse();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(refuseResult.requesterEvent.content.eventId, inviteSharingData.eventId);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.status, 'Refused');
-
-      // check collector
-      const invitesFromInbox = await collector.checkInbox();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].eventData.type, 'invite/collector-v1');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].status, 'error');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox[0].errorType, 'refused');
-    });
-
-    it('[APCR] Collector Client invite revoke', async () => {
-      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APCR');
-      await collectorClient.accept();
-
-      // check collector
-      const invitesFromInbox1 = await collector.checkInbox();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox1[0], invite);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'active');
-
-      // client revoke
-      await collectorClient.revoke();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.status, 'Deactivated');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(collectorClient.accessData.deleted);
-
-      // check collector
-      const invitesFromInbox2 = await collector.checkInbox();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox2[0], invite);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'error');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.errorType, 'revoked');
-    });
-
-    it('[APCM] Collector (manager) invite revoke after accept', async () => {
-      const { collector, collectorClient, invite } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(appManaging, appClient, 'APCM');
-      await collectorClient.accept();
-
-      // check collector
-      const invitesFromInbox1 = await collector.checkInbox();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invitesFromInbox1[0], invite);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'active');
-
-      // revoke invitation
-      await invite.revoke();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.status, 'error');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(invite.errorType, 'revoked');
-
-      // check if authorization is revoked
-
-      const res = await invite.connection.accessInfo();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.error.id, 'invalid-access-token');
-    });
-
-    it('[APCV] Collector convert v0 to v1 correctly', async () => {
-      const newCollector = await appManaging.createCollector('Invite test APCV');
-
-      const requestContent = {
-        version: 0,
-        requester: {
-          name: 'Test requester name'
-        },
-        title: {
-          en: 'Title of the request'
-        },
-        description: {
-          en: 'Short Description'
-        },
-        consent: {
-          en: 'This is a consent message'
-        },
-        features: { },
-        permissions: [
-          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
-          {
-            streamId: 'profile-date-of-birth',
-            defaultName: 'Date of Birth',
-            level: 'read'
-          }
-        ],
-        app: { // may have "url" in the future
-          id: 'test-app',
-          url: 'https://xxx.yyy',
-          data: { // settings for the app
-            dummy: 'dummy',
-            forms: {
-              profile: {
-                itemKeys: [
-                  'profile-name',
-                  'profile-surname'
-                ],
-                name: 'Profile',
-                type: 'permanent'
-              }
-            }
-          }
-        }
-      };
-
-      // set expected content
-      const expectedContent = {
-        version: 1,
-        requester: {
-          name: 'Test requester name'
-        },
-        title: {
-          en: 'Title of the request'
-        },
-        description: {
-          en: 'Short Description'
-        },
-        consent: {
-          en: 'This is a consent message'
-        },
-        features: { },
-        permissionsExtra: [],
-        permissions: [
-          { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
-          {
-            streamId: 'profile-date-of-birth',
-            defaultName: 'Date of Birth',
-            level: 'read'
-          }
-        ],
-        app: { // may have "url" in the future
-          id: 'test-app',
-          url: 'https://xxx.yyy',
-          data: { // settings for the app
-            dummy: 'dummy'
-          }
-        },
-        sections: [{
-          itemKeys: [
-            'profile-name',
-            'profile-surname'
-          ],
-          key: 'profile',
-          name: {
-            en: 'Profile'
-          },
-          type: 'permanent'
-        }
-        ]
-      };
-      newCollector.request.setContent(requestContent);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newCollector.request.content, expectedContent);
-    });
-  });
-
-  describe('[APEX] Errors ', () => {
-    it('[APEH] Collector.client handleIncoming Request Errors', async function () {
-      this.timeout(20000);
-      const new0 = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppAndUsers)('dummy', 'dummyApp', 'dummyC', 'dummyCApp');
-      const inv0 = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewInvite)(new0.appManaging, new0.appClient, 'APEH');
-
-      // Already known but different incomingEnventId
-      try {
-        await new0.appClient.handleIncomingRequest(inv0.inviteSharingData.apiEndpoint, 'bogusId');
-        throw new Error('should throw Error');
-      } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Found existing collectorClient with a different eventId');
-      }
-
-      // -- The following case happens when a user revokes its app permission
-      // and re-grant other permissions to the same app
-
-      // revoke appManaging
-      await new0.appManaging.connection.revoke();
-      // create a new appManaging with the same name for the same user
-      const manager1 = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_3__.helperNewAppManaging)('dummy', 'dummyApp', new0.managingUser);
-      // get invites from precedent collector
-      const collector1 = (await manager1.appManaging.getCollectors())[0];
-      await collector1.init();
-      const inv1 = (await collector1.getInvites())[0];
-      const inviteSharingData1 = await inv1.getSharingData();
-      // Already known but different incomingEnventId
-      try {
-        await new0.appClient.handleIncomingRequest(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
-        throw new Error('should throw Error');
-      } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Found existing collectorClient with a different apiEndpoint');
-      }
-
-      // reset to new incoming (might be implement later)
-      const requesterConnection = new _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(inviteSharingData1.apiEndpoint);
-      const accessInfo = await requesterConnection.accessInfo();
-      const collectorClient = await new0.appClient.getCollectorClientByKey(CollectorClient.keyFromInfo(accessInfo));
-      await collectorClient.reset(inviteSharingData1.apiEndpoint, inviteSharingData1.eventId);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(collectorClient.status, CollectorClient.STATUSES.incoming);
-    });
-  });
-
-  describe('[APCX] app Templates Client', function () {
-    it('[APCE] Should throw error if not initialized with a personal or master token', async () => {
-      const permissionsDummy = [{ streamId: 'dummy', level: 'manage' }];
-      const clientUserNonMaster = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserPermissions)(clientUser, permissionsDummy, [], appName);
-      // non master app
-      try {
-        await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserNonMaster.appApiEndpoint, appClientName);
-        throw new Error('Should throw error');
-      } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, `Application with "app" type of access requires  (streamId = "${baseStreamIdClient}", level = "manage") or master access`);
-      }
-      // personal
-      const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUser.apiEndpoint, appClientName);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(appClient.streamData.id, baseStreamIdClient);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(appClient.streamData.name, appClientName);
-    });
-  });
-});
-
-
-/***/ },
-
 /***/ "./tests/apptemplatesRequest.test.js"
 /*!*******************************************!*\
   !*** ./tests/apptemplatesRequest.test.js ***!
@@ -32101,9 +39703,9 @@ describe('[APTX] appTemplates', function () {
 "use strict";
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
-/* harmony import */ var _test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/helpersAppTemplate.js */ "./tests/test-utils/helpersAppTemplate.js");
-/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
-/* harmony import */ var _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/appTemplates/CollectorRequest.ts */ "./ts/appTemplates/CollectorRequest.ts");
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/CollectorRequest.ts */ "./ts/appTemplates/CollectorRequest.ts");
+/* harmony import */ var _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/appTemplates/Questionnaire.ts */ "./ts/appTemplates/Questionnaire.ts");
 
 
 
@@ -32118,381 +39720,238 @@ describe('[APRX] appTemplates Requests', function () {
 
   describe('[AREX] CollectorRequest error cases', function () {
     it('[AREA] should throw error for unknown features', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       try {
         request.setContent({
           features: { unknownFeature: { setting: 'value' } }
         });
         throw new Error('Should throw error');
       } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(e.message, 'Found unkown features');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(e.message, 'Found unkown features');
       }
     });
 
     it('[AREB] should throw error for invalid chat type', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       try {
         request.addChatFeature({ type: 'invalid' });
         throw new Error('Should throw error');
       } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(e.message, 'Invalid chat type');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(e.message, 'Invalid chat type');
       }
     });
 
     it('[AREC] should throw error for duplicate section key', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.createSection('test-section', 'permanent');
       try {
         request.createSection('test-section', 'recurring');
         throw new Error('Should throw error');
       } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(e.message, 'Section with key: test-section already exists');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(e.message, 'Section with key: test-section already exists');
       }
     });
 
     it('[ARED] should throw error for invalid version', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       try {
         request.setContent({ version: 99 });
         throw new Error('Should throw error');
       } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(e.message, 'Invalid CollectorRequest content version: 99');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(e.message, 'Invalid CollectorRequest content version: 99');
       }
     });
 
     it('[AREE] should handle permissionsExtra in content', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.setContent({
         permissionsExtra: [
           { streamId: 'test-stream', level: 'read' }
         ]
       });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.permissionsExtra.length, 1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.permissionsExtra[0].streamId, 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.permissionsExtra.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.permissionsExtra[0].streamId, 'test-stream');
     });
 
     it('[AREF] addChatFeature with usernames type', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.addChatFeature({ type: 'usernames' });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(request.features.chat, { type: 'usernames' });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.hasChatFeature, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(request.features.chat, { type: 'usernames' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.hasChatFeature, true);
     });
   });
 
   describe('[ARSO] Section ordering and customizations', function () {
     it('[ARSA] moveItemKey reorders items within a section', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       const section = request.createSection('test', 'permanent');
       section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
       section.moveItemKey('profile-sex', 0);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(section.itemKeys, ['profile-sex', 'profile-name', 'profile-surname']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(section.itemKeys, ['profile-sex', 'profile-name', 'profile-surname']);
     });
 
     it('[ARSB] removeItemKey removes item from section', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       const section = request.createSection('test', 'permanent');
       section.addItemKeys(['profile-name', 'profile-surname', 'profile-sex']);
       section.removeItemKey('profile-surname');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(section.itemKeys, ['profile-name', 'profile-sex']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(section.itemKeys, ['profile-name', 'profile-sex']);
     });
 
     it('[ARSC] moveSection reorders sections', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.createSection('a', 'permanent');
       request.createSection('b', 'recurring');
       request.createSection('c', 'permanent');
       request.moveSection('c', 0);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(request.sections.map(s => s.key), ['c', 'a', 'b']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(request.sections.map(s => s.key), ['c', 'a', 'b']);
     });
 
     it('[ARSD] removeSection removes a section', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.createSection('a', 'permanent');
       request.createSection('b', 'recurring');
       request.removeSection('a');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.sections.length, 1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.sections[0].key, 'b');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.sections.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.sections[0].key, 'b');
     });
 
     it('[ARSE] itemCustomizations set/get', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       const section = request.createSection('test', 'permanent');
       section.addItemKeys(['profile-name', 'profile-surname']);
       section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(section.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(section.getItemCustomization('profile-surname'), undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(section.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(section.getItemCustomization('profile-surname'), undefined);
     });
 
     it('[ARSF] itemCustomizations serialization round-trip', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       const section = request.createSection('test', 'permanent');
       section.addItemKeys(['profile-name', 'profile-surname']);
       section.setItemCustomization('profile-name', { placeholder: 'Enter name' });
 
       const content = request.content;
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(content.sections[0].itemCustomizations, {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(content.sections[0].itemCustomizations, {
         'profile-name': { placeholder: 'Enter name' }
       });
 
       // Round-trip: reload from serialized content
-      const request2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest(content);
+      const request2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(content);
       const section2 = request2.getSectionByKey('test');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(section2.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(section2.getItemCustomization('profile-name'), { placeholder: 'Enter name' });
     });
 
     it('[ARSG] getData omits itemCustomizations when empty', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       const section = request.createSection('test', 'permanent');
       section.addItemKeys(['profile-name']);
       const data = section.getData();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(data.itemCustomizations, undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(data.itemCustomizations, undefined);
     });
 
     it('[ARSH] moveItemKey throws for unknown key', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       const section = request.createSection('test', 'permanent');
       section.addItemKeys(['profile-name']);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => section.moveItemKey('unknown', 0), /not found/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => section.moveItemKey('unknown', 0), /not found/);
     });
 
     it('[ARSI] moveSection throws for unknown key', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.createSection('a', 'permanent');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => request.moveSection('unknown', 0), /not found/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => request.moveSection('unknown', 0), /not found/);
     });
 
     it('[ARSJ] removeSection throws for unknown key', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.createSection('a', 'permanent');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => request.removeSection('unknown'), /not found/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => request.removeSection('unknown'), /not found/);
     });
-  });
-
-  it('[APRC] Compute a simple request', async () => {
-    const baseStreamId = 'aprc';
-    const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_1__.helperNewAppManaging)(baseStreamId, 'test-APRC');
-    const newCollector = await appManaging.createCollector('Invite test APCV');
-
-    const request = newCollector.request;
-    request.appId = 'dr-form';
-    request.appUrl = 'https://xxx.yyy';
-    request.title = { en: 'My title' };
-    request.requesterName = 'Username APRC';
-    request.description = { en: 'Short Description' };
-    request.consent = { en: 'Short Consent' };
-    request.addPermissionExtra({ streamId: 'profile' });
-    request.addPermissionExtra({ streamId: 'fertility' });
-
-    const sectionA = request.createSection('profile', 'permanent');
-    sectionA.setNameLocal('en', 'A');
-    sectionA.addItemKeys([
-      'profile-name',
-      'profile-surname',
-      'profile-sex',
-      'family-children-count',
-      'fertility-miscarriages-count'
-    ]);
-
-    const sectionB = request.createSection('history', 'recurring');
-    sectionB.setNameLocal('en', 'B');
-    sectionB.addItemKeys([
-      'fertility-ttc-tta',
-      'body-weight'
-    ]);
-    // build permissions needed
-    request.buildPermissions();
-    const requestContent = request.content;
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.ok(requestContent.id.startsWith(baseStreamId), 'id should start with the basetreamid of the manager');
-
-    const expectedContent = {
-      version: 1,
-      title: { en: 'My title' },
-      consent: { en: 'Short Consent' },
-      description: { en: 'Short Description' },
-      requester: { name: 'Username APRC' },
-      features: {},
-      permissionsExtra: [
-        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
-        {
-          streamId: 'fertility',
-          defaultName: 'Fertility',
-          level: 'read'
-        }
-      ],
-      permissions: [
-        { streamId: 'profile', defaultName: 'Profile', level: 'read' },
-        { streamId: 'fertility', defaultName: 'Fertility', level: 'read' },
-        {
-          streamId: 'family-children',
-          defaultName: 'Children',
-          level: 'read'
-        },
-        {
-          streamId: 'body-weight',
-          defaultName: 'Body Weight',
-          level: 'read'
-        }
-      ],
-      app: { id: 'dr-form', url: 'https://xxx.yyy', data: {} },
-      sections: [
-        {
-          key: 'profile',
-          type: 'permanent',
-          name: { en: 'A' },
-          itemKeys: [
-            'profile-name',
-            'profile-surname',
-            'profile-sex',
-            'family-children-count',
-            'fertility-miscarriages-count'
-          ]
-        },
-        {
-          key: 'history',
-          type: 'recurring',
-          name: { en: 'B' },
-          itemKeys: ['fertility-ttc-tta', 'body-weight']
-        }
-      ],
-      id: requestContent.id
-    };
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(requestContent, expectedContent);
-  });
-
-  it('[APRD] A request with chat', async () => {
-    const baseStreamId = 'aprd';
-    const { appManaging } = await (0,_test_utils_helpersAppTemplate_js__WEBPACK_IMPORTED_MODULE_1__.helperNewAppManaging)(baseStreamId, 'test-APRD');
-    const newCollector = await appManaging.createCollector('Invite test APRD');
-
-    const request = newCollector.request;
-    request.appId = 'dr-form';
-    request.appUrl = 'https://xxx.yyy';
-    request.title = { en: 'My title' };
-    request.requesterName = 'Username APRD';
-    request.description = { en: 'Short Description' };
-    request.consent = { en: 'Short Consent' };
-    request.addPermissionExtra({ streamId: 'profile' });
-    request.addChatFeature();
-
-    const sectionA = request.createSection('profile', 'permanent');
-    sectionA.setNameLocal('en', 'A');
-    sectionA.addItemKeys([
-      'profile-name',
-      'profile-surname'
-    ]);
-
-    // build permissions needed
-    request.buildPermissions();
-
-    const requestContent = request.content;
-
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.ok(requestContent.id.startsWith(baseStreamId), 'id should start with the basetreamid of the manager');
-
-    const expectedContent = {
-      version: 1,
-      title: { en: 'My title' },
-      consent: { en: 'Short Consent' },
-      description: { en: 'Short Description' },
-      requester: { name: 'Username APRD' },
-      features: { chat: { type: 'user' } },
-      permissionsExtra: [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }],
-      permissions: [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }],
-      app: { id: 'dr-form', url: 'https://xxx.yyy', data: {} },
-      sections: [
-        {
-          key: 'profile',
-          type: 'permanent',
-          name: { en: 'A' },
-          itemKeys: ['profile-name', 'profile-surname']
-        }
-      ],
-      id: requestContent.id
-    };
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(requestContent, expectedContent);
   });
 
   describe('[APRES] CollectorRequest existingStreamRefs (Plan 45)', function () {
     it('[ARES1] should parse existingStreamRefs from content', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({
         existingStreamRefs: [
-          { streamId: 'app-system-out', permissions: ['manage'], purpose: 'system-out' },
-          { streamId: 'app-system-in', permissions: ['read'], purpose: 'system-in' }
+          { streamId: 'external-stream-a', permissions: ['manage'], purpose: 'example-out' },
+          { streamId: 'external-stream-b', permissions: ['read'], purpose: 'example-in' }
         ]
       });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.existingStreamRefs.length, 2);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.existingStreamRefs[0].streamId, 'app-system-out');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(request.existingStreamRefs[0].permissions, ['manage']);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.existingStreamRefs[1].streamId, 'app-system-in');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.existingStreamRefs.length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.existingStreamRefs[0].streamId, 'external-stream-a');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(request.existingStreamRefs[0].permissions, ['manage']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.existingStreamRefs[1].streamId, 'external-stream-b');
     });
 
     it('[ARES2] should serialize existingStreamRefs in content', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
-      request.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['manage'] });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.ok(request.content.existingStreamRefs);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.content.existingStreamRefs.length, 1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.content.existingStreamRefs[0].streamId, 'app-system-out');
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      request.addExistingStreamRef({ streamId: 'external-stream-a', permissions: ['manage'] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(request.content.existingStreamRefs);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.content.existingStreamRefs.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.content.existingStreamRefs[0].streamId, 'external-stream-a');
     });
 
     it('[ARES3] should not serialize existingStreamRefs when empty', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.content.existingStreamRefs, undefined);
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.content.existingStreamRefs, undefined);
     });
 
     it('[ARES4] should reject non-string streamId', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       try {
         request.addExistingStreamRef({ streamId: 123, permissions: ['read'] });
         throw new Error('Should throw error');
       } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.match(e.message, /streamId must be a non-empty string/);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /streamId must be a non-empty string/);
       }
     });
 
     it('[ARES5] should reject empty permissions array', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       try {
-        request.addExistingStreamRef({ streamId: 'app-system-out', permissions: [] });
+        request.addExistingStreamRef({ streamId: 'external-stream-a', permissions: [] });
         throw new Error('Should throw error');
       } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.match(e.message, /permissions must be a non-empty array/);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /permissions must be a non-empty array/);
       }
     });
 
     it('[ARES6] should reject invalid permission level', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       try {
-        request.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['admin'] });
+        request.addExistingStreamRef({ streamId: 'external-stream-a', permissions: ['admin'] });
         throw new Error('Should throw error');
       } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.match(e.message, /Invalid permission level "admin"/);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /Invalid permission level "admin"/);
       }
     });
 
     it('[ARES7] should accept all three permission levels', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.addExistingStreamRef({ streamId: 's1', permissions: ['read'] });
       request.addExistingStreamRef({ streamId: 's2', permissions: ['manage'] });
       request.addExistingStreamRef({ streamId: 's3', permissions: ['contribute'] });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.existingStreamRefs.length, 3);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.existingStreamRefs.length, 3);
     });
 
     it('[ARES8] should round-trip through setContent', () => {
-      const r1 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
-      r1.addExistingStreamRef({ streamId: 'app-system-out', permissions: ['manage'], purpose: 'system' });
+      const r1 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r1.addExistingStreamRef({ streamId: 'external-stream-a', permissions: ['manage'], purpose: 'example' });
       const content1 = r1.content;
-      const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest(content1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(r2.existingStreamRefs, r1.existingStreamRefs);
+      const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(content1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(r2.existingStreamRefs, r1.existingStreamRefs);
     });
   });
 
   describe('[APRCF] CollectorRequest customFields (Plan 45)', function () {
     function validCf () {
       return {
-        streamId: 'stormm-woman-custom-flow',
+        streamId: 'sample-template-custom-flow',
         eventType: 'note/txt',
         def: {
           version: 'v1',
-          templateId: 'stormm-woman',
+          templateId: 'sample-template',
           key: 'flow',
           label: { en: 'Flow' },
           options: ['light', 'medium', 'heavy']
@@ -32501,62 +39960,263 @@ describe('[APRX] appTemplates Requests', function () {
     }
 
     it('[ARCF1] should parse customFields from content', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({ customFields: [validCf()] });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.customFields.length, 1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.customFields[0].streamId, 'stormm-woman-custom-flow');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.customFields[0].eventType, 'note/txt');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.customFields[0].def.key, 'flow');
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({ customFields: [validCf()] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.customFields.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.customFields[0].streamId, 'sample-template-custom-flow');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.customFields[0].eventType, 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.customFields[0].def.key, 'flow');
     });
 
     it('[ARCF2] should serialize customFields in content', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.addCustomField(validCf());
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.ok(request.content.customFields);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.content.customFields.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(request.content.customFields);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.content.customFields.length, 1);
     });
 
     it('[ARCF3] should not serialize customFields when empty', () => {
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.content.customFields, undefined);
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.content.customFields, undefined);
     });
 
     it('[ARCF4] should reject streamId outside the def.templateId sandbox', () => {
       const cf = validCf();
       cf.streamId = 'foreign-stream-flow';
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => request.addCustomField(cf), /sandbox prefix/i);
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => request.addCustomField(cf), /sandbox prefix/i);
     });
 
     it('[ARCF5] should reject unknown eventType', () => {
       const cf = validCf();
       cf.eventType = 'temperature/c';
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => request.addCustomField(cf), /Invalid customField.eventType/);
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => request.addCustomField(cf), /Invalid customField.eventType/);
     });
 
     it('[ARCF6] should reject missing def.version', () => {
       const cf = validCf();
       delete cf.def.version;
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.throws(() => request.addCustomField(cf), /version/);
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => request.addCustomField(cf), /version/);
     });
 
     it('[ARCF7] should round-trip through setContent', () => {
-      const r1 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const r1 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       r1.addCustomField(validCf());
       const content1 = r1.content;
-      const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest(content1);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.deepEqual(r2.customFields, r1.customFields);
+      const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(content1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(r2.customFields, r1.customFields);
     });
 
     it('[ARCF8] should preserve optional parentId and name', () => {
       const cf = validCf();
-      cf.parentId = 'stormm-woman-custom';
+      cf.parentId = 'sample-template-custom';
       cf.name = 'Flow';
-      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_3__.CollectorRequest({});
+      const request = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
       request.addCustomField(cf);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.customFields[0].parentId, 'stormm-woman-custom');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_2__.assert.equal(request.customFields[0].name, 'Flow');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.customFields[0].parentId, 'sample-template-custom');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(request.customFields[0].name, 'Flow');
+    });
+  });
+
+  describe('[APRQS] CollectorRequest questionnaires (Plan 71)', function () {
+    function validQuestion () {
+      return {
+        label: { en: 'Body weight in past week' },
+        itemRef: 'body-weight',
+        scope: { type: 'latest', withinDays: 7 }
+      };
+    }
+
+    it('[APRQS-1] default request has no questionnaires', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(r.questionnaires, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.content.questionnaires, undefined);
+    });
+
+    it('[APRQS-2] addQuestionnaire accepts a Questionnaire instance', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__.Questionnaire({ title: { en: 'Intake' } });
+      q.addQuestion('weight-week', validQuestion());
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r.addQuestionnaire(q);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.questionnaires.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.questionnaires[0].title.en, 'Intake');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.questionnaires[0].questions['weight-week'].itemRef, 'body-weight');
+    });
+
+    it('[APRQS-3] addQuestionnaire accepts a raw content object (validates via Questionnaire)', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r.addQuestionnaire({
+        title: { en: 'From content' },
+        questions: { 'weight-week': validQuestion() }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.questionnaires.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.questionnaires[0].title.en, 'From content');
+    });
+
+    it('[APRQS-4] addQuestionnaire rejects invalid question keys', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => r.addQuestionnaire({
+        questions: { 'has:colon': validQuestion() }
+      }), /Pryv path grammar/);
+    });
+
+    it('[APRQS-5] addQuestionnaire rejects an empty questionnaire (no questions)', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => r.addQuestionnaire({}), /at least one question/);
+    });
+
+    it('[APRQS-6] getQuestionnaire returns a fresh Questionnaire wrapping the stored entry', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r.addQuestionnaire({ questions: { 'weight-week': validQuestion() } });
+      const q = r.getQuestionnaire(0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(q instanceof _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__.Questionnaire);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(q.questionKeys, ['weight-week']);
+    });
+
+    it('[APRQS-7] removeQuestionnaire splices the entry', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r.addQuestionnaire({ questions: { a: validQuestion() } });
+      r.addQuestionnaire({ questions: { b: validQuestion() } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.removeQuestionnaire(0), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.questionnaires.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(Object.keys(r.questionnaires[0].questions)[0], 'b');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.removeQuestionnaire(42), false);
+    });
+
+    it('[APRQS-8] content.questionnaires only present when non-empty', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r.addQuestionnaire({ questions: { 'weight-week': validQuestion() } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(Array.isArray(r.content.questionnaires));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.content.questionnaires.length, 1);
+      r.removeQuestionnaire(0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.content.questionnaires, undefined);
+    });
+
+    it('[APRQS-9] round-trips through setContent', () => {
+      const r1 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r1.addQuestionnaire({
+        title: { en: 'Roundtrip' },
+        questions: { 'weight-week': validQuestion() }
+      });
+      const content = r1.content;
+      const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(content);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r2.questionnaires.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r2.questionnaires[0].title.en, 'Roundtrip');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r2.questionnaires[0].questions['weight-week'].itemRef, 'body-weight');
+    });
+
+    it('[APRQS-10] setContent rejects non-array questionnaires field', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(
+        () => new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({ questionnaires: { wrong: 'shape' } }),
+        /must be an array/
+      );
+    });
+
+    it('[APRQS-11] coexists with sections + customFields + questionnaires in one request', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r.title = { en: 'Mixed' };
+      const sec = r.createSection('s1', 'permanent');
+      sec.setName({ en: 'Section 1' });
+      sec.addItemKeys(['body-weight']);
+      r.addQuestionnaire({
+        title: { en: 'Bundled Q' },
+        questions: { 'weight-week': validQuestion() }
+      });
+      const c = r.content;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(c.sections.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(c.questionnaires.length, 1);
+      // Round-trip survives the mix
+      const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(c);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r2.sections.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r2.questionnaires.length, 1);
+    });
+  });
+
+  describe('[APRQC] Questionnaire coverage check (Plan 71)', function () {
+    function bodyWeightQuestion () {
+      return {
+        label: { en: 'Body weight in past week' },
+        itemRef: 'body-weight',
+        scope: { type: 'latest', withinDays: 7 }
+      };
+    }
+
+    function moodQuestion () {
+      return {
+        label: { en: 'Mood' },
+        itemRef: 'wellbeing-mood',
+        scope: { type: 'window', withinDays: 30 }
+      };
+    }
+
+    it('[APRQC-1] ok=true when request already grants the question stream', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r.addPermission('body-weight', 'Body weight', 'read');
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__.Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      const report = r.checkQuestionnaireCoverage(q);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.ok, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.perQuestion.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.perQuestion[0].missing, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.perQuestion[0].coveredBy.streamId, 'body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(report.unknownItems, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(report.proposedPermissions, []);
+    });
+
+    it('[APRQC-2] ok=false + proposedPermissions populated when a question stream is uncovered', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__.Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      const report = r.checkQuestionnaireCoverage(q);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.ok, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.perQuestion[0].missing, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.perQuestion[0].coveredBy, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(report.proposedPermissions.length >= 1);
+      const proposed = report.proposedPermissions.find((p) => p.streamId === 'body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(proposed, 'expected a proposal for body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(proposed.level, 'read');
+    });
+
+    it('[APRQC-3] unknown itemRef surfaced in unknownItems + unknownItem flag, ok stays driven by missing only', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r.addPermission('body-weight', 'Body weight', 'read');
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__.Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      // Stuff in a raw question whose itemRef doesn't exist in the model — bypass addQuestion to avoid its lookup-free shape check.
+      const c = q.toRequestEventContent();
+      c.questions['ghost'] = { label: { en: 'Ghost' }, itemRef: 'no-such-item-xyz', scope: { type: 'ever' } };
+      const report = r.checkQuestionnaireCoverage(c);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(report.unknownItems, ['no-such-item-xyz']);
+      const ghostRow = report.perQuestion.find((c) => c.questionKey === 'ghost');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(ghostRow.unknownItem, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(ghostRow.streamId, null);
+      // body-weight is covered, ghost is unknown (not "missing") → ok=true
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.ok, true);
+    });
+
+    it('[APRQC-4] applyQuestionnaireCoverage adds the missing permissions in place', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__.Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      q.addQuestion('m', moodQuestion());
+      const before = r.permissions.length;
+      const report = r.applyQuestionnaireCoverage(q);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.perQuestion.length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(r.permissions.length > before, 'permissions should have grown');
+      // Re-checking after apply should report ok=true
+      const after = r.checkQuestionnaireCoverage(q);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(after.ok, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(after.proposedPermissions, []);
+    });
+
+    it('[APRQC-5] standalone checkQuestionnaireCoverage accepts raw content for both sides', async () => {
+      const { checkQuestionnaireCoverage } = await Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! ../ts/appTemplates/questionnaireCoverage.ts */ "./ts/appTemplates/questionnaireCoverage.ts", 19));
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__.Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      const report = checkQuestionnaireCoverage(q.toRequestEventContent(), { permissions: [] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.ok, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.perQuestion[0].missing, true);
     });
   });
 });
@@ -32811,9 +40471,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
 /* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
-/* harmony import */ var _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/settings/HDSSettings.ts */ "./ts/settings/HDSSettings.ts");
 
-
+// Import via the package entry point, like every other test file: a default import
+// straight from the .ts resolves to the module namespace under webpack (no .unhook),
+// which failed the browser suite while Node passed.
 
 
 
@@ -33126,7 +40787,7 @@ describe('[ESTX] eventToShortText', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Negative 30%');
   });
 
-  it('[EST18] medication/basic composite shows name + dose', () => {
+  it('[EST18] medication/basic composite (legacy flat) shows name + dose', () => {
     const event = {
       content: { name: 'Ibuprofen', doseValue: 400, doseUnit: 'mg', route: 'oral' },
       streamIds: ['medication-intake'],
@@ -33134,6 +40795,76 @@ describe('[ESTX] eventToShortText', () => {
     };
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Ibuprofen — 400 mg, oral');
+  });
+
+  it('[EST18b] medication/basic composite (nested intake) shows name + dose', () => {
+    const event = {
+      content: { name: 'Ibuprofen', intake: { doseValue: 400, doseUnit: 'mg', route: 'oral' } },
+      streamIds: ['medication-intake'],
+      type: 'medication/basic'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Ibuprofen — 400 mg, oral');
+  });
+
+  it('[EST19] cervix-position composite labels each field', () => {
+    const event = {
+      content: { height: 1.0, firmness: 0.0, openness: 0.5 },
+      streamIds: ['body-vulva-cervix-position'],
+      type: 'cervix-position/3d-vectors'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Height: High · Firmness: Firm · Openness: Medium');
+  });
+
+  it('[EST19b] cervix-position composite skips missing fields', () => {
+    const event = {
+      content: { height: 0.0 },
+      streamIds: ['body-vulva-cervix-position'],
+      type: 'cervix-position/3d-vectors'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Height: Low');
+  });
+
+  it('[EST19c] cervix-position composite snaps continuous values to nearest stop', () => {
+    const event = {
+      content: { height: 0.13, firmness: 0.07, openness: 0.02 },
+      streamIds: ['body-vulva-cervix-position'],
+      type: 'cervix-position/3d-vectors'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Height: Low · Firmness: Firm · Openness: Closed');
+  });
+
+  it('[EST19d] cervix-position composite snaps mid-range to Medium', () => {
+    const event = {
+      content: { height: 0.45, firmness: 0.6 },
+      streamIds: ['body-vulva-cervix-position'],
+      type: 'cervix-position/3d-vectors'
+    };
+    const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Height: Medium · Firmness: Medium');
+  });
+
+  // ─── Blood pressure composite (Plan 77 / #19 §4) ─────────────────
+
+  it('[EST23] blood pressure with pulse → "120/80 ♥72"', () => {
+    const event = {
+      content: { systolic: 120, diastolic: 80, rate: 72 },
+      streamIds: ['body-blood-pressure'],
+      type: 'blood-pressure/mmhg-bpm'
+    };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), '120/80 ♥72');
+  });
+
+  it('[EST23b] blood pressure without pulse → "120/80"', () => {
+    const event = {
+      content: { systolic: 120, diastolic: 80 },
+      streamIds: ['body-blood-pressure'],
+      type: 'blood-pressure/mmhg-bpm'
+    };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), '120/80');
   });
 
   // ─── Convertible: mood ───────────────────────────────────────────
@@ -33230,7 +40961,8 @@ describe('[ESTX] eventToShortText', () => {
       event.time = Date.now() / 1000;
       const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
       // Creighton 10KL has a descriptive label in its method definition
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Creighton Model'), `Expected method name, got: ${result}`);
+      // (method label shortened to bare family name in data-model v1.10.3)
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('10KL'), `Expected observation value, got: ${result}`);
     });
   });
@@ -33244,7 +40976,7 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     afterEach(() => {
-      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__.unhook();
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
     });
 
     it('[EST22a] no autoConvert — shows sourceData + method name', async () => {
@@ -33254,14 +40986,14 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22b] autoConvert same method — shows sourceData + method name (no conversion)', async () => {
-      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-wellbeing-mood', 'mira');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
       const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
       event.time = Date.now() / 1000;
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Happy (Mira)');
     });
 
     it('[EST22c] autoConvert mood mira→_raw — shows stop labels with target <- source', async () => {
-      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-wellbeing-mood', '_raw');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-wellbeing-mood', '_raw');
       const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
       event.time = Date.now() / 1000;
       const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
@@ -33271,7 +41003,7 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22d] autoConvert cervical fluid mira→appleHealth — localized label + perfect match', async () => {
-      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
       const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
       event.time = Date.now() / 1000;
       // "creamy" value should resolve to "Creamy" label from appleHealth method
@@ -33279,18 +41011,19 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22e] autoConvert cervical fluid mira→billings — localized label + partial match', async () => {
-      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-body-vulva-mucus-inspect', 'billings');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'billings');
       const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Watery');
       event.time = Date.now() / 1000;
       const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
       // billings "wetSlippery" value should have a localized label
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!result.includes('wetSlippery'), `Should use label not value, got: ${result}`);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Billings (BOM) <- Mira'), `Expected target <- source, got: ${result}`);
+      // method label shortened to bare family name in data-model v1.10.3
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Billings <- Mira'), `Expected target <- source, got: ${result}`);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
     });
 
     it('[EST22f] autoConvert raw vector (no source) — shows result + target name', async () => {
-      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-wellbeing-mood', 'mira');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
       const event = {
         content: { vectors: { valence: 0.8, arousal: 0.2, dominance: 0.7, socialOrientation: 0.5, temporalFocus: 0.3 } },
         streamIds: ['wellbeing-mood'],
@@ -33303,7 +41036,7 @@ describe('[ESTX] eventToShortText', () => {
     });
 
     it('[EST22g] all cervical fluid mira→appleHealth labels are capitalized', async () => {
-      _ts_settings_HDSSettings_ts__WEBPACK_IMPORTED_MODULE_3__._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
       const pairs = [
         ['No discharge', 'Dry'], ['Dry', 'Dry'], ['Sticky', 'Sticky'],
         ['Creamy', 'Creamy'], ['Watery', 'Watery'], ['Raw Egg White', 'Egg White'],
@@ -33329,7 +41062,59 @@ describe('[ESTX] eventToShortText', () => {
       event.time = Date.now() / 1000;
       const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
       // creighton "10KL" has a label in its method definition
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Creighton Model'), `Expected method name, got: ${result}`);
+      // (method label shortened to bare family name in data-model v1.10.3)
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
+    });
+  });
+
+  describe('[EST24] multi-select (data-model 3.0.0, site-agents#9/#10)', () => {
+    it('[EST24a] joins the localized labels of every selected value', () => {
+      const event = {
+        content: ['white', 'hispanic-latino'],
+        streamIds: ['profile-ethnicity'],
+        type: 'attributes/ethnicity'
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'White, Hispanic or Latino');
+    });
+
+    it('[EST24b] a single-element array is not decorated', () => {
+      const event = {
+        content: ['asian'],
+        streamIds: ['profile-ethnicity'],
+        type: 'attributes/ethnicity'
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Asian');
+    });
+
+    it('[EST24c] tolerates a scalar written before the item became multi-valued', () => {
+      // Backfill has not necessarily run everywhere; a legacy scalar must still
+      // render its label rather than raw content.
+      const event = {
+        content: 'mira',
+        streamIds: ['fertility-tracking-method'],
+        type: 'fertility/tracking-method-v1'
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Mira');
+    });
+
+    it('[EST24d] concurrent tracking methods all appear', () => {
+      const event = {
+        content: ['sympto-thermal', 'mira'],
+        streamIds: ['fertility-tracking-method'],
+        type: 'fertility/tracking-method-v1'
+      };
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Sympto-Thermal'), `got: ${result}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('Mira'), `got: ${result}`);
+    });
+
+    it('[EST24e] an unknown value falls back to the raw value', () => {
+      const event = {
+        content: ['white', 'not-a-category'],
+        streamIds: ['profile-ethnicity'],
+        type: 'attributes/ethnicity'
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'White, not-a-category');
     });
   });
 });
@@ -33599,13 +41384,50 @@ describe('[MODX] Model', () => {
 
   // ---------- itemDef ------------ //
   describe('[MDVX] itemDef methods', function () {
-    it('[MDVA] eventTemplate() returns event template with streamId and type', async () => {
+    it('[MDVA] eventTemplate() returns event template with streamId and chosen type', async () => {
       const itemDef = model.itemsDefs.forKey('body-weight');
-      const template = itemDef.eventTemplate();
+      const template = itemDef.eventTemplate({ eventType: 'mass/kg' });
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(template.streamIds);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(template.type);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(template.streamIds, ['body-weight']);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(template.type, 'mass/kg'); // first eventType
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(template.type, 'mass/kg');
+    });
+
+    // Issue #13: this used to return eventTypes[0] whatever the caller meant, so a
+    // weight entered in pounds was stored as kilograms with nothing failing.
+    it('[MDVA2] eventTemplate() honours the non-default variation', async () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      const template = itemDef.eventTemplate({ eventType: 'mass/lb' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(template.type, 'mass/lb');
+    });
+
+    it('[MDVA3] eventTemplate() throws on a variation item with no choice, naming the options', async () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => itemDef.eventTemplate(),
+        /requires an explicit choice.*mass\/kg, mass\/lb/s
+      );
+    });
+
+    it('[MDVA4] eventTemplate() rejects an eventType outside the declared options', async () => {
+      const itemDef = model.itemsDefs.forKey('body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => itemDef.eventTemplate({ eventType: 'mass/stone' }),
+        /is not a declared variation/
+      );
+    });
+
+    it('[MDVA5] eventTemplate() still works bare for a plain (non-variation) item', async () => {
+      const itemDef = model.itemsDefs.forKey('profile-name');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.eventTemplate().type, itemDef.eventTypes[0]);
+    });
+
+    it('[MDVA6] eventTemplate() rejects a mismatched eventType on a plain item', async () => {
+      const itemDef = model.itemsDefs.forKey('profile-name');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => itemDef.eventTemplate({ eventType: 'mass/kg' }),
+        /cannot produce/
+      );
     });
 
     it('[MDVB] eventTemplate() returns correct streamId from data', async () => {
@@ -33739,7 +41561,11 @@ describe('[MODX] Model', () => {
       const ds = dsModel.datasources.forKey('medication');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ds);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.key, 'medication');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.endpoint, 'https://demo-datasets.datasafe.dev/medication');
+      // `datasets://medication` resolves against service-info `assets.datasets`, so the
+      // host depends on which registry is default — it moved demo → prod in 1.2.4 and
+      // this assertion kept its hardcoded demo host. Assert the resolution *rule*
+      // instead, so the test stops re-breaking whenever deployment config moves.
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.endpoint, dsModel.assets.datasets + 'medication');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.queryParam, 'search');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.minQueryLength, 3);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ds.resultKey, 'medications');
@@ -34228,6 +42054,65 @@ describe('[LOCX] Localization', () => {
         _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'textItems must have an english translation');
       }
     });
+
+    it('[LOLY] empty string `en` is a valid translation (author chose "no text")', () => {
+      // Regression for S-2026-05-26-E: previously `!textItem.en` swallowed
+      // empty strings and threw "textItems must have an english translation",
+      // breaking invite peeks against Chat presets that wrote `consent: { en: "" }`.
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: '' }), '');
+      // Less-preferred locale set to `""` should also fall through to en.
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: 'Hello', fr: '' }), '');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: 'Hello', fr: null }), 'Hello');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: 'Hello', fr: undefined }), 'Hello');
+    });
+  });
+
+  describe('[LOCN] onPreferredLocalesChange (B-2026-07-10-1)', () => {
+    it('[LOCN1] fires with the new order when the locale actually changes', () => {
+      const seen = [];
+      const off = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.onPreferredLocalesChange)((locales) => seen.push(locales));
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']);
+      off();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(seen.length, 1, 'listener should fire exactly once');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(seen[0][0], 'fr', 'listener receives the new preferred order');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)()[0], 'fr');
+    });
+
+    it('[LOCN2] does NOT fire when the effective order is unchanged', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']);
+      let calls = 0;
+      const off = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.onPreferredLocalesChange)(() => { calls++; });
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']); // already in front — no change
+      off();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls, 0, 'a redundant set must not churn consumers');
+    });
+
+    it('[LOCN3] the returned unsubscribe stops delivery', () => {
+      let calls = 0;
+      const off = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.onPreferredLocalesChange)(() => { calls++; });
+      off();
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['es']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls, 0, 'unsubscribed listener must not be called');
+    });
+
+    it('[LOCN4] one throwing listener does not block the others', () => {
+      let reached = 0;
+      const off1 = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.onPreferredLocalesChange)(() => { throw new Error('boom'); });
+      const off2 = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.onPreferredLocalesChange)(() => { reached++; });
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['es']);
+      off1(); off2();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(reached, 1, 'a bad listener must not break the locale change');
+    });
+
+    it('[LOCN5] the listener sees a snapshot localizeText already agrees with', () => {
+      const item = { en: 'Hello', fr: 'Bonjour' };
+      let observed = null;
+      const off = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.onPreferredLocalesChange)(() => { observed = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(item); });
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']);
+      off();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(observed, 'Bonjour', 'state must be committed before listeners fire');
+    });
   });
 });
 
@@ -34655,114 +42540,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var assert__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! assert */ "./node_modules/assert/build/assert.js");
 
 
-
-
-/***/ },
-
-/***/ "./tests/test-utils/helpersAppTemplate.js"
-/*!************************************************!*\
-  !*** ./tests/test-utils/helpersAppTemplate.js ***!
-  \************************************************/
-(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   helperNewAppAndUsers: () => (/* binding */ helperNewAppAndUsers),
-/* harmony export */   helperNewAppClient: () => (/* binding */ helperNewAppClient),
-/* harmony export */   helperNewAppManaging: () => (/* binding */ helperNewAppManaging),
-/* harmony export */   helperNewInvite: () => (/* binding */ helperNewInvite)
-/* harmony export */ });
-/* harmony import */ var _deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./deps-node.js */ "./tests/test-utils/deps-browser.js");
-/* harmony import */ var _pryvService_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./pryvService.js */ "./tests/test-utils/pryvService.js");
-/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../../ts/index.ts */ "./ts/index.ts");
-
-
-
-const { AppManagingAccount, AppClientAccount } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.appTemplates;
-
-
-
-/**
- * function helperNewAppManaging
- */
-async function helperNewAppManaging (baseStreamIdManager, appName, managingUser = null) {
-  // -- managing
-  const initialStreams = [{ id: 'applications', name: 'Applications' }, { id: baseStreamIdManager, name: appName, parentId: 'applications' }];
-  const permissionsManager = [{ streamId: baseStreamIdManager, level: 'manage' }];
-  if (!managingUser) {
-    managingUser = await (0,_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserAndPermissions)(null, permissionsManager, initialStreams, appName);
-  } else {
-    // replace managing user with new permissions set
-    managingUser = await (0,_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserPermissions)(managingUser, permissionsManager, initialStreams, appName);
-  }
-  const connection = new _pryvService_js__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(managingUser.appApiEndpoint);
-  const appManaging = await AppManagingAccount.newFromConnection(baseStreamIdManager, connection);
-  return { managingUser, appManaging };
-}
-
-/**
- * helper to generate a new managing user and new client user
- */
-async function helperNewAppClient (baseStreamIdClient, appClientName) {
-  // -- receiving user
-  const clientUser = await (0,_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUser)();
-  const permissionsClient = [{ streamId: '*', level: 'manage' }];
-  const clientUserResultPermissions = await (0,_pryvService_js__WEBPACK_IMPORTED_MODULE_1__.createUserPermissions)(clientUser, permissionsClient, [], appClientName);
-  const appClient = await AppClientAccount.newFromApiEndpoint(baseStreamIdClient, clientUserResultPermissions.appApiEndpoint, appClientName);
-  return { clientUser, clientUserResultPermissions, appClient };
-}
-
-/**
- * helper to generate a new managing user and new client user
- */
-async function helperNewAppAndUsers (baseStreamIdManager, appName, baseStreamIdClient, appClientName) {
-  const res = {};
-  const resManager = await helperNewAppManaging(baseStreamIdManager, appName);
-  const resClient = await helperNewAppClient(baseStreamIdClient, appClientName);
-  Object.assign(res, resManager);
-  Object.assign(res, resClient);
-  return res;
-}
-
-/**
- * heper to generate a new collector and invite for this managing application
- * @param {AppManagingAccount} appManaging
- * @returns {Object}
- */
-async function helperNewInvite (appManaging, appClient, code, extraFeatures = { requestContent: {}, addChat: false }) {
-  code = code || Math.floor(Math.random() * 1000);
-  const collector = await appManaging.createCollector('Invite test ' + code);
-
-  // set request content
-  const requestContent = {
-    version: 0,
-    requester: { name: 'Test requester name' },
-    title: { en: 'Title of the request' },
-    description: { en: 'Short Description' },
-    consent: { en: 'This is a consent message' },
-    permissions: [{ streamId: 'profile-name', defaultName: 'Name', level: 'read' }],
-    app: { id: 'test-app', url: 'https://xxx.yyy', data: { } }
-  };
-  Object.assign(requestContent, extraFeatures.extraContent || {});
-  collector.request.setContent(requestContent);
-  if (extraFeatures.addChat) {
-    collector.request.addChatFeature();
-  }
-
-  await collector.save();
-  await collector.publish();
-  // create invite
-  const options = { customData: { hello: 'bob' } };
-  const invite = await collector.createInvite('Invite One', options);
-  const inviteSharingData = await invite.getSharingData();
-  _deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(inviteSharingData.apiEndpoint, await collector.sharingApiEndpoint());
-
-  // Invitee receives the invite
-  const collectorClient = await appClient.handleIncomingRequest(inviteSharingData.apiEndpoint, inviteSharingData.eventId);
-
-  return { collector, invite, collectorClient, inviteSharingData };
-}
 
 
 /***/ },
@@ -35234,7 +43011,7 @@ module.exports = /*#__PURE__*/JSON.parse('{"$schema":"http://json-schema.org/dra
 (module) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.0.1","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv S.A. <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{},"engines":{"node":">=20.0.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.11.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
 
 /***/ },
 
@@ -35282,6 +43059,36 @@ module.exports = /*#__PURE__*/JSON.parse('{"$schema":"http://json-schema.org/dra
 /******/ 	}
 /******/ 	
 /************************************************************************/
+/******/ 	/* webpack/runtime/create fake namespace object */
+/******/ 	(() => {
+/******/ 		var getProto = Object.getPrototypeOf ? (obj) => (Object.getPrototypeOf(obj)) : (obj) => (obj.__proto__);
+/******/ 		var leafPrototypes;
+/******/ 		// create a fake namespace object
+/******/ 		// mode & 1: value is a module id, require it
+/******/ 		// mode & 2: merge all properties of value into the ns
+/******/ 		// mode & 4: return value when already ns object
+/******/ 		// mode & 16: return value when it's Promise-like
+/******/ 		// mode & 8|1: behave like require
+/******/ 		__webpack_require__.t = function(value, mode) {
+/******/ 			if(mode & 1) value = this(value);
+/******/ 			if(mode & 8) return value;
+/******/ 			if(typeof value === 'object' && value) {
+/******/ 				if((mode & 4) && value.__esModule) return value;
+/******/ 				if((mode & 16) && typeof value.then === 'function') return value;
+/******/ 			}
+/******/ 			var ns = Object.create(null);
+/******/ 			__webpack_require__.r(ns);
+/******/ 			var def = {};
+/******/ 			leafPrototypes = leafPrototypes || [null, getProto({}), getProto([]), getProto(getProto)];
+/******/ 			for(var current = mode & 2 && value; (typeof current == 'object' || typeof current == 'function') && !~leafPrototypes.indexOf(current); current = getProto(current)) {
+/******/ 				Object.getOwnPropertyNames(current).forEach((key) => (def[key] = () => (value[key])));
+/******/ 			}
+/******/ 			def['default'] = () => (value);
+/******/ 			__webpack_require__.d(ns, def);
+/******/ 			return ns;
+/******/ 		};
+/******/ 	})();
+/******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
 /******/ 		// define getter functions for harmony exports
@@ -35331,8 +43138,8 @@ var __webpack_exports__ = {};
   !*** ./tests/browser-tests.js ***!
   \********************************/
 __webpack_require__.r(__webpack_exports__);
-/* harmony import */ var _applicationClass_test_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./applicationClass.test.js */ "./tests/applicationClass.test.js");
-/* harmony import */ var _apptemplates_test_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./apptemplates.test.js */ "./tests/apptemplates.test.js");
+/* harmony import */ var _accountPreferences_test_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./accountPreferences.test.js */ "./tests/accountPreferences.test.js");
+/* harmony import */ var _applicationClass_test_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./applicationClass.test.js */ "./tests/applicationClass.test.js");
 /* harmony import */ var _apptemplatesRequest_test_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./apptemplatesRequest.test.js */ "./tests/apptemplatesRequest.test.js");
 /* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
 /* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
