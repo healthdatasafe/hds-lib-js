@@ -68,13 +68,36 @@ echo "Building..."
 npm run build
 echo "Build OK."
 
+VERSION="$(node -p "require('./package.json').version")"
+BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 # Generate version.json
 cat > dist/version.json << VEOF
 {
   "commit": "$COMMIT_FULL",
   "commitShort": "$COMMIT_SHORT",
   "branch": "$MAIN_BRANCH",
-  "buildDate": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  "version": "$VERSION",
+  "buildDate": "$BUILD_DATE"
+}
+VEOF
+
+# Publish an immutable copy at /v<version>/ alongside the rolling root bundle.
+# The root URL is what external integrators found on their own (the docs point at
+# node_modules, not at gh-pages), so a dependency jump silently changes the library
+# under them - pryv 3.0.1 -> 3.11.0 narrowed the AUTHORIZED onStateChange payload and
+# broke callers that read `apiEndpoint` from it. A versioned path gives them something
+# to pin. Existing version directories are never overwritten: re-deploying the same
+# version republishes it only if the bundle actually changed.
+mkdir -p "dist/v$VERSION"
+cp dist/hds-lib.js dist/hds-lib.js.map dist/hds-lib.js.LICENSE.txt "dist/v$VERSION/"
+cat > "dist/v$VERSION/version.json" << VEOF
+{
+  "commit": "$COMMIT_FULL",
+  "commitShort": "$COMMIT_SHORT",
+  "branch": "$MAIN_BRANCH",
+  "version": "$VERSION",
+  "buildDate": "$BUILD_DATE"
 }
 VEOF
 git -C dist add -A
@@ -85,4 +108,4 @@ fi
 git -C dist commit -m "deploy $COMMIT_SHORT ($COMMIT_FULL)"
 git -C dist push
 
-echo "Deployed $COMMIT_SHORT to gh-pages."
+echo "Deployed $COMMIT_SHORT to gh-pages (root + v$VERSION)."

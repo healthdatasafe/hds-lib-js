@@ -49,6 +49,31 @@ console.log(weightItem.label); // "Weight"
 </head>
 ```
 
+## Hosted browser bundle
+
+The browser bundle is also published on GitHub Pages, for pages that cannot run an
+npm install (server-rendered sites, integration samples, quick prototypes):
+
+```html
+<!-- pinned: never changes -->
+<script src="https://healthdatasafe.github.io/hds-lib-js/v2.2.0/hds-lib.js"></script>
+
+<!-- rolling: always the latest release -->
+<script src="https://healthdatasafe.github.io/hds-lib-js/hds-lib.js"></script>
+```
+
+**Pin a version in anything you rely on.** The rolling URL tracks `main`, so the
+library under it changes when a release does, including its `pryv` dependency.
+That is not theoretical: `pryv` 3.10 narrowed the `AUTHORIZED` payload delivered to
+`pryv.Browser.setupAuth`'s `onStateChange` to `{ status, id, key, serviceInfo }`, so
+code reading `apiEndpoint` from it stopped working. Obtain the connection with
+`pryv.connectFromKey(key, serviceInfoUrl)` instead. Note that the cookie-autologin
+path still delivers the wider payload, so a caller that reads `apiEndpoint` fails
+only on a fresh authorization and appears to work on a restored session.
+
+Each deploy publishes both the rolling root and an immutable `/v<version>/` copy;
+`version.json` sits next to each bundle and reports the version, commit and build date.
+
 ## Entry points
 
 | Target | Entry point |
@@ -56,6 +81,8 @@ console.log(weightItem.label); // "Weight"
 | Node.js (CJS) | `js/index.js` |
 | TypeScript | `ts/index.ts` |
 | Browser (bundled) | `dist/hds-lib.js` |
+| Browser (hosted, pinned) | `https://healthdatasafe.github.io/hds-lib-js/v<version>/hds-lib.js` |
+| Browser (hosted, rolling) | `https://healthdatasafe.github.io/hds-lib-js/hds-lib.js` |
 
 ## Build from source
 

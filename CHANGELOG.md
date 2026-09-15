@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **`npm run deploy` now publishes an immutable `/v<version>/` copy of the browser bundle** next to
+  the rolling root one, and `version.json` (both copies) gained a `version` field.
+
+  The gh-pages bundle had gone 4.5 months without a deploy, so the public URL still served a build
+  from 2026-04-28 linking `pryv` 3.0.1 while `main` was on 3.11.0 (`healthdatasafe/hds-lib-js#14`).
+  Redeploying fixes the staleness but not its cause: the docs point browser users at
+  `node_modules/hds-lib/dist/hds-lib.js`, so anyone loading the hosted URL found it themselves and
+  has no way to pin, and the library changes under them on every release. Between those two
+  versions `pryv` 3.10 narrowed the `AUTHORIZED` `onStateChange` payload, which breaks callers
+  reading `apiEndpoint` from it — and only on a fresh authorization, since the cookie-autologin
+  path still carries the wider shape.
+
+### Documentation
+- `getting-started.md` documents the hosted bundle for the first time (pinned and rolling URLs),
+  with the `setupAuth` payload change and the `pryv.connectFromKey(key, serviceInfoUrl)` replacement.
+
 ## [2.2.0] - 2026-09-14
 
 ### Added
