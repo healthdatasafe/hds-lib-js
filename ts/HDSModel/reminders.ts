@@ -21,6 +21,8 @@ export interface ReminderStatus {
 interface ItemDefLike {
   key: string;
   eventTypes: string[];
+  /** Twin-aware types; absent on hand-built itemDefs, which fall back to `eventTypes`. */
+  satisfyingEventTypes?: string[];
   reminder: ReminderConfig | null;
   data: { streamId: string };
 }
@@ -65,7 +67,13 @@ function mergeReminders (sources: ReminderSource[]): { config: ReminderConfig; i
  */
 function findLastEvent (itemDef: ItemDefLike, events: EventLike[]): EventLike | undefined {
   const streamId = itemDef.data.streamId;
-  const types = new Set(itemDef.eventTypes);
+  // Twin-aware: a presence event satisfies a graded item on the same stream, so
+  // a reminder does not fire for something a bridge already reported
+  // (`B-2026-09-15-5`). Falls back to the item's own types on an itemDef built
+  // without a model handle. This decides "was it recorded", never "what value".
+  const types = new Set(
+    (itemDef as { satisfyingEventTypes?: string[] }).satisfyingEventTypes ?? itemDef.eventTypes
+  );
   let latest: EventLike | undefined;
   for (const e of events) {
     if (!types.has(e.type)) continue;

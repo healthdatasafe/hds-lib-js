@@ -170,6 +170,51 @@ export class HDSItemDef {
    * Falls back to plain `(streamId in event.streamIds, type === eventType)`
    * if the model handle isn't available.
    */
+  /**
+   * Event types that count as "this concept was recorded", including the ones
+   * belonging to same-stream twins.
+   *
+   * **Why this is not just `eventTypes`.** A concept can be recorded at more
+   * than one fidelity on the same stream: a presence marker
+   * (`symptom-pain-headache`, `activity/plain`) for sources that only know an
+   * occurrence, and a graded twin (`symptom-pain-headache-severity`,
+   * `ratio/proportion`). A form that asks for the graded item is still
+   * *satisfied* by a bridge that can only report presence — asking the subject
+   * to re-enter what a working bridge already sent is the bug this exists for
+   * (`B-2026-09-15-5`).
+   *
+   * **Use it for "has this been recorded?" — completion, reminders, task
+   * prompts. Never use it to read a value.** The types collected here are
+   * deliberately *not* interchangeable as data: `body-urine-hormones-lh`
+   * (IU/L) and `fertility-hormone-lh` (mg/L) share a stream, and reading one
+   * as the other would be wrong by a factor that looks plausible. Resolve the
+   * event through `forEvent` before interpreting its content.
+   *
+   * Falls back to this item's own `eventTypes` when the itemDef was built
+   * without a model handle.
+   */
+  get satisfyingEventTypes (): string[] {
+    if (!this.#model) return this.eventTypes;
+    const streamId = this.#data.streamId;
+    if (typeof streamId !== 'string') return this.eventTypes;
+    const types = new Set<string>(this.eventTypes);
+    for (const sibling of this.#model.itemsDefs.forStreamId(streamId)) {
+      for (const t of sibling.eventTypes) types.add(t);
+    }
+    return [...types];
+  }
+
+  /**
+   * Whether `event` counts as this concept having been recorded, accepting a
+   * same-stream twin. See {@link satisfyingEventTypes} for the read-vs-record
+   * distinction — this answers "recorded?", not "what value?".
+   */
+  satisfiedByEvent (event: { type?: string; streamIds?: string[] }): boolean {
+    if (!event || event.type == null || !Array.isArray(event.streamIds)) return false;
+    if (!this.satisfyingEventTypes.includes(event.type)) return false;
+    return event.streamIds.includes(this.#data.streamId);
+  }
+
   matchesEvent (event: { type?: string; streamIds?: string[] }): boolean {
     if (!event || event.type == null || !Array.isArray(event.streamIds)) return false;
     if (this.#model) {

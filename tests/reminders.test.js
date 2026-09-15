@@ -68,6 +68,56 @@ describe('[REMX] Reminders', () => {
       return { streamId, type, time };
     }
 
+    /**
+     * Twin-awareness (`B-2026-09-15-5`). A reminder must not fire for a concept
+     * a bridge already reported at a lower fidelity — a presence event on the
+     * same stream satisfies a graded item. `satisfyingEventTypes` is optional on
+     * the itemDef-like input, so hand-built items keep the old strict behaviour.
+     */
+    function makeTwinItem (key, streamId, ownType, twinType, reminder) {
+      return {
+        key,
+        eventTypes: [ownType],
+        satisfyingEventTypes: [ownType, twinType],
+        reminder: reminder || null,
+        data: { streamId }
+      };
+    }
+
+    // Assert on `lastEvent` / `lastEntry`, not on `status`: this `frequency`
+    // config reports `due` either way, so a status assertion passes vacuously.
+    // `lastEvent` is the value the fix actually changes, and the one completion
+    // and the ribbon read.
+    it('[CRM-TWIN1] a presence event is picked up as the graded item\'s last entry', () => {
+      const items = [makeTwinItem('symptom-pain-headache-severity', 'symptom-pain-headache',
+        'ratio/proportion', 'activity/plain', { frequency: 'P1D' })];
+      const events = [makeEvent('symptom-pain-headache', 'activity/plain', NOW - 60)];
+      const result = computeReminders(items, events, {}, NOW);
+      assert.equal(result.length, 1);
+      assert.equal(result[0].lastEntry, NOW - 60);
+      assert.equal(result[0].lastEvent.type, 'activity/plain');
+    });
+
+    it('[CRM-TWIN2] without satisfyingEventTypes the old strict behaviour stands', () => {
+      const items = [makeItem('symptom-pain-headache-severity', 'symptom-pain-headache',
+        'ratio/proportion', { frequency: 'P1D' })];
+      const events = [makeEvent('symptom-pain-headache', 'activity/plain', NOW - 60)];
+      const result = computeReminders(items, events, {}, NOW);
+      assert.equal(result.length, 1);
+      assert.equal(result[0].lastEvent, undefined, 'a presence event must not satisfy a strict itemDef');
+    });
+
+    it('[CRM-TWIN3] the item\'s own type still wins when both are present', () => {
+      const items = [makeTwinItem('symptom-pain-headache-severity', 'symptom-pain-headache',
+        'ratio/proportion', 'activity/plain', { frequency: 'P1D' })];
+      const events = [
+        makeEvent('symptom-pain-headache', 'activity/plain', NOW - 600),
+        makeEvent('symptom-pain-headache', 'ratio/proportion', NOW - 60)
+      ];
+      const result = computeReminders(items, events, {}, NOW);
+      assert.equal(result[0].lastEvent.type, 'ratio/proportion', 'latest wins, regardless of fidelity');
+    });
+
     it('[CRM1] no reminder config → not in results', () => {
       const items = [makeItem('body-height', 'body-height', 'length/m', null)];
       const result = computeReminders(items, [], {}, NOW);

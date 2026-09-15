@@ -1,8 +1,37 @@
 # Changelog
 
-## [Unreleased]
+## [2.3.0] - 2026-09-15
+
+### Added
+- **`HDSItemDef.satisfyingEventTypes` / `satisfiedByEvent()`, and `itemsDefs.forStreamId()`** — twin-aware
+  "was this concept recorded?" matching.
+
+  A concept can be recorded at two fidelities on one stream: a presence marker
+  (`symptom-pain-headache`, `activity/plain`) for a source that only knows an occurrence, and a
+  graded twin (`symptom-pain-headache-severity`, `ratio/proportion`). data-model 3.2.0 published
+  that contract **in prose only** — the items describe the pairing in their `description` and
+  nothing links a pair in machine-readable form — so the shared `streamId` is all a consumer has to
+  go on. `forStreamId` exposes it; `satisfyingEventTypes` is the union across the pair.
+
+  **Why it was needed:** a form spec migrated to the graded items while the bridge feeding it writes
+  presence flags, so completion reported every one of them missing and the subject was asked to
+  re-enter what the bridge had already sent (`B-2026-09-15-5`). On the live account: 0 graded
+  events, 17 presence events.
+
+  **`matchesEvent` is deliberately unchanged.** It answers "is this event *this* item", which
+  `forEvent`-based resolution depends on; widening it would make resolution return the wrong
+  itemDef. `satisfiedByEvent` answers the different question, "was the concept recorded".
+
+  **These types are not interchangeable as data.** `body-urine-hormones-lh` (IU/L) and
+  `fertility-hormone-lh` (mg/L) share a stream, and reading one as the other would be wrong by a
+  factor that looks plausible. Use this for completion, reminders and prompts; resolve through
+  `forEvent` before interpreting a value.
 
 ### Changed
+- **`computeReminders` uses the twin-aware types**, so a reminder no longer fires for something a
+  bridge already reported at lower fidelity. `satisfyingEventTypes` is optional on the itemDef-like
+  input, so hand-built items keep the previous strict behaviour.
+
 - **`npm run deploy` now publishes an immutable `/v<version>/` copy of the browser bundle** next to
   the rolling root one, and `version.json` (both copies) gained a `version` field.
 

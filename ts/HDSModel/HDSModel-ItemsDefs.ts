@@ -52,6 +52,26 @@ export class HDSModelItemsDefs {
   }
 
   /**
+   * Every itemDef whose `streamId` is `streamId`, deprecated ones included.
+   *
+   * A stream can carry more than one item because the same concept is recorded
+   * at different fidelities: `symptom-pain-headache` (`activity/plain`, a
+   * presence marker for sources that record occurrence only) and
+   * `symptom-pain-headache-severity` (`ratio/proportion`, the graded twin) sit
+   * on `symptom-pain-headache` together. Data-model 3.2.0 published that
+   * contract in prose — the items describe the pairing in their `description`
+   * — but nothing links a pair in machine-readable form, so the shared
+   * `streamId` is what a consumer has to go on.
+   */
+  forStreamId (streamId: string): HDSItemDef[] {
+    const res: HDSItemDef[] = [];
+    for (const [key, data] of Object.entries(this.#model.modelData.items)) {
+      if ((data as any)?.streamId === streamId) res.push(this.forKey(key)!);
+    }
+    return res;
+  }
+
+  /**
    * get item for a key
    */
   forKey (key: string, throwErrorIfNotFound: boolean = true): HDSItemDef | null {
