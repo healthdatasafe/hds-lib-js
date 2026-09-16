@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.4.1] - 2026-09-16
+
+### Changed
+- **`@pryv/cmc` 3.11.0 → 3.13.0.** Strictly additive upstream release (127 insertions, 0 deletions):
+  it adds the revocation-arrival helpers `revocationFromEvent()` and `revocationMatches()`, the
+  `CmcRevocationRecord` type, and a `side` field on the record. No renames and no signature changes
+  to any existing export, so this is a drop-in bump for every consumer, unlike the 3.9.0 release
+  that renamed `requestScopeUpdate` to `proposeScopeUpdate`.
+
+  The new helpers let a consumer resolve a `consent/revoke-cmc` arrival back to the local
+  relationship it tears down, matching on the most specific identifier the two sides share
+  (`accessId`, then `acceptEventId`, `offerEventId`, `inviteEventId`, `scopeStreamId`). Nothing in
+  HDS uses them yet; they are re-exported through `cmc` and available when a consumer needs them.
+
 ## [2.4.0] - 2026-09-15
 
 ### Added
