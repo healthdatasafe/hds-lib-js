@@ -1,5 +1,44 @@
 # Changelog
 
+## [2.5.0] - 2026-09-17
+
+### Changed
+- **Pryv client libraries moved to the 2026-09-17 lib-js release wave**, the client half of
+  open-pryv.io `2.0.0-rc.21` (deployed to all three HDS cores the same day). Six packages were
+  published within 95 seconds of each other, so this is one lockstep monorepo release rather than
+  six independent decisions.
+
+  | package | from | to | what actually changed |
+  |---|---|---|---|
+  | `@pryv/cmc` | 3.13.0 | **3.16.1** | `listInviteAccepters` added (3.16.0); 3.16.1 is types-only |
+  | `pryv` | 3.11.0 | **3.12.0** | two real `AuthController` fixes + an additive `consent` sidecar |
+  | `@pryv/delegation` | 3.11.0 | **3.12.0** | **no `src` change** — version bump only |
+  | `@pryv/monitor` | 3.10.0 | **3.12.0** | **no `src` change** — version bump only |
+  | `@pryv/socket.io` | 3.10.0 | **3.12.0** | version bump only |
+  | `@pryv/encryption` | 3.10.0 | **3.12.0** | JSDoc + a TS 5.7 `BufferSource` cast; no behaviour change |
+
+  Export surfaces were diffed from the published tarballs, not inferred from the version numbers:
+  across `@pryv/cmc` 3.13.0 → 3.16.1 exactly **one export was added and none removed**, and no
+  signature changed. hds-lib re-exports `@pryv/cmc` wholesale through `ts/patchedPryv.ts`, so
+  `cmc.listInviteAccepters` is available to consumers with no wrapper.
+
+- **`pryv` 3.12.0 fixes two `AuthController` bugs that affect `doctor-dashboard` specifically.** A
+  duplicate state listener was registered on every `init()` re-run, so the listener list compounded
+  on each logout → re-login cycle; and the dispatch loop read the live `this.state` getter instead
+  of the state just set, so a listener that synchronously changed state mid-dispatch caused later
+  listeners to receive the wrong state (a logout delivering `INITIALIZED` instead of `SIGNOUT`).
+  `doctor-dashboard`'s `HDSAccountLoginButton` subclasses `pryv.Browser.LoginButton` and its
+  `resetLoginButton` calls `auth.init()` after logout, which is exactly that re-init.
+
+- **Behavioural note for CMC scope updates.** `acceptScopeUpdate` / `refuseScopeUpdate` now wait for
+  the outcome and **throw when nothing was applied**, and `proposeScopeUpdate` returns
+  `remoteScopeRequestEventId`. Against a core older than rc.21 they report
+  `cmc-scope-update-not-applied` instead of a silent false success. All HDS cores run rc.21 as of
+  2026-09-17, so this is the correct behaviour everywhere we deploy.
+
+- **`ts/cmc/appScope.ts` is still required.** rc.21 auto-provisions the `:_cmc:apps:<appCode>` leaf,
+  but only for **personal** tokens; sub-scopes (`…:<subPath>`) are still created here.
+
 ## [2.4.1] - 2026-09-16
 
 ### Changed
