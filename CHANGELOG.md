@@ -1,5 +1,63 @@
 # Changelog
 
+## [2.6.0] - 2026-09-18 — PREPARED, NOT RELEASED
+
+> **Held deliberately.** Built, tested and left untagged until open-pryv.io **rc.23** is deployed
+> to the cores. `pryv` 3.13.0 requests `credentialHandoff: 'shared-secret'` **by default**, and
+> that path only exists on a core that understands it. It degrades gracefully against an older
+> core (the core drops the field and delivers inline), so this is not a hard break — but tagging
+> it would let a consumer pick up a default path never exercised against our cores. Tag this the
+> moment rc.23 lands.
+
+### Changed
+- **Pryv client libraries to 3.13.0** — the feature release, not a patch. All five monorepo
+  packages together: `pryv`, `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor`,
+  `@pryv/socket.io` 3.12.1 → **3.13.0**. `@pryv/cmc` unchanged at 3.16.1 (test changes only).
+
+### What 3.13.0 brings
+- **Credential hand-off by one-time shared secret, ON by default.** The token is delivered
+  through a one-time secret on the user's core instead of being returned in the ACCEPTED poll.
+  `connectFromKey` redeems it transparently, caching by poll key so it is safe to call more than
+  once. A retrieve that finds the secret already consumed throws `PryvError`
+  `credential-handoff-failed` and the auth request must be restarted. Opt out with
+  `authRequest.credentialHandoff: 'inline'`.
+- **The sign-in button remembers several accounts** and opens an **account menu** on click
+  instead of a logout confirmation. `SIGNOUT` is now emitted when "Log out" is *chosen*, no
+  longer on the click itself. A second cookie `pryv-libjs-<appId>-profiles` holds the remembered
+  accounts; the usual cookie now holds only the active one. `authSettings.menu: false` restores
+  the previous flow.
+- New `SWITCHING` state, `AuthController.switchTo()`, `addAccount()`, `profiles()`,
+  `currentProfile()`, `signOut({ all })`, `authSettings.authRequest.actAs`,
+  `authSettings.maxProfiles`.
+- `@pryv/delegation`: `errorIds.GRANT_REQUIRES_OWNER`. `pryv` typings: `AccessInfo.delegation`,
+  `ServiceInfo.account`, `ServiceInfo.features.delegation`.
+
+### Impact on hds-lib itself: none
+`ts/patchedPryv.ts` re-exports the `pryv` runtime object wholesale and merges the type namespace
+by reference, so 3.13.0's new members (`switchTo`, `profiles`, `ServiceInfo.account`,
+`features.delegation`) reach consumers with no wrapper and no change here. The new `SWITCHING`
+state does **not** break the exported type surface.
+
+Verified on the bump: `tsc` clean, **627 tests passing**, `eslint` clean, webpack bundle built.
+
+### ⚠️ Consumer work this release requires — `doctor-dashboard`
+`app/dr-lib.ts` implements plan 78 §D.2 against the *old* lib-js contract, and 3.13.0 invalidates
+three of its premises. This must be resolved before any consumer is re-pinned on 2.6.0:
+
+1. **Duplicate menus.** `HDSAccountLoginButton.onClick()` deliberately does not call
+   `super.onClick()` while authorized, so no SIGNOUT is raised, and dispatches its own
+   `ACCOUNT_MENU_EVENT`. lib-js 3.13.0 now has a built-in account menu doing the same job
+   (Manage my account / Log out).
+2. **Logout would break.** The `onStateChange` SIGNOUT interception is documented as "defence in
+   depth" against a click-raised SIGNOUT. In 3.13.0 SIGNOUT means *the user chose Log out*, so
+   that interception would swallow a real logout and re-open the HDS menu instead.
+3. **Stale second cookie.** `signout()` clears `pryv-libjs-<appId>`; 3.13.0 adds
+   `pryv-libjs-<appId>-profiles`, which would be left behind.
+
+The likely resolution is to adopt lib-js's built-in menu and retire the plan 78 §D.2 workaround
+it supersedes, or set `authSettings.menu: false` to keep the old contract. That is a decision,
+not a mechanical fix.
+
 ## [2.5.1] - 2026-09-18
 
 ### Changed
