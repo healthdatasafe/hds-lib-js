@@ -1,13 +1,9 @@
 # Changelog
 
-## [2.6.0] - 2026-09-18 — PREPARED, NOT RELEASED
+## [2.6.0] - 2026-09-18
 
-> **Held deliberately.** Built, tested and left untagged until open-pryv.io **rc.23** is deployed
-> to the cores. `pryv` 3.13.0 requests `credentialHandoff: 'shared-secret'` **by default**, and
-> that path only exists on a core that understands it. It degrades gracefully against an older
-> core (the core drops the field and delivers inline), so this is not a hard break — but tagging
-> it would let a consumer pick up a default path never exercised against our cores. Tag this the
-> moment rc.23 lands.
+> Released once open-pryv.io **2.0.0-rc.23** was deployed to all three cores (demo, ch1, us1)
+> on 2026-09-18, so the credential hand-off path this enables is exercisable against our cores.
 
 ### Changed
 - **Pryv client libraries to 3.13.0** — the feature release, not a patch. All five monorepo
