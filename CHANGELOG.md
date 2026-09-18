@@ -1,5 +1,37 @@
 # Changelog
 
+## [2.5.1] - 2026-09-18
+
+### Changed
+- **Pryv client libraries to 3.12.1**, the patch that followed the 2026-09-17 wave. All five
+  monorepo packages were republished together on 2026-09-18, so they move together here as well.
+
+  | package | from | to |
+  |---|---|---|
+  | `pryv` | 3.12.0 | **3.12.1** |
+  | `@pryv/delegation` | 3.12.0 | **3.12.1** |
+  | `@pryv/encryption` | 3.12.0 | **3.12.1** |
+  | `@pryv/monitor` | 3.12.0 | **3.12.1** |
+  | `@pryv/socket.io` | 3.12.0 | **3.12.1** |
+  | `@pryv/cmc` | 3.16.1 | unchanged |
+
+  `@pryv/monitor` and `@pryv/socket.io` are declared `^3.10.0`, so the caret alone left them
+  lockfile-pinned at 3.12.0 while the exact-pinned packages moved. They were updated explicitly:
+  the monorepo releases in lockstep and a split across it is not worth carrying.
+
+- **No API change.** 3.12.1 is three fixes upstream, none of which alters a signature: `just build`
+  on a clean `dist/` no longer races the ES5 build that emits `dist/pryv.js`; `LoginButton` now
+  waits for the controller to re-initialise before a confirmed sign-out returns its state handler
+  (the re-init used to resume in the background and could consume whatever poll URL the page showed
+  by then, racing a sign-in in progress); and `just test --grep` passes its parameters to mocha
+  verbatim instead of letting the shell split them.
+
+  The `LoginButton` fix matters to `doctor-dashboard` for the same reason 3.12.0's
+  `AuthController` fixes did: `HDSAccountLoginButton` calls `auth.init()` after logout, which is
+  exactly the re-initialisation being made to complete before the handler returns.
+
+- Verified on the bump: `tsc` clean, **627 tests passing**, `eslint` clean, webpack bundle built.
+
 ## [2.5.0] - 2026-09-17
 
 ### Changed
