@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.6.1] - 2026-09-22
+
+### Fixed
+- **Bridge accesses now build the data model's stream hierarchy before the access is minted.**
+  Pryv's `accesses.create` auto-creates any stream named by a permission's `defaultName`, but
+  **flat, at root**. So on an account without the tree already, a bridge permission on
+  `body-temperature-basal` produced a ROOT-level stream instead of
+  `body > body-temperature > body-temperature-basal`. The bridge could not repair it afterwards:
+  its scoped access is `forbidden` from creating the model parents.
+
+  `getOrCreateBridgeAccess` and `ensureBridgeAccess` now create the model-defined parent chain
+  (root-first, idempotent, best-effort) on the user's own connection before `accesses.create`.
+  A comment in bridge-tempdrop already asserted "the webapp provisions [the parents] when it mints
+  the access" — nothing did; this is the code that makes it true, and it fixes **every** bridge.
+
+  Found on 2026-09-22 during plan 98's first production Tempdrop connect. It was invisible on
+  established accounts, which already have a `body-temperature` tree from other sources, and hit
+  only **new** users — so a connect that looked clean on the tester's own account would have
+  mis-parented the stream for every fresh one.
+
+  Streams the model does not know (a bridge's own home stream such as `bridge-tempdrop`) are
+  untouched and keep the existing root-level behaviour, which is correct for them.
+
+  Tests `[BAH01]`-`[BAH03]`. `[BAH02]` pins the ordering: `streams.create` calls in one batch do
+  not see each other, so a child emitted before its parent fails `unknown-referenced-resource` —
+  the first cut of this fix walked the chain backwards and did exactly that.
+
 ## [2.6.0] - 2026-09-18
 
 > Released once open-pryv.io **2.0.0-rc.23** was deployed to all three cores (demo, ch1, us1)
