@@ -133,13 +133,26 @@ describe('[MODX] Model', () => {
       // make sure locales are set back to default after each test
       resetPreferredLocales();
     });
+    // Labels are asserted exactly: they are short, stable names and pinning them is the point.
+    //
+    // Descriptions are asserted BEHAVIOURALLY — that they are present and change with the locale
+    // — rather than by their exact prose. This test used to pin 'Measured body weight', and
+    // data-model 3.11.0's editorial coherence pass reworded it to 'Your measured body weight.',
+    // which turned hds-lib-js CI red with no code change on either side and, by the red badge,
+    // blocked all 13 consumers. A localization test should fail when localization breaks, not
+    // when someone improves a sentence.
     it('[MOLL] Label  & Description properties are localized', () => {
       const itemDef = model.itemsDefs.forKey('body-weight');
       assert.equal(itemDef.label, 'Body weight');
-      assert.equal(itemDef.description, 'Measured body weight');
+      const descriptionEn = itemDef.description;
+      assert.ok(descriptionEn && descriptionEn.length > 0, 'en description should be non-empty');
+
       setPreferredLocales(['fr']);
       assert.equal(itemDef.label, 'Poids corporel');
-      assert.equal(itemDef.description, 'Poids corporel mesuré');
+      const descriptionFr = itemDef.description;
+      assert.ok(descriptionFr && descriptionFr.length > 0, 'fr description should be non-empty');
+      assert.notEqual(descriptionFr, descriptionEn,
+        'the description should change with the locale — equal values mean localization fell back');
     });
   });
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.6.3] - 2026-09-25
+
+### Fixed
+- **A `select` whose stored value matches no option no longer loses the eventType's meaning.**
+  `formatSelect` stringified any unmatched value, so `eventToShortText` rendered a bare `0.56`
+  where it had rendered `Positive 56%`. An unmatched numeric value now goes through
+  `formatNumber`, which is where eventType-specific formatting (including the `test-result/scale`
+  Positive/Negative/Indeterminate treatment and unit symbols) lives.
+
+  Nothing in this library changed to cause it: **data-model 3.12.0** made `fertility-test-opk`
+  and `fertility-test-pregnancy` `type: select` with Negative / Indeterminate / Positive at
+  -1 / 0 / 1. That is right for data entry, but the scale is continuous and stored events carry
+  partial values, which matched no option. Because consumers read the *published* pack, this
+  degraded live text in every consumer the moment the pack was published (2026-09-23) — and it
+  turned this repo's CI red with no commit on either side. Exact option values (`0` →
+  "Indeterminate") always matched and were unaffected, which is what made it easy to miss.
+
+  Scoped to the no-prefix case, so the `ratio/generic` object branch — which has already put the
+  raw numbers into its prefix — does not render them twice. Tests `[EST17d]`/`[EST17e]`.
+
+### Changed
+- **`[MOLL]` no longer pins editorial prose.** It asserted the exact string
+  `'Measured body weight'`; data-model 3.11.0's coherence pass reworded it to `'Your measured
+  body weight.'` and CI went red, which by the red badge blocks all 13 consumers. Labels are
+  still asserted exactly — they are short, stable names and pinning them is the point — but the
+  description is now checked behaviourally: present, and different across locales. A localization
+  test should fail when localization breaks, not when someone improves a sentence.
+
 ## [2.6.2] - 2026-09-24
 
 ### Fixed

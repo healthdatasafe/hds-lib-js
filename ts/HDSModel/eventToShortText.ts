@@ -96,7 +96,7 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
   }
 
   if (type === 'select') {
-    return formatSelect(event, content, itemDef);
+    return formatSelect(event, content, itemDef, model);
   }
 
   if (type === 'multi-select') {
@@ -286,7 +286,21 @@ function formatBloodPressure (content: any): string | null {
   return (rate != null) ? `${base} ♥${rate}` : base;
 }
 
-function formatSelect (event: any, content: any, itemDef: any): string {
+/**
+ * A `select` whose stored value matches no option still has to render.
+ *
+ * When the value is a plain number we hand it to `formatNumber` rather than stringifying it,
+ * because the eventType may carry meaning the option list does not cover. `test-result/scale`
+ * is the case that forced this: data-model 3.12.0 made `fertility-test-opk` and
+ * `fertility-test-pregnancy` `type: select` with Negative / Indeterminate / Positive at
+ * -1 / 0 / 1, which is right for data entry — but the scale is continuous, and events already
+ * stored carry partial values. Those matched no option and came out as a bare `0.56` instead of
+ * `Positive 56%`, silently degrading text in every consumer (`[EST17d]`/`[EST17e]`).
+ *
+ * Scoped to the no-prefix case: the `ratio/generic` object branch has already put the raw
+ * numbers in `prefix`, so running them through `formatNumber` would render them twice.
+ */
+function formatSelect (event: any, content: any, itemDef: any, model?: any): string {
   let valueForSelect = content;
   let prefix = '';
   if (event.type === 'ratio/generic' && typeof content === 'object') {
@@ -302,6 +316,9 @@ function formatSelect (event: any, content: any, itemDef: any): string {
       const truncated = text.length > 50 ? text.slice(0, 50) + '...' : text;
       return prefix + truncated;
     }
+  }
+  if (prefix === '' && typeof valueForSelect === 'number' && model) {
+    return formatNumber(event.type, valueForSelect, model);
   }
   return prefix + String(valueForSelect);
 }
