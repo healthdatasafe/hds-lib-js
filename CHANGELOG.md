@@ -1,5 +1,50 @@
 # Changelog
 
+## [2.6.2] - 2026-09-24
+
+### Fixed
+- **`hds-lib` no longer requires `'unsafe-eval'` in a Content-Security-Policy.** The AppTemplate
+  loader built its JSON-schema validator by calling `ajv.compile()` at module top level, and Ajv 8
+  compiles schemas by handing generated source to the `Function` constructor — which
+  `script-src 'self'` refuses. Because the compile ran during module-graph initialisation, the
+  throw was not survivable: the consuming application rendered a **blank page** rather than
+  degrading to "validation skipped", giving the integrator a dead app and no obvious cause.
+
+  The schema is fixed at build time, which is exactly the precondition Ajv's standalone mode needs,
+  so the compile moved to the build. `scripts/build-validators.mjs` generates
+  `ts/appTemplates/schemas/appTemplate.validator.js` (committed, because `prepare` on a git install
+  runs only `tsc` and never this script) and the loader just calls it.
+
+  Reported from an international paediatric patient registry that had shipped `'unsafe-eval'`
+  because the alternative was not shipping — while handling identifiable health data about
+  children. Affected **2.2.0 through 2.6.1**, not one old release.
+  (`B-2026-09-23-1`, [site-agents#18](https://github.com/healthdatasafe/site-agents/issues/18).)
+
+  Tests `[VDR1]`-`[VDR7]`. `[VDR7]` is the one that matters: it imports the loader in a Node
+  process started with `--disallow-code-generation-from-strings`, which refuses the same
+  constructs a CSP without `'unsafe-eval'` does, so the property is verified rather than asserted.
+  `[VDR2]` regenerates from the schema and compares, so editing the schema without running
+  `npm run build:validators` fails CI instead of silently shipping a stale validator.
+
+### Changed
+- **`ajv` moved from `dependencies` to `devDependencies`.** Nothing in `ts/` imports it any more,
+  including type-only imports — those would land in the emitted `.d.ts` and force every consumer
+  type-checking against `hds-lib` to install a package the runtime never calls. The two Ajv types
+  the loader used are now declared locally in `ts/appTemplates/schemas/validatorTypes.ts`.
+  Browser consumers stop bundling a schema compiler they never invoke. Guarded by `[VDR5]`/`[VDR6]`.
+
+  **Potentially breaking** for anyone who relied on `hds-lib` to pull `ajv` in transitively; declare
+  it yourself if so.
+
+### Added
+- **CSP documentation** ([`docs/csp.md`](https://healthdatasafe.github.io/hds-lib-js/csp), linked
+  from the README) — the exact origins an HDS browser app contacts and a ready-to-paste policy for
+  the production and demo platforms. Only the service-info URL is hardcoded; everything else is
+  discovered from that document's `assets` map, which is why the list is per-platform. It also
+  names two origins that do *not* belong in a browser CSP: `pryv.github.io` (a Pryv fallback that
+  never fires when `service/info` supplies `assets.definitions`, as every HDS platform does) and
+  the event-types dictionary (fetched by the core, server-side). Second ask in site-agents#18.
+
 ## [2.6.1] - 2026-09-22
 
 ### Fixed

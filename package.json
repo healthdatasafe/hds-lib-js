@@ -1,6 +1,6 @@
 {
   "name": "hds-lib",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "Health Data Safe - Library",
   "type": "module",
   "engines": {
@@ -14,7 +14,8 @@
     "build": "npm run build:ts && npm run build:webpack",
     "setup": "sh scripts/setup.sh",
     "deploy": "bash scripts/deploy.sh",
-    "build:ts": "tsc",
+    "build:validators": "node scripts/build-validators.mjs",
+    "build:ts": "npm run build:validators && tsc",
     "build:webpack": "webpack --config webpack.config.cjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -47,6 +48,7 @@
   },
   "homepage": "https://github.com/healthdatasafe/hds-lib-js#readme",
   "devDependencies": {
+    "ajv": "^8.20.0",
     "assert": "^2.1.0",
     "c8": "^10.1.3",
     "copy-webpack-plugin": "^14.0.0",
@@ -66,7 +68,6 @@
     "@pryv/encryption": "3.13.0",
     "@pryv/monitor": "3.13.0",
     "@pryv/socket.io": "3.13.0",
-    "ajv": "^8.20.0",
     "events": "^3.3.0",
     "pryv": "3.13.0",
     "short-unique-id": "^5.3.2"

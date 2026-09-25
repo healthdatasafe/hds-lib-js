@@ -32,6 +32,17 @@ const weight = model.itemsDefs.forKey('body-weight');
 const itemDef = model.itemsDefs.forEvent(event);
 ```
 
+## Content-Security-Policy
+
+`hds-lib` requires **no `'unsafe-eval'`**. Up to 2.6.1 it did — the AppTemplate loader compiled its
+JSON schema with Ajv at import time, and because that ran at module top level the CSP refusal threw
+during module-graph initialisation, so the consuming app rendered a **blank page** rather than
+degrading. From 2.6.2 the validator is precompiled at build time and `ajv` is a devDependency, so
+nothing generates code from strings at runtime.
+
+Only one origin is hardcoded (the service-info URL you configure); the rest are discovered from that
+document's `assets` map. **[Full list of origins and a ready-to-paste policy →](https://healthdatasafe.github.io/hds-lib-js/csp)**
+
 ## Dev
 
 Requires **Node.js >= 24**. Source code is TypeScript in `./ts/` — tests run directly from source (Node 24 type stripping).

@@ -1,8 +1,8 @@
 /**
  * AppTemplate JSON loader (Plan 45 §5).
  *
- * Validates the template against an Ajv schema, then runs cross-field rules that
- * Ajv can't express:
+ * Validates the template against a precompiled JSON-schema validator, then runs
+ * cross-field rules the schema can't express:
  *   1. Sandbox prefix — every customFields[i].streamId starts with `${id}-`
  *   2. No mode-2/mode-3 collision — existingStreamRefs[i].streamId does NOT match `${id}-*`
  *   3. customFields[i].def.templateId === id
@@ -15,23 +15,22 @@
  *   const tpl = await loadTemplateFromUrl(url);  // fetches then validates
  */
 
-import * as AjvNs from 'ajv';
-import type { ErrorObject, ValidateFunction } from 'ajv';
 import { HDSLibError } from '../errors.ts';
-import schema from './schemas/appTemplate.schema.json' with { type: 'json' };
+import { validate } from './schemas/appTemplate.validator.js';
+import type { SchemaValidationError } from './schemas/validatorTypes.ts';
 import type { AppTemplate, CustomFieldDeclaration, ExistingStreamRef } from './templateTypes.ts';
 
-// Ajv ships an ESM default + CJS interop. `default` may be the class itself
-// or the namespace depending on bundler. Resolve once at load.
-const Ajv: any = (AjvNs as any).default ?? AjvNs;
+// The validator is PRECOMPILED at build time (scripts/build-validators.mjs), not built
+// here from the schema. Ajv 8 compiles schemas with `new Function`, which a
+// Content-Security-Policy without `unsafe-eval` refuses — and because the old
+// `ajv.compile()` ran at module top level, that refusal threw during module-graph init and
+// left the consuming app rendering a blank page instead of degrading. B-2026-09-23-1.
+//
+// So: nothing in `ts/` may import `ajv` (it is a devDependency now), and no schema
+// compilation happens at runtime. Edit the schema, then `npm run build:validators`;
+// tests/validatorDrift.test.js fails if you forget.
 
-const ajv = new Ajv({ allErrors: true, strict: false });
-// ajv core ships without formats; absent this, compile() logs
-// `unknown format "uri" ignored in schema` to the console on import.
-ajv.addFormat('uri', /^[a-zA-Z][a-zA-Z0-9+.-]*:\S+$/);
-const validate: ValidateFunction<AppTemplate> = ajv.compile(schema as any);
-
-/** Validate the JSON shape (Ajv) and run cross-field rules. Returns the validated AppTemplate or throws HDSLibError. */
+/** Validate the JSON shape and run cross-field rules. Returns the validated AppTemplate or throws HDSLibError. */
 export function loadTemplate (json: unknown): AppTemplate {
   if (json == null || typeof json !== 'object') {
     throw new HDSLibError('AppTemplate must be a non-null object', json as any);
@@ -126,7 +125,7 @@ function validateCrossFieldRules (tpl: AppTemplate): void {
   }
 }
 
-function formatAjvErrors (errors: ErrorObject[] | null | undefined): string {
+function formatAjvErrors (errors: SchemaValidationError[] | null | undefined): string {
   if (!errors || errors.length === 0) return '(no errors)';
   return errors.map((e) => `${e.instancePath || '/'}: ${e.message}`).join('; ');
 }

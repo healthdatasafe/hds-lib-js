@@ -55,6 +55,7 @@ HDSLib.computeReminders()  // Reminder status computation
 | [Localization](localization) | Multi-language text handling |
 | [Toolkit](toolkit) | Stream auto-creation, stream utilities |
 | [Utilities](utilities) | Duration parsing, reminders, error handling, logging |
+| [Content-Security-Policy](csp) | Why no `unsafe-eval` is needed, and the exact origins to allow |
 
 ### Browser
 
