@@ -356,6 +356,13 @@ const HDSProfile = {
       throw new Error('HDSProfile: call hookToConnection() first');
     }
 
+    // Clearing the avatar trashes its event: nulling the content would keep the attachment, and the
+    // URL resolves from the attachment, so the photo came back on the next load (B-2026-09-25-3).
+    if (key === 'avatar' && value === null) {
+      await trashExistingAvatar();
+      return;
+    }
+
     const field = PROFILE_FIELDS[key];
     const existing = _cache[key];
 
@@ -389,6 +396,17 @@ const HDSProfile = {
     const event = _cache.avatar;
     if (!event) return null;
     return resolveAvatarUrl(event);
+  },
+
+  /**
+   * Remove the avatar: trashes its event (attachment included), so no avatar resolves on the next
+   * load. Same as `set('avatar', null)`. No-op when there is no avatar.
+   */
+  async removeAvatar (): Promise<void> {
+    if (!_connection) {
+      throw new Error('HDSProfile: call hookToConnection() first');
+    }
+    await trashExistingAvatar();
   },
 
   /**

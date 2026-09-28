@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.6.4] - 2026-09-28
+
+### Fixed
+- **Removing the avatar now persists.** `HDSProfile.set('avatar', null)` updated the avatar event's
+  content to `null` and kept its attachment, and `getAvatarUrl()` resolves from the attachment, so the
+  photo came back on the next load. Clearing the avatar now trashes its event, like replacing it
+  already did. Seen in app-web-user-account's "Remove photo" (`_plans/BUGS.md` B-2026-09-25-3).
+
+### Added
+- `HDSProfile.removeAvatar()`: the explicit form of `set('avatar', null)`; a no-op without an avatar.
+  Tests `[HDSP-A7]` to `[HDSP-A9]`; `[HDSP-X2]` now creates its own avatar instead of relying on test order.
+
 ## [2.6.3] - 2026-09-25
 
 ### Fixed

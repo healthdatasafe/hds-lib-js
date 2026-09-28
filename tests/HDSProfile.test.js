@@ -294,6 +294,36 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       assert.ok(newUrl.includes('readToken='), 'Should contain readToken');
       assert.notStrictEqual(newUrl, previousUrl, 'URL should differ from previous');
     });
+
+    it('[HDSP-A7] removeAvatar removes an attached avatar, and it stays removed after reload', async () => {
+      await HDSProfile.hookToConnection(connection);
+      assert.ok(HDSProfile.getAvatarUrl(), 'Should have the attached avatar from previous test');
+
+      await HDSProfile.removeAvatar();
+      assert.strictEqual(HDSProfile.getAvatarUrl(), null);
+      assert.strictEqual(HDSProfile.get('avatar'), null);
+
+      await HDSProfile.reload();
+      assert.strictEqual(HDSProfile.getAvatarUrl(), null, 'Avatar must not come back after reload');
+      assert.strictEqual(HDSProfile.isStored('avatar'), false);
+    });
+
+    it('[HDSP-A8] set(\'avatar\', null) removes the avatar too (B-2026-09-25-3)', async () => {
+      await HDSProfile.hookToConnection(connection);
+      const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4E, 0x47])], { type: 'image/png' });
+      await HDSProfile.setAvatarFromFile(blob, 'again.png');
+      assert.ok(HDSProfile.getAvatarUrl());
+
+      await HDSProfile.set('avatar', null);
+      await HDSProfile.reload();
+      assert.strictEqual(HDSProfile.getAvatarUrl(), null, 'Avatar must not come back after reload');
+    });
+
+    it('[HDSP-A9] removeAvatar without an avatar is a no-op', async () => {
+      await HDSProfile.hookToConnection(connection);
+      await HDSProfile.removeAvatar();
+      assert.strictEqual(HDSProfile.getAvatarUrl(), null);
+    });
   });
 
   describe('[HDSP-R] reload', () => {
@@ -344,6 +374,10 @@ describe('[HDSP] HDSProfile (dev API)', function () {
     });
 
     it('[HDSP-X2] reads avatar via shared connection', async () => {
+      // Own setup: the avatar tests end with it removed ([HDSP-A7] to [HDSP-A9]).
+      await HDSProfile.hookToConnection(connection);
+      const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4E, 0x47])], { type: 'image/png' });
+      await HDSProfile.setAvatarFromFile(blob, 'shared.png');
       const profile = await HDSProfile.readFromConnection(sharedConnection);
       assert.ok(profile.avatar, 'Should have avatar URL');
       assert.ok(profile.avatar.includes('/events/'), 'Avatar should be an attachment URL');
