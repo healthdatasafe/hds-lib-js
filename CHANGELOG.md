@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.6.5] - 2026-09-29
+
+### Changed
+- **`@pryv/cmc` 3.16.1 → 3.17.0** (exact pin). No other dependency moved; peer `pryv ^3.3.0`
+  is met by the 3.13.0 we ship.
+
+### What 3.17.0 brings
+- **Popup-mode `requestAccept` / `requestScopeUpdate` now ignore messages that do not come
+  from their own popup** (`ev.source` check), so another window can no longer answer for it.
+  A new optional `expectedOrigin` also pins the sender's origin; a malformed value throws
+  `cmc-invalid-expected-origin`. Nothing in this library calls either function, and the
+  `/cmc-accept` page posts through `window.opener`, so the source check passes as before.
+- **Types only:** `dataGrantApiEndpoint` is removed from `CmcRequestAcceptResult` and from
+  the full `acceptInvite` result; it was always `undefined` at runtime. `acceptInvite` with
+  `waitForCompletion: false` now declares `counterparty` and `features` (and `status: string`).
+  The legacy `dataGrantApiEndpoint` field on *event content* is unaffected.
+
 ## [2.6.4] - 2026-09-28
 
 ### Fixed
