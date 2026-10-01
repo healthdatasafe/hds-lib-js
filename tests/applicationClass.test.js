@@ -118,7 +118,9 @@ describe('[APAX] Application class', function () {
       }
     });
 
-    it('[APAE] Application should throw error if master token not provided and required', async () => {
+    it('[APAE] Application should throw error if master token not provided and required', async function () {
+      // live backend: a dropped keep-alive socket surfaces as undici's 'fetch failed' (B-2026-09-29-9)
+      this.retries(2);
       class Dummy extends Application {
         get appSettings () {
           return {
@@ -131,6 +133,7 @@ describe('[APAX] Application class', function () {
         await Dummy.newFromApiEndpoint('uuuu', user.appApiEndpoint, appName);
         throw new Error('Should throw an error');
       } catch (e) {
+        if (e.message === 'fetch failed') throw e; // retried, and reported with its cause, not as an assertion diff
         assert.equal(e.message, 'Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
       }
     });
