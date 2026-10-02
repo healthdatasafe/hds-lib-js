@@ -484,6 +484,20 @@ describe('[CFSV] validateFormSpecItemKeys', function () {
     ]);
   });
 
+  it('[CFSV7] flags a system item key as `system`, never as a renderable field', () => {
+    // `type: system` (data-model 3.13.0, e.g. `sync-status`) resolves like any
+    // item but is state written by software, so a form must skip it.
+    const model = load({
+      items: {
+        'body-weight': { version: 'v1', label: { en: 'w' }, streamId: 'body-weight', eventType: 'mass/kg', type: 'number', repeatable: 'any' },
+        'sync-status': { version: 'v1', label: { en: 's' }, streamId: 'sync-status', eventType: 'sync-status/connector-v1', type: 'system', repeatable: 'once' }
+      },
+      streams: [{ id: 'body-weight', name: 'W' }, { id: 'sync-status', name: 'S' }]
+    });
+    const out = cmcFormSpec.validateFormSpecItemKeys(specWithKeys(['body-weight', 'sync-status']), model);
+    assert.deepEqual(out, [{ sectionKey: 'fertility-recurring', itemKey: 'sync-status', reason: 'system' }]);
+  });
+
   it('[CFSV6] tolerates a spec with no sections and a section with no itemKeys', () => {
     const model = urineHormoneModel();
     assert.deepEqual(cmcFormSpec.validateFormSpecItemKeys(basicSpec({ sections: [] }), model), []);

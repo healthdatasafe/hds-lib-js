@@ -42,13 +42,13 @@ export class HDSModelItemsDefs {
   }
 
   /**
-   * get all non-deprecated itemDefs. Use this for any UI that lets a user
-   * pick an item to create new data points (form builders, item picker
-   * sheets, data-model browser default listing). Deprecated items remain
-   * resolvable via `forKey` / `forEvent` so existing events still render.
+   * get all non-deprecated, non-system itemDefs. Use this for any UI that lets
+   * a user pick an item to create new data points (form builders, item picker
+   * sheets, data-model browser default listing). Deprecated and system items
+   * remain resolvable via `forKey` / `forEvent` so existing events still render.
    */
   getAllActive (): HDSItemDef[] {
-    return this.getAll().filter((itemDef) => !itemDef.isDeprecated);
+    return this.getAll().filter((itemDef) => !itemDef.isDeprecated && !itemDef.isSystem);
   }
 
   /**

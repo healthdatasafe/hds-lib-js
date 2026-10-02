@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.7.0] - 2026-10-02
+
+### Added
+- **System items** (data-model 3.13.0, `type: system`): `HDSItemDef.isSystem` is true for items that carry
+  state written by software rather than data a user enters (first one: `sync-status`, a connector's status,
+  one event per connector leaf `sync-status-<connector>`). They stay resolvable through `forKey` / `forEvent`
+  and requestable through `authorizations.forItemKeys`, and `eventTemplate({ context })` places them on a leaf.
+
+### Changed
+- **`itemsDefs.getAllActive()` now also excludes system items**, so pickers and form builders that rely on it
+  never offer them. Code that iterates `getAll()` to render or pick items should skip `isSystem`.
+- **`validateFormSpecItemKeys` reports a system item as `reason: 'system'`** (new
+  `FormSpecItemKeyIssueReason` value; `describeItemKeyIssue` prints "system item — not a form field"):
+  a form spec must not list one as a field.
+
 ## [2.6.5] - 2026-09-29
 
 ### Changed

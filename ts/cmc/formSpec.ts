@@ -84,7 +84,7 @@ export interface FormSpec {
 }
 
 /** Why a FormSpec item key does not resolve cleanly against the published data-model. */
-export type FormSpecItemKeyIssueReason = 'unknown' | 'deprecated';
+export type FormSpecItemKeyIssueReason = 'unknown' | 'deprecated' | 'system';
 
 /** One problematic `sections[].itemKeys` entry found by {@link validateFormSpecItemKeys}. */
 export interface FormSpecItemKeyIssue {
@@ -94,7 +94,9 @@ export interface FormSpecItemKeyIssue {
   /**
    * `unknown` — the published pack defines no item under this key, so the app
    * cannot render it at all. `deprecated` — it resolves, but to a deprecated
-   * item, so data collected through it lands on the legacy shape.
+   * item, so data collected through it lands on the legacy shape. `system` —
+   * it resolves to a system item (`type: system`, e.g. `sync-status`): state
+   * written by software, never a form field, so the app skips it.
    */
   reason: FormSpecItemKeyIssueReason;
   /**
@@ -147,6 +149,10 @@ export function validateFormSpecItemKeys (
         issues.push({ sectionKey: (section as any).key, itemKey, reason: 'unknown' });
         continue;
       }
+      if (def.isSystem) {
+        issues.push({ sectionKey: (section as any).key, itemKey, reason: 'system' });
+        continue;
+      }
       if (!def.isDeprecated) continue;
       // Only suggest a replacement when it is unambiguous. Several active items
       // can share a streamId (they differ by eventType), and picking one of those
@@ -164,6 +170,7 @@ export function validateFormSpecItemKeys (
 function describeItemKeyIssue (issue: FormSpecItemKeyIssue): string {
   const where = `${issue.sectionKey}/${issue.itemKey}`;
   if (issue.reason === 'unknown') return `${where} (not defined by the published data-model)`;
+  if (issue.reason === 'system') return `${where} (system item — not a form field)`;
   return issue.replacement
     ? `${where} (deprecated — use ${issue.replacement})`
     : `${where} (deprecated)`;

@@ -54,6 +54,17 @@ export class HDSItemDef {
     return this.#data.deprecated === true;
   }
 
+  /**
+   * Whether this is a system item (`type: system`, e.g. `sync-status`). System
+   * items carry state written by software (a connector's status), not data a
+   * user enters: they stay readable and requestable like any item, but must not
+   * be offered in pickers or rendered as form fields. See
+   * `data-model/documentation/SYNC-STATUS.md`.
+   */
+  get isSystem (): boolean {
+    return this.#data.type === 'system';
+  }
+
   get reminder (): ReminderConfig | null {
     return this.#data.reminder || null;
   }
