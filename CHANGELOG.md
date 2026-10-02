@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.8.0] - 2026-10-02
+
+### Changed
+- **`pryv`, `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor`, `@pryv/socket.io` 3.13.0 → 3.14.2**
+  (exact pins; `@pryv/cmc` stays 3.17.0). No API change in hds-lib; 646 tests pass unchanged.
+
+### What 3.14.x brings (lib-js changelog)
+- **Security: API errors no longer carry the call's params.** `Connection.apiOne()` errors used to embed the
+  params as JSON in their message (a password to `auth.login` or a managed-account creation, a token), which
+  apps log or show. The message now names the method and the server's error id and message; the full error
+  stays on `innerObject`. Code that parsed the old message text must read `innerObject` (none in HDS, checked).
+  Malformed answers of `Service.login`, `mfaVerify`, `startAccessRequest` and the batch protocol are no longer
+  printed in errors either.
+- **Security: the sign-in button finishes a sign-in by redirection only for the auth request it started.**
+- **Fixed: sign-in by redirection redeems the credential hand-off** (HDS `B-2026-09-29-1`), and
+  **`returnURL: 'auto#'` redirects on phones and tablets** (`B-2026-09-29-3`).
+- **Fixed: `connectFromKey` / `pollAccessRequest` by key reach the core holding the request** on a multi-core
+  platform.
+- **Typings: `authRequest.authUrl` and `authRequest.returnURL` are declared; `authRequest.returnUrl` and the
+  top-level `AuthSettings.returnURL` are removed** (they were never read; `B-2026-09-29-2`). A TypeScript
+  consumer that set `returnUrl` now gets a compile error for a setting that never took effect.
+
 ## [2.7.0] - 2026-10-02
 
 ### Added
