@@ -490,7 +490,8 @@ export class Contact {
       // chat stream. Prefer that server-granted stream (authoritative: it exists
       // and is writable); else derive from the remote chat stream's scope; else
       // fall back to the legacy patientScopeStreamId. (`clientData.cmc.appCode`
-      // is null on counterparty accesses, so the scope can't come from appCode.)
+      // is only stamped on counterparty accesses by cores from 2026-07 on, and is
+      // null on older ones, so the scope can't come from appCode.)
       const grantedChat = (access.permissions ?? []).find(p =>
         typeof p.streamId === 'string' &&
         p.streamId.endsWith(`:chats:${peerSlug}`) &&

@@ -6,6 +6,38 @@ import { Contact } from './Contact.ts';
 import { Questionnaire } from './Questionnaire.ts';
 export { getOrCreateBridgeAccess, ensureBridgeAccess } from './bridgeAccess.ts';
 export type { BridgeAccessOptions, BridgeAccessResult } from './bridgeAccess.ts';
+
+// Catalogue connectors: matching rule, connector access, status; hook executor; offer streams.
+export {
+  CONNECTOR_STATUS_TYPE,
+  connectorCmcAppCode,
+  connectorIdFromCmcAppCode,
+  findConnectorAccesses,
+  connectorAccessName,
+  syncStatusLeafFor,
+  connectorAccessRefusal,
+  getOrCreateConnectorAccess,
+  disconnectedStatusContent,
+  markConnectorDisconnected
+} from './connectors.ts';
+export type { ConnectorAccessLike, ConnectorConnection, ConnectorStatusContent } from './connectors.ts';
+export {
+  expand,
+  executeHook,
+  executeDisconnect,
+  UnresolvedVariableError,
+  HookInitiateError
+} from './hookExecutor.ts';
+export type {
+  HookHttpStep,
+  HookOpenStep,
+  HookResyncStep,
+  HookDescriptor,
+  HookContext,
+  HookResult
+} from './hookExecutor.ts';
+export { offerStreamsToCreate, offerStreamsToApiCalls } from './offerStreams.ts';
+export type { ModelStreams, StreamToCreate } from './offerStreams.ts';
 export {
   getSectionItemLabels,
   collectItemLabelsFromSections,

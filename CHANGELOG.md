@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.9.0] - 2026-10-03
+
+### Added
+- **`appTemplates` catalogue connectors** (`connectors.ts`), shared by the HDS webapp and the account app's
+  `/connect` so both apply one rule:
+  - `connectorCmcAppCode` / `connectorIdFromCmcAppCode` (`bridge-<x>` ↔ `hds-bridge-<x>`) and
+    `findConnectorAccesses(accesses, id)`: the user's connection to a connector = its accepted CMC relationships
+    (counterparty accesses stamped with the bridge's app code) plus legacy `app` accesses named after it, newest
+    first, deleted and expired ones skipped.
+  - `getOrCreateConnectorAccess` (+ `connectorAccessRefusal`, `connectorAccessName`, `syncStatusLeafFor`): the
+    connector's minimal access (`<id>-connect`, exactly `read` on its `sync-status` leaf) handed to a first connect
+    instead of the personal token.
+  - `disconnectedStatusContent` / `markConnectorDisconnected`: set the connector's `sync-status/connector-v1` to
+    `disconnected` as the user (updated in place, schema fields carried), after its grant is revoked.
+- **`appTemplates` hook executor** (`expand`, `executeHook`, `executeDisconnect`, hook types) and **offer streams**
+  (`offerStreamsToCreate`, `offerStreamsToApiCalls`), moved from the webapp, unchanged in behaviour.
+
+### Fixed
+- `Contact.aggregateCmc`: a stale comment said `clientData.cmc.appCode` is always null on counterparty accesses
+  (cores stamp it since 2026-07).
+
 ## [2.8.0] - 2026-10-02
 
 ### Changed
