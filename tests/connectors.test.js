@@ -49,6 +49,15 @@ describe('[CONN] connectors: matching rule', function () {
     assert.equal(syncStatusLeafFor('bridge-mira'), 'sync-status-mira');
   });
 
+  it('[CN02b] a plain-access connector\'s access is `shared` (created without a type): it matches; personal never does', () => {
+    const found = findConnectorAccesses([
+      { id: 's1', type: 'shared', name: 'bridge-tempdrop', created: 10 },
+      { id: 'p1', type: 'personal', name: 'bridge-tempdrop', created: 20 },
+      { id: 's2', type: 'shared', name: 'bridge-tempdrop-connect', created: 30 }
+    ], 'bridge-tempdrop');
+    assert.deepEqual(found.map(f => [f.access.id, f.kind]), [['s1', 'legacy']]);
+  });
+
   it('[CN02] finds CMC and legacy connections, newest first, skipping deleted, expired and others', () => {
     const cmc = (id, appCode, extra = {}) => ({ id, type: 'shared', name: 'hds-webapp-' + id, created: extra.created ?? 1, clientData: { cmc: { role: 'counterparty', appCode } }, ...extra });
     const accesses = [
@@ -65,7 +74,8 @@ describe('[CONN] connectors: matching rule', function () {
       { id: 'l4', type: 'app', name: 'bridge-mira', clientData: { cmc: { role: 'counterparty', appCode: 'hds-collector' } } }
     ];
     const found = findConnectorAccesses(accesses, 'bridge-mira', NOW);
-    assert.deepEqual(found.map(f => [f.access.id, f.kind]), [['a2', 'cmc'], ['l1', 'legacy'], ['a1', 'cmc']]);
+    // l2: bridge accesses are created without a type, so the core makes them `shared` (2.9.1)
+    assert.deepEqual(found.map(f => [f.access.id, f.kind]), [['a2', 'cmc'], ['l1', 'legacy'], ['a1', 'cmc'], ['l2', 'legacy']]);
     assert.deepEqual(findConnectorAccesses(accesses, 'bridge-tempdrop', NOW), []);
   });
 });

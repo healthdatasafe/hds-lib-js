@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.9.1] - 2026-10-05
+
+### Fixed
+- `findConnectorAccesses` also matches a **`shared`** access named exactly after the catalogue id. Bridge accesses
+  are created by `getOrCreateBridgeAccess` / `ensureBridgeAccess` without a type, so the core makes them `shared`;
+  matching only `app` made every plain-access connection (bridge-tempdrop) and every pre-CMC bridge access invisible,
+  so the account app's `/connect` showed a connected user the Connect card and answered a disconnect
+  `result=disconnected` without revoking anything.
+
 ## [2.9.0] - 2026-10-03
 
 ### Added

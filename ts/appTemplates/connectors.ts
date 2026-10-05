@@ -58,7 +58,9 @@ export interface ConnectorConnection {
  * deleted and not expired, that is either
  * - a CMC counterparty access (`clientData.cmc.role === 'counterparty'`) whose
  *   `appCode` is `connectorCmcAppCode(catalogueId)`, or
- * - an `app` access named exactly `catalogueId` (bridges from before CMC).
+ * - an `app` or `shared` access named exactly `catalogueId`: a plain-access connector's data access
+ *   (bridge-tempdrop), or a bridge from before CMC. `getOrCreateBridgeAccess` / `ensureBridgeAccess` create
+ *   it without a type, so the core makes it `shared`.
  *
  * Several entries are orphans of earlier double connects. Newest first.
  *
@@ -81,7 +83,7 @@ export function findConnectorAccesses (
     const cmc = access.clientData?.cmc;
     if (cmc?.role === 'counterparty') {
       if (appCode != null && cmc.appCode === appCode) found.push({ access, kind: 'cmc' });
-    } else if (access.type === 'app' && access.name === catalogueId) {
+    } else if ((access.type === 'app' || access.type === 'shared') && access.name === catalogueId) {
       found.push({ access, kind: 'legacy' });
     }
   }
