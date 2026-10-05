@@ -159,7 +159,9 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       assert.throws(() => loadTemplate(badReq), /required must be a boolean/);
     });
 
-    it('[DSTL6] rejects a malformed version and an unknown format', () => {
+    it('[DSTL6] rejects a malformed version, date and an unknown format', () => {
+      assert.throws(() => loadTemplate(datasetTemplate({ publishedAt: '2026-99-99x' })), /schema validation failed/);
+      loadTemplate(datasetTemplate({ publishedAt: '2026-10-05T12:00:00Z' }));
       assert.throws(() => loadTemplate(datasetTemplate({ version: '1.0' })), /schema validation failed/);
       assert.throws(() => loadTemplate(datasetTemplate({ format: 'other' })), /schema validation failed/);
     });
@@ -215,6 +217,36 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       await assert.rejects(loadTemplateFromUrl(url, { fetch, timeoutMs: 20 }), (e) => e.innerObject.reason === 'timeout');
     });
 
+    it('[DSTU4b] a timeout while reading the body is reported as a timeout', async () => {
+      const fetch = async (u, init) => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: () => new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+        })
+      });
+      await assert.rejects(loadTemplateFromUrl(url, { fetch, timeoutMs: 20 }), (e) => e.innerObject.reason === 'timeout');
+    });
+
+    it('[DSTU4c] a streamed body over the cap is cut off without content-length', async () => {
+      let reads = 0;
+      const chunk = new Uint8Array(100);
+      const fetch = async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        body: { getReader: () => ({ read: async () => { reads++; return { done: false, value: chunk }; } }) }
+      });
+      await assert.rejects(loadTemplateFromUrl(url, { fetch, maxBytes: 250 }), (e) => e.innerObject.reason === 'too-large');
+      assert.equal(reads, 3, 'stops reading once over the cap');
+    });
+
+    it('[DSTU4d] a redirect landing on http is refused', async () => {
+      const fetch = async () => ({ ...fakeResponse(JSON.stringify(datasetTemplate())), url: 'http://example.org/x.json' });
+      await assert.rejects(loadTemplateFromUrl(url, { fetch }), (e) => e.innerObject.reason === 'url');
+    });
+
     it('[DSTU5] a valid fetch of an invalid template surfaces the validation error', async () => {
       const bad = datasetTemplate();
       bad.app.url = 'http://x';
@@ -232,8 +264,10 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       b.sections.reverse();
       b.title = { en: 'Renamed' };
       b.sections[0].name = { en: 'Renamed section' };
-      // move an item to another section of the same type
+      // move an item (with its customization) to another section of the same type
       b.sections[0].itemKeys.push(...b.sections[1].itemKeys.splice(0, 1));
+      b.sections[0].itemCustomizations['fertility-cycles-start'] = b.sections[1].itemCustomizations['fertility-cycles-start'];
+      delete b.sections[1].itemCustomizations['fertility-cycles-start'];
       const reordered = Object.fromEntries(Object.entries(a).reverse());
       const h = await templateScopeHash(a);
       assert.match(h, /^sha256:[0-9a-f]{64}$/);
@@ -241,13 +275,14 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       assert.equal(await templateScopeHash(reordered), h);
     });
 
-    it('[DSTH2] changes when an item, a section type or a ref permission changes', async () => {
+    it('[DSTH2] changes when an item, a section type, a cadence or a ref permission changes', async () => {
       const a = datasetTemplate();
       const h = await templateScopeHash(a);
       const added = clone(a); added.sections[1].itemKeys.push('x-new');
       const typed = clone(a); typed.sections[0].type = 'permanent';
       const perm = clone(a); perm.existingStreamRefs[0].permissions = ['read', 'contribute'];
-      for (const t of [added, typed, perm]) assert.notEqual(await templateScopeHash(t), h);
+      const cadence = clone(a); cadence.sections[1].itemCustomizations['body-temperature-basal'].repeatable = 'P2D';
+      for (const t of [added, typed, perm, cadence]) assert.notEqual(await templateScopeHash(t), h);
     });
   });
 
@@ -294,6 +329,18 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       const d = diffTemplateScope(a, b);
       assert.deepEqual(d.existingStreamRefs, { added: ['other'], removed: [], permissionsChanged: ['cycle-notes'] });
       assert.equal(d.breaking, true);
+      // adding a ref alone is a new grant request: major (plan 108 D3)
+      const c = clone(a);
+      c.existingStreamRefs.push({ streamId: 'other', permissions: ['read'] });
+      assert.equal(diffTemplateScope(a, c).requiredBump, 'major');
+    });
+
+    it('[DSTD4b] item label and license edits are patch', () => {
+      const a = datasetTemplate();
+      const lab = clone(a); lab.sections[1].itemCustomizations['body-temperature-basal'].labels = { question: { en: 'Temp?' } };
+      assert.equal(diffTemplateScope(a, lab).requiredBump, 'patch');
+      const lic = clone(a); lic.license = { name: 'CC-BY', notice: { en: 'n' } };
+      assert.equal(diffTemplateScope(a, lic).requiredBump, 'patch');
     });
 
     it('[DSTD5] semverBump', () => {
@@ -309,16 +356,31 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       const tpl = loadTemplate(datasetTemplate());
       const source = await templateSource(tpl, 'https://example.org/cycle-app/hds-dataset.json', 1);
       const { formSpec } = templateToFormSpec(tpl, { model: fixtureModel(), source });
-      assert.equal(diffFormSpecWithTemplate(formSpec, tpl).requiredBump, 'none');
-      // the owner removed an item after import → re-applying the template would add it back
+      assert.equal((await diffFormSpecWithTemplate(formSpec, tpl)).requiredBump, 'none');
+      // the owner removed an item after import → re-applying the template would add it back,
+      // but the unchanged template is not "under-bumped": the change is the owner's
       formSpec.sections[1].itemKeys = ['body-temperature-basal'];
+      const own = await diffFormSpecWithTemplate(formSpec, tpl);
+      assert.deepEqual(own.added, ['body-vulva-bleeding']);
+      assert.equal(own.underBumped, false);
       const next = clone(tpl);
       next.version = '1.1.0';
       next.sections[1].itemKeys.push('x-new');
-      const d = diffFormSpecWithTemplate(formSpec, next);
+      const d = await diffFormSpecWithTemplate(formSpec, next);
       assert.deepEqual(d.added, ['body-vulva-bleeding', 'x-new']);
       assert.equal(d.actualBump, 'minor');
       assert.equal(d.underBumped, false);
+      // publisher changed the scope without bumping
+      const sneaky = clone(tpl);
+      sneaky.sections[1].itemKeys.push('x-new');
+      assert.equal((await diffFormSpecWithTemplate(formSpec, sneaky)).underBumped, true);
+    });
+
+    it('[DSTD7] a plain template (no version) never reports a bump', async () => {
+      const plain = { id: 'plain', title: { en: 'p' }, description: { en: 'p' }, chat: false, sections: [] };
+      const d = diffTemplateScope(plain, { ...plain, sections: [{ key: 's', type: 'recurring', name: { en: 's' }, itemKeys: ['k'] }] });
+      assert.equal(d.actualBump, 'none');
+      assert.equal(d.requiredBump, 'minor');
     });
   });
 
@@ -328,14 +390,23 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       assert.deepEqual(itemKeyIssues, []);
       assert.deepEqual(
         formSpec.permissions.map(p => [p.streamId, p.level]).sort(),
-        [['body-temperature-basal', 'read'], ['body-vulva-bleeding', 'read'], ['fertility-cycles-start', 'read']]
+        [['body-temperature-basal', 'read'], ['body-vulva-bleeding', 'read'], ['cycle-notes', 'read'], ['fertility-cycles-start', 'read']]
       );
+      assert.equal(formSpec.permissions.find(p => p.streamId === 'cycle-notes').defaultName, 'Daily notes');
       assert.equal(formSpec.version, 1);
       assert.deepEqual(formSpec.features, { chat: true });
       assert.deepEqual(formSpec.consent, { en: 'I share my chart read-only.' });
       assert.deepEqual(formSpec.appCustomData, { requiredBridges: ['bridge-mira'] });
       assert.equal(formSpec.sections[0].itemCustomizations['fertility-cycles-start'].required, true);
       assert.deepEqual(formSpec.existingStreamRefs[0].permissions, ['read']);
+    });
+
+    it('[DSTF1b] every existing-stream ref is carried read-only; only app-private ones are granted', () => {
+      const t = datasetTemplate();
+      t.existingStreamRefs.push({ streamId: 'someone-else', permissions: ['manage'], purpose: 'system-out' });
+      const { formSpec } = templateToFormSpec(loadTemplate(t), { model: fixtureModel() });
+      assert.deepEqual(formSpec.existingStreamRefs.map(r => r.permissions), [['read'], ['read']]);
+      assert.ok(!formSpec.permissions.some(p => p.streamId === 'someone-else'));
     });
 
     it('[DSTF2] unknown keys are reported, kept in sections, and left out of permissions', () => {
@@ -352,6 +423,10 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       const { formSpec } = templateToFormSpec(tpl, { model: fixtureModel() });
       formSpec.sections[0].itemKeys.push('x');
       formSpec.sections[0].itemCustomizations['fertility-cycles-start'].required = false;
+      formSpec.title.en = 'changed';
+      formSpec.sections[0].name.en = 'changed';
+      assert.equal(tpl.title.en, 'Cycle chart');
+      assert.equal(tpl.sections[0].name.en, 'Cycle landmarks');
       assert.deepEqual(tpl.sections[0].itemKeys, ['fertility-cycles-start']);
       assert.equal(tpl.sections[0].itemCustomizations['fertility-cycles-start'].required, true);
     });
@@ -411,5 +486,17 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       await createInviteWithFormSpec(conn, { ...base });
       assert.ok(!('expiresAt' in conn.calls[0].params.content.request));
     });
+  });
+});
+
+describe('[DSTX] formSpecFingerprint', function () {
+  it('[DSTX1] ignores source/openLink and key order, changes with content', async () => {
+    const { formSpecFingerprint } = await import('../ts/cmc/formSpec.ts');
+    const a = { version: 1, title: { en: 't' }, description: { en: 'd' }, permissions: [], sections: [] };
+    const b = { sections: [], permissions: [], description: { en: 'd' }, title: { en: 't' }, version: 1, source: { url: 'https://x' }, openLink: { inviteEventId: 'e' } };
+    const h = await formSpecFingerprint(a);
+    assert.match(h, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(await formSpecFingerprint(b), h);
+    assert.notEqual(await formSpecFingerprint({ ...a, title: { en: 'other' } }), h);
   });
 });

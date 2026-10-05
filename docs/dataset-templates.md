@@ -57,7 +57,7 @@ template is a valid AppTemplate, and the same loader validates both.
 | `sections[]` | yes | `type: "permanent"` (set once, profile-like) or `"recurring"`; `itemKeys` are [data-model](https://model.datasafe.dev) item keys. |
 | `sections[].itemCustomizations[itemKey]` | no | Cadence and presentation per item: `repeatable` (`once` \| `any` \| `unlimited` \| ISO-8601 duration such as `P1D`), `reminder`, `labels`, `required` (boolean). |
 | `consent` | no | The consent text the app proposes; the data-set owner may edit it. |
-| `existingStreamRefs[]` | no | Streams outside the data-model. For the app's own data use `purpose: "app-private"`, `permissions: ["read"]` and a `label`; such streams are shown as raw events, never as form fields. |
+| `existingStreamRefs[]` | no | Streams outside the data-model. For the app's own data use `purpose: "app-private"`, `permissions: ["read"]` and a `label`: the importer requests `read` on them (named by `label`) and shows them as raw events, never as form fields. Any other ref is carried read-only and is not granted by the import. |
 | `customFields[]` | no | As in any AppTemplate (template-sandboxed streams). |
 | `requiredBridges[]` | no | Bridges the data set expects (e.g. `bridge-mira`). |
 | `dataModel.publicationDate` | no | Informational: the model pack the file was written against. |
@@ -68,14 +68,15 @@ deprecated and system keys are reported to the data-set owner, never dropped sil
 ## Versioning
 
 - **major** — the scope narrows or a grant changes: an item removed, an item moved between a
-  permanent and a recurring section, a custom field removed, an existing-stream ref removed or its
-  permissions changed. Patients who consented to the old scope no longer match it.
-- **minor** — additive: items, custom fields or refs added; cadence (`repeatable`, `reminder`,
-  `required`) changed.
-- **patch** — texts only: titles, descriptions, consent, section names, labels, app identity, or an
-  item moved between sections of the same type.
+  permanent and a recurring section, a custom field removed, an existing-stream ref added, removed
+  or with other permissions. Patients who consented to the old scope no longer match it.
+- **minor** — additive: items or custom fields added; cadence (`repeatable`, `reminder`, `required`)
+  changed.
+- **patch** — texts only: titles, descriptions, consent, section names, item labels, license, app
+  identity, or an item moved between sections of the same type.
 
-Importers do not rely on the bump alone: `templateScopeHash` fingerprints the scope, and
+Importers do not rely on the bump alone: `templateScopeHash` fingerprints the scope (items with
+their section type and cadence, custom fields, refs with permissions — not texts), and
 `diffTemplateScope` reports the bump a change requires and whether the file is **under-bumped**.
 
 ## Hosting
@@ -86,9 +87,9 @@ A root-hosted app may also serve it at `/.well-known/hds-dataset.json`. GitHub P
 
 ## Security model
 
-The file grants nothing. Permissions are always derived by the importer from the item keys through
-the data-model (level `read`); `app-private` refs are capped at `read`; nothing is accessible until
-a patient accepts an invite. Importers validate the file (schema with `additionalProperties: false`,
+The file grants nothing. Permissions are always derived by the importer: from the item keys through
+the data-model (level `read`), plus `read` on `app-private` refs; every ref is capped at `read`;
+nothing is accessible until a patient accepts an invite. Importers validate the file (schema with `additionalProperties: false`,
 cross-field rules, size cap, https only) and render every text as plain text.
 
 ## API (`appTemplates`)
@@ -107,8 +108,9 @@ const { formSpec, itemKeyIssues } = appTemplates.templateToFormSpec(tpl, { sourc
 const latest = await appTemplates.loadTemplateFromUrl(formSpec.source.url);
 if (await appTemplates.templateScopeHash(latest) !== formSpec.source.scopeHash ||
     latest.version !== formSpec.source.version) {
-  // what applying `latest` would change in the data set (owner's edits included)
-  const diff = appTemplates.diffFormSpecWithTemplate(formSpec, latest);
+  // what applying `latest` would change in the data set (owner's edits included);
+  // `underBumped` = scope changed while `version` stayed the same
+  const diff = await appTemplates.diffFormSpecWithTemplate(formSpec, latest);
   // diff.added / removed / typeChanged / cadenceChanged / breaking / requiredBump / underBumped
 }
 // two template versions: appTemplates.diffTemplateScope(prevTemplate, nextTemplate)

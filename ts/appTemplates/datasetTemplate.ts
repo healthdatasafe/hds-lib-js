@@ -20,22 +20,25 @@ import type { AppTemplate, AppTemplateSection, ExistingStreamRef } from './templ
 // ---------- scope hash ---------- //
 
 /**
- * The part of a template that decides what a data set asks access to: each item with the
- * kind of section it sits in (permanent / recurring), the custom fields provisioned, and the
- * existing streams referenced with their permission levels. Section keys, names, order and
- * all texts are excluded — reorganising sections or rewording labels is not a scope change.
+ * The data-collection scope of a template: each item with the kind of section it sits in
+ * (permanent / recurring) and its cadence (`repeatable`, `reminder`, `required`), the custom
+ * fields provisioned, and the existing streams referenced with their permission levels.
+ * Section keys, names, order and all texts are excluded — reorganising sections or rewording
+ * labels is not a scope change.
  */
 export function templateScope (tpl: AppTemplate): {
-  items: Array<[string, string]>;
+  items: Array<[string, string, string]>;
   customFields: Array<[string, string]>;
   existingStreamRefs: Array<[string, string[]]>;
 } {
-  const items = new Map<string, string>();
+  const items = new Map<string, [string, string, string]>();
   for (const s of tpl.sections) {
-    for (const k of s.itemKeys ?? []) items.set(k, s.type);
+    for (const k of s.itemKeys ?? []) {
+      items.set(k, [k, s.type, stable(cadenceOf((s.itemCustomizations as any)?.[k]))]);
+    }
   }
   return {
-    items: [...items.entries()].sort(byFirst),
+    items: [...items.values()].sort(byFirst),
     customFields: (tpl.customFields ?? []).map(c => [c.streamId, c.eventType] as [string, string]).sort(byFirst),
     existingStreamRefs: (tpl.existingStreamRefs ?? [])
       .map(r => [r.streamId, [...r.permissions].sort()] as [string, string[]])
@@ -69,9 +72,13 @@ export interface TemplateScopeDiff {
   cadenceChanged: string[];
   customFields: { added: string[]; removed: string[] };
   existingStreamRefs: { added: string[]; removed: string[]; permissionsChanged: string[] };
-  /** Titles, descriptions, consent, section names, labels or app identity changed. */
+  /** Titles, descriptions, consent, section names, item labels, license or app identity changed. */
   textsChanged: boolean;
-  /** Something was removed or a grant changed: patients' existing consent no longer matches. */
+  /**
+   * Something was removed, moved between permanent and recurring, or a grant changed (an
+   * existing-stream ref added, removed or with other permissions): patients' existing consent
+   * no longer matches.
+   */
   breaking: boolean;
   /** The bump this diff requires from the publisher. */
   requiredBump: TemplateBump;
@@ -116,10 +123,9 @@ export function diffTemplateScope (prev: AppTemplate, next: AppTemplate): Templa
   const textsChanged = stable(textsOf(prev)) !== stable(textsOf(next));
 
   const breaking = removed.length > 0 || typeChanged.length > 0 ||
-    customFields.removed.length > 0 ||
+    customFields.removed.length > 0 || existingStreamRefs.added.length > 0 ||
     existingStreamRefs.removed.length > 0 || existingStreamRefs.permissionsChanged.length > 0;
-  const additive = added.length > 0 || cadenceChanged.length > 0 ||
-    customFields.added.length > 0 || existingStreamRefs.added.length > 0;
+  const additive = added.length > 0 || cadenceChanged.length > 0 || customFields.added.length > 0;
   const requiredBump: TemplateBump = breaking
     ? 'major'
     : additive ? 'minor' : (textsChanged || moved.length > 0) ? 'patch' : 'none';
@@ -142,10 +148,14 @@ export function diffTemplateScope (prev: AppTemplate, next: AppTemplate): Templa
 
 /**
  * What applying `tpl` would change in an existing data set: the FormSpec (including the
- * owner's own edits since import) is read as the previous template. `actualBump` compares
- * `formSpec.source.version` with `tpl.version`.
+ * owner's own edits since import) is read as the previous template.
+ *
+ * `requiredBump` describes those changes, owner edits included, so it says nothing about the
+ * publisher: `underBumped` is therefore computed against the stored source instead — true
+ * when the template's scope hash differs from `formSpec.source.scopeHash` while its `version`
+ * equals `formSpec.source.version`.
  */
-export function diffFormSpecWithTemplate (formSpec: FormSpec, tpl: AppTemplate): TemplateScopeDiff {
+export async function diffFormSpecWithTemplate (formSpec: FormSpec, tpl: AppTemplate): Promise<TemplateScopeDiff> {
   const prev: AppTemplate = {
     id: formSpec.source?.templateId ?? tpl.id,
     title: formSpec.title,
@@ -158,7 +168,11 @@ export function diffFormSpecWithTemplate (formSpec: FormSpec, tpl: AppTemplate):
     version: formSpec.source?.version,
     app: tpl.app
   };
-  return diffTemplateScope(prev, tpl);
+  const diff = diffTemplateScope(prev, tpl);
+  const source = formSpec.source;
+  diff.underBumped = source != null && source.version != null && source.version === tpl.version &&
+    await templateScopeHash(tpl) !== source.scopeHash;
+  return diff;
 }
 
 const BUMP_RANK: Record<TemplateBump, number> = { none: 0, patch: 1, minor: 2, major: 3 };
@@ -195,9 +209,9 @@ export interface TemplateToFormSpecResult {
  * Build the FormSpec a data set starts from.
  *
  * Permissions are derived from the sections' item keys through the data-model
- * (`authorizations.forItemKeys`, level `read`) — a template cannot ask for more. App-private
- * stream refs are carried read-only; other existing-stream refs are carried as declared
- * (they are patched at acceptance, same as an authored FormSpec).
+ * (`authorizations.forItemKeys`, level `read`) — a template cannot ask for more. Every
+ * existing-stream ref is carried read-only, and `app-private` refs are added to the
+ * permissions as `read` (labelled by `ref.label`).
  *
  * @param tpl A template validated by `loadTemplate` / `loadTemplateFromUrl`.
  * @param opts.model Defaults to the initialised singleton.
@@ -209,7 +223,7 @@ export function templateToFormSpec (
 ): TemplateToFormSpecResult {
   const model = opts.model ?? getHDSModel();
   const sections: AppTemplateSection[] = tpl.sections.map(s => {
-    const out: AppTemplateSection = { key: s.key, type: s.type, name: s.name, itemKeys: [...(s.itemKeys ?? [])] };
+    const out: AppTemplateSection = { key: s.key, type: s.type, name: structuredClone(s.name), itemKeys: [...(s.itemKeys ?? [])] };
     if (s.itemCustomizations && Object.keys(s.itemCustomizations).length > 0) {
       out.itemCustomizations = structuredClone(s.itemCustomizations);
     }
@@ -219,16 +233,16 @@ export function templateToFormSpec (
 
   const formSpec: FormSpec = {
     version: 1,
-    title: tpl.title,
-    description: tpl.description,
+    title: structuredClone(tpl.title),
+    description: structuredClone(tpl.description),
     permissions: [],
     sections
   };
-  if (tpl.consent != null) formSpec.consent = tpl.consent;
+  if (tpl.consent != null) formSpec.consent = structuredClone(tpl.consent);
   if (tpl.chat) formSpec.features = { chat: true };
   if (tpl.customFields && tpl.customFields.length > 0) formSpec.customFields = structuredClone(tpl.customFields);
   if (tpl.existingStreamRefs && tpl.existingStreamRefs.length > 0) {
-    formSpec.existingStreamRefs = tpl.existingStreamRefs.map(capAppPrivate);
+    formSpec.existingStreamRefs = tpl.existingStreamRefs.map(capToRead);
   }
   if (tpl.requiredBridges && tpl.requiredBridges.length > 0) {
     formSpec.appCustomData = { requiredBridges: [...tpl.requiredBridges] };
@@ -238,8 +252,17 @@ export function templateToFormSpec (
   const itemKeyIssues = validateFormSpecItemKeys(formSpec, model);
   const excluded = new Set(itemKeyIssues.filter(i => i.reason !== 'deprecated').map(i => i.itemKey));
   const grantable = [...new Set(sections.flatMap(s => s.itemKeys ?? []))].filter(k => !excluded.has(k));
-  formSpec.permissions = (model.authorizations.forItemKeys(grantable) as Permission[])
+  const permissions = (model.authorizations.forItemKeys(grantable) as Permission[])
     .map(p => ({ streamId: p.streamId, defaultName: p.defaultName, level: p.level }));
+  // App-private streams are granted explicitly: nothing applies existing-stream refs at
+  // acceptance, so a ref alone would be display-only and the reader would get no access.
+  const granted = new Set(permissions.map(p => p.streamId));
+  for (const ref of formSpec.existingStreamRefs ?? []) {
+    if (ref.purpose !== APP_PRIVATE_PURPOSE || granted.has(ref.streamId)) continue;
+    permissions.push({ streamId: ref.streamId, defaultName: labelOf(ref), level: 'read' });
+    granted.add(ref.streamId);
+  }
+  formSpec.permissions = permissions;
   return { formSpec, itemKeyIssues };
 }
 
@@ -290,15 +313,26 @@ function textsOf (tpl: AppTemplate): unknown {
     description: tpl.description,
     consent: tpl.consent ?? null,
     app: tpl.app ?? null,
+    license: tpl.license ?? null,
     sections: tpl.sections.map(s => [s.key, s.name]),
+    labels: tpl.sections.map(s => Object.entries(s.itemCustomizations ?? {})
+      .map(([k, c]) => [k, (c as any)?.labels ?? null])),
     refs: (tpl.existingStreamRefs ?? []).map(r => [r.streamId, r.label ?? null, r.purpose ?? null])
   };
 }
 
-function capAppPrivate (ref: ExistingStreamRef): ExistingStreamRef {
+/** A template is third-party input: whatever it declares, a ref is carried read-only. */
+function capToRead (ref: ExistingStreamRef): ExistingStreamRef {
   const out = structuredClone(ref);
-  if (out.purpose === APP_PRIVATE_PURPOSE) out.permissions = ['read'];
+  out.permissions = ['read'];
   return out;
+}
+
+function labelOf (ref: ExistingStreamRef): string {
+  if (ref.label == null) return ref.streamId;
+  if (typeof ref.label === 'string') return ref.label;
+  const l = ref.label as Record<string, string>;
+  return l.en ?? Object.values(l)[0] ?? ref.streamId;
 }
 
 /** JSON with object keys sorted recursively, so equal values compare equal. */
@@ -309,6 +343,8 @@ function stable (v: unknown): string {
   });
 }
 
-function byFirst (a: [string, unknown], b: [string, unknown]): number {
-  return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+function byFirst (a: readonly unknown[], b: readonly unknown[]): number {
+  const x = String(a[0]);
+  const y = String(b[0]);
+  return x < y ? -1 : x > y ? 1 : 0;
 }

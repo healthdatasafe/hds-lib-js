@@ -109,6 +109,26 @@ export interface FormSpecOpenLink {
   createdAt: number;
   /** `null` = no expiry. A number means the core minted a bounded link (pre-rc.21 core). */
   expiresAt: number | null;
+  /**
+   * {@link formSpecFingerprint} of the FormSpec at mint time. The offer carries a frozen
+   * snapshot, so when the data set changes later the link keeps sharing the old version
+   * until it is regenerated.
+   */
+  specHash?: string;
+}
+
+/**
+ * `sha256:<hex>` of a FormSpec's content, excluding `source` and `openLink` (bookkeeping,
+ * not part of what an invite shares). Stable under object key order.
+ */
+export async function formSpecFingerprint (formSpec: FormSpec): Promise<string> {
+  const { source: _s, openLink: _o, ...content } = formSpec;
+  const json = JSON.stringify(content, (_k, val) => {
+    if (val == null || typeof val !== 'object' || Array.isArray(val)) return val;
+    return Object.fromEntries(Object.keys(val).sort().map(k => [k, (val as any)[k]]));
+  });
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+  return 'sha256:' + [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** Why a FormSpec item key does not resolve cleanly against the published data-model. */

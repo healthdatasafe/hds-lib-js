@@ -86,34 +86,36 @@ export async function loadTemplateFromUrl (url: string, opts: LoadTemplateFromUr
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let text: string;
+  const fail = (e: unknown): never => {
+    if (e instanceof HDSLibError) throw e;
+    if (controller.signal.aborted) {
+      throw new HDSLibError(`Timed out after ${timeoutMs} ms fetching template from ${url}`, { reason: 'timeout', url } as any);
+    }
+    throw new HDSLibError(`Failed to fetch template from ${url}: ${(e as Error)?.message}`, { reason: 'network', url } as any);
+  };
+  let text = '';
   try {
-    let r: Response;
-    try {
-      r = await doFetch(parsed.href, {
-        signal: controller.signal,
-        credentials: 'omit',
-        cache: 'no-store',
-        redirect: 'follow',
-        headers: { Accept: 'application/json' }
-      });
-    } catch (e) {
-      if (controller.signal.aborted) {
-        throw new HDSLibError(`Timed out after ${timeoutMs} ms fetching template from ${url}`, { reason: 'timeout', url } as any);
-      }
-      throw new HDSLibError(`Failed to fetch template from ${url}: ${(e as Error).message}`, { reason: 'network', url } as any);
+    const r = await doFetch(parsed.href, {
+      signal: controller.signal,
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'follow',
+      headers: { Accept: 'application/json' }
+    });
+    // Browsers block an https→http hop as mixed content; Node follows it. Check where we landed.
+    if (typeof r.url === 'string' && r.url !== '' && !/^https:/i.test(r.url)) {
+      throw new HDSLibError(`Template URL ${url} redirected to a non-https URL`, { reason: 'url', url } as any);
     }
     if (!r.ok) throw new HDSLibError(`Failed to fetch template from ${url}: HTTP ${r.status}`, { reason: 'http', status: r.status, url } as any);
     const declared = Number(r.headers?.get?.('content-length'));
     if (Number.isFinite(declared) && declared > maxBytes) {
       throw new HDSLibError(`Template at ${url} is too large (${declared} bytes, max ${maxBytes})`, { reason: 'too-large', url } as any);
     }
-    text = await r.text();
+    text = await readBounded(r, maxBytes, url, controller);
+  } catch (e) {
+    fail(e);
   } finally {
     clearTimeout(timer);
-  }
-  if (new TextEncoder().encode(text).length > maxBytes) {
-    throw new HDSLibError(`Template at ${url} is too large (max ${maxBytes} bytes)`, { reason: 'too-large', url } as any);
   }
   let json: unknown;
   try {
@@ -122,6 +124,33 @@ export async function loadTemplateFromUrl (url: string, opts: LoadTemplateFromUr
     throw new HDSLibError(`Template at ${url} is not valid JSON: ${(e as Error).message}`, { reason: 'json', url } as any);
   }
   return loadTemplate(json);
+}
+
+/** Read a response body as text, aborting as soon as it exceeds `maxBytes`. */
+async function readBounded (r: Response, maxBytes: number, url: string, controller: AbortController): Promise<string> {
+  const tooLarge = () => new HDSLibError(`Template at ${url} is too large (max ${maxBytes} bytes)`, { reason: 'too-large', url } as any);
+  const reader = r.body?.getReader?.();
+  if (reader == null) {
+    const text = await r.text();
+    if (new TextEncoder().encode(text).length > maxBytes) throw tooLarge();
+    return text;
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      controller.abort();
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(received);
+  let offset = 0;
+  for (const c of chunks) { all.set(c, offset); offset += c.byteLength; }
+  return new TextDecoder().decode(all);
 }
 
 function validateCrossFieldRules (tpl: AppTemplate): void {
