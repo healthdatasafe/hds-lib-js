@@ -100,6 +100,11 @@ cat > "dist/v$VERSION/version.json" << VEOF
   "buildDate": "$BUILD_DATE"
 }
 VEOF
+# Publish the AppTemplate / data-set template JSON Schema (plan 108) so third parties can
+# validate an hds-dataset.json without hds-lib: rolling at /schemas/, pinned at /v<version>/schemas/.
+mkdir -p dist/schemas "dist/v$VERSION/schemas"
+cp ts/appTemplates/schemas/appTemplate.schema.json dist/schemas/appTemplate.json
+cp ts/appTemplates/schemas/appTemplate.schema.json "dist/v$VERSION/schemas/appTemplate.json"
 git -C dist add -A
 if git -C dist diff --cached --quiet; then
   echo "No changes in dist/ — nothing to deploy."

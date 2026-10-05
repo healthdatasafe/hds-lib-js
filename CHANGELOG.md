@@ -19,7 +19,13 @@
 - `createInviteWithFormSpec` accepts `expiresAt: null` with `mode: 'open-link'` (a link without expiry, core
   rc.21+); `null` with single-use throws before anything is written.
 
+- `appTemplates.withAppPrivatePermissions(permissions, refs)`: re-add the `read` grant on `app-private` refs wherever
+  permissions are rebuilt from item keys (an editor's `buildPermissions` drops it otherwise).
+- The JSON Schema is published with the gh-pages deploy: <https://healthdatasafe.github.io/hds-lib-js/schemas/appTemplate.json> (and `/v<version>/schemas/`).
+
 ### Changed
+- `app-private` existing-stream refs may start with the template id (an app's own streams); a stream declared both as
+  a custom field and as a ref is still refused.
 - `loadTemplateFromUrl(url, { timeoutMs, maxBytes, fetch })`: https only, no credentials, no cache, 8 s timeout,
   256 KB cap enforced while streaming the body, redirects ending on http refused; errors carry `innerObject.reason` (`url` | `network` | `timeout` | `http` | `too-large` | `json`).
 - Loader cross-field rules: once `format` is set, `formatVersion` + `version` + `app` are required; `app.url` must be

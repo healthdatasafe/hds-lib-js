@@ -11,7 +11,7 @@ template is a valid AppTemplate, and the same loader validates both.
 
 ```json
 {
-  "$schema": "https://hds-lib.datasafe.dev/schemas/appTemplate.json",
+  "$schema": "https://healthdatasafe.github.io/hds-lib-js/schemas/appTemplate.json",
   "format": "hds-dataset-template",
   "formatVersion": 1,
   "id": "cycle-app",
@@ -43,6 +43,10 @@ template is a valid AppTemplate, and the same loader validates both.
   "requiredBridges": []
 }
 ```
+
+JSON Schema: <https://healthdatasafe.github.io/hds-lib-js/schemas/appTemplate.json> (rolling) — pinned per release at
+`https://healthdatasafe.github.io/hds-lib-js/v<version>/schemas/appTemplate.json`. Point `$schema` at it
+so editors validate the file as you write it.
 
 ## Fields
 
