@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.11.0] - 2026-10-05
+
+### Added
+- **Data-set templates** (plan 108): an app publishes the scope of the data it collects as `hds-dataset.json`, an
+  AppTemplate with publication fields (`format: "hds-dataset-template"`, `formatVersion`, semver `version`,
+  `publishedAt`, `app`, `consent`, `requiredBridges`, `dataModel`, `existingStreamRefs[].label`). All additive: every
+  existing AppTemplate still validates. Guide: `docs/dataset-templates.md`.
+- `appTemplates.templateScopeHash`, `templateScope`, `diffTemplateScope`, `diffFormSpecWithTemplate`, `semverBump`:
+  detect a scope change (even without a version bump) and the semver bump it requires.
+- `appTemplates.templateToFormSpec(tpl, { model, source })`: the FormSpec a data set starts from, permissions derived
+  from the data-model (`read`), unresolved item keys reported. `appTemplates.templateSource` builds the provenance.
+- `FormSpec.source` (template URL, version, scope hash, fetch time) and `FormSpec.openLink` (the data set's permanent
+  invite). Types `FormSpecSource`, `FormSpecOpenLink`, `DatasetTemplate`, `DatasetTemplateApp`.
+- `createInviteWithFormSpec` accepts `expiresAt: null` with `mode: 'open-link'` (a link without expiry, core
+  rc.21+); `null` with single-use throws before anything is written.
+
+### Changed
+- `loadTemplateFromUrl(url, { timeoutMs, maxBytes, fetch })`: https only, no credentials, no cache, 8 s timeout,
+  256 KB cap; errors carry `innerObject.reason` (`url` | `network` | `timeout` | `http` | `too-large` | `json`).
+- Loader cross-field rules: once `format` is set, `formatVersion` + `version` + `app` are required; `app.url` must be
+  https; `purpose: "app-private"` refs must be `["read"]`; `itemCustomizations[*].repeatable` must follow the
+  data-model grammar and `.required` must be boolean.
+
 ## [2.10.0] - 2026-10-05
 
 ### Changed

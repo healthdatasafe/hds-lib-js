@@ -12,7 +12,16 @@
     "sections":    { "type": "array", "items": { "$ref": "#/definitions/section" } },
     "customFields":       { "type": "array", "items": { "$ref": "#/definitions/customFieldDeclaration" } },
     "existingStreamRefs": { "type": "array", "items": { "$ref": "#/definitions/existingStreamRef" } },
-    "license":     { "$ref": "#/definitions/license" }
+    "license":     { "$ref": "#/definitions/license" },
+    "$schema":       { "type": "string" },
+    "format":        { "enum": ["hds-dataset-template"] },
+    "formatVersion": { "enum": [1] },
+    "version":       { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "publishedAt":   { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}" },
+    "app":           { "$ref": "#/definitions/app" },
+    "dataModel":     { "$ref": "#/definitions/dataModel" },
+    "consent":       { "$ref": "#/definitions/localizableText" },
+    "requiredBridges": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
   },
   "definitions": {
     "localizableText": {
@@ -75,7 +84,28 @@
       "properties": {
         "streamId":    { "type": "string" },
         "permissions": { "type": "array", "items": { "enum": ["read", "manage", "contribute"] }, "minItems": 1 },
-        "purpose":     { "type": "string" }
+        "purpose":     { "type": "string" },
+        "label":       { "$ref": "#/definitions/localizableText" }
+      }
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "publisher", "url"],
+      "properties": {
+        "id":         { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$" },
+        "name":       { "$ref": "#/definitions/localizableText" },
+        "publisher":  { "type": "string", "pattern": "\\S" },
+        "url":        { "type": "string", "format": "uri" },
+        "contact":    { "type": "string" },
+        "appVersion": { "type": "string" }
+      }
+    },
+    "dataModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "publicationDate": { "type": "string" }
       }
     },
     "license": {

@@ -5,6 +5,8 @@ title: App Templates
 
 # App Templates — Detailed Guide
 
+> Publishing the data scope of your own app (`hds-dataset.json`)? See [Data-set templates](./dataset-templates.md).
+
 App Templates provide a framework for building HDS applications that manage **consent-based data collection and sharing**. They implement the full lifecycle: creating data requests, inviting users, handling accept/refuse/revoke responses, and accessing shared data.
 
 ---

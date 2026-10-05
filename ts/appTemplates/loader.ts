@@ -9,6 +9,9 @@
  *   4. customFields[i].def.key consistent with streamId suffix
  *   5. section?: customFields[i].def.section references existing section.key
  *   6. customFieldKeys[]: each section.customFieldKeys[i] resolves to a customFields[].def.key
+ *   7. Data-set templates (plan 108, `format` present): `version` + `formatVersion` + `app` required,
+ *      `app.url` is https, `purpose: 'app-private'` refs are read-only,
+ *      `itemCustomizations[*].repeatable` follows the data-model grammar, `.required` is boolean
  *
  * Use:
  *   const tpl = loadTemplate(jsonObject);   // synchronous; throws on any failure
@@ -18,7 +21,21 @@
 import { HDSLibError } from '../errors.ts';
 import { validate } from './schemas/appTemplate.validator.js';
 import type { SchemaValidationError } from './schemas/validatorTypes.ts';
+import { APP_PRIVATE_PURPOSE } from './templateTypes.ts';
 import type { AppTemplate, CustomFieldDeclaration, ExistingStreamRef } from './templateTypes.ts';
+
+/** Same grammar as data-model `items.repeatable`: once | any | unlimited | ISO-8601 duration. */
+const REPEATABLE_RE = /^(once|any|unlimited|P(\d+[YMWD])+(T(\d+[HMS])+)?|PT(\d+[HMS])+)$/;
+
+/** Options for {@link loadTemplateFromUrl}. */
+export interface LoadTemplateFromUrlOptions {
+  /** Abort the fetch after this many ms. Default 8000. */
+  timeoutMs?: number;
+  /** Refuse bodies larger than this many bytes. Default 262144 (256 KB). */
+  maxBytes?: number;
+  /** Fetch implementation (tests). Defaults to the global `fetch`. */
+  fetch?: typeof fetch;
+}
 
 // The validator is PRECOMPILED at build time (scripts/build-validators.mjs), not built
 // here from the schema. Ajv 8 compiles schemas with `new Function`, which a
@@ -47,11 +64,63 @@ export function loadTemplate (json: unknown): AppTemplate {
   return tpl;
 }
 
-/** Fetch JSON from a URL and run loadTemplate. */
-export async function loadTemplateFromUrl (url: string): Promise<AppTemplate> {
-  const r = await fetch(url);
-  if (!r.ok) throw new HDSLibError(`Failed to fetch AppTemplate from ${url}: ${r.status}`);
-  const json: unknown = await r.json();
+/**
+ * Fetch a template from a URL and run loadTemplate.
+ *
+ * The document is third-party input (plan 108 — an app's published `hds-dataset.json`), so:
+ * https only, no credentials, no cache, bounded time and size. Errors are HDSLibError with
+ * `innerObject.reason` one of `url`, `network`, `timeout`, `http`, `too-large`, `json`.
+ */
+export async function loadTemplateFromUrl (url: string, opts: LoadTemplateFromUrlOptions = {}): Promise<AppTemplate> {
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  const maxBytes = opts.maxBytes ?? 262144;
+  const doFetch = opts.fetch ?? fetch;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new HDSLibError(`Invalid template URL "${url}"`, { reason: 'url', url } as any);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new HDSLibError(`Template URL must use https: "${url}"`, { reason: 'url', url } as any);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let text: string;
+  try {
+    let r: Response;
+    try {
+      r = await doFetch(parsed.href, {
+        signal: controller.signal,
+        credentials: 'omit',
+        cache: 'no-store',
+        redirect: 'follow',
+        headers: { Accept: 'application/json' }
+      });
+    } catch (e) {
+      if (controller.signal.aborted) {
+        throw new HDSLibError(`Timed out after ${timeoutMs} ms fetching template from ${url}`, { reason: 'timeout', url } as any);
+      }
+      throw new HDSLibError(`Failed to fetch template from ${url}: ${(e as Error).message}`, { reason: 'network', url } as any);
+    }
+    if (!r.ok) throw new HDSLibError(`Failed to fetch template from ${url}: HTTP ${r.status}`, { reason: 'http', status: r.status, url } as any);
+    const declared = Number(r.headers?.get?.('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new HDSLibError(`Template at ${url} is too large (${declared} bytes, max ${maxBytes})`, { reason: 'too-large', url } as any);
+    }
+    text = await r.text();
+  } finally {
+    clearTimeout(timer);
+  }
+  if (new TextEncoder().encode(text).length > maxBytes) {
+    throw new HDSLibError(`Template at ${url} is too large (max ${maxBytes} bytes)`, { reason: 'too-large', url } as any);
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new HDSLibError(`Template at ${url} is not valid JSON: ${(e as Error).message}`, { reason: 'json', url } as any);
+  }
   return loadTemplate(json);
 }
 
@@ -113,6 +182,36 @@ function validateCrossFieldRules (tpl: AppTemplate): void {
         errors.push(
           `section "${s.key}".customFieldKeys references unknown key "${key}" (no matching customFields[].def.key)`
         );
+      }
+    }
+  }
+
+  // Rule 7: data-set template publication fields (plan 108)
+  if (tpl.format != null) {
+    if (tpl.formatVersion == null) errors.push('data-set template: "formatVersion" is required when "format" is set');
+    if (tpl.version == null) errors.push('data-set template: "version" is required when "format" is set');
+    if (tpl.app == null) errors.push('data-set template: "app" is required when "format" is set');
+  }
+  if (tpl.app != null && !/^https:\/\//i.test(tpl.app.url)) {
+    errors.push(`app.url "${tpl.app.url}" must be an https URL`);
+  }
+  for (const ref of tpl.existingStreamRefs ?? []) {
+    if (ref.purpose === APP_PRIVATE_PURPOSE && !(ref.permissions.length === 1 && ref.permissions[0] === 'read')) {
+      errors.push(`existingStreamRefs[].streamId "${ref.streamId}" has purpose "${APP_PRIVATE_PURPOSE}" and must request ["read"] only`);
+    }
+  }
+  for (const s of tpl.sections) {
+    for (const [itemKey, cust] of Object.entries(s.itemCustomizations ?? {})) {
+      if (cust == null || typeof cust !== 'object') {
+        errors.push(`section "${s.key}".itemCustomizations["${itemKey}"] must be an object`);
+        continue;
+      }
+      const c = cust as Record<string, unknown>;
+      if (c.repeatable != null && (typeof c.repeatable !== 'string' || !REPEATABLE_RE.test(c.repeatable))) {
+        errors.push(`section "${s.key}".itemCustomizations["${itemKey}"].repeatable "${String(c.repeatable)}" must be once | any | unlimited | an ISO-8601 duration`);
+      }
+      if (c.required != null && typeof c.required !== 'boolean') {
+        errors.push(`section "${s.key}".itemCustomizations["${itemKey}"].required must be a boolean`);
       }
     }
   }

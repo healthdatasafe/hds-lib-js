@@ -81,6 +81,34 @@ export interface FormSpec {
     requiredBridges?: string[];
     [key: string]: any;
   };
+  /** Plan 108 — set when the data set was imported from a published data-set template URL. */
+  source?: FormSpecSource;
+  /** Plan 108 — the data set's permanent (open-link) invite, when one was minted. */
+  openLink?: FormSpecOpenLink;
+}
+
+/** Provenance of a FormSpec imported from a published data-set template (plan 108). */
+export interface FormSpecSource {
+  /** HTTPS URL of the template (`hds-dataset.json`). */
+  url: string;
+  templateId: string;
+  /** Template content version (semver) at import / last apply. */
+  version?: string;
+  /** `templateScopeHash` of the template at import / last apply. */
+  scopeHash: string;
+  /** Unix seconds of the fetch the FormSpec was last built from. */
+  fetchedAt: number;
+  publisher?: string;
+}
+
+/** A data set's permanent invite: one open-link CMC capability, no expiry (plan 108). */
+export interface FormSpecOpenLink {
+  inviteEventId: string;
+  capabilityUrl: string;
+  /** Unix seconds. */
+  createdAt: number;
+  /** `null` = no expiry. A number means the core minted a bounded link (pre-rc.21 core). */
+  expiresAt: number | null;
 }
 
 /** Why a FormSpec item key does not resolve cleanly against the published data-model. */
@@ -353,7 +381,8 @@ export async function createInviteWithFormSpec (
     requestedPermissions: Permission[];
     formSpec: FormSpec;
     mode?: 'single-use' | 'open-link';
-    expiresAt?: number;
+    /** Unix seconds. `null` = no expiry, open-link only (@pryv/cmc ≥ 3.16, core rc.21+). */
+    expiresAt?: number | null;
     /**
      * Opt-in (@pryv/cmc ≥ 3.9.1): `'app'` makes the accepted data-grant a
      * delegable app-type access — the approved requester can then mint
@@ -368,7 +397,10 @@ export async function createInviteWithFormSpec (
     requesterMeta?: Record<string, any>;
     to?: string | null;
   }
-): Promise<{ inviteEventId: string; capabilityUrl: string; mode: string; expiresAt: number | undefined }> {
+): Promise<{ inviteEventId: string; capabilityUrl: string; mode: string; expiresAt: number | null | undefined }> {
+  if (params.expiresAt === null && params.mode !== 'open-link') {
+    throw new Error('createInviteWithFormSpec: expiresAt null (no expiry) requires mode "open-link"');
+  }
   const requesterMeta = Object.assign(
     { displayName: params.displayName, appId: params.appCode },
     params.requesterMeta ?? {}
@@ -380,7 +412,8 @@ export async function createInviteWithFormSpec (
     permissions: params.requestedPermissions
   };
   if (params.features) request.features = params.features;
-  if (params.expiresAt) request.expiresAt = params.expiresAt;
+  if (params.expiresAt === null) request.expiresAt = null;
+  else if (params.expiresAt) request.expiresAt = params.expiresAt;
   if (params.accessType) request.accessType = params.accessType;
   const content: any = {
     to: params.to === undefined ? null : params.to,

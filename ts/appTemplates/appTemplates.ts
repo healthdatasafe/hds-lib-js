@@ -93,6 +93,20 @@ export {
   isCustomFieldDeclaration,
   isExistingStreamRef
 } from './loader.ts';
+export type { LoadTemplateFromUrlOptions } from './loader.ts';
+
+// Plan 108 — data-set templates published by apps (hds-dataset.json).
+export {
+  templateScope,
+  templateScopeHash,
+  diffTemplateScope,
+  diffFormSpecWithTemplate,
+  semverBump,
+  templateToFormSpec,
+  templateSource
+} from './datasetTemplate.ts';
+export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './datasetTemplate.ts';
+export { DATASET_TEMPLATE_FORMAT, APP_PRIVATE_PURPOSE } from './templateTypes.ts';
 export type {
   CustomFieldEventType,
   EmptyDef,
@@ -104,5 +118,7 @@ export type {
   ExistingStreamRef,
   CustomFieldDeclaration,
   AppTemplateSection,
-  AppTemplate
+  AppTemplate,
+  DatasetTemplate,
+  DatasetTemplateApp
 } from './templateTypes.ts';
