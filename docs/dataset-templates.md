@@ -57,7 +57,7 @@ template is a valid AppTemplate, and the same loader validates both.
 | `sections[]` | yes | `type: "permanent"` (set once, profile-like) or `"recurring"`; `itemKeys` are [data-model](https://model.datasafe.dev) item keys. |
 | `sections[].itemCustomizations[itemKey]` | no | Cadence and presentation per item: `repeatable` (`once` \| `any` \| `unlimited` \| ISO-8601 duration such as `P1D`), `reminder`, `labels`, `required` (boolean). |
 | `consent` | no | The consent text the app proposes; the data-set owner may edit it. |
-| `existingStreamRefs[]` | no | Streams outside the data-model. For the app's own data use `purpose: "app-private"`, `permissions: ["read"]` and a `label`: the importer requests `read` on them (named by `label`) and shows them as raw events, never as form fields. Any other ref is carried read-only and is not granted by the import. |
+| `existingStreamRefs[]` | no | Streams outside the data-model. For the app's own data use `purpose: "app-private"`, `permissions: ["read"]` and a `label` (the stream id may start with the template `id`): the importer requests `read` on them (named by `label`) and shows them as raw events, never as form fields. Any other ref is carried read-only and is not granted by the import. |
 | `customFields[]` | no | As in any AppTemplate (template-sandboxed streams). |
 | `requiredBridges[]` | no | Bridges the data set expects (e.g. `bridge-mira`). |
 | `dataModel.publicationDate` | no | Informational: the model pack the file was written against. |

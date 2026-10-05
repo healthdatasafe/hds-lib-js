@@ -254,16 +254,25 @@ export function templateToFormSpec (
   const grantable = [...new Set(sections.flatMap(s => s.itemKeys ?? []))].filter(k => !excluded.has(k));
   const permissions = (model.authorizations.forItemKeys(grantable) as Permission[])
     .map(p => ({ streamId: p.streamId, defaultName: p.defaultName, level: p.level }));
-  // App-private streams are granted explicitly: nothing applies existing-stream refs at
-  // acceptance, so a ref alone would be display-only and the reader would get no access.
-  const granted = new Set(permissions.map(p => p.streamId));
-  for (const ref of formSpec.existingStreamRefs ?? []) {
+  formSpec.permissions = withAppPrivatePermissions(permissions, formSpec.existingStreamRefs);
+  return { formSpec, itemKeyIssues };
+}
+
+/**
+ * `permissions` plus `read` on every `app-private` existing-stream ref not already granted
+ * (named by the ref's `label`). App-private streams must be granted explicitly: nothing applies
+ * existing-stream refs at acceptance, so a ref alone would be display-only. Use it wherever
+ * permissions are rebuilt from item keys (e.g. an editor's `buildPermissions`), or the grant is lost.
+ */
+export function withAppPrivatePermissions (permissions: Permission[], refs: ExistingStreamRef[] | undefined): Permission[] {
+  const out = [...permissions];
+  const granted = new Set(out.map(p => p.streamId));
+  for (const ref of refs ?? []) {
     if (ref.purpose !== APP_PRIVATE_PURPOSE || granted.has(ref.streamId)) continue;
-    permissions.push({ streamId: ref.streamId, defaultName: labelOf(ref), level: 'read' });
+    out.push({ streamId: ref.streamId, defaultName: labelOf(ref), level: 'read' });
     granted.add(ref.streamId);
   }
-  formSpec.permissions = permissions;
-  return { formSpec, itemKeyIssues };
+  return out;
 }
 
 /** Provenance record for a FormSpec imported from a published template. */
@@ -315,8 +324,10 @@ function textsOf (tpl: AppTemplate): unknown {
     app: tpl.app ?? null,
     license: tpl.license ?? null,
     sections: tpl.sections.map(s => [s.key, s.name]),
-    labels: tpl.sections.map(s => Object.entries(s.itemCustomizations ?? {})
-      .map(([k, c]) => [k, (c as any)?.labels ?? null])),
+    labels: tpl.sections.flatMap(s => Object.entries(s.itemCustomizations ?? {})
+      .filter(([, c]) => (c as any)?.labels != null)
+      .map(([k, c]) => [k, (c as any).labels]))
+      .sort(byFirst),
     refs: (tpl.existingStreamRefs ?? []).map(r => [r.streamId, r.label ?? null, r.purpose ?? null])
   };
 }

@@ -190,7 +190,10 @@ function validateCrossFieldRules (tpl: AppTemplate): void {
   if (tpl.existingStreamRefs) {
     const customStreamIds = new Set((tpl.customFields || []).map((c) => c.streamId));
     for (const ref of tpl.existingStreamRefs) {
-      if (ref.streamId.startsWith(sandboxPrefix)) {
+      // An app's own streams (data-set templates, plan 108) naturally carry the app id as
+      // prefix; the collision that matters — the same stream declared in customFields — is
+      // still checked below.
+      if (ref.streamId.startsWith(sandboxPrefix) && ref.purpose !== APP_PRIVATE_PURPOSE) {
         errors.push(
           `existingStreamRefs[].streamId "${ref.streamId}" collides with this template's sandbox prefix "${sandboxPrefix}" — refs are for streams someone else provisioned`
         );

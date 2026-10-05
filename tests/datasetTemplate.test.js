@@ -1,6 +1,7 @@
 import { assert } from './test-utils/deps-node.js';
 import { loadTemplate, loadTemplateFromUrl } from '../ts/appTemplates/loader.ts';
 import {
+  withAppPrivatePermissions,
   templateScopeHash,
   diffTemplateScope,
   diffFormSpecWithTemplate,
@@ -143,6 +144,15 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       const t = datasetTemplate();
       t.existingStreamRefs[0].permissions = ['manage'];
       assert.throws(() => loadTemplate(t), /must request \["read"\] only/);
+    });
+
+    it('[DSTL4b] app-private refs may carry the template id as prefix; customFields collision still refused', () => {
+      const t = datasetTemplate();
+      t.existingStreamRefs[0].streamId = 'cycle-app-notes';
+      loadTemplate(t);
+      const other = datasetTemplate();
+      other.existingStreamRefs = [{ streamId: 'cycle-app-notes', permissions: ['read'] }];
+      assert.throws(() => loadTemplate(other), /collides with this template's sandbox prefix/);
     });
 
     it('[DSTL5] repeatable follows the data-model grammar; required is boolean', () => {
@@ -339,6 +349,9 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       const a = datasetTemplate();
       const lab = clone(a); lab.sections[1].itemCustomizations['body-temperature-basal'].labels = { question: { en: 'Temp?' } };
       assert.equal(diffTemplateScope(a, lab).requiredBump, 'patch');
+      // a customization without labels added to an item is cadence, not text
+      const cad = clone(a); cad.sections[1].itemCustomizations['body-vulva-bleeding'] = { repeatable: 'P1D' };
+      assert.equal(diffTemplateScope(a, cad).textsChanged, false);
       const lic = clone(a); lic.license = { name: 'CC-BY', notice: { en: 'n' } };
       assert.equal(diffTemplateScope(a, lic).requiredBump, 'patch');
     });
@@ -407,6 +420,16 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       const { formSpec } = templateToFormSpec(loadTemplate(t), { model: fixtureModel() });
       assert.deepEqual(formSpec.existingStreamRefs.map(r => r.permissions), [['read'], ['read']]);
       assert.ok(!formSpec.permissions.some(p => p.streamId === 'someone-else'));
+    });
+
+    it('[DSTF1c] withAppPrivatePermissions adds app-private reads once, leaves others alone', () => {
+      const refs = [
+        { streamId: 'n', permissions: ['read'], purpose: 'app-private', label: { en: 'Notes' } },
+        { streamId: 'x', permissions: ['read'], purpose: 'system-out' }
+      ];
+      const out = withAppPrivatePermissions([{ streamId: 'a', level: 'read' }], refs);
+      assert.deepEqual(out, [{ streamId: 'a', level: 'read' }, { streamId: 'n', defaultName: 'Notes', level: 'read' }]);
+      assert.equal(withAppPrivatePermissions(out, refs).length, 2);
     });
 
     it('[DSTF2] unknown keys are reported, kept in sections, and left out of permissions', () => {

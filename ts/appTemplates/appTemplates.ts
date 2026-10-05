@@ -103,7 +103,8 @@ export {
   diffFormSpecWithTemplate,
   semverBump,
   templateToFormSpec,
-  templateSource
+  templateSource,
+  withAppPrivatePermissions
 } from './datasetTemplate.ts';
 export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './datasetTemplate.ts';
 export { DATASET_TEMPLATE_FORMAT, APP_PRIVATE_PURPOSE } from './templateTypes.ts';
