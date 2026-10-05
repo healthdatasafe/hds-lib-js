@@ -258,10 +258,14 @@ const errorIds = Object.freeze({
   CAPABILITY_TIMEOUT: 'cmc-capability-timeout',
   CAPABILITY_EMPTY: 'cmc-capability-empty',
   CAPABILITY_MULTIPLE_OFFERS: 'cmc-capability-multiple-offers',
-  // Caller's `content.expiresAt` on the trigger event resolves to a
-  // TTL outside the platform-allowed bounds [60s, 30d]. Either omit
-  // `expiresAt` to use the 7-day default or pick a bounded value.
+  // Caller's numeric `request.expiresAt` resolves to a TTL outside the
+  // bounds for the invite's mode: [60s, 30d] single-use, at least 60s
+  // (no upper bound) open-link. Either omit `expiresAt` to use the
+  // 7-day default or pick a bounded value.
   CAPABILITY_TTL_OUT_OF_RANGE: 'cmc-capability-ttl-out-of-range',
+  // `expiresAt: null` (no expiry) on a single-use invite. No expiry is
+  // only allowed with `mode: 'open-link'`.
+  CAPABILITY_NO_EXPIRY_NOT_ALLOWED: 'cmc-capability-no-expiry-not-allowed',
   // Trigger-event content shape
   HANDLER_MISSING_CAPABILITY_URL: 'cmc-handler-missing-capability-url',
   HANDLER_MISSING_CAPABILITY_ID: 'cmc-handler-missing-capability-id',
@@ -307,7 +311,28 @@ const errorIds = Object.freeze({
   // The peer-side `content.from` stamping hook rejects when the
   // writer's counterparty access has no stored `{username,host}`
   // identity — wiring bug at handshake time; surface for ops.
-  COUNTERPARTY_IDENTITY_MISSING: 'cmc-counterparty-identity-missing'
+  COUNTERPARTY_IDENTITY_MISSING: 'cmc-counterparty-identity-missing',
+  // Scope-update answering a collector's request. The server resolves the
+  // request as it arrived on the user's account and binds it to the
+  // collector's grant; these name why an answer changed nothing.
+  SCOPE_REQUEST_NOT_FOUND: 'cmc-scope-request-not-found',
+  SCOPE_REQUEST_NOT_FROM_PEER: 'cmc-scope-request-not-from-peer',
+  SCOPE_REQUEST_STREAM_MISMATCH: 'cmc-scope-request-stream-mismatch',
+  SCOPE_REQUEST_EXPIRED: 'cmc-scope-request-expired',
+  SCOPE_REQUEST_ALREADY_ANSWERED: 'cmc-scope-request-already-answered',
+  SCOPE_REQUEST_INVALID: 'cmc-scope-request-invalid',
+  SCOPE_UPDATE_TARGET_NOT_COUNTERPARTY: 'cmc-scope-update-target-not-counterparty',
+  SCOPE_UPDATE_NOTHING_TO_APPLY: 'cmc-scope-update-nothing-to-apply',
+  SCOPE_UPDATE_LOCAL_APPLY_FAILED: 'cmc-scope-update-local-apply-failed',
+  // Client-side: the trigger completed but the server did not report the
+  // change as applied (a server that predates applying approved requests).
+  SCOPE_UPDATE_NOT_APPLIED: 'cmc-scope-update-not-applied',
+  // Client-side: waiting timed out before the server recorded an outcome.
+  // Not a failure; the answer may still be applied. Do not answer again.
+  SCOPE_UPDATE_OUTCOME_UNKNOWN: 'cmc-scope-update-outcome-unknown',
+  // Client-side: the scope request was written but not delivered within the
+  // wait. `err.cause.scopeRequestEventId` names the trigger to keep watching.
+  SCOPE_REQUEST_DELIVERY_PENDING: 'cmc-scope-request-delivery-pending'
 });
 
 // --- Level-1 protocol functions ---
@@ -350,7 +375,11 @@ class CmcError extends Error {
  * @param {{en?:string}|Object} [params.description]
  * @param {{en?:string}|Object} [params.consent]
  * @param {{chat?:boolean, systemMessaging?:boolean}} [params.features]
- * @param {number} [params.expiresAt]
+ * @param {number|null} [params.expiresAt] - Unix seconds; omit for the
+ *   7-day default. The server bounds it per mode: single-use [60s, 30d],
+ *   open-link at least 60s with no upper bound. `null` (open-link only)
+ *   requests a link without expiry; a core that predates this mints the
+ *   7-day default instead, so check the result's `expiresAt === null`.
  * @param {'shared'|'app'} [params.accessType='shared'] - Pryv access type the
  *   accepted data-grant is minted as. Default `shared` (non-delegable). Set
  *   `app` to make the grant delegable — the approved requester can then
@@ -358,10 +387,14 @@ class CmcError extends Error {
  *   the grant) for least-privilege re-delegation with per-actor audit.
  * @param {string|null} [params.to=null]
  * @param {Object} [params.requesterMeta]
- * @returns {Promise<{inviteEventId:string, capabilityUrl:string, mode:string, expiresAt:number}>}
+ * @returns {Promise<{inviteEventId:string, capabilityUrl:string, mode:string, expiresAt:number|null}>}
  */
 async function createInvite (conn, params) {
   if (params == null) throw new Error('createInvite: params required');
+  if (params.expiresAt === null && (params.mode || 'single-use') !== 'open-link') {
+    throw new CmcError('createInvite: expiresAt: null (no expiry) requires mode "open-link"',
+      errorIds.CAPABILITY_NO_EXPIRY_NOT_ALLOWED);
+  }
   const requesterMeta = Object.assign(
     { displayName: params.displayName, appId: params.appCode },
     params.requesterMeta || {}
@@ -373,7 +406,7 @@ async function createInvite (conn, params) {
     permissions: params.requestedPermissions || []
   };
   if (params.features) request.features = params.features;
-  if (params.expiresAt) request.expiresAt = params.expiresAt;
+  if (params.expiresAt !== undefined) request.expiresAt = params.expiresAt;
   if (params.accessType) request.accessType = params.accessType;
   const content = {
     to: params.to === undefined ? null : params.to,
@@ -421,16 +454,151 @@ async function listInvites (conn, params) {
   return { items, truncated: items.length >= limit };
 }
 
+/**
+ * Normalize an arriving `consent/revoke-cmc` event into a record keyed on
+ * identifiers THIS account holds.
+ *
+ * The event's `content.accessId` is the withdrawing side's access id on their
+ * own account, so it matches nothing locally; it is surfaced here as
+ * `peerAccessId` rather than `accessId`, to stop it being mistaken for
+ * something to look up. The server adds the local handles, and which ones
+ * depends on the side:
+ *
+ *   - requester (we published the invite): `backChannelAccessId` + `inviteEventId`,
+ *     the same pair the accept arrival carried;
+ *   - accepter (we accepted an invite): `dataGrantAccessId` + `offerEventId` +
+ *     `acceptEventId`, the ids our own accept trigger was stamped with.
+ *
+ * `side` is `null` against a server that predates the enrichment, or for a
+ * relationship too old to carry either stamp; `localAccessId` is then null too
+ * and `scopeStreamId` is the identifier to match on. Nothing here throws on a
+ * sparse arrival: an older peer sends only `accessId` and maybe `offerEventId`.
+ *
+ * The accesses named by `revokedAccessIds` are already deleted by the time this
+ * event is readable. Tokens held for them are dead: drop cached endpoints
+ * rather than calling `accesses.delete` yourself.
+ *
+ * @param {Object} event - the `consent/revoke-cmc` event as received
+ * @returns {{
+ *   eventId: ?string, from: ?Object, reason: ?Object, side: ?string,
+ *   localAccessId: ?string, revokedAccessIds: string[], scopeStreamId: ?string,
+ *   inviteEventId: ?string, offerEventId: ?string, acceptEventId: ?string,
+ *   peerAccessId: ?string, time: ?number
+ * }}
+ */
+function revocationFromEvent (event) {
+  const c = (event && event.content) || {};
+  // Same test for the label and for the id below, so a falsy-but-present value
+  // cannot produce a side with no access id to go with it.
+  const backChannelAccessId = c.backChannelAccessId || null;
+  const dataGrantAccessId = c.dataGrantAccessId || null;
+  const side = backChannelAccessId != null
+    ? 'requester'
+    : (dataGrantAccessId != null ? 'accepter' : null);
+  return {
+    eventId: (event && event.id) || null,
+    // Objects or null, never a stray scalar: the declared types say object, and
+    // `from` is compared field-by-field by `revocationMatches`.
+    from: (c.from != null && typeof c.from === 'object') ? c.from : null,
+    reason: (c.reason != null && typeof c.reason === 'object') ? c.reason : null,
+    side,
+    localAccessId: backChannelAccessId || dataGrantAccessId || null,
+    revokedAccessIds: Array.isArray(c.revokedAccessIds) ? c.revokedAccessIds : [],
+    scopeStreamId: c.scopeStreamId || null,
+    inviteEventId: c.inviteEventId || null,
+    offerEventId: c.offerEventId || null,
+    acceptEventId: c.acceptEventId || null,
+    peerAccessId: c.accessId || null,
+    time: (event && event.time) || null
+  };
+}
+
+/**
+ * Does a revocation record refer to the relationship the caller is holding?
+ *
+ * **The most specific identifier the two sides share decides, and nothing
+ * falls through past it.** The tiers, narrowest first:
+ *
+ *   1. `accessId` — compared against `localAccessId` and `revokedAccessIds`;
+ *   2. `acceptEventId`; 3. `offerEventId`; 4. `inviteEventId`;
+ *   5. `scopeStreamId`.
+ *
+ * Falling through used to be the bug: on an **open (multi-use) invite link**
+ * every accepter's relationship carries the SAME `inviteEventId` and the SAME
+ * `scopeStreamId`, because those name the link rather than the subject. So a
+ * revocation by one subject matched every other subject of the same study, and
+ * a caller acting on the match tore down the wrong relationship. A narrower
+ * identifier that disagrees now returns false instead of letting a broader one
+ * rescue the match. The cost is that an `accessId` the caller no longer holds
+ * (the server already deleted it and did not list it) answers false rather than
+ * matching on scope; pass the ids you hold, not the ids you held.
+ *
+ * `relationship.from` (`{username, host}`) acts as a FILTER, not a match: a
+ * mismatch returns false before any tier is considered, and agreement alone
+ * never proves a match. It is the discriminator to add on an open link, and it
+ * is safe to trust because the server stamps `from` on every inbox arrival.
+ *
+ * A `relationship` sharing no identifier with the record returns false.
+ *
+ * @param {Object} record - from `revocationFromEvent`
+ * @param {Object} relationship - any subset of `{accessId, acceptEventId,
+ *   offerEventId, inviteEventId, scopeStreamId}`, plus an optional
+ *   `from: {username, host}` filter
+ * @returns {boolean}
+ */
+function revocationMatches (record, relationship) {
+  if (record == null || relationship == null) return false;
+  const r = relationship;
+
+  // Filter first: a different peer is never this relationship, whatever ids
+  // the two happen to share through a shared link.
+  if (r.from != null) {
+    const f = record.from;
+    if (f == null || typeof f !== 'object') return false;
+    if (f.username !== r.from.username || f.host !== r.from.host) return false;
+  }
+
+  // Tolerate a hand-built record, or a raw event passed in by mistake.
+  const revoked = Array.isArray(record.revokedAccessIds) ? record.revokedAccessIds : [];
+  if (r.accessId != null && (record.localAccessId != null || revoked.length > 0)) {
+    return record.localAccessId === r.accessId || revoked.indexOf(r.accessId) !== -1;
+  }
+  if (r.acceptEventId != null && record.acceptEventId != null) {
+    return record.acceptEventId === r.acceptEventId;
+  }
+  if (r.offerEventId != null && record.offerEventId != null) {
+    return record.offerEventId === r.offerEventId;
+  }
+  if (r.inviteEventId != null && record.inviteEventId != null) {
+    return record.inviteEventId === r.inviteEventId;
+  }
+  if (r.scopeStreamId != null && record.scopeStreamId != null) {
+    return record.scopeStreamId === r.scopeStreamId;
+  }
+  return false;
+}
+
 function inviteRecordFromEvent (event) {
   const c = (event && event.content) || {};
+  const expiresAt = c.capabilityExpiresAt || (c.request && c.request.expiresAt) || null;
+  let status = c.status || 'pending';
+  // The server never stamps 'expired': derive it (client clock) for an
+  // invite still waiting. An invite without expiry never expires.
+  if ((status === 'pending' || status === 'delivered') && typeof expiresAt === 'number' &&
+      expiresAt <= Math.floor(Date.now() / 1000)) {
+    status = 'expired';
+  }
   return {
     inviteEventId: event.id,
     capabilityUrl: c.capabilityUrl || null,
     mode: (c.capability && c.capability.mode) || 'single-use',
-    status: c.status || 'pending',
-    expiresAt: c.capabilityExpiresAt || (c.request && c.request.expiresAt) || null,
-    counterparty: c.acceptedBy || null,
+    status,
+    expiresAt,
+    // Single-use invites: who accepted (or refused). Open-link invites record
+    // no single counterparty: see listInviteAccepters.
+    counterparty: c.acceptedBy || c.refusedBy || null,
     acceptedAt: c.acceptedAt || null,
+    backChannelAccessId: c.backChannelAccessId || null,
     scopeStreamId: (event.streamIds && event.streamIds[0]) || event.streamId
   };
 }
@@ -445,6 +613,46 @@ function inviteRecordFromEvent (event) {
 async function getInviteStatus (conn, inviteEventId) {
   const result = await conn.apiOne('events.getOne', { id: inviteEventId }, 'event');
   return inviteRecordFromEvent(result);
+}
+
+/**
+ * List who has joined an invite and is still joined (provider side): the
+ * back-channel accesses carrying the invite's `capabilityId`. Works for both
+ * modes (0 or 1 item for single-use). A revoked relationship is gone from the
+ * list. Needs a connection allowed to list accesses (personal token).
+ *
+ * @param {Object} conn
+ * @param {Object} params
+ * @param {string} params.inviteEventId
+ * @returns {Promise<{items: Array<{username:string, host:string, acceptedAt:number|null, backChannelAccessId:string, scopeStreamId:string|null}>}>}
+ */
+async function listInviteAccepters (conn, params) {
+  if (params == null || !params.inviteEventId) {
+    throw new Error('listInviteAccepters: params.inviteEventId required');
+  }
+  const trigger = await conn.apiOne('events.getOne', { id: params.inviteEventId }, 'event');
+  const capabilityId = trigger && trigger.content && trigger.content.capabilityId;
+  if (!capabilityId) {
+    throw new Error('listInviteAccepters: could not locate capabilityId on invite event ' + params.inviteEventId);
+  }
+  const accesses = await conn.apiOne('accesses.get', {}, 'accesses');
+  const items = (accesses || [])
+    .filter(function (a) {
+      const cmc = a && a.clientData && a.clientData.cmc;
+      return cmc != null && cmc.role === 'counterparty' && cmc.capabilityId === capabilityId;
+    })
+    .map(function (a) {
+      const cmc = a.clientData.cmc;
+      const cp = cmc.counterparty || {};
+      return {
+        username: cp.username,
+        host: cp.host,
+        acceptedAt: a.created != null ? a.created : null,
+        backChannelAccessId: a.id,
+        scopeStreamId: cmc.scopeStreamId || null
+      };
+    });
+  return { items };
 }
 
 /**
@@ -557,13 +765,22 @@ async function invalidateCapability (conn, params) {
  * deprecated alias (see module.exports below); remove after one
  * release cycle.
  *
+ * By default waits until the request is delivered to the user and returns
+ * `remoteScopeRequestEventId`: the id the request has on the USER's account.
+ * That is the id the user side answers (`acceptScopeUpdate`, and the
+ * `scopeRequestEventId` of a `/cmc-scope-update` hand-off). The returned
+ * `scopeRequestEventId` is the collector-side trigger and cannot be answered.
+ *
  * @param {Object} conn
  * @param {Object} params
  * @param {string} params.collectorStreamId       - the provider's own collector stream
  * @param {Array<{streamId,level:string}>} params.newPermissions
  * @param {Object} [params.message]
  * @param {number} [params.expires]
- * @returns {Promise<{scopeRequestEventId:string}>}
+ * @param {boolean} [params.waitForDelivery=true]
+ * @param {number}  [params.deliveryTimeoutMs=20000] - must exceed the core outbound delivery timeout (15 s by default)
+ * @param {number}  [params.deliveryPollIntervalMs=200]
+ * @returns {Promise<{scopeRequestEventId:string, remoteScopeRequestEventId:string|null, status:string}>}
  */
 async function proposeScopeUpdate (conn, params) {
   if (params == null) throw new Error('proposeScopeUpdate: params required');
@@ -575,7 +792,32 @@ async function proposeScopeUpdate (conn, params) {
     type: ET_SCOPE_REQUEST,
     content
   }, 'event');
-  return { scopeRequestEventId: event.id };
+  if (params.waitForDelivery === false) {
+    return { scopeRequestEventId: event.id, remoteScopeRequestEventId: null, status: 'pending' };
+  }
+  let finalEvent;
+  try {
+    finalEvent = await pollTriggerCompletion(conn, event.id, {
+      timeoutMs: params.deliveryTimeoutMs || SCOPE_WAIT_DEFAULT_MS,
+      intervalMs: params.deliveryPollIntervalMs || 200
+    });
+  } catch (err) {
+    if (!(err instanceof CmcError) || err.id !== errorIds.CAPABILITY_TIMEOUT) throw err;
+    // The request exists and may still be delivered: hand back its id so the
+    // caller can keep watching its own trigger for `remoteEventId`.
+    throw new CmcError('CMC scope request not delivered yet', errorIds.SCOPE_REQUEST_DELIVERY_PENDING,
+      { scopeRequestEventId: event.id });
+  }
+  const fc = finalEvent.content || {};
+  if (fc.status === 'failed') {
+    const reason = (fc.failure && fc.failure.reason) || errorIds.HANDLER_THREW;
+    throw new CmcError('CMC scope request failed: ' + reason, reason, fc.failure);
+  }
+  return {
+    scopeRequestEventId: event.id,
+    remoteScopeRequestEventId: fc.remoteEventId || null,
+    status: fc.status
+  };
 }
 
 // --- Consumer side ---
@@ -1011,14 +1253,29 @@ async function sendSystemAck (conn, params) {
 
 /**
  * Accept a scope-update proposal. Posts `consent/scope-update-cmc` with
- * `{ scopeRequestEventId, accept: true }`. Server-side plugin runs
- * `accesses.update` on the local data-grant.
+ * `{ scopeRequestEventId, accept: true }`; the server applies the request's
+ * permission set to the collector's data-grant.
+ *
+ * `scopeRequestEventId` is the id of the request ON THIS ACCOUNT (the
+ * collector's `proposeScopeUpdate` returns it as `remoteScopeRequestEventId`).
+ *
+ * By default waits for the outcome and resolves only once the grant changed:
+ * `{ updateAcceptEventId, dataGrantAccessId, newPermissions, status,
+ * peerNotified, deliveryFailure? }`. `peerNotified: false` means the grant
+ * changed but the collector could not be told yet. Throws `CmcError` when
+ * nothing was applied (`err.id` is the server's reason, or
+ * `cmc-scope-update-not-applied` against a server that does not apply
+ * approved requests). `waitForCompletion: false` returns right after the
+ * write as `{ updateAcceptEventId, status: 'pending' }`.
  *
  * @param {Object} conn
  * @param {string} scopeRequestEventId
  * @param {Object} [opts]
  * @param {string} [opts.scopeStreamId]   - own collector stream (defaults to the request's stream)
- * @returns {Promise<{updateAcceptEventId:string, newDataGrantAccessId:string|null}>}
+ * @param {boolean} [opts.waitForCompletion=true]
+ * @param {number}  [opts.completionTimeoutMs=20000] - must exceed the core outbound delivery timeout (15 s by default)
+ * @param {number}  [opts.completionPollIntervalMs=200]
+ * @returns {Promise<Object>}
  */
 async function acceptScopeUpdate (conn, scopeRequestEventId, opts) {
   opts = opts || {};
@@ -1028,21 +1285,42 @@ async function acceptScopeUpdate (conn, scopeRequestEventId, opts) {
     type: ET_SCOPE_UPDATE,
     content: { scopeRequestEventId, accept: true }
   }, 'event');
-  return {
+  if (opts.waitForCompletion === false) {
+    return { updateAcceptEventId: event.id, status: 'pending' };
+  }
+  const fc = await waitScopeUpdate(conn, event.id, opts);
+  if (fc.applied !== true) {
+    if (fc.status === 'failed') throw scopeUpdateFailure(fc);
+    throw new CmcError('CMC scope update completed without being applied (the server does not apply approved scope requests)',
+      errorIds.SCOPE_UPDATE_NOT_APPLIED, fc);
+  }
+  const result = {
     updateAcceptEventId: event.id,
-    newDataGrantAccessId: (event.content && event.content.newAccessId) || null
+    dataGrantAccessId: fc.accessId || null,
+    // Kept for callers of earlier versions; same value as dataGrantAccessId.
+    newDataGrantAccessId: fc.accessId || null,
+    newPermissions: fc.newPermissions || [],
+    status: fc.status,
+    peerNotified: fc.status === 'completed'
   };
+  if (fc.status === 'failed') result.deliveryFailure = fc.failure;
+  return result;
 }
 
 /**
- * Refuse a scope-update proposal.
+ * Refuse a scope-update proposal. Same id and waiting rules as
+ * `acceptScopeUpdate`; resolves `{ updateRefuseEventId, status, peerNotified }`
+ * and throws `CmcError` when the server rejected the refusal.
  *
  * @param {Object} conn
  * @param {string} scopeRequestEventId
  * @param {Object} [opts]
  * @param {string} [opts.scopeStreamId]
  * @param {Object} [opts.reason]
- * @returns {Promise<{updateRefuseEventId:string}>}
+ * @param {boolean} [opts.waitForCompletion=true]
+ * @param {number}  [opts.completionTimeoutMs=20000]
+ * @param {number}  [opts.completionPollIntervalMs=200]
+ * @returns {Promise<{updateRefuseEventId:string, status:string, peerNotified?:boolean}>}
  */
 async function refuseScopeUpdate (conn, scopeRequestEventId, opts) {
   opts = opts || {};
@@ -1054,7 +1332,56 @@ async function refuseScopeUpdate (conn, scopeRequestEventId, opts) {
     type: ET_SCOPE_UPDATE,
     content
   }, 'event');
-  return { updateRefuseEventId: event.id };
+  if (opts.waitForCompletion === false) {
+    return { updateRefuseEventId: event.id, status: 'pending' };
+  }
+  const fc = await waitScopeUpdate(conn, event.id, opts);
+  // The refusal stands once the server recorded it (`applied: false`); only
+  // telling the collector may still be pending or failed.
+  if (fc.applied === false && fc.status !== 'completed') {
+    const failure = fc.failure && fc.failure.reason;
+    if (fc.status === 'failed' && !(typeof failure === 'string' && failure.startsWith('cmc-handler-delivery'))) {
+      throw scopeUpdateFailure(fc);
+    }
+    const result = { updateRefuseEventId: event.id, status: fc.status, peerNotified: false };
+    if (fc.status === 'failed') result.deliveryFailure = fc.failure;
+    return result;
+  }
+  if (fc.status === 'failed') throw scopeUpdateFailure(fc);
+  return { updateRefuseEventId: event.id, status: fc.status, peerNotified: true };
+}
+
+// Default wait for scope triggers. Must exceed the core's single outbound
+// delivery attempt (15 s by default): the grant is applied before delivery, so
+// giving up earlier would report a failure for a change that happened.
+const SCOPE_WAIT_DEFAULT_MS = 20000;
+
+/**
+ * Wait for a scope trigger to settle. On timeout, read it once more: an
+ * outcome the server already recorded (`applied` true or false) is returned
+ * as is (status still `delivered`, the peer not reached yet); otherwise throw
+ * `cmc-scope-update-outcome-unknown` rather than claiming a failure.
+ */
+async function waitScopeUpdate (conn, eventId, opts) {
+  try {
+    const finalEvent = await pollTriggerCompletion(conn, eventId, {
+      timeoutMs: opts.completionTimeoutMs || SCOPE_WAIT_DEFAULT_MS,
+      intervalMs: opts.completionPollIntervalMs || 200
+    });
+    return finalEvent.content || {};
+  } catch (err) {
+    if (!(err instanceof CmcError) || err.id !== errorIds.CAPABILITY_TIMEOUT) throw err;
+    const last = await conn.apiOne('events.getOne', { id: eventId }, 'event');
+    const lc = (last && last.content) || {};
+    if (typeof lc.applied === 'boolean') return lc;
+    throw new CmcError('CMC scope update outcome not known yet (last status: ' + lc.status + ')',
+      errorIds.SCOPE_UPDATE_OUTCOME_UNKNOWN, { updateEventId: eventId, lastStatus: lc.status });
+  }
+}
+
+function scopeUpdateFailure (fc) {
+  const reason = (fc.failure && fc.failure.reason) || errorIds.HANDLER_THREW;
+  return new CmcError('CMC scope update failed: ' + reason, reason, fc.failure);
 }
 
 async function resolveScopeRequestStream (conn, scopeRequestEventId) {
@@ -1077,12 +1404,52 @@ async function resolveScopeRequestStream (conn, scopeRequestEventId) {
 const REQUEST_ACCEPT_POSTMSG_TYPE = 'cmc-accept-result';
 
 /**
+ * Normalise `opts.expectedOrigin` to a serialized origin (lowercase
+ * scheme + host, default port dropped, no path or trailing slash), as
+ * found in `MessageEvent.origin`. Returns null when not set.
+ * @param {Object} [opts]
+ * @param {string} fnName  caller name, for the error message.
+ * @returns {string|null}
+ * @throws {CmcError} 'cmc-invalid-expected-origin' when not a parsable absolute URL.
+ */
+function normalizeExpectedOrigin (opts, fnName) {
+  const raw = opts && opts.expectedOrigin;
+  if (raw == null || raw === '') return null;
+  let origin = null;
+  if (typeof raw === 'string') {
+    try { origin = new URL(raw).origin; } catch (_e) { origin = null; }
+  }
+  if (origin == null || origin === 'null') {
+    throw new CmcError(fnName + ': opts.expectedOrigin must be an absolute URL such as \'https://account.example.com\' (got ' + JSON.stringify(raw) + ')',
+      'cmc-invalid-expected-origin');
+  }
+  return origin;
+}
+
+/**
+ * True when a `message` event was posted by the popup this helper opened
+ * (and, when `expectedOrigin` is set, from that origin). Any other
+ * window or frame can post to the opener, so a result is only trusted
+ * when `ev.source` is the popup. The origin is not compared to `authUrl`
+ * by default: the account app may redirect to another origin.
+ * @param {MessageEvent} ev
+ * @param {Window} popup
+ * @param {string|null} expectedOrigin  normalised origin, or null.
+ * @returns {boolean}
+ */
+function isFromPopup (ev, popup, expectedOrigin) {
+  if (ev == null || ev.source == null || ev.source !== popup) return false;
+  if (expectedOrigin != null && ev.origin !== expectedOrigin) return false;
+  return true;
+}
+
+/**
  * Build the `/cmc-accept` URL with query parameters for the
  * app-web-user-account hand-off. Use this if you want to drive the navigation
  * yourself (e.g., custom popup options, deep-link on mobile).
  *
  * @param {Object} opts
- * @param {string} opts.authUrl         - app-web-user-account base + `/cmc-accept` path (e.g. `https://pryv.github.io/app-web-user-account/cmc-accept`).
+ * @param {string} opts.authUrl         - app-web-user-account base + `/cmc-accept` path (e.g. `https://account.pryv.me/cmc-accept`).
  * @param {string} opts.pryvApi         - recipient's Pryv API base (e.g. `https://reg.pryv.me/`).
  * @param {string} opts.capabilityUrl   - capability URL from the requester's invite.
  * @param {string} opts.scopeStreamId   - recipient's `:_cmc:apps:<app>[:...]` stream.
@@ -1131,9 +1498,13 @@ function requestAcceptUrl (opts) {
  *
  * Popup mode (default):
  *   Opens a child window, listens for a `cmc-accept-result`
- *   postMessage from it, returns `{ ok, dataGrantApiEndpoint,
- *   acceptEventId }`. Rejects with CmcError on `ok: false`, on user
- *   closing the popup without acting, or on timeout.
+ *   postMessage from it (messages whose `source` is not that window
+ *   are ignored), returns `{ ok, acceptEventId }`. Rejects
+ *   with CmcError on `ok: false`, on user closing the popup without
+ *   acting, or on timeout. `acceptEventId` is an id on the accepter's
+ *   account and carries no access token: the requester obtains the
+ *   data-grant endpoint on its own side with `waitForAccept`
+ *   (`grantedAccessApiEndpoint`).
  *
  * Redirect mode:
  *   Navigates the current window to `/cmc-accept` with a `returnUrl`
@@ -1145,7 +1516,11 @@ function requestAcceptUrl (opts) {
  * @param {'popup'|'redirect'} [opts.mode='popup']
  * @param {string} [opts.popupFeatures]  `window.open` features string (popup mode).
  * @param {number} [opts.timeoutMs=600000]  popup-mode max wait (default 10 min).
- * @returns {Promise<{ok:boolean, dataGrantApiEndpoint?:string, acceptEventId?:string, reason?:string}>}
+ * @param {string} [opts.expectedOrigin]  popup mode: also require the result message to come from this
+ *   origin. Any absolute URL is accepted and reduced to its origin (`https://Account.Example.com:443/x`
+ *   becomes `https://account.example.com`); an unparsable value rejects with `cmc-invalid-expected-origin`.
+ *   Recommended whenever the account app's origin is known.
+ * @returns {Promise<{ok:boolean, acceptEventId?:string, reason?:string, redirected?:boolean}>}
  */
 function requestAccept (opts) {
   if (typeof window === 'undefined') {
@@ -1159,6 +1534,12 @@ function requestAccept (opts) {
   }
   // popup mode
   const features = (opts && opts.popupFeatures) || 'width=480,height=720,resizable=yes,scrollbars=yes';
+  let expectedOrigin;
+  try {
+    expectedOrigin = normalizeExpectedOrigin(opts, 'requestAccept');
+  } catch (e) {
+    return Promise.reject(e);
+  }
   const popup = window.open(url, 'cmcAccept', features);
   if (popup == null) {
     return Promise.reject(new CmcError('requestAccept: popup blocked. Pass opts.returnUrl + mode=\'redirect\' as a fallback.', 'cmc-accept-popup-blocked'));
@@ -1167,13 +1548,13 @@ function requestAccept (opts) {
   return new Promise(function (resolve, reject) {
     let settled = false;
     function onMessage (ev) {
-      const data = ev && ev.data;
+      if (!isFromPopup(ev, popup, expectedOrigin)) return;
+      const data = ev.data;
       if (data == null || data.type !== REQUEST_ACCEPT_POSTMSG_TYPE) return;
       settle();
       if (data.ok) {
         resolve({
           ok: true,
-          dataGrantApiEndpoint: data.dataGrantApiEndpoint,
           acceptEventId: data.acceptEventId
         });
       } else {
@@ -1222,7 +1603,7 @@ const REQUEST_SCOPE_UPDATE_POSTMSG_TYPE = 'cmc-scope-update-result';
  * @param {Object} opts
  * @param {string} opts.authUrl              - app-web-user-account base + `/cmc-scope-update`.
  * @param {string} opts.pryvApi              - user's Pryv API base.
- * @param {string} opts.scopeRequestEventId  - the collector-side scope-request event id.
+ * @param {string} opts.scopeRequestEventId  - the id of the request on the USER's account: `remoteScopeRequestEventId` from `proposeScopeUpdate` (not the collector-side trigger id).
  * @param {string} [opts.scopeStreamId]      - own collector stream (defaults to the request's home stream when omitted).
  * @param {string} [opts.returnUrl]          - switches to redirect mode.
  * @returns {string}
@@ -1261,7 +1642,8 @@ function requestScopeUpdateUrl (opts) {
  *
  * Popup mode (default):
  *   Opens a child window; listens for a `cmc-scope-update-result`
- *   postMessage from it. Resolves with `{ ok: true, updateEventId,
+ *   postMessage from it (messages whose `source` is not that window
+ *   are ignored). Resolves with `{ ok: true, updateEventId,
  *   action: 'accept'|'refuse' }` on success; rejects with CmcError on
  *   ok: false / user-cancel / popup-blocked / timeout.
  *
@@ -1275,6 +1657,10 @@ function requestScopeUpdateUrl (opts) {
  * @param {'popup'|'redirect'} [opts.mode='popup']
  * @param {string} [opts.popupFeatures]
  * @param {number} [opts.timeoutMs=600000]
+ * @param {string} [opts.expectedOrigin]  popup mode: also require the result message to come from this
+ *   origin. Any absolute URL is accepted and reduced to its origin (`https://Account.Example.com:443/x`
+ *   becomes `https://account.example.com`); an unparsable value rejects with `cmc-invalid-expected-origin`.
+ *   Recommended whenever the account app's origin is known.
  * @returns {Promise<{ok:boolean, updateEventId?:string, action?:'accept'|'refuse', reason?:string, redirected?:boolean}>}
  */
 function requestScopeUpdate (opts) {
@@ -1288,6 +1674,12 @@ function requestScopeUpdate (opts) {
     return Promise.resolve({ ok: true, redirected: true });
   }
   const features = (opts && opts.popupFeatures) || 'width=480,height=720,resizable=yes,scrollbars=yes';
+  let expectedOrigin;
+  try {
+    expectedOrigin = normalizeExpectedOrigin(opts, 'requestScopeUpdate');
+  } catch (e) {
+    return Promise.reject(e);
+  }
   const popup = window.open(url, 'cmcScopeUpdate', features);
   if (popup == null) {
     return Promise.reject(new CmcError('requestScopeUpdate: popup blocked. Pass opts.returnUrl + mode=\'redirect\' as a fallback.', 'cmc-scope-update-popup-blocked'));
@@ -1296,7 +1688,8 @@ function requestScopeUpdate (opts) {
   return new Promise(function (resolve, reject) {
     let settled = false;
     function onMessage (ev) {
-      const data = ev && ev.data;
+      if (!isFromPopup(ev, popup, expectedOrigin)) return;
+      const data = ev.data;
       if (data == null || data.type !== REQUEST_SCOPE_UPDATE_POSTMSG_TYPE) return;
       settle();
       if (data.ok) {
@@ -1304,6 +1697,7 @@ function requestScopeUpdate (opts) {
           ok: true,
           updateEventId: data.updateEventId,
           action: data.action,
+          peerNotified: data.peerNotified,
         });
       } else {
         reject(new CmcError('CMC scope-update hand-off returned ok=false: ' + (data.reason || 'unknown'),
@@ -1420,6 +1814,7 @@ module.exports = {
   createInvite,
   listInvites,
   getInviteStatus,
+  listInviteAccepters,
   revokeRelationship,
   invalidateCapability,
   proposeScopeUpdate,
@@ -1434,6 +1829,9 @@ module.exports = {
   sendSystemAck,
   acceptScopeUpdate,
   refuseScopeUpdate,
+  // revocation arrivals (inbox)
+  revocationFromEvent,
+  revocationMatches,
   // accept hand-off (apps without a personal token)
   requestAccept,
   requestAcceptUrl,
@@ -1442,6 +1840,399 @@ module.exports = {
   requestScopeUpdateUrl,
   // observation scopes
   scopes
+};
+
+
+/***/ },
+
+/***/ "./node_modules/@pryv/delegation/src/index.js"
+/*!****************************************************!*\
+  !*** ./node_modules/@pryv/delegation/src/index.js ***!
+  \****************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * @pryv/delegation — account-delegation client helpers.
+ *
+ * Thin, typed wrapper over a personal `pryv.Connection` for the server-side
+ * `delegations.*` API family (open-pryv.io `delegation` plugin). Account
+ * delegation lets one account (the "delegate", A) act on behalf of another
+ * (the "controlled" account, B) through a delegate personal-access token (PAT)
+ * minted on B — e.g. a parent running a child's account, or a co-guardian
+ * added to an existing one.
+ *
+ * Two sides of one relationship:
+ *   - B (the controlled account) invites a delegate, and is the ONLY party
+ *     that can authoritatively detach one (genuine login required).
+ *   - A (the delegate) accepts/refuses the invite, lists the accounts it
+ *     controls, mints a token for one, and can create brand-new controlled
+ *     accounts.
+ *
+ * Every method here maps to exactly one `delegations.*` API method, issued
+ * through `connection.apiOne(...)` (batch call). Errors carrying a
+ * `delegation-*` id surface as a typed {@link DelegationError} whose `.id`
+ * matches one of {@link errorIds}, so callers branch on a stable constant
+ * instead of parsing English `error.message`.
+ *
+ * See server-side `open-pryv.io/components/delegation/` +
+ * `components/api-server/src/{routes,methods}/delegations.ts`.
+ */
+
+// --- Relationship status ---------------------------------------------------
+// Mirrors the server `STATUS` enum (components/delegation/src/constants.ts).
+// `listDelegates()` / `listControlled()` entries carry one of these.
+const STATUS = Object.freeze({
+  /** A pending invite: sent (B side) / received (A side), not yet accepted. */
+  INVITE: 'invite',
+  /** An active relationship: the delegate holds (or can mint) a live PAT. */
+  ACTIVE: 'active',
+  /**
+   * A's local mirror discovered the relationship was torn down on B (a token
+   * mint answered 401/403). Advisory only — carries no authority; the row is
+   * user-dismissable via `dismissControlled(...)`.
+   */
+  STALE: 'stale'
+});
+
+// --- Typed error catalogue -------------------------------------------------
+// Mirror of the server-side DelegationErrorIds
+// (components/delegation/src/errorIds.ts). Match on these constants when a
+// `delegations.*` call rejects, instead of parsing `error.message`.
+const errorIds = Object.freeze({
+  // Guard hooks (a generic accesses/events/streams write hit a plugin-owned
+  // namespace — should not occur through this client, surfaced for safety).
+  CLIENTDATA_FORBIDDEN: 'delegation-clientdata-forbidden',
+  MANAGED_RESOURCE: 'delegation-managed-resource',
+  RESERVED_STREAM: 'delegation-reserved-stream',
+  // Handshake / lifecycle.
+  UNKNOWN_USERNAME: 'delegation-unknown-username',
+  SELF_NOT_ALLOWED: 'delegation-self-not-allowed',
+  DELEGATE_MISMATCH: 'delegation-delegate-mismatch',
+  ALREADY_EXISTS: 'delegation-already-exists',
+  DELIVERY_FAILED: 'delegation-delivery-failed',
+  /**
+   * The operation (detach / cancel) requires a genuine, freshly-authenticated
+   * login on the controlled account — a delegate PAT or control token cannot
+   * remove a delegation relationship. The UI must prompt the account owner to
+   * log in directly before retrying.
+   */
+  GENUINE_LOGIN_REQUIRED: 'delegation-genuine-login-required',
+  NOT_FOUND: 'delegation-not-found',
+  INVITE_EXPIRED: 'delegation-invite-expired',
+  NOT_ACTIVE: 'delegation-not-active',
+  USERNAME_TAKEN: 'delegation-username-taken',
+  UNKNOWN_CORE: 'delegation-unknown-core',
+  CREATION_FAILED: 'delegation-creation-failed',
+  PERSONAL_TOKEN_REQUIRED: 'delegation-personal-token-required',
+  MIRROR_NOT_STALE: 'delegation-mirror-not-stale',
+  /**
+   * A delegate token, or an access granted through the delegation, tried to
+   * create a durable grant on the controlled account through a path that
+   * records no delegation lineage (CMC consent accept / scope update /
+   * request). Only the account owner can.
+   */
+  GRANT_REQUIRES_OWNER: 'delegation-grant-requires-owner'
+});
+
+const DELEGATION_ID_VALUES = new Set(Object.values(errorIds));
+
+/**
+ * Typed error surfaced by {@link Delegation} methods when a `delegations.*`
+ * call rejects with a `delegation-*` id. `id` is the stable kebab-case string
+ * (one of {@link errorIds}); `cause` is the underlying `pryv` error; `data`
+ * is the server error's `data` payload when present.
+ */
+class DelegationError extends Error {
+  constructor (message, id, cause, data) {
+    super(message);
+    this.name = 'DelegationError';
+    this.id = id;
+    if (cause !== undefined) this.cause = cause;
+    if (data !== undefined) this.data = data;
+  }
+}
+
+/**
+ * Extract a Pryv API `error.id` from a thrown error, across the shapes the
+ * `pryv` client uses. `connection.apiOne` throws a `PryvError` whose
+ * `innerObject` is the batch call's `error` object (`{ id, message, data }`);
+ * `PryvError.fromApiResponse` sets `.id` / `.response` directly. Check all.
+ */
+function errorIdFrom (err) {
+  if (err == null) return null;
+  if (typeof err.id === 'string') return err.id;
+  const inner = err.innerObject;
+  if (inner != null) {
+    if (typeof inner.id === 'string') return inner.id;
+    if (inner.error != null && typeof inner.error.id === 'string') return inner.error.id;
+  }
+  const resp = err.response;
+  if (resp != null && resp.body != null && resp.body.error != null && typeof resp.body.error.id === 'string') {
+    return resp.body.error.id;
+  }
+  return null;
+}
+
+/** Pull the server error `data` payload from a thrown `pryv` error, if any. */
+function errorDataFrom (err) {
+  if (err == null) return undefined;
+  const inner = err.innerObject;
+  if (inner != null) {
+    if (inner.data !== undefined) return inner.data;
+    if (inner.error != null && inner.error.data !== undefined) return inner.error.data;
+  }
+  const resp = err.response;
+  if (resp != null && resp.body != null && resp.body.error != null) return resp.body.error.data;
+  return undefined;
+}
+
+/**
+ * Map a thrown `pryv` error to a {@link DelegationError} when it carries a
+ * `delegation-*` id; otherwise return it unchanged so transport / validation
+ * errors propagate as-is.
+ */
+function toDelegationError (err) {
+  const id = errorIdFrom(err);
+  if (id != null && (DELEGATION_ID_VALUES.has(id) || id.startsWith('delegation-'))) {
+    const message = (err && err.message) || id;
+    return new DelegationError(message, id, err, errorDataFrom(err));
+  }
+  return err;
+}
+
+/**
+ * Client for the `delegations.*` API family, bound to one personal
+ * `pryv.Connection`. Construct via {@link Delegation.fromConnection}.
+ */
+class Delegation {
+  /**
+   * @param {Object} connection  a personal `pryv.Connection`.
+   * @param {Object} [opts]
+   * @param {Object} [opts.pryv]  explicit `pryv` module (otherwise resolved
+   *   via `require('pryv')`; pass it in browser bundles where `require` is
+   *   unavailable — needed only by `openControlled`).
+   */
+  constructor (connection, opts) {
+    if (connection == null) throw new Error('Delegation: a pryv.Connection is required');
+    this.connection = connection;
+    this._pryvModule = (opts && opts.pryv) || null;
+  }
+
+  /**
+   * Wrap a personal `pryv.Connection` in a {@link Delegation} client.
+   * @param {Object} connection  a personal `pryv.Connection`.
+   * @param {Object} [opts]  see the constructor.
+   * @returns {Delegation}
+   */
+  static fromConnection (connection, opts) {
+    return new Delegation(connection, opts);
+  }
+
+  /** @private Resolve the `pryv` module (explicit opt or lazy require). */
+  _getPryv () {
+    if (this._pryvModule != null) return this._pryvModule;
+    this._pryvModule = __webpack_require__(/*! pryv */ "./node_modules/pryv/src/index.js");
+    return this._pryvModule;
+  }
+
+  /** @private One batch call, remapping `delegation-*` errors to DelegationError. */
+  async _apiOne (method, params, expectedKey) {
+    try {
+      return await this.connection.apiOne(method, params || {}, expectedKey);
+    } catch (err) {
+      throw toDelegationError(err);
+    }
+  }
+
+  // ---- B side (the controlled account) ----------------------------------
+
+  /**
+   * B invites a delegate. `POST /delegations/attach-request`.
+   * A delegate PAT acting as B MAY call this (that is how a delegate adds a
+   * co-delegate).
+   *
+   * @param {string} delegateUsername  the account to invite as delegate.
+   * @returns {Promise<DelegationRecord>} the pending invite record
+   *   `{ relId, delegate:{username}, status:'invite', requestedAt, expiresAt }`.
+   */
+  async requestAttach (delegateUsername) {
+    return await this._apiOne('delegations.requestAttach', { delegateUsername }, 'delegation');
+  }
+
+  /**
+   * B cancels a pending invite it issued. `POST /delegations/delegates/{username}/cancel`.
+   * Genuine-login-gated on B (a delegate PAT cannot cancel B's invites) →
+   * may throw {@link DelegationError} `delegation-genuine-login-required`.
+   *
+   * @param {string} delegateUsername  the invited delegate to cancel.
+   * @returns {Promise<void>}
+   */
+  async cancelInvite (delegateUsername) {
+    await this._apiOne('delegations.cancelInvite', { username: delegateUsername });
+  }
+
+  /**
+   * List the delegates of the connected (B) account. `GET /delegations/delegates`.
+   *
+   * @returns {Promise<DelegateRecord[]>} each `{ relId, delegate:{username,
+   *   hostSlug}, status, requestedAt, activatedAt?, lastTokenIssuedAt? }`.
+   */
+  async listDelegates () {
+    return await this._apiOne('delegations.listDelegates', {}, 'delegates');
+  }
+
+  /**
+   * B detaches a delegate — THE authoritative teardown. `DELETE
+   * /delegations/delegates/{username}`. Removes the delegate's PAT + all
+   * marker accesses on B (active), or cancels the pending invite.
+   *
+   * **Requires a genuine login on B.** A delegate PAT or control token is
+   * rejected with {@link DelegationError} `delegation-genuine-login-required`
+   * — surface it distinctly so the UI can explain the account owner must log
+   * in directly (not through a delegated session) to remove a delegate.
+   *
+   * The account owner may keep consent grants the delegate gave (core
+   * 2.0.0-rc.31 or later): `opts.keepAccessIds` lists them; every other
+   * consent grant of the relationship is withdrawn. Each id must be such a
+   * grant, else `delegation-invalid-keep-list` and nothing is changed. An
+   * older core ignores the list and withdraws them all.
+   *
+   * @param {string} delegateUsername  the delegate to detach.
+   * @param {Object} [opts]
+   * @param {string[]} [opts.keepAccessIds]  consent grants the owner keeps.
+   * @returns {Promise<void>}
+   */
+  async detachDelegate (delegateUsername, opts) {
+    const params = { username: delegateUsername };
+    if (opts != null && Array.isArray(opts.keepAccessIds) && opts.keepAccessIds.length > 0) {
+      params.keepAccessIds = opts.keepAccessIds.slice();
+    }
+    await this._apiOne('delegations.detachDelegate', params);
+  }
+
+  // ---- A side (the delegate) --------------------------------------------
+
+  /**
+   * A accepts a pending invite from a controlled account.
+   * `POST /delegations/controlled/{username}/accept`.
+   *
+   * @param {string} controlledUsername  the inviting account.
+   * @returns {Promise<DelegationRecord>} `{ relId, controlled:{username},
+   *   status:'active', activatedAt }`.
+   */
+  async acceptAttach (controlledUsername) {
+    return await this._apiOne('delegations.acceptAttach', { username: controlledUsername }, 'delegation');
+  }
+
+  /**
+   * A refuses a pending invite. `POST /delegations/controlled/{username}/refuse`.
+   * A unilateral decline (not a detach) — gated on A's personal token.
+   *
+   * @param {string} controlledUsername  the inviting account.
+   * @returns {Promise<void>}
+   */
+  async refuseAttach (controlledUsername) {
+    await this._apiOne('delegations.refuseAttach', { username: controlledUsername });
+  }
+
+  /**
+   * List the accounts the connected (A) account controls.
+   * `GET /delegations/controlled`.
+   *
+   * @returns {Promise<ControlledRecord[]>} each `{ relId, controlled:{username,
+   *   hostSlug}, status, requestedAt, activatedAt? }`. `status` may be
+   *   `'stale'` — see {@link dismissControlled}.
+   */
+  async listControlled () {
+    return await this._apiOne('delegations.listControlled', {}, 'controlled');
+  }
+
+  /**
+   * A dismisses a local `stale` mirror row (housekeeping). `DELETE
+   * /delegations/controlled/{username}`. Removes no authority and never
+   * touches B; rejects a non-stale mirror with `delegation-mirror-not-stale`.
+   *
+   * @param {string} controlledUsername  the stale controlled account to drop.
+   * @returns {Promise<void>}
+   */
+  async dismissControlled (controlledUsername) {
+    await this._apiOne('delegations.dismissControlled', { username: controlledUsername });
+  }
+
+  /**
+   * A mints (or refreshes) a delegate PAT for an active controlled account.
+   * `POST /delegations/controlled/{username}/token`. On a torn-down
+   * relationship the mirror flips to `stale` and this throws
+   * {@link DelegationError} `delegation-not-active`.
+   *
+   * @param {string} controlledUsername  the controlled account.
+   * @returns {Promise<{token: string, apiEndpoint: string}>} the delegate PAT
+   *   and the controlled account's API base — use them to talk to B directly.
+   */
+  async getToken (controlledUsername) {
+    const res = await this._apiOne('delegations.getToken', { username: controlledUsername });
+    return { token: res.token, apiEndpoint: res.apiEndpoint };
+  }
+
+  /**
+   * One-call "act as the controlled account": mint a token and return a ready
+   * `pryv.Connection` onto the controlled account (B).
+   *
+   * Composes {@link getToken} + connection construction. Needs the `pryv`
+   * module — resolved via `require('pryv')` in Node, or the `opts.pryv` passed
+   * to {@link Delegation.fromConnection} in a browser bundle.
+   *
+   * @param {string} controlledUsername  the controlled account.
+   * @returns {Promise<Object>} a `pryv.Connection` authenticated as B.
+   */
+  async openControlled (controlledUsername) {
+    const { token, apiEndpoint } = await this.getToken(controlledUsername);
+    const pryv = this._getPryv();
+    // getToken returns the token + the controlled core's API base separately;
+    // fold them into one token-bearing apiEndpoint the Connection accepts.
+    const { endpoint } = pryv.utils.extractTokenAndAPIEndpoint(apiEndpoint);
+    const fullApiEndpoint = pryv.utils.buildAPIEndpoint({ endpoint, token });
+    return new pryv.Connection(fullApiEndpoint);
+  }
+
+  /**
+   * A creates a brand-new controlled account, active at birth.
+   * `POST /delegations/controlled`. `email` / `password` are optional — a
+   * password-less account is reachable only through delegates until one sets
+   * a password. `core` picks the target core (default = A's own).
+   *
+   * @param {Object} params
+   * @param {string} params.username   the new account's username.
+   * @param {string} [params.email]    optional email.
+   * @param {string} [params.password] optional password (random if omitted).
+   * @param {string} [params.core]     optional target core (id or URL).
+   * @param {string} [params.language] optional preferred language.
+   * @returns {Promise<{delegation: DelegationRecord, apiEndpoint?: string}>}
+   */
+  async createAccount (params) {
+    if (params == null || typeof params.username !== 'string' || params.username.length === 0) {
+      throw new Error('createAccount: params.username is required');
+    }
+    const body = { username: params.username };
+    if (params.email !== undefined) body.email = params.email;
+    if (params.password !== undefined) body.password = params.password;
+    if (params.core !== undefined) body.core = params.core;
+    if (params.language !== undefined) body.language = params.language;
+    const res = await this._apiOne('delegations.createAccount', body);
+    return { delegation: res.delegation, apiEndpoint: res.apiEndpoint };
+  }
+}
+
+module.exports = {
+  Delegation,
+  DelegationError,
+  errorIds,
+  STATUS
 };
 
 
@@ -1501,7 +2292,7 @@ class EventsCipher {
    * `encrypt` is optional (a decrypt-only method supports reading existing
    * encrypted events but cannot produce new ones).
    * @param {string} name
-   * @param {{ decrypt: Function, encrypt?: Function }} method
+   * @param {{ decrypt: Function, encrypt?: Function, encryptBytes?: Function, decryptBytes?: Function }} method
    * @returns {EventsCipher} this, for chaining.
    */
   registerMethod (name, method) {
@@ -1527,7 +2318,7 @@ class EventsCipher {
    * @param {*} [params.hint]
    * @returns {Promise<{ type: string, content: { payload: string, keyRef?: string, hint?: * } }>}
    */
-  async encryptEventContent (material, params = {}) {
+  async encryptEventContent (material, params = /** @type {any} */ ({})) {
     const { method: methodName, keyRef, hint } = params;
     const method = this._methods[methodName];
     if (!method) {
@@ -1558,7 +2349,7 @@ class EventsCipher {
    * @param {*} [params.hint]
    * @returns {Promise<Object>} a new encrypted event (input is not mutated).
    */
-  async encryptEvent (plainEvent, params = {}) {
+  async encryptEvent (plainEvent, params = /** @type {any} */ ({})) {
     const { type, content } = await this.encryptEventContent(plainEvent, params);
     const encrypted = Object.assign({}, plainEvent);
     encrypted.type = type;
@@ -1635,7 +2426,7 @@ class EventsCipher {
    * @param {*} [params.hint]
    * @returns {Promise<Uint8Array>} raw payload-layout bytes.
    */
-  async encryptAttachmentData (bytes, params = {}) {
+  async encryptAttachmentData (bytes, params = /** @type {any} */ ({})) {
     const { method: methodName, keyRef, hint } = params;
     const method = this._methods[methodName];
     if (!method) {
@@ -2053,7 +2844,11 @@ async function importKey (key) {
   if (raw.length !== KEY_LENGTH) {
     throw new Error(`aes-256-gcm: key must be ${KEY_LENGTH} bytes, got ${raw.length}`);
   }
-  return globalThis.crypto.subtle.importKey('raw', raw, ALGORITHM, false, ['encrypt', 'decrypt']);
+  // Cast at the Web Crypto boundary: since TypeScript 5.7 a bare
+  // `Uint8Array` is `Uint8Array<ArrayBufferLike>`, which admits
+  // SharedArrayBuffer and so is not a `BufferSource`. These bytes never
+  // come from shared memory, and Web Crypto rejects it regardless.
+  return globalThis.crypto.subtle.importKey('raw', /** @type {BufferSource} */ (raw), ALGORITHM, false, ['encrypt', 'decrypt']);
 }
 
 /**
@@ -2068,7 +2863,7 @@ async function importKey (key) {
 async function encryptBytes (bytes, key) {
   const cryptoKey = await importKey(key);
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
-  const cipherBuffer = await globalThis.crypto.subtle.encrypt({ name: ALGORITHM, iv }, cryptoKey, bytes);
+  const cipherBuffer = await globalThis.crypto.subtle.encrypt({ name: ALGORITHM, iv }, cryptoKey, /** @type {BufferSource} */ (bytes));
   const cipherBytes = new Uint8Array(cipherBuffer);
 
   const out = new Uint8Array(iv.length + cipherBytes.length);
@@ -2182,7 +2977,7 @@ function evpBytesToKey (passphrase, salt) {
     input.set(block, 0);
     input.set(passphrase, block.length);
     input.set(salt, block.length + passphrase.length);
-    block = md5(input);
+    block = /** @type {Uint8Array<ArrayBuffer>} */ (md5(input));
     const take = Math.min(block.length, needed - filled);
     derived.set(block.subarray(0, take), filled);
     filled += take;
@@ -2222,8 +3017,13 @@ async function decrypt (content, key) {
   const passphrase = new TextEncoder().encode(key);
   const { key: keyBytes, iv } = evpBytesToKey(passphrase, salt);
 
-  const cryptoKey = await globalThis.crypto.subtle.importKey('raw', keyBytes, 'AES-CBC', false, ['decrypt']);
-  const plainBuffer = await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, cryptoKey, ciphertext);
+  // See the boundary note in aes-256-gcm.js.
+  const cryptoKey = await globalThis.crypto.subtle.importKey('raw', /** @type {BufferSource} */ (keyBytes), 'AES-CBC', false, ['decrypt']);
+  const plainBuffer = await globalThis.crypto.subtle.decrypt(
+    { name: 'AES-CBC', iv: /** @type {BufferSource} */ (iv) },
+    cryptoKey,
+    /** @type {BufferSource} */ (ciphertext)
+  );
   return JSON.parse(new TextDecoder().decode(plainBuffer));
 }
 
@@ -2346,29 +3146,30 @@ async function normalizeKey (material, usage) {
   }
 
   if (wantPrivate) {
-    return subtle.importKey('pkcs8', bytes, ALGORITHM, false, ['deriveBits']);
+  // See the boundary note in aes-256-gcm.js.
+    return subtle.importKey('pkcs8', /** @type {BufferSource} */ (bytes), ALGORITHM, false, ['deriveBits']);
   }
   if (bytes.length !== EPH_PUB_LENGTH || bytes[0] !== 0x04) {
     throw new Error('ecies-aes-256-gcm: public key must be a 65-byte SEC1 uncompressed point (0x04 || X || Y)');
   }
-  return subtle.importKey('raw', bytes, ALGORITHM, false, []);
+  return subtle.importKey('raw', /** @type {BufferSource} */ (bytes), ALGORITHM, false, []);
 }
 
 /**
  * Derive the AES-256-GCM key from an ECDH shared secret via HKDF-SHA-256.
  * @param {Uint8Array} secret - the 32-byte ECDH shared secret.
- * @param {string[]} usages
+ * @param {KeyUsage[]} usages
  * @returns {Promise<CryptoKey>}
  */
 async function deriveAesKey (secret, usages) {
   const subtle = globalThis.crypto.subtle;
-  const hkdfKey = await subtle.importKey('raw', secret, 'HKDF', false, ['deriveBits']);
+  const hkdfKey = await subtle.importKey('raw', /** @type {BufferSource} */ (secret), 'HKDF', false, ['deriveBits']);
   const aesBits = await subtle.deriveBits(
     { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode(INFO) },
     hkdfKey,
     256
   );
-  return subtle.importKey('raw', new Uint8Array(aesBits), 'AES-GCM', false, usages);
+  return subtle.importKey('raw', /** @type {BufferSource} */ (new Uint8Array(aesBits)), 'AES-GCM', false, usages);
 }
 
 /**
@@ -2390,7 +3191,7 @@ async function encryptBytes (bytes, key) {
   const aesKey = await deriveAesKey(new Uint8Array(secretBits), ['encrypt']);
 
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
-  const cipherBuffer = await subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, bytes);
+  const cipherBuffer = await subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, /** @type {BufferSource} */ (bytes));
   const cipherBytes = new Uint8Array(cipherBuffer);
 
   const ephRaw = new Uint8Array(await subtle.exportKey('raw', ephemeral.publicKey));
@@ -3070,7 +3871,10 @@ const Changes = __webpack_require__(/*! ./Changes */ "./node_modules/@pryv/monit
 module.exports = async function _updateStreams (monitor) {
   try {
     const result = await monitor.connection.get('streams');
-    if (!result.streams) { throw new Error('Invalid response ' + JSON.stringify(result)); }
+    if (!result.streams) {
+      // The answer rides on `innerObject`, never in the message (it holds stream data).
+      throw Object.assign(new Error('Invalid streams.get answer: no streams'), { innerObject: result });
+    }
     monitor.emit(Changes.STREAMS, result.streams);
   } catch (e) {
     monitor.emit(Changes.ERROR, e);
@@ -3328,5899 +4132,6 @@ module.exports = function (pryv) {
   SocketIO(pryv.Connection);
 };
 
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/ajv.js"
-/*!**************************************!*\
-  !*** ./node_modules/ajv/dist/ajv.js ***!
-  \**************************************/
-(module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MissingRefError = exports.ValidationError = exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = exports.Ajv = void 0;
-const core_1 = __webpack_require__(/*! ./core */ "./node_modules/ajv/dist/core.js");
-const draft7_1 = __webpack_require__(/*! ./vocabularies/draft7 */ "./node_modules/ajv/dist/vocabularies/draft7.js");
-const discriminator_1 = __webpack_require__(/*! ./vocabularies/discriminator */ "./node_modules/ajv/dist/vocabularies/discriminator/index.js");
-const draft7MetaSchema = __webpack_require__(/*! ./refs/json-schema-draft-07.json */ "./node_modules/ajv/dist/refs/json-schema-draft-07.json");
-const META_SUPPORT_DATA = ["/properties"];
-const META_SCHEMA_ID = "http://json-schema.org/draft-07/schema";
-class Ajv extends core_1.default {
-    _addVocabularies() {
-        super._addVocabularies();
-        draft7_1.default.forEach((v) => this.addVocabulary(v));
-        if (this.opts.discriminator)
-            this.addKeyword(discriminator_1.default);
-    }
-    _addDefaultMetaSchema() {
-        super._addDefaultMetaSchema();
-        if (!this.opts.meta)
-            return;
-        const metaSchema = this.opts.$data
-            ? this.$dataMetaSchema(draft7MetaSchema, META_SUPPORT_DATA)
-            : draft7MetaSchema;
-        this.addMetaSchema(metaSchema, META_SCHEMA_ID, false);
-        this.refs["http://json-schema.org/schema"] = META_SCHEMA_ID;
-    }
-    defaultMeta() {
-        return (this.opts.defaultMeta =
-            super.defaultMeta() || (this.getSchema(META_SCHEMA_ID) ? META_SCHEMA_ID : undefined));
-    }
-}
-exports.Ajv = Ajv;
-module.exports = exports = Ajv;
-module.exports.Ajv = Ajv;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports["default"] = Ajv;
-var validate_1 = __webpack_require__(/*! ./compile/validate */ "./node_modules/ajv/dist/compile/validate/index.js");
-Object.defineProperty(exports, "KeywordCxt", ({ enumerable: true, get: function () { return validate_1.KeywordCxt; } }));
-var codegen_1 = __webpack_require__(/*! ./compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-Object.defineProperty(exports, "_", ({ enumerable: true, get: function () { return codegen_1._; } }));
-Object.defineProperty(exports, "str", ({ enumerable: true, get: function () { return codegen_1.str; } }));
-Object.defineProperty(exports, "stringify", ({ enumerable: true, get: function () { return codegen_1.stringify; } }));
-Object.defineProperty(exports, "nil", ({ enumerable: true, get: function () { return codegen_1.nil; } }));
-Object.defineProperty(exports, "Name", ({ enumerable: true, get: function () { return codegen_1.Name; } }));
-Object.defineProperty(exports, "CodeGen", ({ enumerable: true, get: function () { return codegen_1.CodeGen; } }));
-var validation_error_1 = __webpack_require__(/*! ./runtime/validation_error */ "./node_modules/ajv/dist/runtime/validation_error.js");
-Object.defineProperty(exports, "ValidationError", ({ enumerable: true, get: function () { return validation_error_1.default; } }));
-var ref_error_1 = __webpack_require__(/*! ./compile/ref_error */ "./node_modules/ajv/dist/compile/ref_error.js");
-Object.defineProperty(exports, "MissingRefError", ({ enumerable: true, get: function () { return ref_error_1.default; } }));
-//# sourceMappingURL=ajv.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/codegen/code.js"
-/*!*******************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/codegen/code.js ***!
-  \*******************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = void 0;
-// eslint-disable-next-line @typescript-eslint/no-extraneous-class
-class _CodeOrName {
-}
-exports._CodeOrName = _CodeOrName;
-exports.IDENTIFIER = /^[a-z$_][a-z$_0-9]*$/i;
-class Name extends _CodeOrName {
-    constructor(s) {
-        super();
-        if (!exports.IDENTIFIER.test(s))
-            throw new Error("CodeGen: name must be a valid identifier");
-        this.str = s;
-    }
-    toString() {
-        return this.str;
-    }
-    emptyStr() {
-        return false;
-    }
-    get names() {
-        return { [this.str]: 1 };
-    }
-}
-exports.Name = Name;
-class _Code extends _CodeOrName {
-    constructor(code) {
-        super();
-        this._items = typeof code === "string" ? [code] : code;
-    }
-    toString() {
-        return this.str;
-    }
-    emptyStr() {
-        if (this._items.length > 1)
-            return false;
-        const item = this._items[0];
-        return item === "" || item === '""';
-    }
-    get str() {
-        var _a;
-        return ((_a = this._str) !== null && _a !== void 0 ? _a : (this._str = this._items.reduce((s, c) => `${s}${c}`, "")));
-    }
-    get names() {
-        var _a;
-        return ((_a = this._names) !== null && _a !== void 0 ? _a : (this._names = this._items.reduce((names, c) => {
-            if (c instanceof Name)
-                names[c.str] = (names[c.str] || 0) + 1;
-            return names;
-        }, {})));
-    }
-}
-exports._Code = _Code;
-exports.nil = new _Code("");
-function _(strs, ...args) {
-    const code = [strs[0]];
-    let i = 0;
-    while (i < args.length) {
-        addCodeArg(code, args[i]);
-        code.push(strs[++i]);
-    }
-    return new _Code(code);
-}
-exports._ = _;
-const plus = new _Code("+");
-function str(strs, ...args) {
-    const expr = [safeStringify(strs[0])];
-    let i = 0;
-    while (i < args.length) {
-        expr.push(plus);
-        addCodeArg(expr, args[i]);
-        expr.push(plus, safeStringify(strs[++i]));
-    }
-    optimize(expr);
-    return new _Code(expr);
-}
-exports.str = str;
-function addCodeArg(code, arg) {
-    if (arg instanceof _Code)
-        code.push(...arg._items);
-    else if (arg instanceof Name)
-        code.push(arg);
-    else
-        code.push(interpolate(arg));
-}
-exports.addCodeArg = addCodeArg;
-function optimize(expr) {
-    let i = 1;
-    while (i < expr.length - 1) {
-        if (expr[i] === plus) {
-            const res = mergeExprItems(expr[i - 1], expr[i + 1]);
-            if (res !== undefined) {
-                expr.splice(i - 1, 3, res);
-                continue;
-            }
-            expr[i++] = "+";
-        }
-        i++;
-    }
-}
-function mergeExprItems(a, b) {
-    if (b === '""')
-        return a;
-    if (a === '""')
-        return b;
-    if (typeof a == "string") {
-        if (b instanceof Name || a[a.length - 1] !== '"')
-            return;
-        if (typeof b != "string")
-            return `${a.slice(0, -1)}${b}"`;
-        if (b[0] === '"')
-            return a.slice(0, -1) + b.slice(1);
-        return;
-    }
-    if (typeof b == "string" && b[0] === '"' && !(a instanceof Name))
-        return `"${a}${b.slice(1)}`;
-    return;
-}
-function strConcat(c1, c2) {
-    return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str `${c1}${c2}`;
-}
-exports.strConcat = strConcat;
-// TODO do not allow arrays here
-function interpolate(x) {
-    return typeof x == "number" || typeof x == "boolean" || x === null
-        ? x
-        : safeStringify(Array.isArray(x) ? x.join(",") : x);
-}
-function stringify(x) {
-    return new _Code(safeStringify(x));
-}
-exports.stringify = stringify;
-function safeStringify(x) {
-    return JSON.stringify(x)
-        .replace(/\u2028/g, "\\u2028")
-        .replace(/\u2029/g, "\\u2029");
-}
-exports.safeStringify = safeStringify;
-function getProperty(key) {
-    return typeof key == "string" && exports.IDENTIFIER.test(key) ? new _Code(`.${key}`) : _ `[${key}]`;
-}
-exports.getProperty = getProperty;
-//Does best effort to format the name properly
-function getEsmExportName(key) {
-    if (typeof key == "string" && exports.IDENTIFIER.test(key)) {
-        return new _Code(`${key}`);
-    }
-    throw new Error(`CodeGen: invalid export name: ${key}, use explicit $id name mapping`);
-}
-exports.getEsmExportName = getEsmExportName;
-function regexpCode(rx) {
-    return new _Code(rx.toString());
-}
-exports.regexpCode = regexpCode;
-//# sourceMappingURL=code.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/codegen/index.js"
-/*!********************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/codegen/index.js ***!
-  \********************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.or = exports.and = exports.not = exports.CodeGen = exports.operators = exports.varKinds = exports.ValueScopeName = exports.ValueScope = exports.Scope = exports.Name = exports.regexpCode = exports.stringify = exports.getProperty = exports.nil = exports.strConcat = exports.str = exports._ = void 0;
-const code_1 = __webpack_require__(/*! ./code */ "./node_modules/ajv/dist/compile/codegen/code.js");
-const scope_1 = __webpack_require__(/*! ./scope */ "./node_modules/ajv/dist/compile/codegen/scope.js");
-var code_2 = __webpack_require__(/*! ./code */ "./node_modules/ajv/dist/compile/codegen/code.js");
-Object.defineProperty(exports, "_", ({ enumerable: true, get: function () { return code_2._; } }));
-Object.defineProperty(exports, "str", ({ enumerable: true, get: function () { return code_2.str; } }));
-Object.defineProperty(exports, "strConcat", ({ enumerable: true, get: function () { return code_2.strConcat; } }));
-Object.defineProperty(exports, "nil", ({ enumerable: true, get: function () { return code_2.nil; } }));
-Object.defineProperty(exports, "getProperty", ({ enumerable: true, get: function () { return code_2.getProperty; } }));
-Object.defineProperty(exports, "stringify", ({ enumerable: true, get: function () { return code_2.stringify; } }));
-Object.defineProperty(exports, "regexpCode", ({ enumerable: true, get: function () { return code_2.regexpCode; } }));
-Object.defineProperty(exports, "Name", ({ enumerable: true, get: function () { return code_2.Name; } }));
-var scope_2 = __webpack_require__(/*! ./scope */ "./node_modules/ajv/dist/compile/codegen/scope.js");
-Object.defineProperty(exports, "Scope", ({ enumerable: true, get: function () { return scope_2.Scope; } }));
-Object.defineProperty(exports, "ValueScope", ({ enumerable: true, get: function () { return scope_2.ValueScope; } }));
-Object.defineProperty(exports, "ValueScopeName", ({ enumerable: true, get: function () { return scope_2.ValueScopeName; } }));
-Object.defineProperty(exports, "varKinds", ({ enumerable: true, get: function () { return scope_2.varKinds; } }));
-exports.operators = {
-    GT: new code_1._Code(">"),
-    GTE: new code_1._Code(">="),
-    LT: new code_1._Code("<"),
-    LTE: new code_1._Code("<="),
-    EQ: new code_1._Code("==="),
-    NEQ: new code_1._Code("!=="),
-    NOT: new code_1._Code("!"),
-    OR: new code_1._Code("||"),
-    AND: new code_1._Code("&&"),
-    ADD: new code_1._Code("+"),
-};
-class Node {
-    optimizeNodes() {
-        return this;
-    }
-    optimizeNames(_names, _constants) {
-        return this;
-    }
-}
-class Def extends Node {
-    constructor(varKind, name, rhs) {
-        super();
-        this.varKind = varKind;
-        this.name = name;
-        this.rhs = rhs;
-    }
-    render({ es5, _n }) {
-        const varKind = es5 ? scope_1.varKinds.var : this.varKind;
-        const rhs = this.rhs === undefined ? "" : ` = ${this.rhs}`;
-        return `${varKind} ${this.name}${rhs};` + _n;
-    }
-    optimizeNames(names, constants) {
-        if (!names[this.name.str])
-            return;
-        if (this.rhs)
-            this.rhs = optimizeExpr(this.rhs, names, constants);
-        return this;
-    }
-    get names() {
-        return this.rhs instanceof code_1._CodeOrName ? this.rhs.names : {};
-    }
-}
-class Assign extends Node {
-    constructor(lhs, rhs, sideEffects) {
-        super();
-        this.lhs = lhs;
-        this.rhs = rhs;
-        this.sideEffects = sideEffects;
-    }
-    render({ _n }) {
-        return `${this.lhs} = ${this.rhs};` + _n;
-    }
-    optimizeNames(names, constants) {
-        if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
-            return;
-        this.rhs = optimizeExpr(this.rhs, names, constants);
-        return this;
-    }
-    get names() {
-        const names = this.lhs instanceof code_1.Name ? {} : { ...this.lhs.names };
-        return addExprNames(names, this.rhs);
-    }
-}
-class AssignOp extends Assign {
-    constructor(lhs, op, rhs, sideEffects) {
-        super(lhs, rhs, sideEffects);
-        this.op = op;
-    }
-    render({ _n }) {
-        return `${this.lhs} ${this.op}= ${this.rhs};` + _n;
-    }
-}
-class Label extends Node {
-    constructor(label) {
-        super();
-        this.label = label;
-        this.names = {};
-    }
-    render({ _n }) {
-        return `${this.label}:` + _n;
-    }
-}
-class Break extends Node {
-    constructor(label) {
-        super();
-        this.label = label;
-        this.names = {};
-    }
-    render({ _n }) {
-        const label = this.label ? ` ${this.label}` : "";
-        return `break${label};` + _n;
-    }
-}
-class Throw extends Node {
-    constructor(error) {
-        super();
-        this.error = error;
-    }
-    render({ _n }) {
-        return `throw ${this.error};` + _n;
-    }
-    get names() {
-        return this.error.names;
-    }
-}
-class AnyCode extends Node {
-    constructor(code) {
-        super();
-        this.code = code;
-    }
-    render({ _n }) {
-        return `${this.code};` + _n;
-    }
-    optimizeNodes() {
-        return `${this.code}` ? this : undefined;
-    }
-    optimizeNames(names, constants) {
-        this.code = optimizeExpr(this.code, names, constants);
-        return this;
-    }
-    get names() {
-        return this.code instanceof code_1._CodeOrName ? this.code.names : {};
-    }
-}
-class ParentNode extends Node {
-    constructor(nodes = []) {
-        super();
-        this.nodes = nodes;
-    }
-    render(opts) {
-        return this.nodes.reduce((code, n) => code + n.render(opts), "");
-    }
-    optimizeNodes() {
-        const { nodes } = this;
-        let i = nodes.length;
-        while (i--) {
-            const n = nodes[i].optimizeNodes();
-            if (Array.isArray(n))
-                nodes.splice(i, 1, ...n);
-            else if (n)
-                nodes[i] = n;
-            else
-                nodes.splice(i, 1);
-        }
-        return nodes.length > 0 ? this : undefined;
-    }
-    optimizeNames(names, constants) {
-        const { nodes } = this;
-        let i = nodes.length;
-        while (i--) {
-            // iterating backwards improves 1-pass optimization
-            const n = nodes[i];
-            if (n.optimizeNames(names, constants))
-                continue;
-            subtractNames(names, n.names);
-            nodes.splice(i, 1);
-        }
-        return nodes.length > 0 ? this : undefined;
-    }
-    get names() {
-        return this.nodes.reduce((names, n) => addNames(names, n.names), {});
-    }
-}
-class BlockNode extends ParentNode {
-    render(opts) {
-        return "{" + opts._n + super.render(opts) + "}" + opts._n;
-    }
-}
-class Root extends ParentNode {
-}
-class Else extends BlockNode {
-}
-Else.kind = "else";
-class If extends BlockNode {
-    constructor(condition, nodes) {
-        super(nodes);
-        this.condition = condition;
-    }
-    render(opts) {
-        let code = `if(${this.condition})` + super.render(opts);
-        if (this.else)
-            code += "else " + this.else.render(opts);
-        return code;
-    }
-    optimizeNodes() {
-        super.optimizeNodes();
-        const cond = this.condition;
-        if (cond === true)
-            return this.nodes; // else is ignored here
-        let e = this.else;
-        if (e) {
-            const ns = e.optimizeNodes();
-            e = this.else = Array.isArray(ns) ? new Else(ns) : ns;
-        }
-        if (e) {
-            if (cond === false)
-                return e instanceof If ? e : e.nodes;
-            if (this.nodes.length)
-                return this;
-            return new If(not(cond), e instanceof If ? [e] : e.nodes);
-        }
-        if (cond === false || !this.nodes.length)
-            return undefined;
-        return this;
-    }
-    optimizeNames(names, constants) {
-        var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        if (!(super.optimizeNames(names, constants) || this.else))
-            return;
-        this.condition = optimizeExpr(this.condition, names, constants);
-        return this;
-    }
-    get names() {
-        const names = super.names;
-        addExprNames(names, this.condition);
-        if (this.else)
-            addNames(names, this.else.names);
-        return names;
-    }
-}
-If.kind = "if";
-class For extends BlockNode {
-}
-For.kind = "for";
-class ForLoop extends For {
-    constructor(iteration) {
-        super();
-        this.iteration = iteration;
-    }
-    render(opts) {
-        return `for(${this.iteration})` + super.render(opts);
-    }
-    optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
-            return;
-        this.iteration = optimizeExpr(this.iteration, names, constants);
-        return this;
-    }
-    get names() {
-        return addNames(super.names, this.iteration.names);
-    }
-}
-class ForRange extends For {
-    constructor(varKind, name, from, to) {
-        super();
-        this.varKind = varKind;
-        this.name = name;
-        this.from = from;
-        this.to = to;
-    }
-    render(opts) {
-        const varKind = opts.es5 ? scope_1.varKinds.var : this.varKind;
-        const { name, from, to } = this;
-        return `for(${varKind} ${name}=${from}; ${name}<${to}; ${name}++)` + super.render(opts);
-    }
-    get names() {
-        const names = addExprNames(super.names, this.from);
-        return addExprNames(names, this.to);
-    }
-}
-class ForIter extends For {
-    constructor(loop, varKind, name, iterable) {
-        super();
-        this.loop = loop;
-        this.varKind = varKind;
-        this.name = name;
-        this.iterable = iterable;
-    }
-    render(opts) {
-        return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
-    }
-    optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
-            return;
-        this.iterable = optimizeExpr(this.iterable, names, constants);
-        return this;
-    }
-    get names() {
-        return addNames(super.names, this.iterable.names);
-    }
-}
-class Func extends BlockNode {
-    constructor(name, args, async) {
-        super();
-        this.name = name;
-        this.args = args;
-        this.async = async;
-    }
-    render(opts) {
-        const _async = this.async ? "async " : "";
-        return `${_async}function ${this.name}(${this.args})` + super.render(opts);
-    }
-}
-Func.kind = "func";
-class Return extends ParentNode {
-    render(opts) {
-        return "return " + super.render(opts);
-    }
-}
-Return.kind = "return";
-class Try extends BlockNode {
-    render(opts) {
-        let code = "try" + super.render(opts);
-        if (this.catch)
-            code += this.catch.render(opts);
-        if (this.finally)
-            code += this.finally.render(opts);
-        return code;
-    }
-    optimizeNodes() {
-        var _a, _b;
-        super.optimizeNodes();
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNodes();
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
-        return this;
-    }
-    optimizeNames(names, constants) {
-        var _a, _b;
-        super.optimizeNames(names, constants);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants);
-        return this;
-    }
-    get names() {
-        const names = super.names;
-        if (this.catch)
-            addNames(names, this.catch.names);
-        if (this.finally)
-            addNames(names, this.finally.names);
-        return names;
-    }
-}
-class Catch extends BlockNode {
-    constructor(error) {
-        super();
-        this.error = error;
-    }
-    render(opts) {
-        return `catch(${this.error})` + super.render(opts);
-    }
-}
-Catch.kind = "catch";
-class Finally extends BlockNode {
-    render(opts) {
-        return "finally" + super.render(opts);
-    }
-}
-Finally.kind = "finally";
-class CodeGen {
-    constructor(extScope, opts = {}) {
-        this._values = {};
-        this._blockStarts = [];
-        this._constants = {};
-        this.opts = { ...opts, _n: opts.lines ? "\n" : "" };
-        this._extScope = extScope;
-        this._scope = new scope_1.Scope({ parent: extScope });
-        this._nodes = [new Root()];
-    }
-    toString() {
-        return this._root.render(this.opts);
-    }
-    // returns unique name in the internal scope
-    name(prefix) {
-        return this._scope.name(prefix);
-    }
-    // reserves unique name in the external scope
-    scopeName(prefix) {
-        return this._extScope.name(prefix);
-    }
-    // reserves unique name in the external scope and assigns value to it
-    scopeValue(prefixOrName, value) {
-        const name = this._extScope.value(prefixOrName, value);
-        const vs = this._values[name.prefix] || (this._values[name.prefix] = new Set());
-        vs.add(name);
-        return name;
-    }
-    getScopeValue(prefix, keyOrRef) {
-        return this._extScope.getValue(prefix, keyOrRef);
-    }
-    // return code that assigns values in the external scope to the names that are used internally
-    // (same names that were returned by gen.scopeName or gen.scopeValue)
-    scopeRefs(scopeName) {
-        return this._extScope.scopeRefs(scopeName, this._values);
-    }
-    scopeCode() {
-        return this._extScope.scopeCode(this._values);
-    }
-    _def(varKind, nameOrPrefix, rhs, constant) {
-        const name = this._scope.toName(nameOrPrefix);
-        if (rhs !== undefined && constant)
-            this._constants[name.str] = rhs;
-        this._leafNode(new Def(varKind, name, rhs));
-        return name;
-    }
-    // `const` declaration (`var` in es5 mode)
-    const(nameOrPrefix, rhs, _constant) {
-        return this._def(scope_1.varKinds.const, nameOrPrefix, rhs, _constant);
-    }
-    // `let` declaration with optional assignment (`var` in es5 mode)
-    let(nameOrPrefix, rhs, _constant) {
-        return this._def(scope_1.varKinds.let, nameOrPrefix, rhs, _constant);
-    }
-    // `var` declaration with optional assignment
-    var(nameOrPrefix, rhs, _constant) {
-        return this._def(scope_1.varKinds.var, nameOrPrefix, rhs, _constant);
-    }
-    // assignment code
-    assign(lhs, rhs, sideEffects) {
-        return this._leafNode(new Assign(lhs, rhs, sideEffects));
-    }
-    // `+=` code
-    add(lhs, rhs) {
-        return this._leafNode(new AssignOp(lhs, exports.operators.ADD, rhs));
-    }
-    // appends passed SafeExpr to code or executes Block
-    code(c) {
-        if (typeof c == "function")
-            c();
-        else if (c !== code_1.nil)
-            this._leafNode(new AnyCode(c));
-        return this;
-    }
-    // returns code for object literal for the passed argument list of key-value pairs
-    object(...keyValues) {
-        const code = ["{"];
-        for (const [key, value] of keyValues) {
-            if (code.length > 1)
-                code.push(",");
-            code.push(key);
-            if (key !== value || this.opts.es5) {
-                code.push(":");
-                (0, code_1.addCodeArg)(code, value);
-            }
-        }
-        code.push("}");
-        return new code_1._Code(code);
-    }
-    // `if` clause (or statement if `thenBody` and, optionally, `elseBody` are passed)
-    if(condition, thenBody, elseBody) {
-        this._blockNode(new If(condition));
-        if (thenBody && elseBody) {
-            this.code(thenBody).else().code(elseBody).endIf();
-        }
-        else if (thenBody) {
-            this.code(thenBody).endIf();
-        }
-        else if (elseBody) {
-            throw new Error('CodeGen: "else" body without "then" body');
-        }
-        return this;
-    }
-    // `else if` clause - invalid without `if` or after `else` clauses
-    elseIf(condition) {
-        return this._elseNode(new If(condition));
-    }
-    // `else` clause - only valid after `if` or `else if` clauses
-    else() {
-        return this._elseNode(new Else());
-    }
-    // end `if` statement (needed if gen.if was used only with condition)
-    endIf() {
-        return this._endBlockNode(If, Else);
-    }
-    _for(node, forBody) {
-        this._blockNode(node);
-        if (forBody)
-            this.code(forBody).endFor();
-        return this;
-    }
-    // a generic `for` clause (or statement if `forBody` is passed)
-    for(iteration, forBody) {
-        return this._for(new ForLoop(iteration), forBody);
-    }
-    // `for` statement for a range of values
-    forRange(nameOrPrefix, from, to, forBody, varKind = this.opts.es5 ? scope_1.varKinds.var : scope_1.varKinds.let) {
-        const name = this._scope.toName(nameOrPrefix);
-        return this._for(new ForRange(varKind, name, from, to), () => forBody(name));
-    }
-    // `for-of` statement (in es5 mode replace with a normal for loop)
-    forOf(nameOrPrefix, iterable, forBody, varKind = scope_1.varKinds.const) {
-        const name = this._scope.toName(nameOrPrefix);
-        if (this.opts.es5) {
-            const arr = iterable instanceof code_1.Name ? iterable : this.var("_arr", iterable);
-            return this.forRange("_i", 0, (0, code_1._) `${arr}.length`, (i) => {
-                this.var(name, (0, code_1._) `${arr}[${i}]`);
-                forBody(name);
-            });
-        }
-        return this._for(new ForIter("of", varKind, name, iterable), () => forBody(name));
-    }
-    // `for-in` statement.
-    // With option `ownProperties` replaced with a `for-of` loop for object keys
-    forIn(nameOrPrefix, obj, forBody, varKind = this.opts.es5 ? scope_1.varKinds.var : scope_1.varKinds.const) {
-        if (this.opts.ownProperties) {
-            return this.forOf(nameOrPrefix, (0, code_1._) `Object.keys(${obj})`, forBody);
-        }
-        const name = this._scope.toName(nameOrPrefix);
-        return this._for(new ForIter("in", varKind, name, obj), () => forBody(name));
-    }
-    // end `for` loop
-    endFor() {
-        return this._endBlockNode(For);
-    }
-    // `label` statement
-    label(label) {
-        return this._leafNode(new Label(label));
-    }
-    // `break` statement
-    break(label) {
-        return this._leafNode(new Break(label));
-    }
-    // `return` statement
-    return(value) {
-        const node = new Return();
-        this._blockNode(node);
-        this.code(value);
-        if (node.nodes.length !== 1)
-            throw new Error('CodeGen: "return" should have one node');
-        return this._endBlockNode(Return);
-    }
-    // `try` statement
-    try(tryBody, catchCode, finallyCode) {
-        if (!catchCode && !finallyCode)
-            throw new Error('CodeGen: "try" without "catch" and "finally"');
-        const node = new Try();
-        this._blockNode(node);
-        this.code(tryBody);
-        if (catchCode) {
-            const error = this.name("e");
-            this._currNode = node.catch = new Catch(error);
-            catchCode(error);
-        }
-        if (finallyCode) {
-            this._currNode = node.finally = new Finally();
-            this.code(finallyCode);
-        }
-        return this._endBlockNode(Catch, Finally);
-    }
-    // `throw` statement
-    throw(error) {
-        return this._leafNode(new Throw(error));
-    }
-    // start self-balancing block
-    block(body, nodeCount) {
-        this._blockStarts.push(this._nodes.length);
-        if (body)
-            this.code(body).endBlock(nodeCount);
-        return this;
-    }
-    // end the current self-balancing block
-    endBlock(nodeCount) {
-        const len = this._blockStarts.pop();
-        if (len === undefined)
-            throw new Error("CodeGen: not in self-balancing block");
-        const toClose = this._nodes.length - len;
-        if (toClose < 0 || (nodeCount !== undefined && toClose !== nodeCount)) {
-            throw new Error(`CodeGen: wrong number of nodes: ${toClose} vs ${nodeCount} expected`);
-        }
-        this._nodes.length = len;
-        return this;
-    }
-    // `function` heading (or definition if funcBody is passed)
-    func(name, args = code_1.nil, async, funcBody) {
-        this._blockNode(new Func(name, args, async));
-        if (funcBody)
-            this.code(funcBody).endFunc();
-        return this;
-    }
-    // end function definition
-    endFunc() {
-        return this._endBlockNode(Func);
-    }
-    optimize(n = 1) {
-        while (n-- > 0) {
-            this._root.optimizeNodes();
-            this._root.optimizeNames(this._root.names, this._constants);
-        }
-    }
-    _leafNode(node) {
-        this._currNode.nodes.push(node);
-        return this;
-    }
-    _blockNode(node) {
-        this._currNode.nodes.push(node);
-        this._nodes.push(node);
-    }
-    _endBlockNode(N1, N2) {
-        const n = this._currNode;
-        if (n instanceof N1 || (N2 && n instanceof N2)) {
-            this._nodes.pop();
-            return this;
-        }
-        throw new Error(`CodeGen: not in block "${N2 ? `${N1.kind}/${N2.kind}` : N1.kind}"`);
-    }
-    _elseNode(node) {
-        const n = this._currNode;
-        if (!(n instanceof If)) {
-            throw new Error('CodeGen: "else" without "if"');
-        }
-        this._currNode = n.else = node;
-        return this;
-    }
-    get _root() {
-        return this._nodes[0];
-    }
-    get _currNode() {
-        const ns = this._nodes;
-        return ns[ns.length - 1];
-    }
-    set _currNode(node) {
-        const ns = this._nodes;
-        ns[ns.length - 1] = node;
-    }
-}
-exports.CodeGen = CodeGen;
-function addNames(names, from) {
-    for (const n in from)
-        names[n] = (names[n] || 0) + (from[n] || 0);
-    return names;
-}
-function addExprNames(names, from) {
-    return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
-}
-function optimizeExpr(expr, names, constants) {
-    if (expr instanceof code_1.Name)
-        return replaceName(expr);
-    if (!canOptimize(expr))
-        return expr;
-    return new code_1._Code(expr._items.reduce((items, c) => {
-        if (c instanceof code_1.Name)
-            c = replaceName(c);
-        if (c instanceof code_1._Code)
-            items.push(...c._items);
-        else
-            items.push(c);
-        return items;
-    }, []));
-    function replaceName(n) {
-        const c = constants[n.str];
-        if (c === undefined || names[n.str] !== 1)
-            return n;
-        delete names[n.str];
-        return c;
-    }
-    function canOptimize(e) {
-        return (e instanceof code_1._Code &&
-            e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants[c.str] !== undefined));
-    }
-}
-function subtractNames(names, from) {
-    for (const n in from)
-        names[n] = (names[n] || 0) - (from[n] || 0);
-}
-function not(x) {
-    return typeof x == "boolean" || typeof x == "number" || x === null ? !x : (0, code_1._) `!${par(x)}`;
-}
-exports.not = not;
-const andCode = mappend(exports.operators.AND);
-// boolean AND (&&) expression with the passed arguments
-function and(...args) {
-    return args.reduce(andCode);
-}
-exports.and = and;
-const orCode = mappend(exports.operators.OR);
-// boolean OR (||) expression with the passed arguments
-function or(...args) {
-    return args.reduce(orCode);
-}
-exports.or = or;
-function mappend(op) {
-    return (x, y) => (x === code_1.nil ? y : y === code_1.nil ? x : (0, code_1._) `${par(x)} ${op} ${par(y)}`);
-}
-function par(x) {
-    return x instanceof code_1.Name ? x : (0, code_1._) `(${x})`;
-}
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/codegen/scope.js"
-/*!********************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/codegen/scope.js ***!
-  \********************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ValueScope = exports.ValueScopeName = exports.Scope = exports.varKinds = exports.UsedValueState = void 0;
-const code_1 = __webpack_require__(/*! ./code */ "./node_modules/ajv/dist/compile/codegen/code.js");
-class ValueError extends Error {
-    constructor(name) {
-        super(`CodeGen: "code" for ${name} not defined`);
-        this.value = name.value;
-    }
-}
-var UsedValueState;
-(function (UsedValueState) {
-    UsedValueState[UsedValueState["Started"] = 0] = "Started";
-    UsedValueState[UsedValueState["Completed"] = 1] = "Completed";
-})(UsedValueState || (exports.UsedValueState = UsedValueState = {}));
-exports.varKinds = {
-    const: new code_1.Name("const"),
-    let: new code_1.Name("let"),
-    var: new code_1.Name("var"),
-};
-class Scope {
-    constructor({ prefixes, parent } = {}) {
-        this._names = {};
-        this._prefixes = prefixes;
-        this._parent = parent;
-    }
-    toName(nameOrPrefix) {
-        return nameOrPrefix instanceof code_1.Name ? nameOrPrefix : this.name(nameOrPrefix);
-    }
-    name(prefix) {
-        return new code_1.Name(this._newName(prefix));
-    }
-    _newName(prefix) {
-        const ng = this._names[prefix] || this._nameGroup(prefix);
-        return `${prefix}${ng.index++}`;
-    }
-    _nameGroup(prefix) {
-        var _a, _b;
-        if (((_b = (_a = this._parent) === null || _a === void 0 ? void 0 : _a._prefixes) === null || _b === void 0 ? void 0 : _b.has(prefix)) || (this._prefixes && !this._prefixes.has(prefix))) {
-            throw new Error(`CodeGen: prefix "${prefix}" is not allowed in this scope`);
-        }
-        return (this._names[prefix] = { prefix, index: 0 });
-    }
-}
-exports.Scope = Scope;
-class ValueScopeName extends code_1.Name {
-    constructor(prefix, nameStr) {
-        super(nameStr);
-        this.prefix = prefix;
-    }
-    setValue(value, { property, itemIndex }) {
-        this.value = value;
-        this.scopePath = (0, code_1._) `.${new code_1.Name(property)}[${itemIndex}]`;
-    }
-}
-exports.ValueScopeName = ValueScopeName;
-const line = (0, code_1._) `\n`;
-class ValueScope extends Scope {
-    constructor(opts) {
-        super(opts);
-        this._values = {};
-        this._scope = opts.scope;
-        this.opts = { ...opts, _n: opts.lines ? line : code_1.nil };
-    }
-    get() {
-        return this._scope;
-    }
-    name(prefix) {
-        return new ValueScopeName(prefix, this._newName(prefix));
-    }
-    value(nameOrPrefix, value) {
-        var _a;
-        if (value.ref === undefined)
-            throw new Error("CodeGen: ref must be passed in value");
-        const name = this.toName(nameOrPrefix);
-        const { prefix } = name;
-        const valueKey = (_a = value.key) !== null && _a !== void 0 ? _a : value.ref;
-        let vs = this._values[prefix];
-        if (vs) {
-            const _name = vs.get(valueKey);
-            if (_name)
-                return _name;
-        }
-        else {
-            vs = this._values[prefix] = new Map();
-        }
-        vs.set(valueKey, name);
-        const s = this._scope[prefix] || (this._scope[prefix] = []);
-        const itemIndex = s.length;
-        s[itemIndex] = value.ref;
-        name.setValue(value, { property: prefix, itemIndex });
-        return name;
-    }
-    getValue(prefix, keyOrRef) {
-        const vs = this._values[prefix];
-        if (!vs)
-            return;
-        return vs.get(keyOrRef);
-    }
-    scopeRefs(scopeName, values = this._values) {
-        return this._reduceValues(values, (name) => {
-            if (name.scopePath === undefined)
-                throw new Error(`CodeGen: name "${name}" has no value`);
-            return (0, code_1._) `${scopeName}${name.scopePath}`;
-        });
-    }
-    scopeCode(values = this._values, usedValues, getCode) {
-        return this._reduceValues(values, (name) => {
-            if (name.value === undefined)
-                throw new Error(`CodeGen: name "${name}" has no value`);
-            return name.value.code;
-        }, usedValues, getCode);
-    }
-    _reduceValues(values, valueCode, usedValues = {}, getCode) {
-        let code = code_1.nil;
-        for (const prefix in values) {
-            const vs = values[prefix];
-            if (!vs)
-                continue;
-            const nameSet = (usedValues[prefix] = usedValues[prefix] || new Map());
-            vs.forEach((name) => {
-                if (nameSet.has(name))
-                    return;
-                nameSet.set(name, UsedValueState.Started);
-                let c = valueCode(name);
-                if (c) {
-                    const def = this.opts.es5 ? exports.varKinds.var : exports.varKinds.const;
-                    code = (0, code_1._) `${code}${def} ${name} = ${c};${this.opts._n}`;
-                }
-                else if ((c = getCode === null || getCode === void 0 ? void 0 : getCode(name))) {
-                    code = (0, code_1._) `${code}${c}${this.opts._n}`;
-                }
-                else {
-                    throw new ValueError(name);
-                }
-                nameSet.set(name, UsedValueState.Completed);
-            });
-        }
-        return code;
-    }
-}
-exports.ValueScope = ValueScope;
-//# sourceMappingURL=scope.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/errors.js"
-/*!*************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/errors.js ***!
-  \*************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.extendErrors = exports.resetErrorsCount = exports.reportExtraError = exports.reportError = exports.keyword$DataError = exports.keywordError = void 0;
-const codegen_1 = __webpack_require__(/*! ./codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ./util */ "./node_modules/ajv/dist/compile/util.js");
-const names_1 = __webpack_require__(/*! ./names */ "./node_modules/ajv/dist/compile/names.js");
-exports.keywordError = {
-    message: ({ keyword }) => (0, codegen_1.str) `must pass "${keyword}" keyword validation`,
-};
-exports.keyword$DataError = {
-    message: ({ keyword, schemaType }) => schemaType
-        ? (0, codegen_1.str) `"${keyword}" keyword must be ${schemaType} ($data)`
-        : (0, codegen_1.str) `"${keyword}" keyword is invalid ($data)`,
-};
-function reportError(cxt, error = exports.keywordError, errorPaths, overrideAllErrors) {
-    const { it } = cxt;
-    const { gen, compositeRule, allErrors } = it;
-    const errObj = errorObjectCode(cxt, error, errorPaths);
-    if (overrideAllErrors !== null && overrideAllErrors !== void 0 ? overrideAllErrors : (compositeRule || allErrors)) {
-        addError(gen, errObj);
-    }
-    else {
-        returnErrors(it, (0, codegen_1._) `[${errObj}]`);
-    }
-}
-exports.reportError = reportError;
-function reportExtraError(cxt, error = exports.keywordError, errorPaths) {
-    const { it } = cxt;
-    const { gen, compositeRule, allErrors } = it;
-    const errObj = errorObjectCode(cxt, error, errorPaths);
-    addError(gen, errObj);
-    if (!(compositeRule || allErrors)) {
-        returnErrors(it, names_1.default.vErrors);
-    }
-}
-exports.reportExtraError = reportExtraError;
-function resetErrorsCount(gen, errsCount) {
-    gen.assign(names_1.default.errors, errsCount);
-    gen.if((0, codegen_1._) `${names_1.default.vErrors} !== null`, () => gen.if(errsCount, () => gen.assign((0, codegen_1._) `${names_1.default.vErrors}.length`, errsCount), () => gen.assign(names_1.default.vErrors, null)));
-}
-exports.resetErrorsCount = resetErrorsCount;
-function extendErrors({ gen, keyword, schemaValue, data, errsCount, it, }) {
-    /* istanbul ignore if */
-    if (errsCount === undefined)
-        throw new Error("ajv implementation error");
-    const err = gen.name("err");
-    gen.forRange("i", errsCount, names_1.default.errors, (i) => {
-        gen.const(err, (0, codegen_1._) `${names_1.default.vErrors}[${i}]`);
-        gen.if((0, codegen_1._) `${err}.instancePath === undefined`, () => gen.assign((0, codegen_1._) `${err}.instancePath`, (0, codegen_1.strConcat)(names_1.default.instancePath, it.errorPath)));
-        gen.assign((0, codegen_1._) `${err}.schemaPath`, (0, codegen_1.str) `${it.errSchemaPath}/${keyword}`);
-        if (it.opts.verbose) {
-            gen.assign((0, codegen_1._) `${err}.schema`, schemaValue);
-            gen.assign((0, codegen_1._) `${err}.data`, data);
-        }
-    });
-}
-exports.extendErrors = extendErrors;
-function addError(gen, errObj) {
-    const err = gen.const("err", errObj);
-    gen.if((0, codegen_1._) `${names_1.default.vErrors} === null`, () => gen.assign(names_1.default.vErrors, (0, codegen_1._) `[${err}]`), (0, codegen_1._) `${names_1.default.vErrors}.push(${err})`);
-    gen.code((0, codegen_1._) `${names_1.default.errors}++`);
-}
-function returnErrors(it, errs) {
-    const { gen, validateName, schemaEnv } = it;
-    if (schemaEnv.$async) {
-        gen.throw((0, codegen_1._) `new ${it.ValidationError}(${errs})`);
-    }
-    else {
-        gen.assign((0, codegen_1._) `${validateName}.errors`, errs);
-        gen.return(false);
-    }
-}
-const E = {
-    keyword: new codegen_1.Name("keyword"),
-    schemaPath: new codegen_1.Name("schemaPath"), // also used in JTD errors
-    params: new codegen_1.Name("params"),
-    propertyName: new codegen_1.Name("propertyName"),
-    message: new codegen_1.Name("message"),
-    schema: new codegen_1.Name("schema"),
-    parentSchema: new codegen_1.Name("parentSchema"),
-};
-function errorObjectCode(cxt, error, errorPaths) {
-    const { createErrors } = cxt.it;
-    if (createErrors === false)
-        return (0, codegen_1._) `{}`;
-    return errorObject(cxt, error, errorPaths);
-}
-function errorObject(cxt, error, errorPaths = {}) {
-    const { gen, it } = cxt;
-    const keyValues = [
-        errorInstancePath(it, errorPaths),
-        errorSchemaPath(cxt, errorPaths),
-    ];
-    extraErrorProps(cxt, error, keyValues);
-    return gen.object(...keyValues);
-}
-function errorInstancePath({ errorPath }, { instancePath }) {
-    const instPath = instancePath
-        ? (0, codegen_1.str) `${errorPath}${(0, util_1.getErrorPath)(instancePath, util_1.Type.Str)}`
-        : errorPath;
-    return [names_1.default.instancePath, (0, codegen_1.strConcat)(names_1.default.instancePath, instPath)];
-}
-function errorSchemaPath({ keyword, it: { errSchemaPath } }, { schemaPath, parentSchema }) {
-    let schPath = parentSchema ? errSchemaPath : (0, codegen_1.str) `${errSchemaPath}/${keyword}`;
-    if (schemaPath) {
-        schPath = (0, codegen_1.str) `${schPath}${(0, util_1.getErrorPath)(schemaPath, util_1.Type.Str)}`;
-    }
-    return [E.schemaPath, schPath];
-}
-function extraErrorProps(cxt, { params, message }, keyValues) {
-    const { keyword, data, schemaValue, it } = cxt;
-    const { opts, propertyName, topSchemaRef, schemaPath } = it;
-    keyValues.push([E.keyword, keyword], [E.params, typeof params == "function" ? params(cxt) : params || (0, codegen_1._) `{}`]);
-    if (opts.messages) {
-        keyValues.push([E.message, typeof message == "function" ? message(cxt) : message]);
-    }
-    if (opts.verbose) {
-        keyValues.push([E.schema, schemaValue], [E.parentSchema, (0, codegen_1._) `${topSchemaRef}${schemaPath}`], [names_1.default.data, data]);
-    }
-    if (propertyName)
-        keyValues.push([E.propertyName, propertyName]);
-}
-//# sourceMappingURL=errors.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/index.js"
-/*!************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/index.js ***!
-  \************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.resolveSchema = exports.getCompilingSchema = exports.resolveRef = exports.compileSchema = exports.SchemaEnv = void 0;
-const codegen_1 = __webpack_require__(/*! ./codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const validation_error_1 = __webpack_require__(/*! ../runtime/validation_error */ "./node_modules/ajv/dist/runtime/validation_error.js");
-const names_1 = __webpack_require__(/*! ./names */ "./node_modules/ajv/dist/compile/names.js");
-const resolve_1 = __webpack_require__(/*! ./resolve */ "./node_modules/ajv/dist/compile/resolve.js");
-const util_1 = __webpack_require__(/*! ./util */ "./node_modules/ajv/dist/compile/util.js");
-const validate_1 = __webpack_require__(/*! ./validate */ "./node_modules/ajv/dist/compile/validate/index.js");
-class SchemaEnv {
-    constructor(env) {
-        var _a;
-        this.refs = {};
-        this.dynamicAnchors = {};
-        let schema;
-        if (typeof env.schema == "object")
-            schema = env.schema;
-        this.schema = env.schema;
-        this.schemaId = env.schemaId;
-        this.root = env.root || this;
-        this.baseId = (_a = env.baseId) !== null && _a !== void 0 ? _a : (0, resolve_1.normalizeId)(schema === null || schema === void 0 ? void 0 : schema[env.schemaId || "$id"]);
-        this.schemaPath = env.schemaPath;
-        this.localRefs = env.localRefs;
-        this.meta = env.meta;
-        this.$async = schema === null || schema === void 0 ? void 0 : schema.$async;
-        this.refs = {};
-    }
-}
-exports.SchemaEnv = SchemaEnv;
-// let codeSize = 0
-// let nodeCount = 0
-// Compiles schema in SchemaEnv
-function compileSchema(sch) {
-    // TODO refactor - remove compilations
-    const _sch = getCompilingSchema.call(this, sch);
-    if (_sch)
-        return _sch;
-    const rootId = (0, resolve_1.getFullPath)(this.opts.uriResolver, sch.root.baseId); // TODO if getFullPath removed 1 tests fails
-    const { es5, lines } = this.opts.code;
-    const { ownProperties } = this.opts;
-    const gen = new codegen_1.CodeGen(this.scope, { es5, lines, ownProperties });
-    let _ValidationError;
-    if (sch.$async) {
-        _ValidationError = gen.scopeValue("Error", {
-            ref: validation_error_1.default,
-            code: (0, codegen_1._) `require("ajv/dist/runtime/validation_error").default`,
-        });
-    }
-    const validateName = gen.scopeName("validate");
-    sch.validateName = validateName;
-    const schemaCxt = {
-        gen,
-        allErrors: this.opts.allErrors,
-        data: names_1.default.data,
-        parentData: names_1.default.parentData,
-        parentDataProperty: names_1.default.parentDataProperty,
-        dataNames: [names_1.default.data],
-        dataPathArr: [codegen_1.nil], // TODO can its length be used as dataLevel if nil is removed?
-        dataLevel: 0,
-        dataTypes: [],
-        definedProperties: new Set(),
-        topSchemaRef: gen.scopeValue("schema", this.opts.code.source === true
-            ? { ref: sch.schema, code: (0, codegen_1.stringify)(sch.schema) }
-            : { ref: sch.schema }),
-        validateName,
-        ValidationError: _ValidationError,
-        schema: sch.schema,
-        schemaEnv: sch,
-        rootId,
-        baseId: sch.baseId || rootId,
-        schemaPath: codegen_1.nil,
-        errSchemaPath: sch.schemaPath || (this.opts.jtd ? "" : "#"),
-        errorPath: (0, codegen_1._) `""`,
-        opts: this.opts,
-        self: this,
-    };
-    let sourceCode;
-    try {
-        this._compilations.add(sch);
-        (0, validate_1.validateFunctionCode)(schemaCxt);
-        gen.optimize(this.opts.code.optimize);
-        // gen.optimize(1)
-        const validateCode = gen.toString();
-        sourceCode = `${gen.scopeRefs(names_1.default.scope)}return ${validateCode}`;
-        // console.log((codeSize += sourceCode.length), (nodeCount += gen.nodeCount))
-        if (this.opts.code.process)
-            sourceCode = this.opts.code.process(sourceCode, sch);
-        // console.log("\n\n\n *** \n", sourceCode)
-        const makeValidate = new Function(`${names_1.default.self}`, `${names_1.default.scope}`, sourceCode);
-        const validate = makeValidate(this, this.scope.get());
-        this.scope.value(validateName, { ref: validate });
-        validate.errors = null;
-        validate.schema = sch.schema;
-        validate.schemaEnv = sch;
-        if (sch.$async)
-            validate.$async = true;
-        if (this.opts.code.source === true) {
-            validate.source = { validateName, validateCode, scopeValues: gen._values };
-        }
-        if (this.opts.unevaluated) {
-            const { props, items } = schemaCxt;
-            validate.evaluated = {
-                props: props instanceof codegen_1.Name ? undefined : props,
-                items: items instanceof codegen_1.Name ? undefined : items,
-                dynamicProps: props instanceof codegen_1.Name,
-                dynamicItems: items instanceof codegen_1.Name,
-            };
-            if (validate.source)
-                validate.source.evaluated = (0, codegen_1.stringify)(validate.evaluated);
-        }
-        sch.validate = validate;
-        return sch;
-    }
-    catch (e) {
-        delete sch.validate;
-        delete sch.validateName;
-        if (sourceCode)
-            this.logger.error("Error compiling schema, function code:", sourceCode);
-        // console.log("\n\n\n *** \n", sourceCode, this.opts)
-        throw e;
-    }
-    finally {
-        this._compilations.delete(sch);
-    }
-}
-exports.compileSchema = compileSchema;
-function resolveRef(root, baseId, ref) {
-    var _a;
-    ref = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, ref);
-    const schOrFunc = root.refs[ref];
-    if (schOrFunc)
-        return schOrFunc;
-    let _sch = resolve.call(this, root, ref);
-    if (_sch === undefined) {
-        const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref]; // TODO maybe localRefs should hold SchemaEnv
-        const { schemaId } = this.opts;
-        if (schema)
-            _sch = new SchemaEnv({ schema, schemaId, root, baseId });
-    }
-    if (_sch === undefined)
-        return;
-    return (root.refs[ref] = inlineOrCompile.call(this, _sch));
-}
-exports.resolveRef = resolveRef;
-function inlineOrCompile(sch) {
-    if ((0, resolve_1.inlineRef)(sch.schema, this.opts.inlineRefs))
-        return sch.schema;
-    return sch.validate ? sch : compileSchema.call(this, sch);
-}
-// Index of schema compilation in the currently compiled list
-function getCompilingSchema(schEnv) {
-    for (const sch of this._compilations) {
-        if (sameSchemaEnv(sch, schEnv))
-            return sch;
-    }
-}
-exports.getCompilingSchema = getCompilingSchema;
-function sameSchemaEnv(s1, s2) {
-    return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
-}
-// resolve and compile the references ($ref)
-// TODO returns AnySchemaObject (if the schema can be inlined) or validation function
-function resolve(root, // information about the root schema for the current schema
-ref // reference to resolve
-) {
-    let sch;
-    while (typeof (sch = this.refs[ref]) == "string")
-        ref = sch;
-    return sch || this.schemas[ref] || resolveSchema.call(this, root, ref);
-}
-// Resolve schema, its root and baseId
-function resolveSchema(root, // root object with properties schema, refs TODO below SchemaEnv is assigned to it
-ref // reference to resolve
-) {
-    const p = this.opts.uriResolver.parse(ref);
-    const refPath = (0, resolve_1._getFullPath)(this.opts.uriResolver, p);
-    let baseId = (0, resolve_1.getFullPath)(this.opts.uriResolver, root.baseId, undefined);
-    // TODO `Object.keys(root.schema).length > 0` should not be needed - but removing breaks 2 tests
-    if (Object.keys(root.schema).length > 0 && refPath === baseId) {
-        return getJsonPointer.call(this, p, root);
-    }
-    const id = (0, resolve_1.normalizeId)(refPath);
-    const schOrRef = this.refs[id] || this.schemas[id];
-    if (typeof schOrRef == "string") {
-        const sch = resolveSchema.call(this, root, schOrRef);
-        if (typeof (sch === null || sch === void 0 ? void 0 : sch.schema) !== "object")
-            return;
-        return getJsonPointer.call(this, p, sch);
-    }
-    if (typeof (schOrRef === null || schOrRef === void 0 ? void 0 : schOrRef.schema) !== "object")
-        return;
-    if (!schOrRef.validate)
-        compileSchema.call(this, schOrRef);
-    if (id === (0, resolve_1.normalizeId)(ref)) {
-        const { schema } = schOrRef;
-        const { schemaId } = this.opts;
-        const schId = schema[schemaId];
-        if (schId)
-            baseId = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, schId);
-        return new SchemaEnv({ schema, schemaId, root, baseId });
-    }
-    return getJsonPointer.call(this, p, schOrRef);
-}
-exports.resolveSchema = resolveSchema;
-const PREVENT_SCOPE_CHANGE = new Set([
-    "properties",
-    "patternProperties",
-    "enum",
-    "dependencies",
-    "definitions",
-]);
-function getJsonPointer(parsedRef, { baseId, schema, root }) {
-    var _a;
-    if (((_a = parsedRef.fragment) === null || _a === void 0 ? void 0 : _a[0]) !== "/")
-        return;
-    for (const part of parsedRef.fragment.slice(1).split("/")) {
-        if (typeof schema === "boolean")
-            return;
-        const partSchema = schema[(0, util_1.unescapeFragment)(part)];
-        if (partSchema === undefined)
-            return;
-        schema = partSchema;
-        // TODO PREVENT_SCOPE_CHANGE could be defined in keyword def?
-        const schId = typeof schema === "object" && schema[this.opts.schemaId];
-        if (!PREVENT_SCOPE_CHANGE.has(part) && schId) {
-            baseId = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, schId);
-        }
-    }
-    let env;
-    if (typeof schema != "boolean" && schema.$ref && !(0, util_1.schemaHasRulesButRef)(schema, this.RULES)) {
-        const $ref = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, schema.$ref);
-        env = resolveSchema.call(this, root, $ref);
-    }
-    // even though resolution failed we need to return SchemaEnv to throw exception
-    // so that compileAsync loads missing schema.
-    const { schemaId } = this.opts;
-    env = env || new SchemaEnv({ schema, schemaId, root, baseId });
-    if (env.schema !== env.root.schema)
-        return env;
-    return undefined;
-}
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/names.js"
-/*!************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/names.js ***!
-  \************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ./codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const names = {
-    // validation function arguments
-    data: new codegen_1.Name("data"), // data passed to validation function
-    // args passed from referencing schema
-    valCxt: new codegen_1.Name("valCxt"), // validation/data context - should not be used directly, it is destructured to the names below
-    instancePath: new codegen_1.Name("instancePath"),
-    parentData: new codegen_1.Name("parentData"),
-    parentDataProperty: new codegen_1.Name("parentDataProperty"),
-    rootData: new codegen_1.Name("rootData"), // root data - same as the data passed to the first/top validation function
-    dynamicAnchors: new codegen_1.Name("dynamicAnchors"), // used to support recursiveRef and dynamicRef
-    // function scoped variables
-    vErrors: new codegen_1.Name("vErrors"), // null or array of validation errors
-    errors: new codegen_1.Name("errors"), // counter of validation errors
-    this: new codegen_1.Name("this"),
-    // "globals"
-    self: new codegen_1.Name("self"),
-    scope: new codegen_1.Name("scope"),
-    // JTD serialize/parse name for JSON string and position
-    json: new codegen_1.Name("json"),
-    jsonPos: new codegen_1.Name("jsonPos"),
-    jsonLen: new codegen_1.Name("jsonLen"),
-    jsonPart: new codegen_1.Name("jsonPart"),
-};
-exports["default"] = names;
-//# sourceMappingURL=names.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/ref_error.js"
-/*!****************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/ref_error.js ***!
-  \****************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const resolve_1 = __webpack_require__(/*! ./resolve */ "./node_modules/ajv/dist/compile/resolve.js");
-class MissingRefError extends Error {
-    constructor(resolver, baseId, ref, msg) {
-        super(msg || `can't resolve reference ${ref} from id ${baseId}`);
-        this.missingRef = (0, resolve_1.resolveUrl)(resolver, baseId, ref);
-        this.missingSchema = (0, resolve_1.normalizeId)((0, resolve_1.getFullPath)(resolver, this.missingRef));
-    }
-}
-exports["default"] = MissingRefError;
-//# sourceMappingURL=ref_error.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/resolve.js"
-/*!**************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/resolve.js ***!
-  \**************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getSchemaRefs = exports.resolveUrl = exports.normalizeId = exports._getFullPath = exports.getFullPath = exports.inlineRef = void 0;
-const util_1 = __webpack_require__(/*! ./util */ "./node_modules/ajv/dist/compile/util.js");
-const equal = __webpack_require__(/*! fast-deep-equal */ "./node_modules/fast-deep-equal/index.js");
-const traverse = __webpack_require__(/*! json-schema-traverse */ "./node_modules/json-schema-traverse/index.js");
-// TODO refactor to use keyword definitions
-const SIMPLE_INLINED = new Set([
-    "type",
-    "format",
-    "pattern",
-    "maxLength",
-    "minLength",
-    "maxProperties",
-    "minProperties",
-    "maxItems",
-    "minItems",
-    "maximum",
-    "minimum",
-    "uniqueItems",
-    "multipleOf",
-    "required",
-    "enum",
-    "const",
-]);
-function inlineRef(schema, limit = true) {
-    if (typeof schema == "boolean")
-        return true;
-    if (limit === true)
-        return !hasRef(schema);
-    if (!limit)
-        return false;
-    return countKeys(schema) <= limit;
-}
-exports.inlineRef = inlineRef;
-const REF_KEYWORDS = new Set([
-    "$ref",
-    "$recursiveRef",
-    "$recursiveAnchor",
-    "$dynamicRef",
-    "$dynamicAnchor",
-]);
-function hasRef(schema) {
-    for (const key in schema) {
-        if (REF_KEYWORDS.has(key))
-            return true;
-        const sch = schema[key];
-        if (Array.isArray(sch) && sch.some(hasRef))
-            return true;
-        if (typeof sch == "object" && hasRef(sch))
-            return true;
-    }
-    return false;
-}
-function countKeys(schema) {
-    let count = 0;
-    for (const key in schema) {
-        if (key === "$ref")
-            return Infinity;
-        count++;
-        if (SIMPLE_INLINED.has(key))
-            continue;
-        if (typeof schema[key] == "object") {
-            (0, util_1.eachItem)(schema[key], (sch) => (count += countKeys(sch)));
-        }
-        if (count === Infinity)
-            return Infinity;
-    }
-    return count;
-}
-function getFullPath(resolver, id = "", normalize) {
-    if (normalize !== false)
-        id = normalizeId(id);
-    const p = resolver.parse(id);
-    return _getFullPath(resolver, p);
-}
-exports.getFullPath = getFullPath;
-function _getFullPath(resolver, p) {
-    const serialized = resolver.serialize(p);
-    return serialized.split("#")[0] + "#";
-}
-exports._getFullPath = _getFullPath;
-const TRAILING_SLASH_HASH = /#\/?$/;
-function normalizeId(id) {
-    return id ? id.replace(TRAILING_SLASH_HASH, "") : "";
-}
-exports.normalizeId = normalizeId;
-function resolveUrl(resolver, baseId, id) {
-    id = normalizeId(id);
-    return resolver.resolve(baseId, id);
-}
-exports.resolveUrl = resolveUrl;
-const ANCHOR = /^[a-z_][-a-z0-9._]*$/i;
-function getSchemaRefs(schema, baseId) {
-    if (typeof schema == "boolean")
-        return {};
-    const { schemaId, uriResolver } = this.opts;
-    const schId = normalizeId(schema[schemaId] || baseId);
-    const baseIds = { "": schId };
-    const pathPrefix = getFullPath(uriResolver, schId, false);
-    const localRefs = {};
-    const schemaRefs = new Set();
-    traverse(schema, { allKeys: true }, (sch, jsonPtr, _, parentJsonPtr) => {
-        if (parentJsonPtr === undefined)
-            return;
-        const fullPath = pathPrefix + jsonPtr;
-        let innerBaseId = baseIds[parentJsonPtr];
-        if (typeof sch[schemaId] == "string")
-            innerBaseId = addRef.call(this, sch[schemaId]);
-        addAnchor.call(this, sch.$anchor);
-        addAnchor.call(this, sch.$dynamicAnchor);
-        baseIds[jsonPtr] = innerBaseId;
-        function addRef(ref) {
-            // eslint-disable-next-line @typescript-eslint/unbound-method
-            const _resolve = this.opts.uriResolver.resolve;
-            ref = normalizeId(innerBaseId ? _resolve(innerBaseId, ref) : ref);
-            if (schemaRefs.has(ref))
-                throw ambiguos(ref);
-            schemaRefs.add(ref);
-            let schOrRef = this.refs[ref];
-            if (typeof schOrRef == "string")
-                schOrRef = this.refs[schOrRef];
-            if (typeof schOrRef == "object") {
-                checkAmbiguosRef(sch, schOrRef.schema, ref);
-            }
-            else if (ref !== normalizeId(fullPath)) {
-                if (ref[0] === "#") {
-                    checkAmbiguosRef(sch, localRefs[ref], ref);
-                    localRefs[ref] = sch;
-                }
-                else {
-                    this.refs[ref] = fullPath;
-                }
-            }
-            return ref;
-        }
-        function addAnchor(anchor) {
-            if (typeof anchor == "string") {
-                if (!ANCHOR.test(anchor))
-                    throw new Error(`invalid anchor "${anchor}"`);
-                addRef.call(this, `#${anchor}`);
-            }
-        }
-    });
-    return localRefs;
-    function checkAmbiguosRef(sch1, sch2, ref) {
-        if (sch2 !== undefined && !equal(sch1, sch2))
-            throw ambiguos(ref);
-    }
-    function ambiguos(ref) {
-        return new Error(`reference "${ref}" resolves to more than one schema`);
-    }
-}
-exports.getSchemaRefs = getSchemaRefs;
-//# sourceMappingURL=resolve.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/rules.js"
-/*!************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/rules.js ***!
-  \************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getRules = exports.isJSONType = void 0;
-const _jsonTypes = ["string", "number", "integer", "boolean", "null", "object", "array"];
-const jsonTypes = new Set(_jsonTypes);
-function isJSONType(x) {
-    return typeof x == "string" && jsonTypes.has(x);
-}
-exports.isJSONType = isJSONType;
-function getRules() {
-    const groups = {
-        number: { type: "number", rules: [] },
-        string: { type: "string", rules: [] },
-        array: { type: "array", rules: [] },
-        object: { type: "object", rules: [] },
-    };
-    return {
-        types: { ...groups, integer: true, boolean: true, null: true },
-        rules: [{ rules: [] }, groups.number, groups.string, groups.array, groups.object],
-        post: { rules: [] },
-        all: {},
-        keywords: {},
-    };
-}
-exports.getRules = getRules;
-//# sourceMappingURL=rules.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/util.js"
-/*!***********************************************!*\
-  !*** ./node_modules/ajv/dist/compile/util.js ***!
-  \***********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.checkStrictMode = exports.getErrorPath = exports.Type = exports.useFunc = exports.setEvaluated = exports.evaluatedPropsToName = exports.mergeEvaluated = exports.eachItem = exports.unescapeJsonPointer = exports.escapeJsonPointer = exports.escapeFragment = exports.unescapeFragment = exports.schemaRefOrVal = exports.schemaHasRulesButRef = exports.schemaHasRules = exports.checkUnknownRules = exports.alwaysValidSchema = exports.toHash = void 0;
-const codegen_1 = __webpack_require__(/*! ./codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const code_1 = __webpack_require__(/*! ./codegen/code */ "./node_modules/ajv/dist/compile/codegen/code.js");
-// TODO refactor to use Set
-function toHash(arr) {
-    const hash = {};
-    for (const item of arr)
-        hash[item] = true;
-    return hash;
-}
-exports.toHash = toHash;
-function alwaysValidSchema(it, schema) {
-    if (typeof schema == "boolean")
-        return schema;
-    if (Object.keys(schema).length === 0)
-        return true;
-    checkUnknownRules(it, schema);
-    return !schemaHasRules(schema, it.self.RULES.all);
-}
-exports.alwaysValidSchema = alwaysValidSchema;
-function checkUnknownRules(it, schema = it.schema) {
-    const { opts, self } = it;
-    if (!opts.strictSchema)
-        return;
-    if (typeof schema === "boolean")
-        return;
-    const rules = self.RULES.keywords;
-    for (const key in schema) {
-        if (!rules[key])
-            checkStrictMode(it, `unknown keyword: "${key}"`);
-    }
-}
-exports.checkUnknownRules = checkUnknownRules;
-function schemaHasRules(schema, rules) {
-    if (typeof schema == "boolean")
-        return !schema;
-    for (const key in schema)
-        if (rules[key])
-            return true;
-    return false;
-}
-exports.schemaHasRules = schemaHasRules;
-function schemaHasRulesButRef(schema, RULES) {
-    if (typeof schema == "boolean")
-        return !schema;
-    for (const key in schema)
-        if (key !== "$ref" && RULES.all[key])
-            return true;
-    return false;
-}
-exports.schemaHasRulesButRef = schemaHasRulesButRef;
-function schemaRefOrVal({ topSchemaRef, schemaPath }, schema, keyword, $data) {
-    if (!$data) {
-        if (typeof schema == "number" || typeof schema == "boolean")
-            return schema;
-        if (typeof schema == "string")
-            return (0, codegen_1._) `${schema}`;
-    }
-    return (0, codegen_1._) `${topSchemaRef}${schemaPath}${(0, codegen_1.getProperty)(keyword)}`;
-}
-exports.schemaRefOrVal = schemaRefOrVal;
-function unescapeFragment(str) {
-    return unescapeJsonPointer(decodeURIComponent(str));
-}
-exports.unescapeFragment = unescapeFragment;
-function escapeFragment(str) {
-    return encodeURIComponent(escapeJsonPointer(str));
-}
-exports.escapeFragment = escapeFragment;
-function escapeJsonPointer(str) {
-    if (typeof str == "number")
-        return `${str}`;
-    return str.replace(/~/g, "~0").replace(/\//g, "~1");
-}
-exports.escapeJsonPointer = escapeJsonPointer;
-function unescapeJsonPointer(str) {
-    return str.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-exports.unescapeJsonPointer = unescapeJsonPointer;
-function eachItem(xs, f) {
-    if (Array.isArray(xs)) {
-        for (const x of xs)
-            f(x);
-    }
-    else {
-        f(xs);
-    }
-}
-exports.eachItem = eachItem;
-function makeMergeEvaluated({ mergeNames, mergeToName, mergeValues, resultToName, }) {
-    return (gen, from, to, toName) => {
-        const res = to === undefined
-            ? from
-            : to instanceof codegen_1.Name
-                ? (from instanceof codegen_1.Name ? mergeNames(gen, from, to) : mergeToName(gen, from, to), to)
-                : from instanceof codegen_1.Name
-                    ? (mergeToName(gen, to, from), from)
-                    : mergeValues(from, to);
-        return toName === codegen_1.Name && !(res instanceof codegen_1.Name) ? resultToName(gen, res) : res;
-    };
-}
-exports.mergeEvaluated = {
-    props: makeMergeEvaluated({
-        mergeNames: (gen, from, to) => gen.if((0, codegen_1._) `${to} !== true && ${from} !== undefined`, () => {
-            gen.if((0, codegen_1._) `${from} === true`, () => gen.assign(to, true), () => gen.assign(to, (0, codegen_1._) `${to} || {}`).code((0, codegen_1._) `Object.assign(${to}, ${from})`));
-        }),
-        mergeToName: (gen, from, to) => gen.if((0, codegen_1._) `${to} !== true`, () => {
-            if (from === true) {
-                gen.assign(to, true);
-            }
-            else {
-                gen.assign(to, (0, codegen_1._) `${to} || {}`);
-                setEvaluated(gen, to, from);
-            }
-        }),
-        mergeValues: (from, to) => (from === true ? true : { ...from, ...to }),
-        resultToName: evaluatedPropsToName,
-    }),
-    items: makeMergeEvaluated({
-        mergeNames: (gen, from, to) => gen.if((0, codegen_1._) `${to} !== true && ${from} !== undefined`, () => gen.assign(to, (0, codegen_1._) `${from} === true ? true : ${to} > ${from} ? ${to} : ${from}`)),
-        mergeToName: (gen, from, to) => gen.if((0, codegen_1._) `${to} !== true`, () => gen.assign(to, from === true ? true : (0, codegen_1._) `${to} > ${from} ? ${to} : ${from}`)),
-        mergeValues: (from, to) => (from === true ? true : Math.max(from, to)),
-        resultToName: (gen, items) => gen.var("items", items),
-    }),
-};
-function evaluatedPropsToName(gen, ps) {
-    if (ps === true)
-        return gen.var("props", true);
-    const props = gen.var("props", (0, codegen_1._) `{}`);
-    if (ps !== undefined)
-        setEvaluated(gen, props, ps);
-    return props;
-}
-exports.evaluatedPropsToName = evaluatedPropsToName;
-function setEvaluated(gen, props, ps) {
-    Object.keys(ps).forEach((p) => gen.assign((0, codegen_1._) `${props}${(0, codegen_1.getProperty)(p)}`, true));
-}
-exports.setEvaluated = setEvaluated;
-const snippets = {};
-function useFunc(gen, f) {
-    return gen.scopeValue("func", {
-        ref: f,
-        code: snippets[f.code] || (snippets[f.code] = new code_1._Code(f.code)),
-    });
-}
-exports.useFunc = useFunc;
-var Type;
-(function (Type) {
-    Type[Type["Num"] = 0] = "Num";
-    Type[Type["Str"] = 1] = "Str";
-})(Type || (exports.Type = Type = {}));
-function getErrorPath(dataProp, dataPropType, jsPropertySyntax) {
-    // let path
-    if (dataProp instanceof codegen_1.Name) {
-        const isNumber = dataPropType === Type.Num;
-        return jsPropertySyntax
-            ? isNumber
-                ? (0, codegen_1._) `"[" + ${dataProp} + "]"`
-                : (0, codegen_1._) `"['" + ${dataProp} + "']"`
-            : isNumber
-                ? (0, codegen_1._) `"/" + ${dataProp}`
-                : (0, codegen_1._) `"/" + ${dataProp}.replace(/~/g, "~0").replace(/\\//g, "~1")`; // TODO maybe use global escapePointer
-    }
-    return jsPropertySyntax ? (0, codegen_1.getProperty)(dataProp).toString() : "/" + escapeJsonPointer(dataProp);
-}
-exports.getErrorPath = getErrorPath;
-function checkStrictMode(it, msg, mode = it.opts.strictSchema) {
-    if (!mode)
-        return;
-    msg = `strict mode: ${msg}`;
-    if (mode === true)
-        throw new Error(msg);
-    it.self.logger.warn(msg);
-}
-exports.checkStrictMode = checkStrictMode;
-//# sourceMappingURL=util.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/validate/applicability.js"
-/*!*****************************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/validate/applicability.js ***!
-  \*****************************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.shouldUseRule = exports.shouldUseGroup = exports.schemaHasRulesForType = void 0;
-function schemaHasRulesForType({ schema, self }, type) {
-    const group = self.RULES.types[type];
-    return group && group !== true && shouldUseGroup(schema, group);
-}
-exports.schemaHasRulesForType = schemaHasRulesForType;
-function shouldUseGroup(schema, group) {
-    return group.rules.some((rule) => shouldUseRule(schema, rule));
-}
-exports.shouldUseGroup = shouldUseGroup;
-function shouldUseRule(schema, rule) {
-    var _a;
-    return (schema[rule.keyword] !== undefined ||
-        ((_a = rule.definition.implements) === null || _a === void 0 ? void 0 : _a.some((kwd) => schema[kwd] !== undefined)));
-}
-exports.shouldUseRule = shouldUseRule;
-//# sourceMappingURL=applicability.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/validate/boolSchema.js"
-/*!**************************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/validate/boolSchema.js ***!
-  \**************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.boolOrEmptySchema = exports.topBoolOrEmptySchema = void 0;
-const errors_1 = __webpack_require__(/*! ../errors */ "./node_modules/ajv/dist/compile/errors.js");
-const codegen_1 = __webpack_require__(/*! ../codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const names_1 = __webpack_require__(/*! ../names */ "./node_modules/ajv/dist/compile/names.js");
-const boolError = {
-    message: "boolean schema is false",
-};
-function topBoolOrEmptySchema(it) {
-    const { gen, schema, validateName } = it;
-    if (schema === false) {
-        falseSchemaError(it, false);
-    }
-    else if (typeof schema == "object" && schema.$async === true) {
-        gen.return(names_1.default.data);
-    }
-    else {
-        gen.assign((0, codegen_1._) `${validateName}.errors`, null);
-        gen.return(true);
-    }
-}
-exports.topBoolOrEmptySchema = topBoolOrEmptySchema;
-function boolOrEmptySchema(it, valid) {
-    const { gen, schema } = it;
-    if (schema === false) {
-        gen.var(valid, false); // TODO var
-        falseSchemaError(it);
-    }
-    else {
-        gen.var(valid, true); // TODO var
-    }
-}
-exports.boolOrEmptySchema = boolOrEmptySchema;
-function falseSchemaError(it, overrideAllErrors) {
-    const { gen, data } = it;
-    // TODO maybe some other interface should be used for non-keyword validation errors...
-    const cxt = {
-        gen,
-        keyword: "false schema",
-        data,
-        schema: false,
-        schemaCode: false,
-        schemaValue: false,
-        params: {},
-        it,
-    };
-    (0, errors_1.reportError)(cxt, boolError, undefined, overrideAllErrors);
-}
-//# sourceMappingURL=boolSchema.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/validate/dataType.js"
-/*!************************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/validate/dataType.js ***!
-  \************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.reportTypeError = exports.checkDataTypes = exports.checkDataType = exports.coerceAndCheckDataType = exports.getJSONTypes = exports.getSchemaTypes = exports.DataType = void 0;
-const rules_1 = __webpack_require__(/*! ../rules */ "./node_modules/ajv/dist/compile/rules.js");
-const applicability_1 = __webpack_require__(/*! ./applicability */ "./node_modules/ajv/dist/compile/validate/applicability.js");
-const errors_1 = __webpack_require__(/*! ../errors */ "./node_modules/ajv/dist/compile/errors.js");
-const codegen_1 = __webpack_require__(/*! ../codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../util */ "./node_modules/ajv/dist/compile/util.js");
-var DataType;
-(function (DataType) {
-    DataType[DataType["Correct"] = 0] = "Correct";
-    DataType[DataType["Wrong"] = 1] = "Wrong";
-})(DataType || (exports.DataType = DataType = {}));
-function getSchemaTypes(schema) {
-    const types = getJSONTypes(schema.type);
-    const hasNull = types.includes("null");
-    if (hasNull) {
-        if (schema.nullable === false)
-            throw new Error("type: null contradicts nullable: false");
-    }
-    else {
-        if (!types.length && schema.nullable !== undefined) {
-            throw new Error('"nullable" cannot be used without "type"');
-        }
-        if (schema.nullable === true)
-            types.push("null");
-    }
-    return types;
-}
-exports.getSchemaTypes = getSchemaTypes;
-// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
-function getJSONTypes(ts) {
-    const types = Array.isArray(ts) ? ts : ts ? [ts] : [];
-    if (types.every(rules_1.isJSONType))
-        return types;
-    throw new Error("type must be JSONType or JSONType[]: " + types.join(","));
-}
-exports.getJSONTypes = getJSONTypes;
-function coerceAndCheckDataType(it, types) {
-    const { gen, data, opts } = it;
-    const coerceTo = coerceToTypes(types, opts.coerceTypes);
-    const checkTypes = types.length > 0 &&
-        !(coerceTo.length === 0 && types.length === 1 && (0, applicability_1.schemaHasRulesForType)(it, types[0]));
-    if (checkTypes) {
-        const wrongType = checkDataTypes(types, data, opts.strictNumbers, DataType.Wrong);
-        gen.if(wrongType, () => {
-            if (coerceTo.length)
-                coerceData(it, types, coerceTo);
-            else
-                reportTypeError(it);
-        });
-    }
-    return checkTypes;
-}
-exports.coerceAndCheckDataType = coerceAndCheckDataType;
-const COERCIBLE = new Set(["string", "number", "integer", "boolean", "null"]);
-function coerceToTypes(types, coerceTypes) {
-    return coerceTypes
-        ? types.filter((t) => COERCIBLE.has(t) || (coerceTypes === "array" && t === "array"))
-        : [];
-}
-function coerceData(it, types, coerceTo) {
-    const { gen, data, opts } = it;
-    const dataType = gen.let("dataType", (0, codegen_1._) `typeof ${data}`);
-    const coerced = gen.let("coerced", (0, codegen_1._) `undefined`);
-    if (opts.coerceTypes === "array") {
-        gen.if((0, codegen_1._) `${dataType} == 'object' && Array.isArray(${data}) && ${data}.length == 1`, () => gen
-            .assign(data, (0, codegen_1._) `${data}[0]`)
-            .assign(dataType, (0, codegen_1._) `typeof ${data}`)
-            .if(checkDataTypes(types, data, opts.strictNumbers), () => gen.assign(coerced, data)));
-    }
-    gen.if((0, codegen_1._) `${coerced} !== undefined`);
-    for (const t of coerceTo) {
-        if (COERCIBLE.has(t) || (t === "array" && opts.coerceTypes === "array")) {
-            coerceSpecificType(t);
-        }
-    }
-    gen.else();
-    reportTypeError(it);
-    gen.endIf();
-    gen.if((0, codegen_1._) `${coerced} !== undefined`, () => {
-        gen.assign(data, coerced);
-        assignParentData(it, coerced);
-    });
-    function coerceSpecificType(t) {
-        switch (t) {
-            case "string":
-                gen
-                    .elseIf((0, codegen_1._) `${dataType} == "number" || ${dataType} == "boolean"`)
-                    .assign(coerced, (0, codegen_1._) `"" + ${data}`)
-                    .elseIf((0, codegen_1._) `${data} === null`)
-                    .assign(coerced, (0, codegen_1._) `""`);
-                return;
-            case "number":
-                gen
-                    .elseIf((0, codegen_1._) `${dataType} == "boolean" || ${data} === null
-              || (${dataType} == "string" && ${data} && ${data} == +${data})`)
-                    .assign(coerced, (0, codegen_1._) `+${data}`);
-                return;
-            case "integer":
-                gen
-                    .elseIf((0, codegen_1._) `${dataType} === "boolean" || ${data} === null
-              || (${dataType} === "string" && ${data} && ${data} == +${data} && !(${data} % 1))`)
-                    .assign(coerced, (0, codegen_1._) `+${data}`);
-                return;
-            case "boolean":
-                gen
-                    .elseIf((0, codegen_1._) `${data} === "false" || ${data} === 0 || ${data} === null`)
-                    .assign(coerced, false)
-                    .elseIf((0, codegen_1._) `${data} === "true" || ${data} === 1`)
-                    .assign(coerced, true);
-                return;
-            case "null":
-                gen.elseIf((0, codegen_1._) `${data} === "" || ${data} === 0 || ${data} === false`);
-                gen.assign(coerced, null);
-                return;
-            case "array":
-                gen
-                    .elseIf((0, codegen_1._) `${dataType} === "string" || ${dataType} === "number"
-              || ${dataType} === "boolean" || ${data} === null`)
-                    .assign(coerced, (0, codegen_1._) `[${data}]`);
-        }
-    }
-}
-function assignParentData({ gen, parentData, parentDataProperty }, expr) {
-    // TODO use gen.property
-    gen.if((0, codegen_1._) `${parentData} !== undefined`, () => gen.assign((0, codegen_1._) `${parentData}[${parentDataProperty}]`, expr));
-}
-function checkDataType(dataType, data, strictNums, correct = DataType.Correct) {
-    const EQ = correct === DataType.Correct ? codegen_1.operators.EQ : codegen_1.operators.NEQ;
-    let cond;
-    switch (dataType) {
-        case "null":
-            return (0, codegen_1._) `${data} ${EQ} null`;
-        case "array":
-            cond = (0, codegen_1._) `Array.isArray(${data})`;
-            break;
-        case "object":
-            cond = (0, codegen_1._) `${data} && typeof ${data} == "object" && !Array.isArray(${data})`;
-            break;
-        case "integer":
-            cond = numCond((0, codegen_1._) `!(${data} % 1) && !isNaN(${data})`);
-            break;
-        case "number":
-            cond = numCond();
-            break;
-        default:
-            return (0, codegen_1._) `typeof ${data} ${EQ} ${dataType}`;
-    }
-    return correct === DataType.Correct ? cond : (0, codegen_1.not)(cond);
-    function numCond(_cond = codegen_1.nil) {
-        return (0, codegen_1.and)((0, codegen_1._) `typeof ${data} == "number"`, _cond, strictNums ? (0, codegen_1._) `isFinite(${data})` : codegen_1.nil);
-    }
-}
-exports.checkDataType = checkDataType;
-function checkDataTypes(dataTypes, data, strictNums, correct) {
-    if (dataTypes.length === 1) {
-        return checkDataType(dataTypes[0], data, strictNums, correct);
-    }
-    let cond;
-    const types = (0, util_1.toHash)(dataTypes);
-    if (types.array && types.object) {
-        const notObj = (0, codegen_1._) `typeof ${data} != "object"`;
-        cond = types.null ? notObj : (0, codegen_1._) `!${data} || ${notObj}`;
-        delete types.null;
-        delete types.array;
-        delete types.object;
-    }
-    else {
-        cond = codegen_1.nil;
-    }
-    if (types.number)
-        delete types.integer;
-    for (const t in types)
-        cond = (0, codegen_1.and)(cond, checkDataType(t, data, strictNums, correct));
-    return cond;
-}
-exports.checkDataTypes = checkDataTypes;
-const typeError = {
-    message: ({ schema }) => `must be ${schema}`,
-    params: ({ schema, schemaValue }) => typeof schema == "string" ? (0, codegen_1._) `{type: ${schema}}` : (0, codegen_1._) `{type: ${schemaValue}}`,
-};
-function reportTypeError(it) {
-    const cxt = getTypeErrorContext(it);
-    (0, errors_1.reportError)(cxt, typeError);
-}
-exports.reportTypeError = reportTypeError;
-function getTypeErrorContext(it) {
-    const { gen, data, schema } = it;
-    const schemaCode = (0, util_1.schemaRefOrVal)(it, schema, "type");
-    return {
-        gen,
-        keyword: "type",
-        data,
-        schema: schema.type,
-        schemaCode,
-        schemaValue: schemaCode,
-        parentSchema: schema,
-        params: {},
-        it,
-    };
-}
-//# sourceMappingURL=dataType.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/validate/defaults.js"
-/*!************************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/validate/defaults.js ***!
-  \************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.assignDefaults = void 0;
-const codegen_1 = __webpack_require__(/*! ../codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../util */ "./node_modules/ajv/dist/compile/util.js");
-function assignDefaults(it, ty) {
-    const { properties, items } = it.schema;
-    if (ty === "object" && properties) {
-        for (const key in properties) {
-            assignDefault(it, key, properties[key].default);
-        }
-    }
-    else if (ty === "array" && Array.isArray(items)) {
-        items.forEach((sch, i) => assignDefault(it, i, sch.default));
-    }
-}
-exports.assignDefaults = assignDefaults;
-function assignDefault(it, prop, defaultValue) {
-    const { gen, compositeRule, data, opts } = it;
-    if (defaultValue === undefined)
-        return;
-    const childData = (0, codegen_1._) `${data}${(0, codegen_1.getProperty)(prop)}`;
-    if (compositeRule) {
-        (0, util_1.checkStrictMode)(it, `default is ignored for: ${childData}`);
-        return;
-    }
-    let condition = (0, codegen_1._) `${childData} === undefined`;
-    if (opts.useDefaults === "empty") {
-        condition = (0, codegen_1._) `${condition} || ${childData} === null || ${childData} === ""`;
-    }
-    // `${childData} === undefined` +
-    // (opts.useDefaults === "empty" ? ` || ${childData} === null || ${childData} === ""` : "")
-    gen.if(condition, (0, codegen_1._) `${childData} = ${(0, codegen_1.stringify)(defaultValue)}`);
-}
-//# sourceMappingURL=defaults.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/validate/index.js"
-/*!*********************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/validate/index.js ***!
-  \*********************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getData = exports.KeywordCxt = exports.validateFunctionCode = void 0;
-const boolSchema_1 = __webpack_require__(/*! ./boolSchema */ "./node_modules/ajv/dist/compile/validate/boolSchema.js");
-const dataType_1 = __webpack_require__(/*! ./dataType */ "./node_modules/ajv/dist/compile/validate/dataType.js");
-const applicability_1 = __webpack_require__(/*! ./applicability */ "./node_modules/ajv/dist/compile/validate/applicability.js");
-const dataType_2 = __webpack_require__(/*! ./dataType */ "./node_modules/ajv/dist/compile/validate/dataType.js");
-const defaults_1 = __webpack_require__(/*! ./defaults */ "./node_modules/ajv/dist/compile/validate/defaults.js");
-const keyword_1 = __webpack_require__(/*! ./keyword */ "./node_modules/ajv/dist/compile/validate/keyword.js");
-const subschema_1 = __webpack_require__(/*! ./subschema */ "./node_modules/ajv/dist/compile/validate/subschema.js");
-const codegen_1 = __webpack_require__(/*! ../codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const names_1 = __webpack_require__(/*! ../names */ "./node_modules/ajv/dist/compile/names.js");
-const resolve_1 = __webpack_require__(/*! ../resolve */ "./node_modules/ajv/dist/compile/resolve.js");
-const util_1 = __webpack_require__(/*! ../util */ "./node_modules/ajv/dist/compile/util.js");
-const errors_1 = __webpack_require__(/*! ../errors */ "./node_modules/ajv/dist/compile/errors.js");
-// schema compilation - generates validation function, subschemaCode (below) is used for subschemas
-function validateFunctionCode(it) {
-    if (isSchemaObj(it)) {
-        checkKeywords(it);
-        if (schemaCxtHasRules(it)) {
-            topSchemaObjCode(it);
-            return;
-        }
-    }
-    validateFunction(it, () => (0, boolSchema_1.topBoolOrEmptySchema)(it));
-}
-exports.validateFunctionCode = validateFunctionCode;
-function validateFunction({ gen, validateName, schema, schemaEnv, opts }, body) {
-    if (opts.code.es5) {
-        gen.func(validateName, (0, codegen_1._) `${names_1.default.data}, ${names_1.default.valCxt}`, schemaEnv.$async, () => {
-            gen.code((0, codegen_1._) `"use strict"; ${funcSourceUrl(schema, opts)}`);
-            destructureValCxtES5(gen, opts);
-            gen.code(body);
-        });
-    }
-    else {
-        gen.func(validateName, (0, codegen_1._) `${names_1.default.data}, ${destructureValCxt(opts)}`, schemaEnv.$async, () => gen.code(funcSourceUrl(schema, opts)).code(body));
-    }
-}
-function destructureValCxt(opts) {
-    return (0, codegen_1._) `{${names_1.default.instancePath}="", ${names_1.default.parentData}, ${names_1.default.parentDataProperty}, ${names_1.default.rootData}=${names_1.default.data}${opts.dynamicRef ? (0, codegen_1._) `, ${names_1.default.dynamicAnchors}={}` : codegen_1.nil}}={}`;
-}
-function destructureValCxtES5(gen, opts) {
-    gen.if(names_1.default.valCxt, () => {
-        gen.var(names_1.default.instancePath, (0, codegen_1._) `${names_1.default.valCxt}.${names_1.default.instancePath}`);
-        gen.var(names_1.default.parentData, (0, codegen_1._) `${names_1.default.valCxt}.${names_1.default.parentData}`);
-        gen.var(names_1.default.parentDataProperty, (0, codegen_1._) `${names_1.default.valCxt}.${names_1.default.parentDataProperty}`);
-        gen.var(names_1.default.rootData, (0, codegen_1._) `${names_1.default.valCxt}.${names_1.default.rootData}`);
-        if (opts.dynamicRef)
-            gen.var(names_1.default.dynamicAnchors, (0, codegen_1._) `${names_1.default.valCxt}.${names_1.default.dynamicAnchors}`);
-    }, () => {
-        gen.var(names_1.default.instancePath, (0, codegen_1._) `""`);
-        gen.var(names_1.default.parentData, (0, codegen_1._) `undefined`);
-        gen.var(names_1.default.parentDataProperty, (0, codegen_1._) `undefined`);
-        gen.var(names_1.default.rootData, names_1.default.data);
-        if (opts.dynamicRef)
-            gen.var(names_1.default.dynamicAnchors, (0, codegen_1._) `{}`);
-    });
-}
-function topSchemaObjCode(it) {
-    const { schema, opts, gen } = it;
-    validateFunction(it, () => {
-        if (opts.$comment && schema.$comment)
-            commentKeyword(it);
-        checkNoDefault(it);
-        gen.let(names_1.default.vErrors, null);
-        gen.let(names_1.default.errors, 0);
-        if (opts.unevaluated)
-            resetEvaluated(it);
-        typeAndKeywords(it);
-        returnResults(it);
-    });
-    return;
-}
-function resetEvaluated(it) {
-    // TODO maybe some hook to execute it in the end to check whether props/items are Name, as in assignEvaluated
-    const { gen, validateName } = it;
-    it.evaluated = gen.const("evaluated", (0, codegen_1._) `${validateName}.evaluated`);
-    gen.if((0, codegen_1._) `${it.evaluated}.dynamicProps`, () => gen.assign((0, codegen_1._) `${it.evaluated}.props`, (0, codegen_1._) `undefined`));
-    gen.if((0, codegen_1._) `${it.evaluated}.dynamicItems`, () => gen.assign((0, codegen_1._) `${it.evaluated}.items`, (0, codegen_1._) `undefined`));
-}
-function funcSourceUrl(schema, opts) {
-    const schId = typeof schema == "object" && schema[opts.schemaId];
-    return schId && (opts.code.source || opts.code.process) ? (0, codegen_1._) `/*# sourceURL=${schId} */` : codegen_1.nil;
-}
-// schema compilation - this function is used recursively to generate code for sub-schemas
-function subschemaCode(it, valid) {
-    if (isSchemaObj(it)) {
-        checkKeywords(it);
-        if (schemaCxtHasRules(it)) {
-            subSchemaObjCode(it, valid);
-            return;
-        }
-    }
-    (0, boolSchema_1.boolOrEmptySchema)(it, valid);
-}
-function schemaCxtHasRules({ schema, self }) {
-    if (typeof schema == "boolean")
-        return !schema;
-    for (const key in schema)
-        if (self.RULES.all[key])
-            return true;
-    return false;
-}
-function isSchemaObj(it) {
-    return typeof it.schema != "boolean";
-}
-function subSchemaObjCode(it, valid) {
-    const { schema, gen, opts } = it;
-    if (opts.$comment && schema.$comment)
-        commentKeyword(it);
-    updateContext(it);
-    checkAsyncSchema(it);
-    const errsCount = gen.const("_errs", names_1.default.errors);
-    typeAndKeywords(it, errsCount);
-    // TODO var
-    gen.var(valid, (0, codegen_1._) `${errsCount} === ${names_1.default.errors}`);
-}
-function checkKeywords(it) {
-    (0, util_1.checkUnknownRules)(it);
-    checkRefsAndKeywords(it);
-}
-function typeAndKeywords(it, errsCount) {
-    if (it.opts.jtd)
-        return schemaKeywords(it, [], false, errsCount);
-    const types = (0, dataType_1.getSchemaTypes)(it.schema);
-    const checkedTypes = (0, dataType_1.coerceAndCheckDataType)(it, types);
-    schemaKeywords(it, types, !checkedTypes, errsCount);
-}
-function checkRefsAndKeywords(it) {
-    const { schema, errSchemaPath, opts, self } = it;
-    if (schema.$ref && opts.ignoreKeywordsWithRef && (0, util_1.schemaHasRulesButRef)(schema, self.RULES)) {
-        self.logger.warn(`$ref: keywords ignored in schema at path "${errSchemaPath}"`);
-    }
-}
-function checkNoDefault(it) {
-    const { schema, opts } = it;
-    if (schema.default !== undefined && opts.useDefaults && opts.strictSchema) {
-        (0, util_1.checkStrictMode)(it, "default is ignored in the schema root");
-    }
-}
-function updateContext(it) {
-    const schId = it.schema[it.opts.schemaId];
-    if (schId)
-        it.baseId = (0, resolve_1.resolveUrl)(it.opts.uriResolver, it.baseId, schId);
-}
-function checkAsyncSchema(it) {
-    if (it.schema.$async && !it.schemaEnv.$async)
-        throw new Error("async schema in sync schema");
-}
-function commentKeyword({ gen, schemaEnv, schema, errSchemaPath, opts }) {
-    const msg = schema.$comment;
-    if (opts.$comment === true) {
-        gen.code((0, codegen_1._) `${names_1.default.self}.logger.log(${msg})`);
-    }
-    else if (typeof opts.$comment == "function") {
-        const schemaPath = (0, codegen_1.str) `${errSchemaPath}/$comment`;
-        const rootName = gen.scopeValue("root", { ref: schemaEnv.root });
-        gen.code((0, codegen_1._) `${names_1.default.self}.opts.$comment(${msg}, ${schemaPath}, ${rootName}.schema)`);
-    }
-}
-function returnResults(it) {
-    const { gen, schemaEnv, validateName, ValidationError, opts } = it;
-    if (schemaEnv.$async) {
-        // TODO assign unevaluated
-        gen.if((0, codegen_1._) `${names_1.default.errors} === 0`, () => gen.return(names_1.default.data), () => gen.throw((0, codegen_1._) `new ${ValidationError}(${names_1.default.vErrors})`));
-    }
-    else {
-        gen.assign((0, codegen_1._) `${validateName}.errors`, names_1.default.vErrors);
-        if (opts.unevaluated)
-            assignEvaluated(it);
-        gen.return((0, codegen_1._) `${names_1.default.errors} === 0`);
-    }
-}
-function assignEvaluated({ gen, evaluated, props, items }) {
-    if (props instanceof codegen_1.Name)
-        gen.assign((0, codegen_1._) `${evaluated}.props`, props);
-    if (items instanceof codegen_1.Name)
-        gen.assign((0, codegen_1._) `${evaluated}.items`, items);
-}
-function schemaKeywords(it, types, typeErrors, errsCount) {
-    const { gen, schema, data, allErrors, opts, self } = it;
-    const { RULES } = self;
-    if (schema.$ref && (opts.ignoreKeywordsWithRef || !(0, util_1.schemaHasRulesButRef)(schema, RULES))) {
-        gen.block(() => keywordCode(it, "$ref", RULES.all.$ref.definition)); // TODO typecast
-        return;
-    }
-    if (!opts.jtd)
-        checkStrictTypes(it, types);
-    gen.block(() => {
-        for (const group of RULES.rules)
-            groupKeywords(group);
-        groupKeywords(RULES.post);
-    });
-    function groupKeywords(group) {
-        if (!(0, applicability_1.shouldUseGroup)(schema, group))
-            return;
-        if (group.type) {
-            gen.if((0, dataType_2.checkDataType)(group.type, data, opts.strictNumbers));
-            iterateKeywords(it, group);
-            if (types.length === 1 && types[0] === group.type && typeErrors) {
-                gen.else();
-                (0, dataType_2.reportTypeError)(it);
-            }
-            gen.endIf();
-        }
-        else {
-            iterateKeywords(it, group);
-        }
-        // TODO make it "ok" call?
-        if (!allErrors)
-            gen.if((0, codegen_1._) `${names_1.default.errors} === ${errsCount || 0}`);
-    }
-}
-function iterateKeywords(it, group) {
-    const { gen, schema, opts: { useDefaults }, } = it;
-    if (useDefaults)
-        (0, defaults_1.assignDefaults)(it, group.type);
-    gen.block(() => {
-        for (const rule of group.rules) {
-            if ((0, applicability_1.shouldUseRule)(schema, rule)) {
-                keywordCode(it, rule.keyword, rule.definition, group.type);
-            }
-        }
-    });
-}
-function checkStrictTypes(it, types) {
-    if (it.schemaEnv.meta || !it.opts.strictTypes)
-        return;
-    checkContextTypes(it, types);
-    if (!it.opts.allowUnionTypes)
-        checkMultipleTypes(it, types);
-    checkKeywordTypes(it, it.dataTypes);
-}
-function checkContextTypes(it, types) {
-    if (!types.length)
-        return;
-    if (!it.dataTypes.length) {
-        it.dataTypes = types;
-        return;
-    }
-    types.forEach((t) => {
-        if (!includesType(it.dataTypes, t)) {
-            strictTypesError(it, `type "${t}" not allowed by context "${it.dataTypes.join(",")}"`);
-        }
-    });
-    narrowSchemaTypes(it, types);
-}
-function checkMultipleTypes(it, ts) {
-    if (ts.length > 1 && !(ts.length === 2 && ts.includes("null"))) {
-        strictTypesError(it, "use allowUnionTypes to allow union type keyword");
-    }
-}
-function checkKeywordTypes(it, ts) {
-    const rules = it.self.RULES.all;
-    for (const keyword in rules) {
-        const rule = rules[keyword];
-        if (typeof rule == "object" && (0, applicability_1.shouldUseRule)(it.schema, rule)) {
-            const { type } = rule.definition;
-            if (type.length && !type.some((t) => hasApplicableType(ts, t))) {
-                strictTypesError(it, `missing type "${type.join(",")}" for keyword "${keyword}"`);
-            }
-        }
-    }
-}
-function hasApplicableType(schTs, kwdT) {
-    return schTs.includes(kwdT) || (kwdT === "number" && schTs.includes("integer"));
-}
-function includesType(ts, t) {
-    return ts.includes(t) || (t === "integer" && ts.includes("number"));
-}
-function narrowSchemaTypes(it, withTypes) {
-    const ts = [];
-    for (const t of it.dataTypes) {
-        if (includesType(withTypes, t))
-            ts.push(t);
-        else if (withTypes.includes("integer") && t === "number")
-            ts.push("integer");
-    }
-    it.dataTypes = ts;
-}
-function strictTypesError(it, msg) {
-    const schemaPath = it.schemaEnv.baseId + it.errSchemaPath;
-    msg += ` at "${schemaPath}" (strictTypes)`;
-    (0, util_1.checkStrictMode)(it, msg, it.opts.strictTypes);
-}
-class KeywordCxt {
-    constructor(it, def, keyword) {
-        (0, keyword_1.validateKeywordUsage)(it, def, keyword);
-        this.gen = it.gen;
-        this.allErrors = it.allErrors;
-        this.keyword = keyword;
-        this.data = it.data;
-        this.schema = it.schema[keyword];
-        this.$data = def.$data && it.opts.$data && this.schema && this.schema.$data;
-        this.schemaValue = (0, util_1.schemaRefOrVal)(it, this.schema, keyword, this.$data);
-        this.schemaType = def.schemaType;
-        this.parentSchema = it.schema;
-        this.params = {};
-        this.it = it;
-        this.def = def;
-        if (this.$data) {
-            this.schemaCode = it.gen.const("vSchema", getData(this.$data, it));
-        }
-        else {
-            this.schemaCode = this.schemaValue;
-            if (!(0, keyword_1.validSchemaType)(this.schema, def.schemaType, def.allowUndefined)) {
-                throw new Error(`${keyword} value must be ${JSON.stringify(def.schemaType)}`);
-            }
-        }
-        if ("code" in def ? def.trackErrors : def.errors !== false) {
-            this.errsCount = it.gen.const("_errs", names_1.default.errors);
-        }
-    }
-    result(condition, successAction, failAction) {
-        this.failResult((0, codegen_1.not)(condition), successAction, failAction);
-    }
-    failResult(condition, successAction, failAction) {
-        this.gen.if(condition);
-        if (failAction)
-            failAction();
-        else
-            this.error();
-        if (successAction) {
-            this.gen.else();
-            successAction();
-            if (this.allErrors)
-                this.gen.endIf();
-        }
-        else {
-            if (this.allErrors)
-                this.gen.endIf();
-            else
-                this.gen.else();
-        }
-    }
-    pass(condition, failAction) {
-        this.failResult((0, codegen_1.not)(condition), undefined, failAction);
-    }
-    fail(condition) {
-        if (condition === undefined) {
-            this.error();
-            if (!this.allErrors)
-                this.gen.if(false); // this branch will be removed by gen.optimize
-            return;
-        }
-        this.gen.if(condition);
-        this.error();
-        if (this.allErrors)
-            this.gen.endIf();
-        else
-            this.gen.else();
-    }
-    fail$data(condition) {
-        if (!this.$data)
-            return this.fail(condition);
-        const { schemaCode } = this;
-        this.fail((0, codegen_1._) `${schemaCode} !== undefined && (${(0, codegen_1.or)(this.invalid$data(), condition)})`);
-    }
-    error(append, errorParams, errorPaths) {
-        if (errorParams) {
-            this.setParams(errorParams);
-            this._error(append, errorPaths);
-            this.setParams({});
-            return;
-        }
-        this._error(append, errorPaths);
-    }
-    _error(append, errorPaths) {
-        ;
-        (append ? errors_1.reportExtraError : errors_1.reportError)(this, this.def.error, errorPaths);
-    }
-    $dataError() {
-        (0, errors_1.reportError)(this, this.def.$dataError || errors_1.keyword$DataError);
-    }
-    reset() {
-        if (this.errsCount === undefined)
-            throw new Error('add "trackErrors" to keyword definition');
-        (0, errors_1.resetErrorsCount)(this.gen, this.errsCount);
-    }
-    ok(cond) {
-        if (!this.allErrors)
-            this.gen.if(cond);
-    }
-    setParams(obj, assign) {
-        if (assign)
-            Object.assign(this.params, obj);
-        else
-            this.params = obj;
-    }
-    block$data(valid, codeBlock, $dataValid = codegen_1.nil) {
-        this.gen.block(() => {
-            this.check$data(valid, $dataValid);
-            codeBlock();
-        });
-    }
-    check$data(valid = codegen_1.nil, $dataValid = codegen_1.nil) {
-        if (!this.$data)
-            return;
-        const { gen, schemaCode, schemaType, def } = this;
-        gen.if((0, codegen_1.or)((0, codegen_1._) `${schemaCode} === undefined`, $dataValid));
-        if (valid !== codegen_1.nil)
-            gen.assign(valid, true);
-        if (schemaType.length || def.validateSchema) {
-            gen.elseIf(this.invalid$data());
-            this.$dataError();
-            if (valid !== codegen_1.nil)
-                gen.assign(valid, false);
-        }
-        gen.else();
-    }
-    invalid$data() {
-        const { gen, schemaCode, schemaType, def, it } = this;
-        return (0, codegen_1.or)(wrong$DataType(), invalid$DataSchema());
-        function wrong$DataType() {
-            if (schemaType.length) {
-                /* istanbul ignore if */
-                if (!(schemaCode instanceof codegen_1.Name))
-                    throw new Error("ajv implementation error");
-                const st = Array.isArray(schemaType) ? schemaType : [schemaType];
-                return (0, codegen_1._) `${(0, dataType_2.checkDataTypes)(st, schemaCode, it.opts.strictNumbers, dataType_2.DataType.Wrong)}`;
-            }
-            return codegen_1.nil;
-        }
-        function invalid$DataSchema() {
-            if (def.validateSchema) {
-                const validateSchemaRef = gen.scopeValue("validate$data", { ref: def.validateSchema }); // TODO value.code for standalone
-                return (0, codegen_1._) `!${validateSchemaRef}(${schemaCode})`;
-            }
-            return codegen_1.nil;
-        }
-    }
-    subschema(appl, valid) {
-        const subschema = (0, subschema_1.getSubschema)(this.it, appl);
-        (0, subschema_1.extendSubschemaData)(subschema, this.it, appl);
-        (0, subschema_1.extendSubschemaMode)(subschema, appl);
-        const nextContext = { ...this.it, ...subschema, items: undefined, props: undefined };
-        subschemaCode(nextContext, valid);
-        return nextContext;
-    }
-    mergeEvaluated(schemaCxt, toName) {
-        const { it, gen } = this;
-        if (!it.opts.unevaluated)
-            return;
-        if (it.props !== true && schemaCxt.props !== undefined) {
-            it.props = util_1.mergeEvaluated.props(gen, schemaCxt.props, it.props, toName);
-        }
-        if (it.items !== true && schemaCxt.items !== undefined) {
-            it.items = util_1.mergeEvaluated.items(gen, schemaCxt.items, it.items, toName);
-        }
-    }
-    mergeValidEvaluated(schemaCxt, valid) {
-        const { it, gen } = this;
-        if (it.opts.unevaluated && (it.props !== true || it.items !== true)) {
-            gen.if(valid, () => this.mergeEvaluated(schemaCxt, codegen_1.Name));
-            return true;
-        }
-    }
-}
-exports.KeywordCxt = KeywordCxt;
-function keywordCode(it, keyword, def, ruleType) {
-    const cxt = new KeywordCxt(it, def, keyword);
-    if ("code" in def) {
-        def.code(cxt, ruleType);
-    }
-    else if (cxt.$data && def.validate) {
-        (0, keyword_1.funcKeywordCode)(cxt, def);
-    }
-    else if ("macro" in def) {
-        (0, keyword_1.macroKeywordCode)(cxt, def);
-    }
-    else if (def.compile || def.validate) {
-        (0, keyword_1.funcKeywordCode)(cxt, def);
-    }
-}
-const JSON_POINTER = /^\/(?:[^~]|~0|~1)*$/;
-const RELATIVE_JSON_POINTER = /^([0-9]+)(#|\/(?:[^~]|~0|~1)*)?$/;
-function getData($data, { dataLevel, dataNames, dataPathArr }) {
-    let jsonPointer;
-    let data;
-    if ($data === "")
-        return names_1.default.rootData;
-    if ($data[0] === "/") {
-        if (!JSON_POINTER.test($data))
-            throw new Error(`Invalid JSON-pointer: ${$data}`);
-        jsonPointer = $data;
-        data = names_1.default.rootData;
-    }
-    else {
-        const matches = RELATIVE_JSON_POINTER.exec($data);
-        if (!matches)
-            throw new Error(`Invalid JSON-pointer: ${$data}`);
-        const up = +matches[1];
-        jsonPointer = matches[2];
-        if (jsonPointer === "#") {
-            if (up >= dataLevel)
-                throw new Error(errorMsg("property/index", up));
-            return dataPathArr[dataLevel - up];
-        }
-        if (up > dataLevel)
-            throw new Error(errorMsg("data", up));
-        data = dataNames[dataLevel - up];
-        if (!jsonPointer)
-            return data;
-    }
-    let expr = data;
-    const segments = jsonPointer.split("/");
-    for (const segment of segments) {
-        if (segment) {
-            data = (0, codegen_1._) `${data}${(0, codegen_1.getProperty)((0, util_1.unescapeJsonPointer)(segment))}`;
-            expr = (0, codegen_1._) `${expr} && ${data}`;
-        }
-    }
-    return expr;
-    function errorMsg(pointerType, up) {
-        return `Cannot access ${pointerType} ${up} levels up, current level is ${dataLevel}`;
-    }
-}
-exports.getData = getData;
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/validate/keyword.js"
-/*!***********************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/validate/keyword.js ***!
-  \***********************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.validateKeywordUsage = exports.validSchemaType = exports.funcKeywordCode = exports.macroKeywordCode = void 0;
-const codegen_1 = __webpack_require__(/*! ../codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const names_1 = __webpack_require__(/*! ../names */ "./node_modules/ajv/dist/compile/names.js");
-const code_1 = __webpack_require__(/*! ../../vocabularies/code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const errors_1 = __webpack_require__(/*! ../errors */ "./node_modules/ajv/dist/compile/errors.js");
-function macroKeywordCode(cxt, def) {
-    const { gen, keyword, schema, parentSchema, it } = cxt;
-    const macroSchema = def.macro.call(it.self, schema, parentSchema, it);
-    const schemaRef = useKeyword(gen, keyword, macroSchema);
-    if (it.opts.validateSchema !== false)
-        it.self.validateSchema(macroSchema, true);
-    const valid = gen.name("valid");
-    cxt.subschema({
-        schema: macroSchema,
-        schemaPath: codegen_1.nil,
-        errSchemaPath: `${it.errSchemaPath}/${keyword}`,
-        topSchemaRef: schemaRef,
-        compositeRule: true,
-    }, valid);
-    cxt.pass(valid, () => cxt.error(true));
-}
-exports.macroKeywordCode = macroKeywordCode;
-function funcKeywordCode(cxt, def) {
-    var _a;
-    const { gen, keyword, schema, parentSchema, $data, it } = cxt;
-    checkAsyncKeyword(it, def);
-    const validate = !$data && def.compile ? def.compile.call(it.self, schema, parentSchema, it) : def.validate;
-    const validateRef = useKeyword(gen, keyword, validate);
-    const valid = gen.let("valid");
-    cxt.block$data(valid, validateKeyword);
-    cxt.ok((_a = def.valid) !== null && _a !== void 0 ? _a : valid);
-    function validateKeyword() {
-        if (def.errors === false) {
-            assignValid();
-            if (def.modifying)
-                modifyData(cxt);
-            reportErrs(() => cxt.error());
-        }
-        else {
-            const ruleErrs = def.async ? validateAsync() : validateSync();
-            if (def.modifying)
-                modifyData(cxt);
-            reportErrs(() => addErrs(cxt, ruleErrs));
-        }
-    }
-    function validateAsync() {
-        const ruleErrs = gen.let("ruleErrs", null);
-        gen.try(() => assignValid((0, codegen_1._) `await `), (e) => gen.assign(valid, false).if((0, codegen_1._) `${e} instanceof ${it.ValidationError}`, () => gen.assign(ruleErrs, (0, codegen_1._) `${e}.errors`), () => gen.throw(e)));
-        return ruleErrs;
-    }
-    function validateSync() {
-        const validateErrs = (0, codegen_1._) `${validateRef}.errors`;
-        gen.assign(validateErrs, null);
-        assignValid(codegen_1.nil);
-        return validateErrs;
-    }
-    function assignValid(_await = def.async ? (0, codegen_1._) `await ` : codegen_1.nil) {
-        const passCxt = it.opts.passContext ? names_1.default.this : names_1.default.self;
-        const passSchema = !(("compile" in def && !$data) || def.schema === false);
-        gen.assign(valid, (0, codegen_1._) `${_await}${(0, code_1.callValidateCode)(cxt, validateRef, passCxt, passSchema)}`, def.modifying);
-    }
-    function reportErrs(errors) {
-        var _a;
-        gen.if((0, codegen_1.not)((_a = def.valid) !== null && _a !== void 0 ? _a : valid), errors);
-    }
-}
-exports.funcKeywordCode = funcKeywordCode;
-function modifyData(cxt) {
-    const { gen, data, it } = cxt;
-    gen.if(it.parentData, () => gen.assign(data, (0, codegen_1._) `${it.parentData}[${it.parentDataProperty}]`));
-}
-function addErrs(cxt, errs) {
-    const { gen } = cxt;
-    gen.if((0, codegen_1._) `Array.isArray(${errs})`, () => {
-        gen
-            .assign(names_1.default.vErrors, (0, codegen_1._) `${names_1.default.vErrors} === null ? ${errs} : ${names_1.default.vErrors}.concat(${errs})`)
-            .assign(names_1.default.errors, (0, codegen_1._) `${names_1.default.vErrors}.length`);
-        (0, errors_1.extendErrors)(cxt);
-    }, () => cxt.error());
-}
-function checkAsyncKeyword({ schemaEnv }, def) {
-    if (def.async && !schemaEnv.$async)
-        throw new Error("async keyword in sync schema");
-}
-function useKeyword(gen, keyword, result) {
-    if (result === undefined)
-        throw new Error(`keyword "${keyword}" failed to compile`);
-    return gen.scopeValue("keyword", typeof result == "function" ? { ref: result } : { ref: result, code: (0, codegen_1.stringify)(result) });
-}
-function validSchemaType(schema, schemaType, allowUndefined = false) {
-    // TODO add tests
-    return (!schemaType.length ||
-        schemaType.some((st) => st === "array"
-            ? Array.isArray(schema)
-            : st === "object"
-                ? schema && typeof schema == "object" && !Array.isArray(schema)
-                : typeof schema == st || (allowUndefined && typeof schema == "undefined")));
-}
-exports.validSchemaType = validSchemaType;
-function validateKeywordUsage({ schema, opts, self, errSchemaPath }, def, keyword) {
-    /* istanbul ignore if */
-    if (Array.isArray(def.keyword) ? !def.keyword.includes(keyword) : def.keyword !== keyword) {
-        throw new Error("ajv implementation error");
-    }
-    const deps = def.dependencies;
-    if (deps === null || deps === void 0 ? void 0 : deps.some((kwd) => !Object.prototype.hasOwnProperty.call(schema, kwd))) {
-        throw new Error(`parent schema must have dependencies of ${keyword}: ${deps.join(",")}`);
-    }
-    if (def.validateSchema) {
-        const valid = def.validateSchema(schema[keyword]);
-        if (!valid) {
-            const msg = `keyword "${keyword}" value is invalid at path "${errSchemaPath}": ` +
-                self.errorsText(def.validateSchema.errors);
-            if (opts.validateSchema === "log")
-                self.logger.error(msg);
-            else
-                throw new Error(msg);
-        }
-    }
-}
-exports.validateKeywordUsage = validateKeywordUsage;
-//# sourceMappingURL=keyword.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/compile/validate/subschema.js"
-/*!*************************************************************!*\
-  !*** ./node_modules/ajv/dist/compile/validate/subschema.js ***!
-  \*************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.extendSubschemaMode = exports.extendSubschemaData = exports.getSubschema = void 0;
-const codegen_1 = __webpack_require__(/*! ../codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../util */ "./node_modules/ajv/dist/compile/util.js");
-function getSubschema(it, { keyword, schemaProp, schema, schemaPath, errSchemaPath, topSchemaRef }) {
-    if (keyword !== undefined && schema !== undefined) {
-        throw new Error('both "keyword" and "schema" passed, only one allowed');
-    }
-    if (keyword !== undefined) {
-        const sch = it.schema[keyword];
-        return schemaProp === undefined
-            ? {
-                schema: sch,
-                schemaPath: (0, codegen_1._) `${it.schemaPath}${(0, codegen_1.getProperty)(keyword)}`,
-                errSchemaPath: `${it.errSchemaPath}/${keyword}`,
-            }
-            : {
-                schema: sch[schemaProp],
-                schemaPath: (0, codegen_1._) `${it.schemaPath}${(0, codegen_1.getProperty)(keyword)}${(0, codegen_1.getProperty)(schemaProp)}`,
-                errSchemaPath: `${it.errSchemaPath}/${keyword}/${(0, util_1.escapeFragment)(schemaProp)}`,
-            };
-    }
-    if (schema !== undefined) {
-        if (schemaPath === undefined || errSchemaPath === undefined || topSchemaRef === undefined) {
-            throw new Error('"schemaPath", "errSchemaPath" and "topSchemaRef" are required with "schema"');
-        }
-        return {
-            schema,
-            schemaPath,
-            topSchemaRef,
-            errSchemaPath,
-        };
-    }
-    throw new Error('either "keyword" or "schema" must be passed');
-}
-exports.getSubschema = getSubschema;
-function extendSubschemaData(subschema, it, { dataProp, dataPropType: dpType, data, dataTypes, propertyName }) {
-    if (data !== undefined && dataProp !== undefined) {
-        throw new Error('both "data" and "dataProp" passed, only one allowed');
-    }
-    const { gen } = it;
-    if (dataProp !== undefined) {
-        const { errorPath, dataPathArr, opts } = it;
-        const nextData = gen.let("data", (0, codegen_1._) `${it.data}${(0, codegen_1.getProperty)(dataProp)}`, true);
-        dataContextProps(nextData);
-        subschema.errorPath = (0, codegen_1.str) `${errorPath}${(0, util_1.getErrorPath)(dataProp, dpType, opts.jsPropertySyntax)}`;
-        subschema.parentDataProperty = (0, codegen_1._) `${dataProp}`;
-        subschema.dataPathArr = [...dataPathArr, subschema.parentDataProperty];
-    }
-    if (data !== undefined) {
-        const nextData = data instanceof codegen_1.Name ? data : gen.let("data", data, true); // replaceable if used once?
-        dataContextProps(nextData);
-        if (propertyName !== undefined)
-            subschema.propertyName = propertyName;
-        // TODO something is possibly wrong here with not changing parentDataProperty and not appending dataPathArr
-    }
-    if (dataTypes)
-        subschema.dataTypes = dataTypes;
-    function dataContextProps(_nextData) {
-        subschema.data = _nextData;
-        subschema.dataLevel = it.dataLevel + 1;
-        subschema.dataTypes = [];
-        it.definedProperties = new Set();
-        subschema.parentData = it.data;
-        subschema.dataNames = [...it.dataNames, _nextData];
-    }
-}
-exports.extendSubschemaData = extendSubschemaData;
-function extendSubschemaMode(subschema, { jtdDiscriminator, jtdMetadata, compositeRule, createErrors, allErrors }) {
-    if (compositeRule !== undefined)
-        subschema.compositeRule = compositeRule;
-    if (createErrors !== undefined)
-        subschema.createErrors = createErrors;
-    if (allErrors !== undefined)
-        subschema.allErrors = allErrors;
-    subschema.jtdDiscriminator = jtdDiscriminator; // not inherited
-    subschema.jtdMetadata = jtdMetadata; // not inherited
-}
-exports.extendSubschemaMode = extendSubschemaMode;
-//# sourceMappingURL=subschema.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/core.js"
-/*!***************************************!*\
-  !*** ./node_modules/ajv/dist/core.js ***!
-  \***************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = void 0;
-var validate_1 = __webpack_require__(/*! ./compile/validate */ "./node_modules/ajv/dist/compile/validate/index.js");
-Object.defineProperty(exports, "KeywordCxt", ({ enumerable: true, get: function () { return validate_1.KeywordCxt; } }));
-var codegen_1 = __webpack_require__(/*! ./compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-Object.defineProperty(exports, "_", ({ enumerable: true, get: function () { return codegen_1._; } }));
-Object.defineProperty(exports, "str", ({ enumerable: true, get: function () { return codegen_1.str; } }));
-Object.defineProperty(exports, "stringify", ({ enumerable: true, get: function () { return codegen_1.stringify; } }));
-Object.defineProperty(exports, "nil", ({ enumerable: true, get: function () { return codegen_1.nil; } }));
-Object.defineProperty(exports, "Name", ({ enumerable: true, get: function () { return codegen_1.Name; } }));
-Object.defineProperty(exports, "CodeGen", ({ enumerable: true, get: function () { return codegen_1.CodeGen; } }));
-const validation_error_1 = __webpack_require__(/*! ./runtime/validation_error */ "./node_modules/ajv/dist/runtime/validation_error.js");
-const ref_error_1 = __webpack_require__(/*! ./compile/ref_error */ "./node_modules/ajv/dist/compile/ref_error.js");
-const rules_1 = __webpack_require__(/*! ./compile/rules */ "./node_modules/ajv/dist/compile/rules.js");
-const compile_1 = __webpack_require__(/*! ./compile */ "./node_modules/ajv/dist/compile/index.js");
-const codegen_2 = __webpack_require__(/*! ./compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const resolve_1 = __webpack_require__(/*! ./compile/resolve */ "./node_modules/ajv/dist/compile/resolve.js");
-const dataType_1 = __webpack_require__(/*! ./compile/validate/dataType */ "./node_modules/ajv/dist/compile/validate/dataType.js");
-const util_1 = __webpack_require__(/*! ./compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const $dataRefSchema = __webpack_require__(/*! ./refs/data.json */ "./node_modules/ajv/dist/refs/data.json");
-const uri_1 = __webpack_require__(/*! ./runtime/uri */ "./node_modules/ajv/dist/runtime/uri.js");
-const defaultRegExp = (str, flags) => new RegExp(str, flags);
-defaultRegExp.code = "new RegExp";
-const META_IGNORE_OPTIONS = ["removeAdditional", "useDefaults", "coerceTypes"];
-const EXT_SCOPE_NAMES = new Set([
-    "validate",
-    "serialize",
-    "parse",
-    "wrapper",
-    "root",
-    "schema",
-    "keyword",
-    "pattern",
-    "formats",
-    "validate$data",
-    "func",
-    "obj",
-    "Error",
-]);
-const removedOptions = {
-    errorDataPath: "",
-    format: "`validateFormats: false` can be used instead.",
-    nullable: '"nullable" keyword is supported by default.',
-    jsonPointers: "Deprecated jsPropertySyntax can be used instead.",
-    extendRefs: "Deprecated ignoreKeywordsWithRef can be used instead.",
-    missingRefs: "Pass empty schema with $id that should be ignored to ajv.addSchema.",
-    processCode: "Use option `code: {process: (code, schemaEnv: object) => string}`",
-    sourceCode: "Use option `code: {source: true}`",
-    strictDefaults: "It is default now, see option `strict`.",
-    strictKeywords: "It is default now, see option `strict`.",
-    uniqueItems: '"uniqueItems" keyword is always validated.',
-    unknownFormats: "Disable strict mode or pass `true` to `ajv.addFormat` (or `formats` option).",
-    cache: "Map is used as cache, schema object as key.",
-    serialize: "Map is used as cache, schema object as key.",
-    ajvErrors: "It is default now.",
-};
-const deprecatedOptions = {
-    ignoreKeywordsWithRef: "",
-    jsPropertySyntax: "",
-    unicode: '"minLength"/"maxLength" account for unicode characters by default.',
-};
-const MAX_EXPRESSION = 200;
-// eslint-disable-next-line complexity
-function requiredOptions(o) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0;
-    const s = o.strict;
-    const _optz = (_a = o.code) === null || _a === void 0 ? void 0 : _a.optimize;
-    const optimize = _optz === true || _optz === undefined ? 1 : _optz || 0;
-    const regExp = (_c = (_b = o.code) === null || _b === void 0 ? void 0 : _b.regExp) !== null && _c !== void 0 ? _c : defaultRegExp;
-    const uriResolver = (_d = o.uriResolver) !== null && _d !== void 0 ? _d : uri_1.default;
-    return {
-        strictSchema: (_f = (_e = o.strictSchema) !== null && _e !== void 0 ? _e : s) !== null && _f !== void 0 ? _f : true,
-        strictNumbers: (_h = (_g = o.strictNumbers) !== null && _g !== void 0 ? _g : s) !== null && _h !== void 0 ? _h : true,
-        strictTypes: (_k = (_j = o.strictTypes) !== null && _j !== void 0 ? _j : s) !== null && _k !== void 0 ? _k : "log",
-        strictTuples: (_m = (_l = o.strictTuples) !== null && _l !== void 0 ? _l : s) !== null && _m !== void 0 ? _m : "log",
-        strictRequired: (_p = (_o = o.strictRequired) !== null && _o !== void 0 ? _o : s) !== null && _p !== void 0 ? _p : false,
-        code: o.code ? { ...o.code, optimize, regExp } : { optimize, regExp },
-        loopRequired: (_q = o.loopRequired) !== null && _q !== void 0 ? _q : MAX_EXPRESSION,
-        loopEnum: (_r = o.loopEnum) !== null && _r !== void 0 ? _r : MAX_EXPRESSION,
-        meta: (_s = o.meta) !== null && _s !== void 0 ? _s : true,
-        messages: (_t = o.messages) !== null && _t !== void 0 ? _t : true,
-        inlineRefs: (_u = o.inlineRefs) !== null && _u !== void 0 ? _u : true,
-        schemaId: (_v = o.schemaId) !== null && _v !== void 0 ? _v : "$id",
-        addUsedSchema: (_w = o.addUsedSchema) !== null && _w !== void 0 ? _w : true,
-        validateSchema: (_x = o.validateSchema) !== null && _x !== void 0 ? _x : true,
-        validateFormats: (_y = o.validateFormats) !== null && _y !== void 0 ? _y : true,
-        unicodeRegExp: (_z = o.unicodeRegExp) !== null && _z !== void 0 ? _z : true,
-        int32range: (_0 = o.int32range) !== null && _0 !== void 0 ? _0 : true,
-        uriResolver: uriResolver,
-    };
-}
-class Ajv {
-    constructor(opts = {}) {
-        this.schemas = {};
-        this.refs = {};
-        this.formats = Object.create(null);
-        this._compilations = new Set();
-        this._loading = {};
-        this._cache = new Map();
-        opts = this.opts = { ...opts, ...requiredOptions(opts) };
-        const { es5, lines } = this.opts.code;
-        this.scope = new codegen_2.ValueScope({ scope: {}, prefixes: EXT_SCOPE_NAMES, es5, lines });
-        this.logger = getLogger(opts.logger);
-        const formatOpt = opts.validateFormats;
-        opts.validateFormats = false;
-        this.RULES = (0, rules_1.getRules)();
-        checkOptions.call(this, removedOptions, opts, "NOT SUPPORTED");
-        checkOptions.call(this, deprecatedOptions, opts, "DEPRECATED", "warn");
-        this._metaOpts = getMetaSchemaOptions.call(this);
-        if (opts.formats)
-            addInitialFormats.call(this);
-        this._addVocabularies();
-        this._addDefaultMetaSchema();
-        if (opts.keywords)
-            addInitialKeywords.call(this, opts.keywords);
-        if (typeof opts.meta == "object")
-            this.addMetaSchema(opts.meta);
-        addInitialSchemas.call(this);
-        opts.validateFormats = formatOpt;
-    }
-    _addVocabularies() {
-        this.addKeyword("$async");
-    }
-    _addDefaultMetaSchema() {
-        const { $data, meta, schemaId } = this.opts;
-        let _dataRefSchema = $dataRefSchema;
-        if (schemaId === "id") {
-            _dataRefSchema = { ...$dataRefSchema };
-            _dataRefSchema.id = _dataRefSchema.$id;
-            delete _dataRefSchema.$id;
-        }
-        if (meta && $data)
-            this.addMetaSchema(_dataRefSchema, _dataRefSchema[schemaId], false);
-    }
-    defaultMeta() {
-        const { meta, schemaId } = this.opts;
-        return (this.opts.defaultMeta = typeof meta == "object" ? meta[schemaId] || meta : undefined);
-    }
-    validate(schemaKeyRef, // key, ref or schema object
-    // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
-    data // to be validated
-    ) {
-        let v;
-        if (typeof schemaKeyRef == "string") {
-            v = this.getSchema(schemaKeyRef);
-            if (!v)
-                throw new Error(`no schema with key or ref "${schemaKeyRef}"`);
-        }
-        else {
-            v = this.compile(schemaKeyRef);
-        }
-        const valid = v(data);
-        if (!("$async" in v))
-            this.errors = v.errors;
-        return valid;
-    }
-    compile(schema, _meta) {
-        const sch = this._addSchema(schema, _meta);
-        return (sch.validate || this._compileSchemaEnv(sch));
-    }
-    compileAsync(schema, meta) {
-        if (typeof this.opts.loadSchema != "function") {
-            throw new Error("options.loadSchema should be a function");
-        }
-        const { loadSchema } = this.opts;
-        return runCompileAsync.call(this, schema, meta);
-        async function runCompileAsync(_schema, _meta) {
-            await loadMetaSchema.call(this, _schema.$schema);
-            const sch = this._addSchema(_schema, _meta);
-            return sch.validate || _compileAsync.call(this, sch);
-        }
-        async function loadMetaSchema($ref) {
-            if ($ref && !this.getSchema($ref)) {
-                await runCompileAsync.call(this, { $ref }, true);
-            }
-        }
-        async function _compileAsync(sch) {
-            try {
-                return this._compileSchemaEnv(sch);
-            }
-            catch (e) {
-                if (!(e instanceof ref_error_1.default))
-                    throw e;
-                checkLoaded.call(this, e);
-                await loadMissingSchema.call(this, e.missingSchema);
-                return _compileAsync.call(this, sch);
-            }
-        }
-        function checkLoaded({ missingSchema: ref, missingRef }) {
-            if (this.refs[ref]) {
-                throw new Error(`AnySchema ${ref} is loaded but ${missingRef} cannot be resolved`);
-            }
-        }
-        async function loadMissingSchema(ref) {
-            const _schema = await _loadSchema.call(this, ref);
-            if (!this.refs[ref])
-                await loadMetaSchema.call(this, _schema.$schema);
-            if (!this.refs[ref])
-                this.addSchema(_schema, ref, meta);
-        }
-        async function _loadSchema(ref) {
-            const p = this._loading[ref];
-            if (p)
-                return p;
-            try {
-                return await (this._loading[ref] = loadSchema(ref));
-            }
-            finally {
-                delete this._loading[ref];
-            }
-        }
-    }
-    // Adds schema to the instance
-    addSchema(schema, // If array is passed, `key` will be ignored
-    key, // Optional schema key. Can be passed to `validate` method instead of schema object or id/ref. One schema per instance can have empty `id` and `key`.
-    _meta, // true if schema is a meta-schema. Used internally, addMetaSchema should be used instead.
-    _validateSchema = this.opts.validateSchema // false to skip schema validation. Used internally, option validateSchema should be used instead.
-    ) {
-        if (Array.isArray(schema)) {
-            for (const sch of schema)
-                this.addSchema(sch, undefined, _meta, _validateSchema);
-            return this;
-        }
-        let id;
-        if (typeof schema === "object") {
-            const { schemaId } = this.opts;
-            id = schema[schemaId];
-            if (id !== undefined && typeof id != "string") {
-                throw new Error(`schema ${schemaId} must be string`);
-            }
-        }
-        key = (0, resolve_1.normalizeId)(key || id);
-        this._checkUnique(key);
-        this.schemas[key] = this._addSchema(schema, _meta, key, _validateSchema, true);
-        return this;
-    }
-    // Add schema that will be used to validate other schemas
-    // options in META_IGNORE_OPTIONS are alway set to false
-    addMetaSchema(schema, key, // schema key
-    _validateSchema = this.opts.validateSchema // false to skip schema validation, can be used to override validateSchema option for meta-schema
-    ) {
-        this.addSchema(schema, key, true, _validateSchema);
-        return this;
-    }
-    //  Validate schema against its meta-schema
-    validateSchema(schema, throwOrLogError) {
-        if (typeof schema == "boolean")
-            return true;
-        let $schema;
-        $schema = schema.$schema;
-        if ($schema !== undefined && typeof $schema != "string") {
-            throw new Error("$schema must be a string");
-        }
-        $schema = $schema || this.opts.defaultMeta || this.defaultMeta();
-        if (!$schema) {
-            this.logger.warn("meta-schema not available");
-            this.errors = null;
-            return true;
-        }
-        const valid = this.validate($schema, schema);
-        if (!valid && throwOrLogError) {
-            const message = "schema is invalid: " + this.errorsText();
-            if (this.opts.validateSchema === "log")
-                this.logger.error(message);
-            else
-                throw new Error(message);
-        }
-        return valid;
-    }
-    // Get compiled schema by `key` or `ref`.
-    // (`key` that was passed to `addSchema` or full schema reference - `schema.$id` or resolved id)
-    getSchema(keyRef) {
-        let sch;
-        while (typeof (sch = getSchEnv.call(this, keyRef)) == "string")
-            keyRef = sch;
-        if (sch === undefined) {
-            const { schemaId } = this.opts;
-            const root = new compile_1.SchemaEnv({ schema: {}, schemaId });
-            sch = compile_1.resolveSchema.call(this, root, keyRef);
-            if (!sch)
-                return;
-            this.refs[keyRef] = sch;
-        }
-        return (sch.validate || this._compileSchemaEnv(sch));
-    }
-    // Remove cached schema(s).
-    // If no parameter is passed all schemas but meta-schemas are removed.
-    // If RegExp is passed all schemas with key/id matching pattern but meta-schemas are removed.
-    // Even if schema is referenced by other schemas it still can be removed as other schemas have local references.
-    removeSchema(schemaKeyRef) {
-        if (schemaKeyRef instanceof RegExp) {
-            this._removeAllSchemas(this.schemas, schemaKeyRef);
-            this._removeAllSchemas(this.refs, schemaKeyRef);
-            return this;
-        }
-        switch (typeof schemaKeyRef) {
-            case "undefined":
-                this._removeAllSchemas(this.schemas);
-                this._removeAllSchemas(this.refs);
-                this._cache.clear();
-                return this;
-            case "string": {
-                const sch = getSchEnv.call(this, schemaKeyRef);
-                if (typeof sch == "object")
-                    this._cache.delete(sch.schema);
-                delete this.schemas[schemaKeyRef];
-                delete this.refs[schemaKeyRef];
-                return this;
-            }
-            case "object": {
-                const cacheKey = schemaKeyRef;
-                this._cache.delete(cacheKey);
-                let id = schemaKeyRef[this.opts.schemaId];
-                if (id) {
-                    id = (0, resolve_1.normalizeId)(id);
-                    delete this.schemas[id];
-                    delete this.refs[id];
-                }
-                return this;
-            }
-            default:
-                throw new Error("ajv.removeSchema: invalid parameter");
-        }
-    }
-    // add "vocabulary" - a collection of keywords
-    addVocabulary(definitions) {
-        for (const def of definitions)
-            this.addKeyword(def);
-        return this;
-    }
-    addKeyword(kwdOrDef, def // deprecated
-    ) {
-        let keyword;
-        if (typeof kwdOrDef == "string") {
-            keyword = kwdOrDef;
-            if (typeof def == "object") {
-                this.logger.warn("these parameters are deprecated, see docs for addKeyword");
-                def.keyword = keyword;
-            }
-        }
-        else if (typeof kwdOrDef == "object" && def === undefined) {
-            def = kwdOrDef;
-            keyword = def.keyword;
-            if (Array.isArray(keyword) && !keyword.length) {
-                throw new Error("addKeywords: keyword must be string or non-empty array");
-            }
-        }
-        else {
-            throw new Error("invalid addKeywords parameters");
-        }
-        checkKeyword.call(this, keyword, def);
-        if (!def) {
-            (0, util_1.eachItem)(keyword, (kwd) => addRule.call(this, kwd));
-            return this;
-        }
-        keywordMetaschema.call(this, def);
-        const definition = {
-            ...def,
-            type: (0, dataType_1.getJSONTypes)(def.type),
-            schemaType: (0, dataType_1.getJSONTypes)(def.schemaType),
-        };
-        (0, util_1.eachItem)(keyword, definition.type.length === 0
-            ? (k) => addRule.call(this, k, definition)
-            : (k) => definition.type.forEach((t) => addRule.call(this, k, definition, t)));
-        return this;
-    }
-    getKeyword(keyword) {
-        const rule = this.RULES.all[keyword];
-        return typeof rule == "object" ? rule.definition : !!rule;
-    }
-    // Remove keyword
-    removeKeyword(keyword) {
-        // TODO return type should be Ajv
-        const { RULES } = this;
-        delete RULES.keywords[keyword];
-        delete RULES.all[keyword];
-        for (const group of RULES.rules) {
-            const i = group.rules.findIndex((rule) => rule.keyword === keyword);
-            if (i >= 0)
-                group.rules.splice(i, 1);
-        }
-        return this;
-    }
-    // Add format
-    addFormat(name, format) {
-        if (typeof format == "string")
-            format = new RegExp(format);
-        this.formats[name] = format;
-        return this;
-    }
-    errorsText(errors = this.errors, // optional array of validation errors
-    { separator = ", ", dataVar = "data" } = {} // optional options with properties `separator` and `dataVar`
-    ) {
-        if (!errors || errors.length === 0)
-            return "No errors";
-        return errors
-            .map((e) => `${dataVar}${e.instancePath} ${e.message}`)
-            .reduce((text, msg) => text + separator + msg);
-    }
-    $dataMetaSchema(metaSchema, keywordsJsonPointers) {
-        const rules = this.RULES.all;
-        metaSchema = JSON.parse(JSON.stringify(metaSchema));
-        for (const jsonPointer of keywordsJsonPointers) {
-            const segments = jsonPointer.split("/").slice(1); // first segment is an empty string
-            let keywords = metaSchema;
-            for (const seg of segments)
-                keywords = keywords[seg];
-            for (const key in rules) {
-                const rule = rules[key];
-                if (typeof rule != "object")
-                    continue;
-                const { $data } = rule.definition;
-                const schema = keywords[key];
-                if ($data && schema)
-                    keywords[key] = schemaOrData(schema);
-            }
-        }
-        return metaSchema;
-    }
-    _removeAllSchemas(schemas, regex) {
-        for (const keyRef in schemas) {
-            const sch = schemas[keyRef];
-            if (!regex || regex.test(keyRef)) {
-                if (typeof sch == "string") {
-                    delete schemas[keyRef];
-                }
-                else if (sch && !sch.meta) {
-                    this._cache.delete(sch.schema);
-                    delete schemas[keyRef];
-                }
-            }
-        }
-    }
-    _addSchema(schema, meta, baseId, validateSchema = this.opts.validateSchema, addSchema = this.opts.addUsedSchema) {
-        let id;
-        const { schemaId } = this.opts;
-        if (typeof schema == "object") {
-            id = schema[schemaId];
-        }
-        else {
-            if (this.opts.jtd)
-                throw new Error("schema must be object");
-            else if (typeof schema != "boolean")
-                throw new Error("schema must be object or boolean");
-        }
-        let sch = this._cache.get(schema);
-        if (sch !== undefined)
-            return sch;
-        baseId = (0, resolve_1.normalizeId)(id || baseId);
-        const localRefs = resolve_1.getSchemaRefs.call(this, schema, baseId);
-        sch = new compile_1.SchemaEnv({ schema, schemaId, meta, baseId, localRefs });
-        this._cache.set(sch.schema, sch);
-        if (addSchema && !baseId.startsWith("#")) {
-            // TODO atm it is allowed to overwrite schemas without id (instead of not adding them)
-            if (baseId)
-                this._checkUnique(baseId);
-            this.refs[baseId] = sch;
-        }
-        if (validateSchema)
-            this.validateSchema(schema, true);
-        return sch;
-    }
-    _checkUnique(id) {
-        if (this.schemas[id] || this.refs[id]) {
-            throw new Error(`schema with key or id "${id}" already exists`);
-        }
-    }
-    _compileSchemaEnv(sch) {
-        if (sch.meta)
-            this._compileMetaSchema(sch);
-        else
-            compile_1.compileSchema.call(this, sch);
-        /* istanbul ignore if */
-        if (!sch.validate)
-            throw new Error("ajv implementation error");
-        return sch.validate;
-    }
-    _compileMetaSchema(sch) {
-        const currentOpts = this.opts;
-        this.opts = this._metaOpts;
-        try {
-            compile_1.compileSchema.call(this, sch);
-        }
-        finally {
-            this.opts = currentOpts;
-        }
-    }
-}
-Ajv.ValidationError = validation_error_1.default;
-Ajv.MissingRefError = ref_error_1.default;
-exports["default"] = Ajv;
-function checkOptions(checkOpts, options, msg, log = "error") {
-    for (const key in checkOpts) {
-        const opt = key;
-        if (opt in options)
-            this.logger[log](`${msg}: option ${key}. ${checkOpts[opt]}`);
-    }
-}
-function getSchEnv(keyRef) {
-    keyRef = (0, resolve_1.normalizeId)(keyRef); // TODO tests fail without this line
-    return this.schemas[keyRef] || this.refs[keyRef];
-}
-function addInitialSchemas() {
-    const optsSchemas = this.opts.schemas;
-    if (!optsSchemas)
-        return;
-    if (Array.isArray(optsSchemas))
-        this.addSchema(optsSchemas);
-    else
-        for (const key in optsSchemas)
-            this.addSchema(optsSchemas[key], key);
-}
-function addInitialFormats() {
-    for (const name in this.opts.formats) {
-        const format = this.opts.formats[name];
-        if (format)
-            this.addFormat(name, format);
-    }
-}
-function addInitialKeywords(defs) {
-    if (Array.isArray(defs)) {
-        this.addVocabulary(defs);
-        return;
-    }
-    this.logger.warn("keywords option as map is deprecated, pass array");
-    for (const keyword in defs) {
-        const def = defs[keyword];
-        if (!def.keyword)
-            def.keyword = keyword;
-        this.addKeyword(def);
-    }
-}
-function getMetaSchemaOptions() {
-    const metaOpts = { ...this.opts };
-    for (const opt of META_IGNORE_OPTIONS)
-        delete metaOpts[opt];
-    return metaOpts;
-}
-const noLogs = { log() { }, warn() { }, error() { } };
-function getLogger(logger) {
-    if (logger === false)
-        return noLogs;
-    if (logger === undefined)
-        return console;
-    if (logger.log && logger.warn && logger.error)
-        return logger;
-    throw new Error("logger must implement log, warn and error methods");
-}
-const KEYWORD_NAME = /^[a-z_$][a-z0-9_$:-]*$/i;
-function checkKeyword(keyword, def) {
-    const { RULES } = this;
-    (0, util_1.eachItem)(keyword, (kwd) => {
-        if (RULES.keywords[kwd])
-            throw new Error(`Keyword ${kwd} is already defined`);
-        if (!KEYWORD_NAME.test(kwd))
-            throw new Error(`Keyword ${kwd} has invalid name`);
-    });
-    if (!def)
-        return;
-    if (def.$data && !("code" in def || "validate" in def)) {
-        throw new Error('$data keyword must have "code" or "validate" function');
-    }
-}
-function addRule(keyword, definition, dataType) {
-    var _a;
-    const post = definition === null || definition === void 0 ? void 0 : definition.post;
-    if (dataType && post)
-        throw new Error('keyword with "post" flag cannot have "type"');
-    const { RULES } = this;
-    let ruleGroup = post ? RULES.post : RULES.rules.find(({ type: t }) => t === dataType);
-    if (!ruleGroup) {
-        ruleGroup = { type: dataType, rules: [] };
-        RULES.rules.push(ruleGroup);
-    }
-    RULES.keywords[keyword] = true;
-    if (!definition)
-        return;
-    const rule = {
-        keyword,
-        definition: {
-            ...definition,
-            type: (0, dataType_1.getJSONTypes)(definition.type),
-            schemaType: (0, dataType_1.getJSONTypes)(definition.schemaType),
-        },
-    };
-    if (definition.before)
-        addBeforeRule.call(this, ruleGroup, rule, definition.before);
-    else
-        ruleGroup.rules.push(rule);
-    RULES.all[keyword] = rule;
-    (_a = definition.implements) === null || _a === void 0 ? void 0 : _a.forEach((kwd) => this.addKeyword(kwd));
-}
-function addBeforeRule(ruleGroup, rule, before) {
-    const i = ruleGroup.rules.findIndex((_rule) => _rule.keyword === before);
-    if (i >= 0) {
-        ruleGroup.rules.splice(i, 0, rule);
-    }
-    else {
-        ruleGroup.rules.push(rule);
-        this.logger.warn(`rule ${before} is not defined`);
-    }
-}
-function keywordMetaschema(def) {
-    let { metaSchema } = def;
-    if (metaSchema === undefined)
-        return;
-    if (def.$data && this.opts.$data)
-        metaSchema = schemaOrData(metaSchema);
-    def.validateSchema = this.compile(metaSchema, true);
-}
-const $dataRef = {
-    $ref: "https://raw.githubusercontent.com/ajv-validator/ajv/master/lib/refs/data.json#",
-};
-function schemaOrData(schema) {
-    return { anyOf: [schema, $dataRef] };
-}
-//# sourceMappingURL=core.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/runtime/equal.js"
-/*!************************************************!*\
-  !*** ./node_modules/ajv/dist/runtime/equal.js ***!
-  \************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-// https://github.com/ajv-validator/ajv/issues/889
-const equal = __webpack_require__(/*! fast-deep-equal */ "./node_modules/fast-deep-equal/index.js");
-equal.code = 'require("ajv/dist/runtime/equal").default';
-exports["default"] = equal;
-//# sourceMappingURL=equal.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/runtime/ucs2length.js"
-/*!*****************************************************!*\
-  !*** ./node_modules/ajv/dist/runtime/ucs2length.js ***!
-  \*****************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-// https://mathiasbynens.be/notes/javascript-encoding
-// https://github.com/bestiejs/punycode.js - punycode.ucs2.decode
-function ucs2length(str) {
-    const len = str.length;
-    let length = 0;
-    let pos = 0;
-    let value;
-    while (pos < len) {
-        length++;
-        value = str.charCodeAt(pos++);
-        if (value >= 0xd800 && value <= 0xdbff && pos < len) {
-            // high surrogate, and there is a next character
-            value = str.charCodeAt(pos);
-            if ((value & 0xfc00) === 0xdc00)
-                pos++; // low surrogate
-        }
-    }
-    return length;
-}
-exports["default"] = ucs2length;
-ucs2length.code = 'require("ajv/dist/runtime/ucs2length").default';
-//# sourceMappingURL=ucs2length.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/runtime/uri.js"
-/*!**********************************************!*\
-  !*** ./node_modules/ajv/dist/runtime/uri.js ***!
-  \**********************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const uri = __webpack_require__(/*! fast-uri */ "./node_modules/fast-uri/index.js");
-uri.code = 'require("ajv/dist/runtime/uri").default';
-exports["default"] = uri;
-//# sourceMappingURL=uri.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/runtime/validation_error.js"
-/*!***********************************************************!*\
-  !*** ./node_modules/ajv/dist/runtime/validation_error.js ***!
-  \***********************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-class ValidationError extends Error {
-    constructor(errors) {
-        super("validation failed");
-        this.errors = errors;
-        this.ajv = this.validation = true;
-    }
-}
-exports["default"] = ValidationError;
-//# sourceMappingURL=validation_error.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"
-/*!**************************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/additionalItems.js ***!
-  \**************************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.validateAdditionalItems = void 0;
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const error = {
-    message: ({ params: { len } }) => (0, codegen_1.str) `must NOT have more than ${len} items`,
-    params: ({ params: { len } }) => (0, codegen_1._) `{limit: ${len}}`,
-};
-const def = {
-    keyword: "additionalItems",
-    type: "array",
-    schemaType: ["boolean", "object"],
-    before: "uniqueItems",
-    error,
-    code(cxt) {
-        const { parentSchema, it } = cxt;
-        const { items } = parentSchema;
-        if (!Array.isArray(items)) {
-            (0, util_1.checkStrictMode)(it, '"additionalItems" is ignored when "items" is not an array of schemas');
-            return;
-        }
-        validateAdditionalItems(cxt, items);
-    },
-};
-function validateAdditionalItems(cxt, items) {
-    const { gen, schema, data, keyword, it } = cxt;
-    it.items = true;
-    const len = gen.const("len", (0, codegen_1._) `${data}.length`);
-    if (schema === false) {
-        cxt.setParams({ len: items.length });
-        cxt.pass((0, codegen_1._) `${len} <= ${items.length}`);
-    }
-    else if (typeof schema == "object" && !(0, util_1.alwaysValidSchema)(it, schema)) {
-        const valid = gen.var("valid", (0, codegen_1._) `${len} <= ${items.length}`); // TODO var
-        gen.if((0, codegen_1.not)(valid), () => validateItems(valid));
-        cxt.ok(valid);
-    }
-    function validateItems(valid) {
-        gen.forRange("i", items.length, len, (i) => {
-            cxt.subschema({ keyword, dataProp: i, dataPropType: util_1.Type.Num }, valid);
-            if (!it.allErrors)
-                gen.if((0, codegen_1.not)(valid), () => gen.break());
-        });
-    }
-}
-exports.validateAdditionalItems = validateAdditionalItems;
-exports["default"] = def;
-//# sourceMappingURL=additionalItems.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"
-/*!*******************************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js ***!
-  \*******************************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const names_1 = __webpack_require__(/*! ../../compile/names */ "./node_modules/ajv/dist/compile/names.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const error = {
-    message: "must NOT have additional properties",
-    params: ({ params }) => (0, codegen_1._) `{additionalProperty: ${params.additionalProperty}}`,
-};
-const def = {
-    keyword: "additionalProperties",
-    type: ["object"],
-    schemaType: ["boolean", "object"],
-    allowUndefined: true,
-    trackErrors: true,
-    error,
-    code(cxt) {
-        const { gen, schema, parentSchema, data, errsCount, it } = cxt;
-        /* istanbul ignore if */
-        if (!errsCount)
-            throw new Error("ajv implementation error");
-        const { allErrors, opts } = it;
-        it.props = true;
-        if (opts.removeAdditional !== "all" && (0, util_1.alwaysValidSchema)(it, schema))
-            return;
-        const props = (0, code_1.allSchemaProperties)(parentSchema.properties);
-        const patProps = (0, code_1.allSchemaProperties)(parentSchema.patternProperties);
-        checkAdditionalProperties();
-        cxt.ok((0, codegen_1._) `${errsCount} === ${names_1.default.errors}`);
-        function checkAdditionalProperties() {
-            gen.forIn("key", data, (key) => {
-                if (!props.length && !patProps.length)
-                    additionalPropertyCode(key);
-                else
-                    gen.if(isAdditional(key), () => additionalPropertyCode(key));
-            });
-        }
-        function isAdditional(key) {
-            let definedProp;
-            if (props.length > 8) {
-                // TODO maybe an option instead of hard-coded 8?
-                const propsSchema = (0, util_1.schemaRefOrVal)(it, parentSchema.properties, "properties");
-                definedProp = (0, code_1.isOwnProperty)(gen, propsSchema, key);
-            }
-            else if (props.length) {
-                definedProp = (0, codegen_1.or)(...props.map((p) => (0, codegen_1._) `${key} === ${p}`));
-            }
-            else {
-                definedProp = codegen_1.nil;
-            }
-            if (patProps.length) {
-                definedProp = (0, codegen_1.or)(definedProp, ...patProps.map((p) => (0, codegen_1._) `${(0, code_1.usePattern)(cxt, p)}.test(${key})`));
-            }
-            return (0, codegen_1.not)(definedProp);
-        }
-        function deleteAdditional(key) {
-            gen.code((0, codegen_1._) `delete ${data}[${key}]`);
-        }
-        function additionalPropertyCode(key) {
-            if (opts.removeAdditional === "all" || (opts.removeAdditional && schema === false)) {
-                deleteAdditional(key);
-                return;
-            }
-            if (schema === false) {
-                cxt.setParams({ additionalProperty: key });
-                cxt.error();
-                if (!allErrors)
-                    gen.break();
-                return;
-            }
-            if (typeof schema == "object" && !(0, util_1.alwaysValidSchema)(it, schema)) {
-                const valid = gen.name("valid");
-                if (opts.removeAdditional === "failing") {
-                    applyAdditionalSchema(key, valid, false);
-                    gen.if((0, codegen_1.not)(valid), () => {
-                        cxt.reset();
-                        deleteAdditional(key);
-                    });
-                }
-                else {
-                    applyAdditionalSchema(key, valid);
-                    if (!allErrors)
-                        gen.if((0, codegen_1.not)(valid), () => gen.break());
-                }
-            }
-        }
-        function applyAdditionalSchema(key, valid, errors) {
-            const subschema = {
-                keyword: "additionalProperties",
-                dataProp: key,
-                dataPropType: util_1.Type.Str,
-            };
-            if (errors === false) {
-                Object.assign(subschema, {
-                    compositeRule: true,
-                    createErrors: false,
-                    allErrors: false,
-                });
-            }
-            cxt.subschema(subschema, valid);
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=additionalProperties.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/allOf.js"
-/*!****************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/allOf.js ***!
-  \****************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const def = {
-    keyword: "allOf",
-    schemaType: "array",
-    code(cxt) {
-        const { gen, schema, it } = cxt;
-        /* istanbul ignore if */
-        if (!Array.isArray(schema))
-            throw new Error("ajv implementation error");
-        const valid = gen.name("valid");
-        schema.forEach((sch, i) => {
-            if ((0, util_1.alwaysValidSchema)(it, sch))
-                return;
-            const schCxt = cxt.subschema({ keyword: "allOf", schemaProp: i }, valid);
-            cxt.ok(valid);
-            cxt.mergeEvaluated(schCxt);
-        });
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=allOf.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/anyOf.js"
-/*!****************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/anyOf.js ***!
-  \****************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const def = {
-    keyword: "anyOf",
-    schemaType: "array",
-    trackErrors: true,
-    code: code_1.validateUnion,
-    error: { message: "must match a schema in anyOf" },
-};
-exports["default"] = def;
-//# sourceMappingURL=anyOf.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/contains.js"
-/*!*******************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/contains.js ***!
-  \*******************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const error = {
-    message: ({ params: { min, max } }) => max === undefined
-        ? (0, codegen_1.str) `must contain at least ${min} valid item(s)`
-        : (0, codegen_1.str) `must contain at least ${min} and no more than ${max} valid item(s)`,
-    params: ({ params: { min, max } }) => max === undefined ? (0, codegen_1._) `{minContains: ${min}}` : (0, codegen_1._) `{minContains: ${min}, maxContains: ${max}}`,
-};
-const def = {
-    keyword: "contains",
-    type: "array",
-    schemaType: ["object", "boolean"],
-    before: "uniqueItems",
-    trackErrors: true,
-    error,
-    code(cxt) {
-        const { gen, schema, parentSchema, data, it } = cxt;
-        let min;
-        let max;
-        const { minContains, maxContains } = parentSchema;
-        if (it.opts.next) {
-            min = minContains === undefined ? 1 : minContains;
-            max = maxContains;
-        }
-        else {
-            min = 1;
-        }
-        const len = gen.const("len", (0, codegen_1._) `${data}.length`);
-        cxt.setParams({ min, max });
-        if (max === undefined && min === 0) {
-            (0, util_1.checkStrictMode)(it, `"minContains" == 0 without "maxContains": "contains" keyword ignored`);
-            return;
-        }
-        if (max !== undefined && min > max) {
-            (0, util_1.checkStrictMode)(it, `"minContains" > "maxContains" is always invalid`);
-            cxt.fail();
-            return;
-        }
-        if ((0, util_1.alwaysValidSchema)(it, schema)) {
-            let cond = (0, codegen_1._) `${len} >= ${min}`;
-            if (max !== undefined)
-                cond = (0, codegen_1._) `${cond} && ${len} <= ${max}`;
-            cxt.pass(cond);
-            return;
-        }
-        it.items = true;
-        const valid = gen.name("valid");
-        if (max === undefined && min === 1) {
-            validateItems(valid, () => gen.if(valid, () => gen.break()));
-        }
-        else if (min === 0) {
-            gen.let(valid, true);
-            if (max !== undefined)
-                gen.if((0, codegen_1._) `${data}.length > 0`, validateItemsWithCount);
-        }
-        else {
-            gen.let(valid, false);
-            validateItemsWithCount();
-        }
-        cxt.result(valid, () => cxt.reset());
-        function validateItemsWithCount() {
-            const schValid = gen.name("_valid");
-            const count = gen.let("count", 0);
-            validateItems(schValid, () => gen.if(schValid, () => checkLimits(count)));
-        }
-        function validateItems(_valid, block) {
-            gen.forRange("i", 0, len, (i) => {
-                cxt.subschema({
-                    keyword: "contains",
-                    dataProp: i,
-                    dataPropType: util_1.Type.Num,
-                    compositeRule: true,
-                }, _valid);
-                block();
-            });
-        }
-        function checkLimits(count) {
-            gen.code((0, codegen_1._) `${count}++`);
-            if (max === undefined) {
-                gen.if((0, codegen_1._) `${count} >= ${min}`, () => gen.assign(valid, true).break());
-            }
-            else {
-                gen.if((0, codegen_1._) `${count} > ${max}`, () => gen.assign(valid, false).break());
-                if (min === 1)
-                    gen.assign(valid, true);
-                else
-                    gen.if((0, codegen_1._) `${count} >= ${min}`, () => gen.assign(valid, true));
-            }
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=contains.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/dependencies.js"
-/*!***********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/dependencies.js ***!
-  \***********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.validateSchemaDeps = exports.validatePropertyDeps = exports.error = void 0;
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-exports.error = {
-    message: ({ params: { property, depsCount, deps } }) => {
-        const property_ies = depsCount === 1 ? "property" : "properties";
-        return (0, codegen_1.str) `must have ${property_ies} ${deps} when property ${property} is present`;
-    },
-    params: ({ params: { property, depsCount, deps, missingProperty } }) => (0, codegen_1._) `{property: ${property},
-    missingProperty: ${missingProperty},
-    depsCount: ${depsCount},
-    deps: ${deps}}`, // TODO change to reference
-};
-const def = {
-    keyword: "dependencies",
-    type: "object",
-    schemaType: "object",
-    error: exports.error,
-    code(cxt) {
-        const [propDeps, schDeps] = splitDependencies(cxt);
-        validatePropertyDeps(cxt, propDeps);
-        validateSchemaDeps(cxt, schDeps);
-    },
-};
-function splitDependencies({ schema }) {
-    const propertyDeps = {};
-    const schemaDeps = {};
-    for (const key in schema) {
-        if (key === "__proto__")
-            continue;
-        const deps = Array.isArray(schema[key]) ? propertyDeps : schemaDeps;
-        deps[key] = schema[key];
-    }
-    return [propertyDeps, schemaDeps];
-}
-function validatePropertyDeps(cxt, propertyDeps = cxt.schema) {
-    const { gen, data, it } = cxt;
-    if (Object.keys(propertyDeps).length === 0)
-        return;
-    const missing = gen.let("missing");
-    for (const prop in propertyDeps) {
-        const deps = propertyDeps[prop];
-        if (deps.length === 0)
-            continue;
-        const hasProperty = (0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties);
-        cxt.setParams({
-            property: prop,
-            depsCount: deps.length,
-            deps: deps.join(", "),
-        });
-        if (it.allErrors) {
-            gen.if(hasProperty, () => {
-                for (const depProp of deps) {
-                    (0, code_1.checkReportMissingProp)(cxt, depProp);
-                }
-            });
-        }
-        else {
-            gen.if((0, codegen_1._) `${hasProperty} && (${(0, code_1.checkMissingProp)(cxt, deps, missing)})`);
-            (0, code_1.reportMissingProp)(cxt, missing);
-            gen.else();
-        }
-    }
-}
-exports.validatePropertyDeps = validatePropertyDeps;
-function validateSchemaDeps(cxt, schemaDeps = cxt.schema) {
-    const { gen, data, keyword, it } = cxt;
-    const valid = gen.name("valid");
-    for (const prop in schemaDeps) {
-        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop]))
-            continue;
-        gen.if((0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties), () => {
-            const schCxt = cxt.subschema({ keyword, schemaProp: prop }, valid);
-            cxt.mergeValidEvaluated(schCxt, valid);
-        }, () => gen.var(valid, true) // TODO var
-        );
-        cxt.ok(valid);
-    }
-}
-exports.validateSchemaDeps = validateSchemaDeps;
-exports["default"] = def;
-//# sourceMappingURL=dependencies.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/if.js"
-/*!*************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/if.js ***!
-  \*************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const error = {
-    message: ({ params }) => (0, codegen_1.str) `must match "${params.ifClause}" schema`,
-    params: ({ params }) => (0, codegen_1._) `{failingKeyword: ${params.ifClause}}`,
-};
-const def = {
-    keyword: "if",
-    schemaType: ["object", "boolean"],
-    trackErrors: true,
-    error,
-    code(cxt) {
-        const { gen, parentSchema, it } = cxt;
-        if (parentSchema.then === undefined && parentSchema.else === undefined) {
-            (0, util_1.checkStrictMode)(it, '"if" without "then" and "else" is ignored');
-        }
-        const hasThen = hasSchema(it, "then");
-        const hasElse = hasSchema(it, "else");
-        if (!hasThen && !hasElse)
-            return;
-        const valid = gen.let("valid", true);
-        const schValid = gen.name("_valid");
-        validateIf();
-        cxt.reset();
-        if (hasThen && hasElse) {
-            const ifClause = gen.let("ifClause");
-            cxt.setParams({ ifClause });
-            gen.if(schValid, validateClause("then", ifClause), validateClause("else", ifClause));
-        }
-        else if (hasThen) {
-            gen.if(schValid, validateClause("then"));
-        }
-        else {
-            gen.if((0, codegen_1.not)(schValid), validateClause("else"));
-        }
-        cxt.pass(valid, () => cxt.error(true));
-        function validateIf() {
-            const schCxt = cxt.subschema({
-                keyword: "if",
-                compositeRule: true,
-                createErrors: false,
-                allErrors: false,
-            }, schValid);
-            cxt.mergeEvaluated(schCxt);
-        }
-        function validateClause(keyword, ifClause) {
-            return () => {
-                const schCxt = cxt.subschema({ keyword }, schValid);
-                gen.assign(valid, schValid);
-                cxt.mergeValidEvaluated(schCxt, valid);
-                if (ifClause)
-                    gen.assign(ifClause, (0, codegen_1._) `${keyword}`);
-                else
-                    cxt.setParams({ ifClause: keyword });
-            };
-        }
-    },
-};
-function hasSchema(it, keyword) {
-    const schema = it.schema[keyword];
-    return schema !== undefined && !(0, util_1.alwaysValidSchema)(it, schema);
-}
-exports["default"] = def;
-//# sourceMappingURL=if.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/index.js"
-/*!****************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/index.js ***!
-  \****************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const additionalItems_1 = __webpack_require__(/*! ./additionalItems */ "./node_modules/ajv/dist/vocabularies/applicator/additionalItems.js");
-const prefixItems_1 = __webpack_require__(/*! ./prefixItems */ "./node_modules/ajv/dist/vocabularies/applicator/prefixItems.js");
-const items_1 = __webpack_require__(/*! ./items */ "./node_modules/ajv/dist/vocabularies/applicator/items.js");
-const items2020_1 = __webpack_require__(/*! ./items2020 */ "./node_modules/ajv/dist/vocabularies/applicator/items2020.js");
-const contains_1 = __webpack_require__(/*! ./contains */ "./node_modules/ajv/dist/vocabularies/applicator/contains.js");
-const dependencies_1 = __webpack_require__(/*! ./dependencies */ "./node_modules/ajv/dist/vocabularies/applicator/dependencies.js");
-const propertyNames_1 = __webpack_require__(/*! ./propertyNames */ "./node_modules/ajv/dist/vocabularies/applicator/propertyNames.js");
-const additionalProperties_1 = __webpack_require__(/*! ./additionalProperties */ "./node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js");
-const properties_1 = __webpack_require__(/*! ./properties */ "./node_modules/ajv/dist/vocabularies/applicator/properties.js");
-const patternProperties_1 = __webpack_require__(/*! ./patternProperties */ "./node_modules/ajv/dist/vocabularies/applicator/patternProperties.js");
-const not_1 = __webpack_require__(/*! ./not */ "./node_modules/ajv/dist/vocabularies/applicator/not.js");
-const anyOf_1 = __webpack_require__(/*! ./anyOf */ "./node_modules/ajv/dist/vocabularies/applicator/anyOf.js");
-const oneOf_1 = __webpack_require__(/*! ./oneOf */ "./node_modules/ajv/dist/vocabularies/applicator/oneOf.js");
-const allOf_1 = __webpack_require__(/*! ./allOf */ "./node_modules/ajv/dist/vocabularies/applicator/allOf.js");
-const if_1 = __webpack_require__(/*! ./if */ "./node_modules/ajv/dist/vocabularies/applicator/if.js");
-const thenElse_1 = __webpack_require__(/*! ./thenElse */ "./node_modules/ajv/dist/vocabularies/applicator/thenElse.js");
-function getApplicator(draft2020 = false) {
-    const applicator = [
-        // any
-        not_1.default,
-        anyOf_1.default,
-        oneOf_1.default,
-        allOf_1.default,
-        if_1.default,
-        thenElse_1.default,
-        // object
-        propertyNames_1.default,
-        additionalProperties_1.default,
-        dependencies_1.default,
-        properties_1.default,
-        patternProperties_1.default,
-    ];
-    // array
-    if (draft2020)
-        applicator.push(prefixItems_1.default, items2020_1.default);
-    else
-        applicator.push(additionalItems_1.default, items_1.default);
-    applicator.push(contains_1.default);
-    return applicator;
-}
-exports["default"] = getApplicator;
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/items.js"
-/*!****************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/items.js ***!
-  \****************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.validateTuple = void 0;
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const def = {
-    keyword: "items",
-    type: "array",
-    schemaType: ["object", "array", "boolean"],
-    before: "uniqueItems",
-    code(cxt) {
-        const { schema, it } = cxt;
-        if (Array.isArray(schema))
-            return validateTuple(cxt, "additionalItems", schema);
-        it.items = true;
-        if ((0, util_1.alwaysValidSchema)(it, schema))
-            return;
-        cxt.ok((0, code_1.validateArray)(cxt));
-    },
-};
-function validateTuple(cxt, extraItems, schArr = cxt.schema) {
-    const { gen, parentSchema, data, keyword, it } = cxt;
-    checkStrictTuple(parentSchema);
-    if (it.opts.unevaluated && schArr.length && it.items !== true) {
-        it.items = util_1.mergeEvaluated.items(gen, schArr.length, it.items);
-    }
-    const valid = gen.name("valid");
-    const len = gen.const("len", (0, codegen_1._) `${data}.length`);
-    schArr.forEach((sch, i) => {
-        if ((0, util_1.alwaysValidSchema)(it, sch))
-            return;
-        gen.if((0, codegen_1._) `${len} > ${i}`, () => cxt.subschema({
-            keyword,
-            schemaProp: i,
-            dataProp: i,
-        }, valid));
-        cxt.ok(valid);
-    });
-    function checkStrictTuple(sch) {
-        const { opts, errSchemaPath } = it;
-        const l = schArr.length;
-        const fullTuple = l === sch.minItems && (l === sch.maxItems || sch[extraItems] === false);
-        if (opts.strictTuples && !fullTuple) {
-            const msg = `"${keyword}" is ${l}-tuple, but minItems or maxItems/${extraItems} are not specified or different at path "${errSchemaPath}"`;
-            (0, util_1.checkStrictMode)(it, msg, opts.strictTuples);
-        }
-    }
-}
-exports.validateTuple = validateTuple;
-exports["default"] = def;
-//# sourceMappingURL=items.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/items2020.js"
-/*!********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/items2020.js ***!
-  \********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const additionalItems_1 = __webpack_require__(/*! ./additionalItems */ "./node_modules/ajv/dist/vocabularies/applicator/additionalItems.js");
-const error = {
-    message: ({ params: { len } }) => (0, codegen_1.str) `must NOT have more than ${len} items`,
-    params: ({ params: { len } }) => (0, codegen_1._) `{limit: ${len}}`,
-};
-const def = {
-    keyword: "items",
-    type: "array",
-    schemaType: ["object", "boolean"],
-    before: "uniqueItems",
-    error,
-    code(cxt) {
-        const { schema, parentSchema, it } = cxt;
-        const { prefixItems } = parentSchema;
-        it.items = true;
-        if ((0, util_1.alwaysValidSchema)(it, schema))
-            return;
-        if (prefixItems)
-            (0, additionalItems_1.validateAdditionalItems)(cxt, prefixItems);
-        else
-            cxt.ok((0, code_1.validateArray)(cxt));
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=items2020.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/not.js"
-/*!**************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/not.js ***!
-  \**************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const def = {
-    keyword: "not",
-    schemaType: ["object", "boolean"],
-    trackErrors: true,
-    code(cxt) {
-        const { gen, schema, it } = cxt;
-        if ((0, util_1.alwaysValidSchema)(it, schema)) {
-            cxt.fail();
-            return;
-        }
-        const valid = gen.name("valid");
-        cxt.subschema({
-            keyword: "not",
-            compositeRule: true,
-            createErrors: false,
-            allErrors: false,
-        }, valid);
-        cxt.failResult(valid, () => cxt.reset(), () => cxt.error());
-    },
-    error: { message: "must NOT be valid" },
-};
-exports["default"] = def;
-//# sourceMappingURL=not.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/oneOf.js"
-/*!****************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/oneOf.js ***!
-  \****************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const error = {
-    message: "must match exactly one schema in oneOf",
-    params: ({ params }) => (0, codegen_1._) `{passingSchemas: ${params.passing}}`,
-};
-const def = {
-    keyword: "oneOf",
-    schemaType: "array",
-    trackErrors: true,
-    error,
-    code(cxt) {
-        const { gen, schema, parentSchema, it } = cxt;
-        /* istanbul ignore if */
-        if (!Array.isArray(schema))
-            throw new Error("ajv implementation error");
-        if (it.opts.discriminator && parentSchema.discriminator)
-            return;
-        const schArr = schema;
-        const valid = gen.let("valid", false);
-        const passing = gen.let("passing", null);
-        const schValid = gen.name("_valid");
-        cxt.setParams({ passing });
-        // TODO possibly fail straight away (with warning or exception) if there are two empty always valid schemas
-        gen.block(validateOneOf);
-        cxt.result(valid, () => cxt.reset(), () => cxt.error(true));
-        function validateOneOf() {
-            schArr.forEach((sch, i) => {
-                let schCxt;
-                if ((0, util_1.alwaysValidSchema)(it, sch)) {
-                    gen.var(schValid, true);
-                }
-                else {
-                    schCxt = cxt.subschema({
-                        keyword: "oneOf",
-                        schemaProp: i,
-                        compositeRule: true,
-                    }, schValid);
-                }
-                if (i > 0) {
-                    gen
-                        .if((0, codegen_1._) `${schValid} && ${valid}`)
-                        .assign(valid, false)
-                        .assign(passing, (0, codegen_1._) `[${passing}, ${i}]`)
-                        .else();
-                }
-                gen.if(schValid, () => {
-                    gen.assign(valid, true);
-                    gen.assign(passing, i);
-                    if (schCxt)
-                        cxt.mergeEvaluated(schCxt, codegen_1.Name);
-                });
-            });
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=oneOf.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"
-/*!****************************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/patternProperties.js ***!
-  \****************************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const util_2 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const def = {
-    keyword: "patternProperties",
-    type: "object",
-    schemaType: "object",
-    code(cxt) {
-        const { gen, schema, data, parentSchema, it } = cxt;
-        const { opts } = it;
-        const patterns = (0, code_1.allSchemaProperties)(schema);
-        const alwaysValidPatterns = patterns.filter((p) => (0, util_1.alwaysValidSchema)(it, schema[p]));
-        if (patterns.length === 0 ||
-            (alwaysValidPatterns.length === patterns.length &&
-                (!it.opts.unevaluated || it.props === true))) {
-            return;
-        }
-        const checkProperties = opts.strictSchema && !opts.allowMatchingProperties && parentSchema.properties;
-        const valid = gen.name("valid");
-        if (it.props !== true && !(it.props instanceof codegen_1.Name)) {
-            it.props = (0, util_2.evaluatedPropsToName)(gen, it.props);
-        }
-        const { props } = it;
-        validatePatternProperties();
-        function validatePatternProperties() {
-            for (const pat of patterns) {
-                if (checkProperties)
-                    checkMatchingProperties(pat);
-                if (it.allErrors) {
-                    validateProperties(pat);
-                }
-                else {
-                    gen.var(valid, true); // TODO var
-                    validateProperties(pat);
-                    gen.if(valid);
-                }
-            }
-        }
-        function checkMatchingProperties(pat) {
-            for (const prop in checkProperties) {
-                if (new RegExp(pat).test(prop)) {
-                    (0, util_1.checkStrictMode)(it, `property ${prop} matches pattern ${pat} (use allowMatchingProperties)`);
-                }
-            }
-        }
-        function validateProperties(pat) {
-            gen.forIn("key", data, (key) => {
-                gen.if((0, codegen_1._) `${(0, code_1.usePattern)(cxt, pat)}.test(${key})`, () => {
-                    const alwaysValid = alwaysValidPatterns.includes(pat);
-                    if (!alwaysValid) {
-                        cxt.subschema({
-                            keyword: "patternProperties",
-                            schemaProp: pat,
-                            dataProp: key,
-                            dataPropType: util_2.Type.Str,
-                        }, valid);
-                    }
-                    if (it.opts.unevaluated && props !== true) {
-                        gen.assign((0, codegen_1._) `${props}[${key}]`, true);
-                    }
-                    else if (!alwaysValid && !it.allErrors) {
-                        // can short-circuit if `unevaluatedProperties` is not supported (opts.next === false)
-                        // or if all properties were evaluated (props === true)
-                        gen.if((0, codegen_1.not)(valid), () => gen.break());
-                    }
-                });
-            });
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=patternProperties.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"
-/*!**********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/prefixItems.js ***!
-  \**********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const items_1 = __webpack_require__(/*! ./items */ "./node_modules/ajv/dist/vocabularies/applicator/items.js");
-const def = {
-    keyword: "prefixItems",
-    type: "array",
-    schemaType: ["array"],
-    before: "uniqueItems",
-    code: (cxt) => (0, items_1.validateTuple)(cxt, "items"),
-};
-exports["default"] = def;
-//# sourceMappingURL=prefixItems.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/properties.js"
-/*!*********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/properties.js ***!
-  \*********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const validate_1 = __webpack_require__(/*! ../../compile/validate */ "./node_modules/ajv/dist/compile/validate/index.js");
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const additionalProperties_1 = __webpack_require__(/*! ./additionalProperties */ "./node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js");
-const def = {
-    keyword: "properties",
-    type: "object",
-    schemaType: "object",
-    code(cxt) {
-        const { gen, schema, parentSchema, data, it } = cxt;
-        if (it.opts.removeAdditional === "all" && parentSchema.additionalProperties === undefined) {
-            additionalProperties_1.default.code(new validate_1.KeywordCxt(it, additionalProperties_1.default, "additionalProperties"));
-        }
-        const allProps = (0, code_1.allSchemaProperties)(schema);
-        for (const prop of allProps) {
-            it.definedProperties.add(prop);
-        }
-        if (it.opts.unevaluated && allProps.length && it.props !== true) {
-            it.props = util_1.mergeEvaluated.props(gen, (0, util_1.toHash)(allProps), it.props);
-        }
-        const properties = allProps.filter((p) => !(0, util_1.alwaysValidSchema)(it, schema[p]));
-        if (properties.length === 0)
-            return;
-        const valid = gen.name("valid");
-        for (const prop of properties) {
-            if (hasDefault(prop)) {
-                applyPropertySchema(prop);
-            }
-            else {
-                gen.if((0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties));
-                applyPropertySchema(prop);
-                if (!it.allErrors)
-                    gen.else().var(valid, true);
-                gen.endIf();
-            }
-            cxt.it.definedProperties.add(prop);
-            cxt.ok(valid);
-        }
-        function hasDefault(prop) {
-            return it.opts.useDefaults && !it.compositeRule && schema[prop].default !== undefined;
-        }
-        function applyPropertySchema(prop) {
-            cxt.subschema({
-                keyword: "properties",
-                schemaProp: prop,
-                dataProp: prop,
-            }, valid);
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=properties.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"
-/*!************************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/propertyNames.js ***!
-  \************************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const error = {
-    message: "property name must be valid",
-    params: ({ params }) => (0, codegen_1._) `{propertyName: ${params.propertyName}}`,
-};
-const def = {
-    keyword: "propertyNames",
-    type: "object",
-    schemaType: ["object", "boolean"],
-    error,
-    code(cxt) {
-        const { gen, schema, data, it } = cxt;
-        if ((0, util_1.alwaysValidSchema)(it, schema))
-            return;
-        const valid = gen.name("valid");
-        gen.forIn("key", data, (key) => {
-            cxt.setParams({ propertyName: key });
-            cxt.subschema({
-                keyword: "propertyNames",
-                data: key,
-                dataTypes: ["string"],
-                propertyName: key,
-                compositeRule: true,
-            }, valid);
-            gen.if((0, codegen_1.not)(valid), () => {
-                cxt.error(true);
-                if (!it.allErrors)
-                    gen.break();
-            });
-        });
-        cxt.ok(valid);
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=propertyNames.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/applicator/thenElse.js"
-/*!*******************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/applicator/thenElse.js ***!
-  \*******************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const def = {
-    keyword: ["then", "else"],
-    schemaType: ["object", "boolean"],
-    code({ keyword, parentSchema, it }) {
-        if (parentSchema.if === undefined)
-            (0, util_1.checkStrictMode)(it, `"${keyword}" without "if" is ignored`);
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=thenElse.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/code.js"
-/*!****************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/code.js ***!
-  \****************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.validateUnion = exports.validateArray = exports.usePattern = exports.callValidateCode = exports.schemaProperties = exports.allSchemaProperties = exports.noPropertyInData = exports.propertyInData = exports.isOwnProperty = exports.hasPropFunc = exports.reportMissingProp = exports.checkMissingProp = exports.checkReportMissingProp = void 0;
-const codegen_1 = __webpack_require__(/*! ../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const names_1 = __webpack_require__(/*! ../compile/names */ "./node_modules/ajv/dist/compile/names.js");
-const util_2 = __webpack_require__(/*! ../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-function checkReportMissingProp(cxt, prop) {
-    const { gen, data, it } = cxt;
-    gen.if(noPropertyInData(gen, data, prop, it.opts.ownProperties), () => {
-        cxt.setParams({ missingProperty: (0, codegen_1._) `${prop}` }, true);
-        cxt.error();
-    });
-}
-exports.checkReportMissingProp = checkReportMissingProp;
-function checkMissingProp({ gen, data, it: { opts } }, properties, missing) {
-    return (0, codegen_1.or)(...properties.map((prop) => (0, codegen_1.and)(noPropertyInData(gen, data, prop, opts.ownProperties), (0, codegen_1._) `${missing} = ${prop}`)));
-}
-exports.checkMissingProp = checkMissingProp;
-function reportMissingProp(cxt, missing) {
-    cxt.setParams({ missingProperty: missing }, true);
-    cxt.error();
-}
-exports.reportMissingProp = reportMissingProp;
-function hasPropFunc(gen) {
-    return gen.scopeValue("func", {
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        ref: Object.prototype.hasOwnProperty,
-        code: (0, codegen_1._) `Object.prototype.hasOwnProperty`,
-    });
-}
-exports.hasPropFunc = hasPropFunc;
-function isOwnProperty(gen, data, property) {
-    return (0, codegen_1._) `${hasPropFunc(gen)}.call(${data}, ${property})`;
-}
-exports.isOwnProperty = isOwnProperty;
-function propertyInData(gen, data, property, ownProperties) {
-    const cond = (0, codegen_1._) `${data}${(0, codegen_1.getProperty)(property)} !== undefined`;
-    return ownProperties ? (0, codegen_1._) `${cond} && ${isOwnProperty(gen, data, property)}` : cond;
-}
-exports.propertyInData = propertyInData;
-function noPropertyInData(gen, data, property, ownProperties) {
-    const cond = (0, codegen_1._) `${data}${(0, codegen_1.getProperty)(property)} === undefined`;
-    return ownProperties ? (0, codegen_1.or)(cond, (0, codegen_1.not)(isOwnProperty(gen, data, property))) : cond;
-}
-exports.noPropertyInData = noPropertyInData;
-function allSchemaProperties(schemaMap) {
-    return schemaMap ? Object.keys(schemaMap).filter((p) => p !== "__proto__") : [];
-}
-exports.allSchemaProperties = allSchemaProperties;
-function schemaProperties(it, schemaMap) {
-    return allSchemaProperties(schemaMap).filter((p) => !(0, util_1.alwaysValidSchema)(it, schemaMap[p]));
-}
-exports.schemaProperties = schemaProperties;
-function callValidateCode({ schemaCode, data, it: { gen, topSchemaRef, schemaPath, errorPath }, it }, func, context, passSchema) {
-    const dataAndSchema = passSchema ? (0, codegen_1._) `${schemaCode}, ${data}, ${topSchemaRef}${schemaPath}` : data;
-    const valCxt = [
-        [names_1.default.instancePath, (0, codegen_1.strConcat)(names_1.default.instancePath, errorPath)],
-        [names_1.default.parentData, it.parentData],
-        [names_1.default.parentDataProperty, it.parentDataProperty],
-        [names_1.default.rootData, names_1.default.rootData],
-    ];
-    if (it.opts.dynamicRef)
-        valCxt.push([names_1.default.dynamicAnchors, names_1.default.dynamicAnchors]);
-    const args = (0, codegen_1._) `${dataAndSchema}, ${gen.object(...valCxt)}`;
-    return context !== codegen_1.nil ? (0, codegen_1._) `${func}.call(${context}, ${args})` : (0, codegen_1._) `${func}(${args})`;
-}
-exports.callValidateCode = callValidateCode;
-const newRegExp = (0, codegen_1._) `new RegExp`;
-function usePattern({ gen, it: { opts } }, pattern) {
-    const u = opts.unicodeRegExp ? "u" : "";
-    const { regExp } = opts.code;
-    const rx = regExp(pattern, u);
-    return gen.scopeValue("pattern", {
-        key: rx.toString(),
-        ref: rx,
-        code: (0, codegen_1._) `${regExp.code === "new RegExp" ? newRegExp : (0, util_2.useFunc)(gen, regExp)}(${pattern}, ${u})`,
-    });
-}
-exports.usePattern = usePattern;
-function validateArray(cxt) {
-    const { gen, data, keyword, it } = cxt;
-    const valid = gen.name("valid");
-    if (it.allErrors) {
-        const validArr = gen.let("valid", true);
-        validateItems(() => gen.assign(validArr, false));
-        return validArr;
-    }
-    gen.var(valid, true);
-    validateItems(() => gen.break());
-    return valid;
-    function validateItems(notValid) {
-        const len = gen.const("len", (0, codegen_1._) `${data}.length`);
-        gen.forRange("i", 0, len, (i) => {
-            cxt.subschema({
-                keyword,
-                dataProp: i,
-                dataPropType: util_1.Type.Num,
-            }, valid);
-            gen.if((0, codegen_1.not)(valid), notValid);
-        });
-    }
-}
-exports.validateArray = validateArray;
-function validateUnion(cxt) {
-    const { gen, schema, keyword, it } = cxt;
-    /* istanbul ignore if */
-    if (!Array.isArray(schema))
-        throw new Error("ajv implementation error");
-    const alwaysValid = schema.some((sch) => (0, util_1.alwaysValidSchema)(it, sch));
-    if (alwaysValid && !it.opts.unevaluated)
-        return;
-    const valid = gen.let("valid", false);
-    const schValid = gen.name("_valid");
-    gen.block(() => schema.forEach((_sch, i) => {
-        const schCxt = cxt.subschema({
-            keyword,
-            schemaProp: i,
-            compositeRule: true,
-        }, schValid);
-        gen.assign(valid, (0, codegen_1._) `${valid} || ${schValid}`);
-        const merged = cxt.mergeValidEvaluated(schCxt, schValid);
-        // can short-circuit if `unevaluatedProperties/Items` not supported (opts.unevaluated !== true)
-        // or if all properties and items were evaluated (it.props === true && it.items === true)
-        if (!merged)
-            gen.if((0, codegen_1.not)(valid));
-    }));
-    cxt.result(valid, () => cxt.reset(), () => cxt.error(true));
-}
-exports.validateUnion = validateUnion;
-//# sourceMappingURL=code.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/core/id.js"
-/*!*******************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/core/id.js ***!
-  \*******************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const def = {
-    keyword: "id",
-    code() {
-        throw new Error('NOT SUPPORTED: keyword "id", use "$id" for schema ID');
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=id.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/core/index.js"
-/*!**********************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/core/index.js ***!
-  \**********************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const id_1 = __webpack_require__(/*! ./id */ "./node_modules/ajv/dist/vocabularies/core/id.js");
-const ref_1 = __webpack_require__(/*! ./ref */ "./node_modules/ajv/dist/vocabularies/core/ref.js");
-const core = [
-    "$schema",
-    "$id",
-    "$defs",
-    "$vocabulary",
-    { keyword: "$comment" },
-    "definitions",
-    id_1.default,
-    ref_1.default,
-];
-exports["default"] = core;
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/core/ref.js"
-/*!********************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/core/ref.js ***!
-  \********************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.callRef = exports.getValidate = void 0;
-const ref_error_1 = __webpack_require__(/*! ../../compile/ref_error */ "./node_modules/ajv/dist/compile/ref_error.js");
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const names_1 = __webpack_require__(/*! ../../compile/names */ "./node_modules/ajv/dist/compile/names.js");
-const compile_1 = __webpack_require__(/*! ../../compile */ "./node_modules/ajv/dist/compile/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const def = {
-    keyword: "$ref",
-    schemaType: "string",
-    code(cxt) {
-        const { gen, schema: $ref, it } = cxt;
-        const { baseId, schemaEnv: env, validateName, opts, self } = it;
-        const { root } = env;
-        if (($ref === "#" || $ref === "#/") && baseId === root.baseId)
-            return callRootRef();
-        const schOrEnv = compile_1.resolveRef.call(self, root, baseId, $ref);
-        if (schOrEnv === undefined)
-            throw new ref_error_1.default(it.opts.uriResolver, baseId, $ref);
-        if (schOrEnv instanceof compile_1.SchemaEnv)
-            return callValidate(schOrEnv);
-        return inlineRefSchema(schOrEnv);
-        function callRootRef() {
-            if (env === root)
-                return callRef(cxt, validateName, env, env.$async);
-            const rootName = gen.scopeValue("root", { ref: root });
-            return callRef(cxt, (0, codegen_1._) `${rootName}.validate`, root, root.$async);
-        }
-        function callValidate(sch) {
-            const v = getValidate(cxt, sch);
-            callRef(cxt, v, sch, sch.$async);
-        }
-        function inlineRefSchema(sch) {
-            const schName = gen.scopeValue("schema", opts.code.source === true ? { ref: sch, code: (0, codegen_1.stringify)(sch) } : { ref: sch });
-            const valid = gen.name("valid");
-            const schCxt = cxt.subschema({
-                schema: sch,
-                dataTypes: [],
-                schemaPath: codegen_1.nil,
-                topSchemaRef: schName,
-                errSchemaPath: $ref,
-            }, valid);
-            cxt.mergeEvaluated(schCxt);
-            cxt.ok(valid);
-        }
-    },
-};
-function getValidate(cxt, sch) {
-    const { gen } = cxt;
-    return sch.validate
-        ? gen.scopeValue("validate", { ref: sch.validate })
-        : (0, codegen_1._) `${gen.scopeValue("wrapper", { ref: sch })}.validate`;
-}
-exports.getValidate = getValidate;
-function callRef(cxt, v, sch, $async) {
-    const { gen, it } = cxt;
-    const { allErrors, schemaEnv: env, opts } = it;
-    const passCxt = opts.passContext ? names_1.default.this : codegen_1.nil;
-    if ($async)
-        callAsyncRef();
-    else
-        callSyncRef();
-    function callAsyncRef() {
-        if (!env.$async)
-            throw new Error("async schema referenced by sync schema");
-        const valid = gen.let("valid");
-        gen.try(() => {
-            gen.code((0, codegen_1._) `await ${(0, code_1.callValidateCode)(cxt, v, passCxt)}`);
-            addEvaluatedFrom(v); // TODO will not work with async, it has to be returned with the result
-            if (!allErrors)
-                gen.assign(valid, true);
-        }, (e) => {
-            gen.if((0, codegen_1._) `!(${e} instanceof ${it.ValidationError})`, () => gen.throw(e));
-            addErrorsFrom(e);
-            if (!allErrors)
-                gen.assign(valid, false);
-        });
-        cxt.ok(valid);
-    }
-    function callSyncRef() {
-        cxt.result((0, code_1.callValidateCode)(cxt, v, passCxt), () => addEvaluatedFrom(v), () => addErrorsFrom(v));
-    }
-    function addErrorsFrom(source) {
-        const errs = (0, codegen_1._) `${source}.errors`;
-        gen.assign(names_1.default.vErrors, (0, codegen_1._) `${names_1.default.vErrors} === null ? ${errs} : ${names_1.default.vErrors}.concat(${errs})`); // TODO tagged
-        gen.assign(names_1.default.errors, (0, codegen_1._) `${names_1.default.vErrors}.length`);
-    }
-    function addEvaluatedFrom(source) {
-        var _a;
-        if (!it.opts.unevaluated)
-            return;
-        const schEvaluated = (_a = sch === null || sch === void 0 ? void 0 : sch.validate) === null || _a === void 0 ? void 0 : _a.evaluated;
-        // TODO refactor
-        if (it.props !== true) {
-            if (schEvaluated && !schEvaluated.dynamicProps) {
-                if (schEvaluated.props !== undefined) {
-                    it.props = util_1.mergeEvaluated.props(gen, schEvaluated.props, it.props);
-                }
-            }
-            else {
-                const props = gen.var("props", (0, codegen_1._) `${source}.evaluated.props`);
-                it.props = util_1.mergeEvaluated.props(gen, props, it.props, codegen_1.Name);
-            }
-        }
-        if (it.items !== true) {
-            if (schEvaluated && !schEvaluated.dynamicItems) {
-                if (schEvaluated.items !== undefined) {
-                    it.items = util_1.mergeEvaluated.items(gen, schEvaluated.items, it.items);
-                }
-            }
-            else {
-                const items = gen.var("items", (0, codegen_1._) `${source}.evaluated.items`);
-                it.items = util_1.mergeEvaluated.items(gen, items, it.items, codegen_1.Name);
-            }
-        }
-    }
-}
-exports.callRef = callRef;
-exports["default"] = def;
-//# sourceMappingURL=ref.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/discriminator/index.js"
-/*!*******************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/discriminator/index.js ***!
-  \*******************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const types_1 = __webpack_require__(/*! ../discriminator/types */ "./node_modules/ajv/dist/vocabularies/discriminator/types.js");
-const compile_1 = __webpack_require__(/*! ../../compile */ "./node_modules/ajv/dist/compile/index.js");
-const ref_error_1 = __webpack_require__(/*! ../../compile/ref_error */ "./node_modules/ajv/dist/compile/ref_error.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const error = {
-    message: ({ params: { discrError, tagName } }) => discrError === types_1.DiscrError.Tag
-        ? `tag "${tagName}" must be string`
-        : `value of tag "${tagName}" must be in oneOf`,
-    params: ({ params: { discrError, tag, tagName } }) => (0, codegen_1._) `{error: ${discrError}, tag: ${tagName}, tagValue: ${tag}}`,
-};
-const def = {
-    keyword: "discriminator",
-    type: "object",
-    schemaType: "object",
-    error,
-    code(cxt) {
-        const { gen, data, schema, parentSchema, it } = cxt;
-        const { oneOf } = parentSchema;
-        if (!it.opts.discriminator) {
-            throw new Error("discriminator: requires discriminator option");
-        }
-        const tagName = schema.propertyName;
-        if (typeof tagName != "string")
-            throw new Error("discriminator: requires propertyName");
-        if (schema.mapping)
-            throw new Error("discriminator: mapping is not supported");
-        if (!oneOf)
-            throw new Error("discriminator: requires oneOf keyword");
-        const valid = gen.let("valid", false);
-        const tag = gen.const("tag", (0, codegen_1._) `${data}${(0, codegen_1.getProperty)(tagName)}`);
-        gen.if((0, codegen_1._) `typeof ${tag} == "string"`, () => validateMapping(), () => cxt.error(false, { discrError: types_1.DiscrError.Tag, tag, tagName }));
-        cxt.ok(valid);
-        function validateMapping() {
-            const mapping = getMapping();
-            gen.if(false);
-            for (const tagValue in mapping) {
-                gen.elseIf((0, codegen_1._) `${tag} === ${tagValue}`);
-                gen.assign(valid, applyTagSchema(mapping[tagValue]));
-            }
-            gen.else();
-            cxt.error(false, { discrError: types_1.DiscrError.Mapping, tag, tagName });
-            gen.endIf();
-        }
-        function applyTagSchema(schemaProp) {
-            const _valid = gen.name("valid");
-            const schCxt = cxt.subschema({ keyword: "oneOf", schemaProp }, _valid);
-            cxt.mergeEvaluated(schCxt, codegen_1.Name);
-            return _valid;
-        }
-        function getMapping() {
-            var _a;
-            const oneOfMapping = {};
-            const topRequired = hasRequired(parentSchema);
-            let tagRequired = true;
-            for (let i = 0; i < oneOf.length; i++) {
-                let sch = oneOf[i];
-                if ((sch === null || sch === void 0 ? void 0 : sch.$ref) && !(0, util_1.schemaHasRulesButRef)(sch, it.self.RULES)) {
-                    const ref = sch.$ref;
-                    sch = compile_1.resolveRef.call(it.self, it.schemaEnv.root, it.baseId, ref);
-                    if (sch instanceof compile_1.SchemaEnv)
-                        sch = sch.schema;
-                    if (sch === undefined)
-                        throw new ref_error_1.default(it.opts.uriResolver, it.baseId, ref);
-                }
-                const propSch = (_a = sch === null || sch === void 0 ? void 0 : sch.properties) === null || _a === void 0 ? void 0 : _a[tagName];
-                if (typeof propSch != "object") {
-                    throw new Error(`discriminator: oneOf subschemas (or referenced schemas) must have "properties/${tagName}"`);
-                }
-                tagRequired = tagRequired && (topRequired || hasRequired(sch));
-                addMappings(propSch, i);
-            }
-            if (!tagRequired)
-                throw new Error(`discriminator: "${tagName}" must be required`);
-            return oneOfMapping;
-            function hasRequired({ required }) {
-                return Array.isArray(required) && required.includes(tagName);
-            }
-            function addMappings(sch, i) {
-                if (sch.const) {
-                    addMapping(sch.const, i);
-                }
-                else if (sch.enum) {
-                    for (const tagValue of sch.enum) {
-                        addMapping(tagValue, i);
-                    }
-                }
-                else {
-                    throw new Error(`discriminator: "properties/${tagName}" must have "const" or "enum"`);
-                }
-            }
-            function addMapping(tagValue, i) {
-                if (typeof tagValue != "string" || tagValue in oneOfMapping) {
-                    throw new Error(`discriminator: "${tagName}" values must be unique strings`);
-                }
-                oneOfMapping[tagValue] = i;
-            }
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/discriminator/types.js"
-/*!*******************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/discriminator/types.js ***!
-  \*******************************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DiscrError = void 0;
-var DiscrError;
-(function (DiscrError) {
-    DiscrError["Tag"] = "tag";
-    DiscrError["Mapping"] = "mapping";
-})(DiscrError || (exports.DiscrError = DiscrError = {}));
-//# sourceMappingURL=types.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/draft7.js"
-/*!******************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/draft7.js ***!
-  \******************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const core_1 = __webpack_require__(/*! ./core */ "./node_modules/ajv/dist/vocabularies/core/index.js");
-const validation_1 = __webpack_require__(/*! ./validation */ "./node_modules/ajv/dist/vocabularies/validation/index.js");
-const applicator_1 = __webpack_require__(/*! ./applicator */ "./node_modules/ajv/dist/vocabularies/applicator/index.js");
-const format_1 = __webpack_require__(/*! ./format */ "./node_modules/ajv/dist/vocabularies/format/index.js");
-const metadata_1 = __webpack_require__(/*! ./metadata */ "./node_modules/ajv/dist/vocabularies/metadata.js");
-const draft7Vocabularies = [
-    core_1.default,
-    validation_1.default,
-    (0, applicator_1.default)(),
-    format_1.default,
-    metadata_1.metadataVocabulary,
-    metadata_1.contentVocabulary,
-];
-exports["default"] = draft7Vocabularies;
-//# sourceMappingURL=draft7.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/format/format.js"
-/*!*************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/format/format.js ***!
-  \*************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const error = {
-    message: ({ schemaCode }) => (0, codegen_1.str) `must match format "${schemaCode}"`,
-    params: ({ schemaCode }) => (0, codegen_1._) `{format: ${schemaCode}}`,
-};
-const def = {
-    keyword: "format",
-    type: ["number", "string"],
-    schemaType: "string",
-    $data: true,
-    error,
-    code(cxt, ruleType) {
-        const { gen, data, $data, schema, schemaCode, it } = cxt;
-        const { opts, errSchemaPath, schemaEnv, self } = it;
-        if (!opts.validateFormats)
-            return;
-        if ($data)
-            validate$DataFormat();
-        else
-            validateFormat();
-        function validate$DataFormat() {
-            const fmts = gen.scopeValue("formats", {
-                ref: self.formats,
-                code: opts.code.formats,
-            });
-            const fDef = gen.const("fDef", (0, codegen_1._) `${fmts}[${schemaCode}]`);
-            const fType = gen.let("fType");
-            const format = gen.let("format");
-            // TODO simplify
-            gen.if((0, codegen_1._) `typeof ${fDef} == "object" && !(${fDef} instanceof RegExp)`, () => gen.assign(fType, (0, codegen_1._) `${fDef}.type || "string"`).assign(format, (0, codegen_1._) `${fDef}.validate`), () => gen.assign(fType, (0, codegen_1._) `"string"`).assign(format, fDef));
-            cxt.fail$data((0, codegen_1.or)(unknownFmt(), invalidFmt()));
-            function unknownFmt() {
-                if (opts.strictSchema === false)
-                    return codegen_1.nil;
-                return (0, codegen_1._) `${schemaCode} && !${format}`;
-            }
-            function invalidFmt() {
-                const callFormat = schemaEnv.$async
-                    ? (0, codegen_1._) `(${fDef}.async ? await ${format}(${data}) : ${format}(${data}))`
-                    : (0, codegen_1._) `${format}(${data})`;
-                const validData = (0, codegen_1._) `(typeof ${format} == "function" ? ${callFormat} : ${format}.test(${data}))`;
-                return (0, codegen_1._) `${format} && ${format} !== true && ${fType} === ${ruleType} && !${validData}`;
-            }
-        }
-        function validateFormat() {
-            const formatDef = self.formats[schema];
-            if (!formatDef) {
-                unknownFormat();
-                return;
-            }
-            if (formatDef === true)
-                return;
-            const [fmtType, format, fmtRef] = getFormat(formatDef);
-            if (fmtType === ruleType)
-                cxt.pass(validCondition());
-            function unknownFormat() {
-                if (opts.strictSchema === false) {
-                    self.logger.warn(unknownMsg());
-                    return;
-                }
-                throw new Error(unknownMsg());
-                function unknownMsg() {
-                    return `unknown format "${schema}" ignored in schema at path "${errSchemaPath}"`;
-                }
-            }
-            function getFormat(fmtDef) {
-                const code = fmtDef instanceof RegExp
-                    ? (0, codegen_1.regexpCode)(fmtDef)
-                    : opts.code.formats
-                        ? (0, codegen_1._) `${opts.code.formats}${(0, codegen_1.getProperty)(schema)}`
-                        : undefined;
-                const fmt = gen.scopeValue("formats", { key: schema, ref: fmtDef, code });
-                if (typeof fmtDef == "object" && !(fmtDef instanceof RegExp)) {
-                    return [fmtDef.type || "string", fmtDef.validate, (0, codegen_1._) `${fmt}.validate`];
-                }
-                return ["string", fmtDef, fmt];
-            }
-            function validCondition() {
-                if (typeof formatDef == "object" && !(formatDef instanceof RegExp) && formatDef.async) {
-                    if (!schemaEnv.$async)
-                        throw new Error("async format in sync schema");
-                    return (0, codegen_1._) `await ${fmtRef}(${data})`;
-                }
-                return typeof format == "function" ? (0, codegen_1._) `${fmtRef}(${data})` : (0, codegen_1._) `${fmtRef}.test(${data})`;
-            }
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=format.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/format/index.js"
-/*!************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/format/index.js ***!
-  \************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const format_1 = __webpack_require__(/*! ./format */ "./node_modules/ajv/dist/vocabularies/format/format.js");
-const format = [format_1.default];
-exports["default"] = format;
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/metadata.js"
-/*!********************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/metadata.js ***!
-  \********************************************************/
-(__unused_webpack_module, exports) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.contentVocabulary = exports.metadataVocabulary = void 0;
-exports.metadataVocabulary = [
-    "title",
-    "description",
-    "default",
-    "deprecated",
-    "readOnly",
-    "writeOnly",
-    "examples",
-];
-exports.contentVocabulary = [
-    "contentMediaType",
-    "contentEncoding",
-    "contentSchema",
-];
-//# sourceMappingURL=metadata.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/const.js"
-/*!****************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/const.js ***!
-  \****************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const equal_1 = __webpack_require__(/*! ../../runtime/equal */ "./node_modules/ajv/dist/runtime/equal.js");
-const error = {
-    message: "must be equal to constant",
-    params: ({ schemaCode }) => (0, codegen_1._) `{allowedValue: ${schemaCode}}`,
-};
-const def = {
-    keyword: "const",
-    $data: true,
-    error,
-    code(cxt) {
-        const { gen, data, $data, schemaCode, schema } = cxt;
-        if ($data || (schema && typeof schema == "object")) {
-            cxt.fail$data((0, codegen_1._) `!${(0, util_1.useFunc)(gen, equal_1.default)}(${data}, ${schemaCode})`);
-        }
-        else {
-            cxt.fail((0, codegen_1._) `${schema} !== ${data}`);
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=const.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/enum.js"
-/*!***************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/enum.js ***!
-  \***************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const equal_1 = __webpack_require__(/*! ../../runtime/equal */ "./node_modules/ajv/dist/runtime/equal.js");
-const error = {
-    message: "must be equal to one of the allowed values",
-    params: ({ schemaCode }) => (0, codegen_1._) `{allowedValues: ${schemaCode}}`,
-};
-const def = {
-    keyword: "enum",
-    schemaType: "array",
-    $data: true,
-    error,
-    code(cxt) {
-        const { gen, data, $data, schema, schemaCode, it } = cxt;
-        if (!$data && schema.length === 0)
-            throw new Error("enum must have non-empty array");
-        const useLoop = schema.length >= it.opts.loopEnum;
-        let eql;
-        const getEql = () => (eql !== null && eql !== void 0 ? eql : (eql = (0, util_1.useFunc)(gen, equal_1.default)));
-        let valid;
-        if (useLoop || $data) {
-            valid = gen.let("valid");
-            cxt.block$data(valid, loopEnum);
-        }
-        else {
-            /* istanbul ignore if */
-            if (!Array.isArray(schema))
-                throw new Error("ajv implementation error");
-            const vSchema = gen.const("vSchema", schemaCode);
-            valid = (0, codegen_1.or)(...schema.map((_x, i) => equalCode(vSchema, i)));
-        }
-        cxt.pass(valid);
-        function loopEnum() {
-            gen.assign(valid, false);
-            gen.forOf("v", schemaCode, (v) => gen.if((0, codegen_1._) `${getEql()}(${data}, ${v})`, () => gen.assign(valid, true).break()));
-        }
-        function equalCode(vSchema, i) {
-            const sch = schema[i];
-            return typeof sch === "object" && sch !== null
-                ? (0, codegen_1._) `${getEql()}(${data}, ${vSchema}[${i}])`
-                : (0, codegen_1._) `${data} === ${sch}`;
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=enum.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/index.js"
-/*!****************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/index.js ***!
-  \****************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const limitNumber_1 = __webpack_require__(/*! ./limitNumber */ "./node_modules/ajv/dist/vocabularies/validation/limitNumber.js");
-const multipleOf_1 = __webpack_require__(/*! ./multipleOf */ "./node_modules/ajv/dist/vocabularies/validation/multipleOf.js");
-const limitLength_1 = __webpack_require__(/*! ./limitLength */ "./node_modules/ajv/dist/vocabularies/validation/limitLength.js");
-const pattern_1 = __webpack_require__(/*! ./pattern */ "./node_modules/ajv/dist/vocabularies/validation/pattern.js");
-const limitProperties_1 = __webpack_require__(/*! ./limitProperties */ "./node_modules/ajv/dist/vocabularies/validation/limitProperties.js");
-const required_1 = __webpack_require__(/*! ./required */ "./node_modules/ajv/dist/vocabularies/validation/required.js");
-const limitItems_1 = __webpack_require__(/*! ./limitItems */ "./node_modules/ajv/dist/vocabularies/validation/limitItems.js");
-const uniqueItems_1 = __webpack_require__(/*! ./uniqueItems */ "./node_modules/ajv/dist/vocabularies/validation/uniqueItems.js");
-const const_1 = __webpack_require__(/*! ./const */ "./node_modules/ajv/dist/vocabularies/validation/const.js");
-const enum_1 = __webpack_require__(/*! ./enum */ "./node_modules/ajv/dist/vocabularies/validation/enum.js");
-const validation = [
-    // number
-    limitNumber_1.default,
-    multipleOf_1.default,
-    // string
-    limitLength_1.default,
-    pattern_1.default,
-    // object
-    limitProperties_1.default,
-    required_1.default,
-    // array
-    limitItems_1.default,
-    uniqueItems_1.default,
-    // any
-    { keyword: "type", schemaType: ["string", "array"] },
-    { keyword: "nullable", schemaType: "boolean" },
-    const_1.default,
-    enum_1.default,
-];
-exports["default"] = validation;
-//# sourceMappingURL=index.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/limitItems.js"
-/*!*********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/limitItems.js ***!
-  \*********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const error = {
-    message({ keyword, schemaCode }) {
-        const comp = keyword === "maxItems" ? "more" : "fewer";
-        return (0, codegen_1.str) `must NOT have ${comp} than ${schemaCode} items`;
-    },
-    params: ({ schemaCode }) => (0, codegen_1._) `{limit: ${schemaCode}}`,
-};
-const def = {
-    keyword: ["maxItems", "minItems"],
-    type: "array",
-    schemaType: "number",
-    $data: true,
-    error,
-    code(cxt) {
-        const { keyword, data, schemaCode } = cxt;
-        const op = keyword === "maxItems" ? codegen_1.operators.GT : codegen_1.operators.LT;
-        cxt.fail$data((0, codegen_1._) `${data}.length ${op} ${schemaCode}`);
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=limitItems.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/limitLength.js"
-/*!**********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/limitLength.js ***!
-  \**********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const ucs2length_1 = __webpack_require__(/*! ../../runtime/ucs2length */ "./node_modules/ajv/dist/runtime/ucs2length.js");
-const error = {
-    message({ keyword, schemaCode }) {
-        const comp = keyword === "maxLength" ? "more" : "fewer";
-        return (0, codegen_1.str) `must NOT have ${comp} than ${schemaCode} characters`;
-    },
-    params: ({ schemaCode }) => (0, codegen_1._) `{limit: ${schemaCode}}`,
-};
-const def = {
-    keyword: ["maxLength", "minLength"],
-    type: "string",
-    schemaType: "number",
-    $data: true,
-    error,
-    code(cxt) {
-        const { keyword, data, schemaCode, it } = cxt;
-        const op = keyword === "maxLength" ? codegen_1.operators.GT : codegen_1.operators.LT;
-        const len = it.opts.unicode === false ? (0, codegen_1._) `${data}.length` : (0, codegen_1._) `${(0, util_1.useFunc)(cxt.gen, ucs2length_1.default)}(${data})`;
-        cxt.fail$data((0, codegen_1._) `${len} ${op} ${schemaCode}`);
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=limitLength.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/limitNumber.js"
-/*!**********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/limitNumber.js ***!
-  \**********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const ops = codegen_1.operators;
-const KWDs = {
-    maximum: { okStr: "<=", ok: ops.LTE, fail: ops.GT },
-    minimum: { okStr: ">=", ok: ops.GTE, fail: ops.LT },
-    exclusiveMaximum: { okStr: "<", ok: ops.LT, fail: ops.GTE },
-    exclusiveMinimum: { okStr: ">", ok: ops.GT, fail: ops.LTE },
-};
-const error = {
-    message: ({ keyword, schemaCode }) => (0, codegen_1.str) `must be ${KWDs[keyword].okStr} ${schemaCode}`,
-    params: ({ keyword, schemaCode }) => (0, codegen_1._) `{comparison: ${KWDs[keyword].okStr}, limit: ${schemaCode}}`,
-};
-const def = {
-    keyword: Object.keys(KWDs),
-    type: "number",
-    schemaType: "number",
-    $data: true,
-    error,
-    code(cxt) {
-        const { keyword, data, schemaCode } = cxt;
-        cxt.fail$data((0, codegen_1._) `${data} ${KWDs[keyword].fail} ${schemaCode} || isNaN(${data})`);
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=limitNumber.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/limitProperties.js"
-/*!**************************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/limitProperties.js ***!
-  \**************************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const error = {
-    message({ keyword, schemaCode }) {
-        const comp = keyword === "maxProperties" ? "more" : "fewer";
-        return (0, codegen_1.str) `must NOT have ${comp} than ${schemaCode} properties`;
-    },
-    params: ({ schemaCode }) => (0, codegen_1._) `{limit: ${schemaCode}}`,
-};
-const def = {
-    keyword: ["maxProperties", "minProperties"],
-    type: "object",
-    schemaType: "number",
-    $data: true,
-    error,
-    code(cxt) {
-        const { keyword, data, schemaCode } = cxt;
-        const op = keyword === "maxProperties" ? codegen_1.operators.GT : codegen_1.operators.LT;
-        cxt.fail$data((0, codegen_1._) `Object.keys(${data}).length ${op} ${schemaCode}`);
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=limitProperties.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/multipleOf.js"
-/*!*********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/multipleOf.js ***!
-  \*********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const error = {
-    message: ({ schemaCode }) => (0, codegen_1.str) `must be multiple of ${schemaCode}`,
-    params: ({ schemaCode }) => (0, codegen_1._) `{multipleOf: ${schemaCode}}`,
-};
-const def = {
-    keyword: "multipleOf",
-    type: "number",
-    schemaType: "number",
-    $data: true,
-    error,
-    code(cxt) {
-        const { gen, data, schemaCode, it } = cxt;
-        // const bdt = bad$DataType(schemaCode, <string>def.schemaType, $data)
-        const prec = it.opts.multipleOfPrecision;
-        const res = gen.let("res");
-        const invalid = prec
-            ? (0, codegen_1._) `Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}`
-            : (0, codegen_1._) `${res} !== parseInt(${res})`;
-        cxt.fail$data((0, codegen_1._) `(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid}))`);
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=multipleOf.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/pattern.js"
-/*!******************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/pattern.js ***!
-  \******************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const error = {
-    message: ({ schemaCode }) => (0, codegen_1.str) `must match pattern "${schemaCode}"`,
-    params: ({ schemaCode }) => (0, codegen_1._) `{pattern: ${schemaCode}}`,
-};
-const def = {
-    keyword: "pattern",
-    type: "string",
-    schemaType: "string",
-    $data: true,
-    error,
-    code(cxt) {
-        const { gen, data, $data, schema, schemaCode, it } = cxt;
-        const u = it.opts.unicodeRegExp ? "u" : "";
-        if ($data) {
-            const { regExp } = it.opts.code;
-            const regExpCode = regExp.code === "new RegExp" ? (0, codegen_1._) `new RegExp` : (0, util_1.useFunc)(gen, regExp);
-            const valid = gen.let("valid");
-            gen.try(() => gen.assign(valid, (0, codegen_1._) `${regExpCode}(${schemaCode}, ${u}).test(${data})`), () => gen.assign(valid, false));
-            cxt.fail$data((0, codegen_1._) `!${valid}`);
-        }
-        else {
-            const regExp = (0, code_1.usePattern)(cxt, schema);
-            cxt.fail$data((0, codegen_1._) `!${regExp}.test(${data})`);
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=pattern.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/required.js"
-/*!*******************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/required.js ***!
-  \*******************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const code_1 = __webpack_require__(/*! ../code */ "./node_modules/ajv/dist/vocabularies/code.js");
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const error = {
-    message: ({ params: { missingProperty } }) => (0, codegen_1.str) `must have required property '${missingProperty}'`,
-    params: ({ params: { missingProperty } }) => (0, codegen_1._) `{missingProperty: ${missingProperty}}`,
-};
-const def = {
-    keyword: "required",
-    type: "object",
-    schemaType: "array",
-    $data: true,
-    error,
-    code(cxt) {
-        const { gen, schema, schemaCode, data, $data, it } = cxt;
-        const { opts } = it;
-        if (!$data && schema.length === 0)
-            return;
-        const useLoop = schema.length >= opts.loopRequired;
-        if (it.allErrors)
-            allErrorsMode();
-        else
-            exitOnErrorMode();
-        if (opts.strictRequired) {
-            const props = cxt.parentSchema.properties;
-            const { definedProperties } = cxt.it;
-            for (const requiredKey of schema) {
-                if ((props === null || props === void 0 ? void 0 : props[requiredKey]) === undefined && !definedProperties.has(requiredKey)) {
-                    const schemaPath = it.schemaEnv.baseId + it.errSchemaPath;
-                    const msg = `required property "${requiredKey}" is not defined at "${schemaPath}" (strictRequired)`;
-                    (0, util_1.checkStrictMode)(it, msg, it.opts.strictRequired);
-                }
-            }
-        }
-        function allErrorsMode() {
-            if (useLoop || $data) {
-                cxt.block$data(codegen_1.nil, loopAllRequired);
-            }
-            else {
-                for (const prop of schema) {
-                    (0, code_1.checkReportMissingProp)(cxt, prop);
-                }
-            }
-        }
-        function exitOnErrorMode() {
-            const missing = gen.let("missing");
-            if (useLoop || $data) {
-                const valid = gen.let("valid", true);
-                cxt.block$data(valid, () => loopUntilMissing(missing, valid));
-                cxt.ok(valid);
-            }
-            else {
-                gen.if((0, code_1.checkMissingProp)(cxt, schema, missing));
-                (0, code_1.reportMissingProp)(cxt, missing);
-                gen.else();
-            }
-        }
-        function loopAllRequired() {
-            gen.forOf("prop", schemaCode, (prop) => {
-                cxt.setParams({ missingProperty: prop });
-                gen.if((0, code_1.noPropertyInData)(gen, data, prop, opts.ownProperties), () => cxt.error());
-            });
-        }
-        function loopUntilMissing(missing, valid) {
-            cxt.setParams({ missingProperty: missing });
-            gen.forOf(missing, schemaCode, () => {
-                gen.assign(valid, (0, code_1.propertyInData)(gen, data, missing, opts.ownProperties));
-                gen.if((0, codegen_1.not)(valid), () => {
-                    cxt.error();
-                    gen.break();
-                });
-            }, codegen_1.nil);
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=required.js.map
-
-/***/ },
-
-/***/ "./node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"
-/*!**********************************************************************!*\
-  !*** ./node_modules/ajv/dist/vocabularies/validation/uniqueItems.js ***!
-  \**********************************************************************/
-(__unused_webpack_module, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const dataType_1 = __webpack_require__(/*! ../../compile/validate/dataType */ "./node_modules/ajv/dist/compile/validate/dataType.js");
-const codegen_1 = __webpack_require__(/*! ../../compile/codegen */ "./node_modules/ajv/dist/compile/codegen/index.js");
-const util_1 = __webpack_require__(/*! ../../compile/util */ "./node_modules/ajv/dist/compile/util.js");
-const equal_1 = __webpack_require__(/*! ../../runtime/equal */ "./node_modules/ajv/dist/runtime/equal.js");
-const error = {
-    message: ({ params: { i, j } }) => (0, codegen_1.str) `must NOT have duplicate items (items ## ${j} and ${i} are identical)`,
-    params: ({ params: { i, j } }) => (0, codegen_1._) `{i: ${i}, j: ${j}}`,
-};
-const def = {
-    keyword: "uniqueItems",
-    type: "array",
-    schemaType: "boolean",
-    $data: true,
-    error,
-    code(cxt) {
-        const { gen, data, $data, schema, parentSchema, schemaCode, it } = cxt;
-        if (!$data && !schema)
-            return;
-        const valid = gen.let("valid");
-        const itemTypes = parentSchema.items ? (0, dataType_1.getSchemaTypes)(parentSchema.items) : [];
-        cxt.block$data(valid, validateUniqueItems, (0, codegen_1._) `${schemaCode} === false`);
-        cxt.ok(valid);
-        function validateUniqueItems() {
-            const i = gen.let("i", (0, codegen_1._) `${data}.length`);
-            const j = gen.let("j");
-            cxt.setParams({ i, j });
-            gen.assign(valid, true);
-            gen.if((0, codegen_1._) `${i} > 1`, () => (canOptimize() ? loopN : loopN2)(i, j));
-        }
-        function canOptimize() {
-            return itemTypes.length > 0 && !itemTypes.some((t) => t === "object" || t === "array");
-        }
-        function loopN(i, j) {
-            const item = gen.name("item");
-            const wrongType = (0, dataType_1.checkDataTypes)(itemTypes, item, it.opts.strictNumbers, dataType_1.DataType.Wrong);
-            const indices = gen.const("indices", (0, codegen_1._) `{}`);
-            gen.for((0, codegen_1._) `;${i}--;`, () => {
-                gen.let(item, (0, codegen_1._) `${data}[${i}]`);
-                gen.if(wrongType, (0, codegen_1._) `continue`);
-                if (itemTypes.length > 1)
-                    gen.if((0, codegen_1._) `typeof ${item} == "string"`, (0, codegen_1._) `${item} += "_"`);
-                gen
-                    .if((0, codegen_1._) `typeof ${indices}[${item}] == "number"`, () => {
-                    gen.assign(j, (0, codegen_1._) `${indices}[${item}]`);
-                    cxt.error();
-                    gen.assign(valid, false).break();
-                })
-                    .code((0, codegen_1._) `${indices}[${item}] = ${i}`);
-            });
-        }
-        function loopN2(i, j) {
-            const eql = (0, util_1.useFunc)(gen, equal_1.default);
-            const outer = gen.name("outer");
-            gen.label(outer).for((0, codegen_1._) `;${i}--;`, () => gen.for((0, codegen_1._) `${j} = ${i}; ${j}--;`, () => gen.if((0, codegen_1._) `${eql}(${data}[${i}], ${data}[${j}])`, () => {
-                cxt.error();
-                gen.assign(valid, false).break(outer);
-            })));
-        }
-    },
-};
-exports["default"] = def;
-//# sourceMappingURL=uniqueItems.js.map
 
 /***/ },
 
@@ -12655,63 +7566,6 @@ function eventTargetAgnosticAddListener(emitter, name, listener, flags) {
 
 /***/ },
 
-/***/ "./node_modules/fast-deep-equal/index.js"
-/*!***********************************************!*\
-  !*** ./node_modules/fast-deep-equal/index.js ***!
-  \***********************************************/
-(module) {
-
-"use strict";
-
-
-// do not edit .js files directly - edit src/index.jst
-
-
-
-module.exports = function equal(a, b) {
-  if (a === b) return true;
-
-  if (a && b && typeof a == 'object' && typeof b == 'object') {
-    if (a.constructor !== b.constructor) return false;
-
-    var length, i, keys;
-    if (Array.isArray(a)) {
-      length = a.length;
-      if (length != b.length) return false;
-      for (i = length; i-- !== 0;)
-        if (!equal(a[i], b[i])) return false;
-      return true;
-    }
-
-
-
-    if (a.constructor === RegExp) return a.source === b.source && a.flags === b.flags;
-    if (a.valueOf !== Object.prototype.valueOf) return a.valueOf() === b.valueOf();
-    if (a.toString !== Object.prototype.toString) return a.toString() === b.toString();
-
-    keys = Object.keys(a);
-    length = keys.length;
-    if (length !== Object.keys(b).length) return false;
-
-    for (i = length; i-- !== 0;)
-      if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
-
-    for (i = length; i-- !== 0;) {
-      var key = keys[i];
-
-      if (!equal(a[key], b[key])) return false;
-    }
-
-    return true;
-  }
-
-  // true if both NaN, false otherwise
-  return a!==a && b!==b;
-};
-
-
-/***/ },
-
 /***/ "./node_modules/for-each/index.js"
 /*!****************************************!*\
   !*** ./node_modules/for-each/index.js ***!
@@ -14016,110 +8870,6 @@ module.exports = function isTypedArray(value) {
 
 /***/ },
 
-/***/ "./node_modules/json-schema-traverse/index.js"
-/*!****************************************************!*\
-  !*** ./node_modules/json-schema-traverse/index.js ***!
-  \****************************************************/
-(module) {
-
-"use strict";
-
-
-var traverse = module.exports = function (schema, opts, cb) {
-  // Legacy support for v0.3.1 and earlier.
-  if (typeof opts == 'function') {
-    cb = opts;
-    opts = {};
-  }
-
-  cb = opts.cb || cb;
-  var pre = (typeof cb == 'function') ? cb : cb.pre || function() {};
-  var post = cb.post || function() {};
-
-  _traverse(opts, pre, post, schema, '', schema);
-};
-
-
-traverse.keywords = {
-  additionalItems: true,
-  items: true,
-  contains: true,
-  additionalProperties: true,
-  propertyNames: true,
-  not: true,
-  if: true,
-  then: true,
-  else: true
-};
-
-traverse.arrayKeywords = {
-  items: true,
-  allOf: true,
-  anyOf: true,
-  oneOf: true
-};
-
-traverse.propsKeywords = {
-  $defs: true,
-  definitions: true,
-  properties: true,
-  patternProperties: true,
-  dependencies: true
-};
-
-traverse.skipKeywords = {
-  default: true,
-  enum: true,
-  const: true,
-  required: true,
-  maximum: true,
-  minimum: true,
-  exclusiveMaximum: true,
-  exclusiveMinimum: true,
-  multipleOf: true,
-  maxLength: true,
-  minLength: true,
-  pattern: true,
-  format: true,
-  maxItems: true,
-  minItems: true,
-  uniqueItems: true,
-  maxProperties: true,
-  minProperties: true
-};
-
-
-function _traverse(opts, pre, post, schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex) {
-  if (schema && typeof schema == 'object' && !Array.isArray(schema)) {
-    pre(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
-    for (var key in schema) {
-      var sch = schema[key];
-      if (Array.isArray(sch)) {
-        if (key in traverse.arrayKeywords) {
-          for (var i=0; i<sch.length; i++)
-            _traverse(opts, pre, post, sch[i], jsonPtr + '/' + key + '/' + i, rootSchema, jsonPtr, key, schema, i);
-        }
-      } else if (key in traverse.propsKeywords) {
-        if (sch && typeof sch == 'object') {
-          for (var prop in sch)
-            _traverse(opts, pre, post, sch[prop], jsonPtr + '/' + key + '/' + escapeJsonPtr(prop), rootSchema, jsonPtr, key, schema, prop);
-        }
-      } else if (key in traverse.keywords || (opts.allKeys && !(key in traverse.skipKeywords))) {
-        _traverse(opts, pre, post, sch, jsonPtr + '/' + key, rootSchema, jsonPtr, key, schema);
-      }
-    }
-    post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
-  }
-}
-
-
-function escapeJsonPtr(str) {
-  return str.replace(/~/g, '~0').replace(/\//g, '~1');
-}
-
-
-/***/ },
-
 /***/ "./node_modules/math-intrinsics/abs.js"
 /*!*********************************************!*\
   !*** ./node_modules/math-intrinsics/abs.js ***!
@@ -15085,6 +9835,10 @@ process.umask = function() { return 0; };
 const utils = __webpack_require__(/*! ../utils */ "./node_modules/pryv/src/utils.js");
 const AuthStates = __webpack_require__(/*! ./AuthStates */ "./node_modules/pryv/src/Auth/AuthStates.js");
 const Messages = __webpack_require__(/*! ./LoginMessages */ "./node_modules/pryv/src/Auth/LoginMessages.js");
+const ProfileStore = __webpack_require__(/*! ./ProfileStore */ "./node_modules/pryv/src/Auth/ProfileStore.js");
+const handoff = __webpack_require__(/*! ../lib/handoff */ "./node_modules/pryv/src/lib/handoff.js");
+const pollUrls = __webpack_require__(/*! ../lib/pollUrls */ "./node_modules/pryv/src/lib/pollUrls.js");
+const PryvError = __webpack_require__(/*! ../lib/PryvError */ "./node_modules/pryv/src/lib/PryvError.js");
 
 /**
  * Controller for authentication flow
@@ -15119,6 +9873,11 @@ class AuthController {
     this.messages = Messages(this.languageCode);
 
     this.loginButton = loginButton;
+    // Incremented by every new auth request, sign-out and re-initialization:
+    // an older request's poll then no longer changes the state.
+    this._authFlowId = 0;
+    /** @type {Object|null} signed-in state to return to if a switch does not complete */
+    this._switchPrevious = null;
 
     function validateSettings (settings) {
       if (!settings) { throw new Error('settings cannot be null'); }
@@ -15135,6 +9894,18 @@ class AuthController {
       if (!settings.authRequest.requestedPermissions) {
         throw new Error('Missing settings.authRequest.requestedPermissions');
       }
+
+      // Delivery mode. Default to the one-time shared-secret hand-off so the
+      // token is never returned in the poll: a new core echoes
+      // `credentialHandoff` and delivers a `handoff` key (redeemed once here),
+      // an older core drops the field and falls back to inline delivery.
+      // Opt out with `authRequest.credentialHandoff = 'inline'`, which sends no
+      // field at all, so the request is byte-identical to the legacy one.
+      if (settings.authRequest.credentialHandoff === 'inline') {
+        delete settings.authRequest.credentialHandoff;
+      } else if (settings.authRequest.credentialHandoff == null) {
+        settings.authRequest.credentialHandoff = 'shared-secret';
+      }
     }
   }
 
@@ -15143,6 +9914,7 @@ class AuthController {
    * @returns {Promise<Service>} Promise resolving to the Service instance
    */
   async init () {
+    cancelAuthFlow(this);
     this.serviceInfo = this.service.infoSync();
     this.state = { status: AuthStates.LOADING };
     this.assets = await loadAssets(this);
@@ -15150,7 +9922,14 @@ class AuthController {
     const loginButton = this.loginButton;
     // initialize human interaction interface
     if (loginButton != null) {
-      this.stateChangeListeners.push(loginButton.onStateChange.bind(loginButton));
+      // Register the button's state listener at most once: init() can run again
+      // on the same controller (the LoginButton re-inits after a confirmed
+      // logout), and a duplicate listener would fire the logout confirm twice
+      // and compound the listener list on every re-login.
+      if (!this._loginButtonListenerRegistered) {
+        this.stateChangeListeners.push(loginButton.onStateChange.bind(loginButton));
+        this._loginButtonListenerRegistered = true;
+      }
       // autologin needs cookies/storage implemented in human interaction interface
       await checkAutoLogin(this);
     }
@@ -15172,6 +9951,8 @@ class AuthController {
    * Stops poll for auth request
    */
   stopAuthRequest (msg) {
+    // its poll must not change the state any more
+    cancelAuthFlow(this);
     this.state = { status: AuthStates.ERROR, message: msg };
   }
 
@@ -15181,9 +9962,22 @@ class AuthController {
    */
   async handleClick () {
     if (isAuthorized.call(this)) {
+      // A button with an account menu opens it (logout happens from there,
+      // through `signOut()`); otherwise the legacy SIGNOUT state lets the
+      // button confirm the logout itself.
+      const loginButton = this.loginButton;
+      if (loginButton != null && typeof loginButton.showMenu === 'function' &&
+          loginButton.showMenu() !== false) {
+        return;
+      }
       this.state = { status: AuthStates.SIGNOUT };
     } else if (isInitialized.call(this)) {
       this.startAuthRequest();
+    } else if (this.state.status === AuthStates.SWITCHING) {
+      // a switch is running; its outcome arrives as a state change
+    } else if (this.state.status === AuthStates.ERROR) {
+      // start over (stored sign-in or the sign-in button) rather than stay inert
+      await this.init();
     } else if (isNeedSignIn.call(this)) {
       // reopen popup (HACK for now: set to private property to avoid self-assignment)
       this.state = this._state;
@@ -15203,11 +9997,197 @@ class AuthController {
   }
 
   /**
+   * Log out: emit SIGNOUT once, forget the active account and return to
+   * INITIALIZED. The other remembered accounts are kept (`all` forgets them
+   * too). This is the confirmed logout (no further confirmation).
+   * @param {Object} [options]
+   * @param {boolean} [options.all] - forget every remembered account
+   * @returns {Promise<void>}
+   */
+  async signOut (options) {
+    const all = options?.all === true;
+    cancelAuthFlow(this);
+    const store = this._readProfiles();
+    // during a switch, the account being left
+    const current = this.state?.username ?? this.state?.from;
+    this._signingOut = true;
+    try {
+      this.state = { status: AuthStates.SIGNOUT };
+    } finally {
+      this._signingOut = false;
+    }
+    // Drop any cached hand-off credential for this flow's key. Guard the
+    // key: on a cookie-autologin session there is no `_authFlowKey`, and
+    // clearing with `undefined` would wipe an unrelated concurrent flow.
+    if (this._authFlowKey != null) handoff.cacheClear(this._authFlowKey);
+    const others = current == null ? store.profiles : ProfileStore.remove(store, current).profiles;
+    const loginButton = this.loginButton;
+    if (!all && others.length > 0 && loginButton != null && typeof loginButton.saveAuthorizationData === 'function') {
+      loginButton.saveAuthorizationData(ProfileStore.write(Object.assign({}, store, { active: null, profiles: others })));
+    } else if (loginButton != null && typeof loginButton.deleteAuthorizationData === 'function') {
+      await loginButton.deleteAuthorizationData();
+    }
+    await this.init();
+  }
+
+  /**
+   * The accounts remembered for this app, most recently used first.
+   * @returns {Array<{username: string, actingAs?: {username: string, delegate: string}, active: boolean, available: boolean}>}
+   */
+  profiles () {
+    const current = this.currentProfile();
+    return this._readProfiles().profiles.map((p) => {
+      const out = { username: p.username, active: current != null && current.username === p.username, available: p.unavailable !== true };
+      if (p.actingAs != null) out.actingAs = p.actingAs;
+      return out;
+    });
+  }
+
+  /**
+   * The signed-in account, or null.
+   * @returns {{username: string, actingAs?: {username: string, delegate: string}}|null}
+   */
+  currentProfile () {
+    if (this.state?.status !== AuthStates.AUTHORIZED || this.state.profile == null) return null;
+    const out = { username: this.state.profile.username };
+    if (this.state.profile.actingAs != null) out.actingAs = this.state.profile.actingAs;
+    return out;
+  }
+
+  /**
+   * Switch to another account. `username` null means the signed-in person's
+   * own account (switch back). A remembered account whose access is still
+   * valid is activated without a sign-in; otherwise the auth request runs
+   * again, asking for that account (`actAs`). Emits SWITCHING first; ends in
+   * AUTHORIZED, or back on the previous account when the sign-in is refused.
+   * @param {string|null} username
+   * @returns {Promise<void>}
+   */
+  async switchTo (username) {
+    const store = this._readProfiles();
+    const current = this.currentProfile();
+    let target;
+    if (username == null) {
+      if (current != null && current.actingAs == null) return;
+      const delegate = current?.actingAs?.delegate;
+      // Acting for an account: back to the delegate's own account only, never
+      // to another remembered one. Not signed in: the most recent own account.
+      target = delegate != null
+        ? store.profiles.find((p) => p.username === delegate && p.actingAs == null)
+        : store.profiles.find((p) => p.actingAs == null);
+    } else {
+      if (current != null && current.username === username) return;
+      target = store.profiles.find((p) => p.username === username);
+    }
+    const toUsername = target?.username ?? username ?? null;
+    const previous = restorableState(this.state);
+    // a log out or re-initialization during the access check ends this switch
+    cancelAuthFlow(this);
+    const flowId = this._authFlowId;
+    this.state = { status: AuthStates.SWITCHING, from: current?.username ?? null, to: toUsername };
+
+    if (target != null && target.unavailable !== true) {
+      let info;
+      try {
+        info = await this._accessInfo(target.apiEndpoint);
+      } catch (e) {
+        if (this._authFlowId !== flowId) throw e;
+        // network failure: stay on the previous account
+        this.state = previous ?? { status: AuthStates.INITIALIZED, serviceInfo: this.serviceInfo };
+        throw e;
+      }
+      if (this._authFlowId !== flowId) return;
+      if (info != null && info.error == null) {
+        const profile = profileFromAccessInfo(target, info);
+        this.state = { status: AuthStates.AUTHORIZED, username: profile.username, apiEndpoint: profile.apiEndpoint, profile };
+        return;
+      }
+      if (!ACCESS_GONE_ERRORS.includes(info?.error?.id)) {
+        // any other answer (server error, rate limit) says nothing about the access
+        this.state = previous ?? { status: AuthStates.INITIALIZED, serviceInfo: this.serviceInfo };
+        throw new PryvError('Cannot check the access of ' + target.username + ': ' + (info?.error?.id ?? 'unexpected answer'), info?.error);
+      }
+      // revoked or expired (a detach revokes the accesses granted through it)
+      this._saveProfiles(ProfileStore.markUnavailable(this._readProfiles(), target.username));
+    }
+    // own account: a sign-in that offers no other account; otherwise ask for that one
+    await this.startAuthRequest({ actAs: username == null ? 'deny' : username }, previous);
+  }
+
+  /**
+   * Sign in to one more account (the popup may offer the accounts the person
+   * can act for); the remembered accounts are kept.
+   * @returns {Promise<void>}
+   */
+  async addAccount () {
+    const current = this.currentProfile();
+    const previous = restorableState(this.state);
+    this.state = { status: AuthStates.SWITCHING, from: current?.username ?? null, to: null };
+    await this.startAuthRequest({ actAs: 'allow' }, previous);
+  }
+
+  /**
+   * @private The access-info of a stored account (`{ error }` when refused).
+   * @param {string} apiEndpoint
+   */
+  async _accessInfo (apiEndpoint) {
+    // required here: Connection is not needed before the first switch
+    const Connection = __webpack_require__(/*! ../Connection */ "./node_modules/pryv/src/Connection.js");
+    return await new Connection(apiEndpoint).accessInfo(true);
+  }
+
+  /** @private */
+  _readProfiles () {
+    const loginButton = this.loginButton;
+    if (loginButton == null || typeof loginButton.getAuthorizationData !== 'function') return ProfileStore.read(null);
+    return ProfileStore.read(loginButton.getAuthorizationData());
+  }
+
+  /** @private */
+  _saveProfiles (store) {
+    const loginButton = this.loginButton;
+    if (loginButton == null || typeof loginButton.saveAuthorizationData !== 'function') return;
+    const data = ProfileStore.write(store);
+    if (data == null && typeof loginButton.deleteAuthorizationData === 'function') {
+      loginButton.deleteAuthorizationData();
+    } else if (data != null) {
+      loginButton.saveAuthorizationData(data);
+    }
+  }
+
+  /**
+   * URL of the account app (profile page) for this platform, or null when
+   * it cannot be determined. Resolution order: `settings.accountUrl`, then
+   * the service's `account`, then the auth page URL of the last auth
+   * request with its trailing `/auth` removed.
+   * @returns {string|null}
+   */
+  accountUrl () {
+    let base = this.settings.accountUrl || this.serviceInfo?.account || accountUrlFromAuthUrl(this._authUrl);
+    if (typeof base !== 'string' || base === '') return null;
+    base = base.replace(/\/+$/, '');
+    // @ts-ignore - Service keeps the URL it was created with
+    const serviceInfoUrl = this.service?._serviceInfoUrl;
+    return base + '/account/profile' +
+      (serviceInfoUrl ? '?pryvServiceInfoUrl=' + encodeURIComponent(serviceInfoUrl) : '');
+  }
+
+  /**
+   * Open the account app in a new tab.
+   * @returns {string|null} the URL opened, or null when unknown
+   */
+  openAccountApp () {
+    const url = this.accountUrl();
+    if (url != null) window.open(url, '_blank', 'noopener');
+    return url;
+  }
+
+  /**
    * Compute the return URL for authentication redirect.
    * Used only in browser environments.
-   * @param {string} [returnURL] - The return URL setting ('auto#', 'self#', or custom URL)
+   * @param {string|false} [returnURL] - The return URL setting ('auto#', 'self#', or custom URL)
    * @param {string} [windowLocationForTest] - Mock window.location.href for testing
-   * @param {string|Navigator} [navigatorForTests] - Mock navigator for testing
+   * @param {string|Navigator} [navigatorForTests] - Mock navigator for testing (defaults to the browser's own)
    * @returns {string|boolean} The computed return URL, or false if using popup mode
    */
   getReturnURL (
@@ -15216,6 +10196,7 @@ class AuthController {
     navigatorForTests
   ) {
     const RETURN_URL_AUTO = 'auto';
+    const nav = navigatorForTests ?? globalThis.navigator;
 
     returnURL = returnURL || RETURN_URL_AUTO + '#';
 
@@ -15227,11 +10208,11 @@ class AuthController {
     }
     // auto mode for desktop
     if (returnUrlIsAuto(returnURL) &&
-        !utils.browserIsMobileOrTablet(navigatorForTests)) {
+        !utils.browserIsMobileOrTablet(nav)) {
       return false;
     // auto mode for mobile or self
     } else if ((returnUrlIsAuto(returnURL) &&
-                utils.browserIsMobileOrTablet(navigatorForTests)) ||
+                utils.browserIsMobileOrTablet(nav)) ||
                returnURL.indexOf('self') === 0) {
       // set self as return url?
       // eventually clean-up current url from previous pryv returnURL
@@ -15247,16 +10228,28 @@ class AuthController {
 
   /**
    * Start the authentication request and polling process
+   * @param {Object} [overrides] - auth request fields for this request only (e.g. `actAs`)
+   * @param {Object} [previous] - AUTHORIZED state to return to when this
+   *   request (an account switch) does not end in AUTHORIZED
    * @returns {Promise<void>}
    * @see https://pryv.github.io/reference/#auth-request
    */
-  async startAuthRequest () {
+  async startAuthRequest (overrides, previous) {
+    cancelAuthFlow(this);
+    const flowId = this._authFlowId;
+    this._switchPrevious = previous ?? null;
     // @ts-ignore - postAccess uses .call(this) for context
-    this.state = await postAccess.call(this);
+    const requested = await postAccess.call(this);
+    if (this._authFlowId !== flowId) return; // replaced while posting
+    this.state = requested;
     // Remember the polling key so listeners on the terminal AUTHORIZED
     // state can be handed `{ key, serviceInfo? }` (the polling response
     // itself doesn't echo `key` back).
     this._authFlowKey = this.state?.key;
+    // an app's later connectFromKey(key) then polls the core holding the request
+    pollUrls.remember(this.state?.key, this.state?.poll);
+    // Kept to locate the account app when the service does not name it.
+    if (this.state?.authUrl) this._authUrl = this.state.authUrl;
 
     await doPolling.call(this);
 
@@ -15267,14 +10260,19 @@ class AuthController {
           // @ts-ignore - this is bound via .call()
           this.serviceInfo.access,
           // @ts-ignore - this is bound via .call()
-          this.settings.authRequest
+          Object.assign({}, this.settings.authRequest, overrides)
         );
         if (!response.ok) {
-          throw new Error('Access request failed: ' + JSON.stringify(body));
+          // The server's message, id and status; the body stays on `response`,
+          // never in the message (it echoes the request's permissions and data).
+          throw PryvError.fromApiResponse(response, body);
         }
         return body;
       } catch (e) {
-        this.state = {
+        if (this._authFlowId !== flowId) throw e; // replaced while posting
+        const previous = this._switchPrevious;
+        this._switchPrevious = null;
+        this.state = previous ?? {
           status: AuthStates.ERROR,
           message: 'Requesting access',
           error: e
@@ -15286,20 +10284,61 @@ class AuthController {
     /** @this {AuthController} */
     async function doPolling () {
       // @ts-ignore - this is bound via .call()
-      if (this.state?.status !== AuthStates.NEED_SIGNIN) {
+      if (this._authFlowId !== flowId || this.state?.status !== AuthStates.NEED_SIGNIN) {
         return;
       }
       // @ts-ignore - this is bound via .call()
       const pollResponse = await pollAccess(this.state?.poll);
+      // a newer request, a sign-out or a re-initialization replaced this one
+      // @ts-ignore - this is bound via .call()
+      if (this._authFlowId !== flowId) return;
 
       if (pollResponse.status === AuthStates.NEED_SIGNIN) {
         // @ts-ignore - this is bound via .call()
         setTimeout(await doPolling.bind(this), this.state?.poll_rate_ms);
       } else {
+        // Shared-secret delivery: the ACCEPTED body carries a one-time
+        // `handoff` key, not the token. Redeem it once here (caching under the
+        // poll key so a later connectFromKey reuses it) and rewrite the body to
+        // the legacy shape, so the cookie / LoginButton path and the external
+        // listener filter are untouched.
+        if (handoff.isHandoffBody(pollResponse)) {
+          try {
+            const entry = await handoff.resolveHandoff(pollResponse, this._authFlowKey);
+            pollResponse.apiEndpoint = entry.apiEndpoint;
+            pollResponse.token = entry.token;
+            pollResponse.username = entry.username;
+            delete pollResponse.handoff;
+          } catch (e) {
+            // @ts-ignore - this is bound via .call()
+            if (this._authFlowId !== flowId) return;
+            // @ts-ignore - this is bound via .call()
+            const previous = this._switchPrevious;
+            // @ts-ignore - this is bound via .call()
+            this._switchPrevious = null;
+            if (previous != null) console.warn('pryv: account switch did not complete (credential hand-off failed); keeping the previous account');
+            this.state = previous ?? { status: AuthStates.ERROR, message: 'Credential hand-off failed', error: e };
+            return;
+          }
+          // a newer request, a sign-out or a re-initialization replaced this one
+          // @ts-ignore - this is bound via .call()
+          if (this._authFlowId !== flowId) return;
+        }
         // Carry the key forward — listeners on the narrow public surface
         // need it, and the server doesn't echo it back on ACCEPTED.
         if (this._authFlowKey != null && pollResponse.key == null) {
           pollResponse.key = this._authFlowKey;
+        }
+        const previous = this._switchPrevious;
+        this._switchPrevious = null;
+        if (pollResponse.status === AuthStates.AUTHORIZED) {
+          pollResponse.profile = ProfileStore.fromAccepted(pollResponse);
+        } else if (previous != null) {
+          // an account switch that did not complete: stay on the previous account
+          console.warn('pryv: account switch did not complete (' +
+            (pollResponse?.error?.id ?? pollResponse?.message ?? pollResponse?.status) + '); keeping the previous account');
+          this.state = previous;
+          return;
         }
         this.state = pollResponse;
       }
@@ -15325,9 +10364,16 @@ class AuthController {
 
     this._state = newState;
 
+    // Dispatch the state that was just set (`newState`), NOT the live `this.state`
+    // getter: a listener that synchronously changes the state mid-dispatch (e.g. a
+    // custom listener re-initializing to INITIALIZED on SIGNOUT; the LoginButton's
+    // own re-init now starts a microtask later) would otherwise overwrite
+    // `this._state`, so later listeners in this loop would receive the wrong state
+    // (a logout would deliver INITIALIZED instead of SIGNOUT to the app's
+    // onStateChange).
     this.stateChangeListeners.forEach((listener) => {
       try {
-        listener(this.state);
+        listener(newState);
       } catch (e) {
         console.log('Error during set state ()', e);
       }
@@ -15373,16 +10419,87 @@ function filterForExternalListener (state) {
   return out;
 }
 
+/**
+ * The account app is served next to the auth page: strip a trailing `/auth`
+ * path segment (and the query) from the auth page URL. Null when the URL
+ * does not have that shape.
+ * @param {string} [authUrl]
+ * @returns {string|null}
+ */
+function accountUrlFromAuthUrl (authUrl) {
+  if (typeof authUrl !== 'string') return null;
+  let url;
+  try { url = new URL(authUrl); } catch (e) { return null; }
+  const path = url.pathname.replace(/\/+$/, '');
+  if (!path.endsWith('/auth')) return null;
+  return url.origin + path.slice(0, -'/auth'.length);
+}
+
 async function checkAutoLogin (authController) {
   const loginButton = authController.loginButton;
   if (loginButton == null) {
     return;
   }
 
-  const storedCredentials = await loginButton.getAuthorizationData();
-  if (storedCredentials != null) {
-    authController.state = Object.assign({}, { status: AuthStates.AUTHORIZED }, storedCredentials);
+  let storedCredentials = await loginButton.getAuthorizationData();
+  if (storedCredentials == null) return;
+  // Forget the stored sign-ins that carry no token (3.13.0 saved some after a
+  // redirect return): they would sign in to a session the API refuses, or
+  // stay listed as available accounts.
+  const stored = ProfileStore.read(storedCredentials);
+  const tokenless = stored.profiles.filter((p) => !ProfileStore.carriesToken(p.apiEndpoint));
+  if (tokenless.length > 0) {
+    authController._saveProfiles(tokenless.reduce((s, p) => ProfileStore.remove(s, p.username), stored));
+    storedCredentials = await loginButton.getAuthorizationData();
+    if (storedCredentials == null) return;
   }
+  if (typeof storedCredentials.authUrl === 'string') authController._authUrl = storedCredentials.authUrl;
+  if (Array.isArray(storedCredentials.profiles)) {
+    // Several remembered accounts: sign in to the active one, if any
+    const store = ProfileStore.read(storedCredentials);
+    if (store.active == null || !ProfileStore.carriesToken(store.active.apiEndpoint)) return;
+    const state = { status: AuthStates.AUTHORIZED, username: store.active.username, apiEndpoint: store.active.apiEndpoint, profile: store.active };
+    if (store.authUrl != null) state.authUrl = store.authUrl;
+    authController.state = state;
+    return;
+  }
+  // a button that cannot rewrite its storage still must not sign in to it
+  if (typeof storedCredentials.apiEndpoint === 'string' && !ProfileStore.carriesToken(storedCredentials.apiEndpoint)) return;
+  const state = Object.assign({}, { status: AuthStates.AUTHORIZED }, storedCredentials);
+  if (typeof state.username === 'string' && typeof state.apiEndpoint === 'string') state.profile = ProfileStore.profileOf(state);
+  authController.state = state;
+}
+
+/** A stored profile refreshed with what its access says about itself. */
+function profileFromAccessInfo (stored, info) {
+  const profile = { username: stored.username, apiEndpoint: stored.apiEndpoint };
+  const d = info.delegation;
+  if (d != null && d.isDelegatedAccess === true && typeof d.delegate?.username === 'string') {
+    profile.actingAs = { username: stored.username, delegate: d.delegate.username };
+  }
+  return profile;
+}
+
+/** API errors that mean a stored access is no longer usable. */
+const ACCESS_GONE_ERRORS = ['invalid-access-token', 'forbidden'];
+
+/**
+ * The signed-in state to return to when an account switch does not
+ * complete: the account as stored, without the `key` of its sign-in (that
+ * auth request is consumed), like a sign-in from stored credentials.
+ */
+function restorableState (state) {
+  if (state?.status !== AuthStates.AUTHORIZED) return null;
+  const restored = { status: AuthStates.AUTHORIZED, username: state.username, apiEndpoint: state.apiEndpoint };
+  if (state.profile != null) restored.profile = state.profile;
+  if (state.authUrl != null) restored.authUrl = state.authUrl;
+  return restored;
+}
+
+/** Stop any auth request in progress: its poll no longer changes the state. */
+function cancelAuthFlow (authController) {
+  authController._authFlowId = (authController._authFlowId || 0) + 1;
+  authController._switchPrevious = null;
 }
 
 // ------------------ ACTIONS  ----------- //
@@ -15428,7 +10545,8 @@ module.exports = AuthController;
  */
 /**
  * The possible auth states:
- * ERROR, LOADING, INITIALIZED, NEED_SIGNIN, AUTHORIZED, SIGNOUT, REFUSED
+ * ERROR, LOADING, INITIALIZED, NEED_SIGNIN, AUTHORIZED, SIGNOUT, REFUSED,
+ * SWITCHING (an account switch is running)
  * @readonly
  * @enum {string}
  * @memberof pryv.Browser
@@ -15440,7 +10558,8 @@ module.exports = {
   NEED_SIGNIN: 'NEED_SIGNIN',
   AUTHORIZED: 'ACCEPTED',
   SIGNOUT: 'SIGNOUT',
-  REFUSED: 'REFUSED'
+  REFUSED: 'REFUSED',
+  SWITCHING: 'SWITCHING'
 };
 
 
@@ -15473,16 +10592,232 @@ const Messages = {
   SIGNOUT_CONFIRM: {
     en: 'Logout?',
     fr: 'Se déconnecter ?'
+  },
+  MENU_TITLE: {
+    en: 'Account',
+    fr: 'Compte'
+  },
+  LOGOUT: {
+    en: 'Log out',
+    fr: 'Se déconnecter'
+  },
+  MANAGE_ACCOUNT: {
+    en: 'Manage my account',
+    fr: 'Gérer mon compte'
+  },
+  APP: {
+    en: 'app',
+    fr: 'app'
+  },
+  CLOSE: {
+    en: 'Close',
+    fr: 'Fermer'
+  },
+  CANCEL: {
+    en: 'Cancel',
+    fr: 'Annuler'
+  },
+  LOGOUT_ALL: {
+    en: 'Log out of all accounts',
+    fr: 'Se déconnecter de tous les comptes'
+  },
+  MANAGE_ACCOUNT_OF: {
+    en: 'Manage {username}\'s account',
+    fr: 'Gérer le compte de {username}'
+  },
+  USE_FOR: {
+    en: 'Use this app for',
+    fr: 'Utiliser cette app pour'
+  },
+  ME: {
+    en: 'me',
+    fr: 'moi'
+  },
+  VIA: {
+    en: 'via',
+    fr: 'via'
+  },
+  ACTING_AS: {
+    en: 'acting as',
+    fr: 'pour le compte'
+  },
+  SWITCH_BACK: {
+    en: 'Switch back to {username}',
+    fr: 'Revenir à {username}'
+  },
+  SWITCHING: {
+    en: 'Switching...',
+    fr: 'Changement...'
+  },
+  OTHER_ACCOUNT: {
+    en: 'Another account...',
+    fr: 'Un autre compte...'
+  },
+  UNAVAILABLE: {
+    en: 'no longer available',
+    fr: 'plus disponible'
   }
 };
 
+/**
+ * Messages for a language. `definitions` (a service's own messages) override
+ * the defaults key by key, so a key the service does not define still has
+ * its default text.
+ */
 function get (languageCode, definitions) {
-  const myMessages = definitions || Messages;
+  const myMessages = Object.assign({}, Messages, definitions || {});
   const res = {};
   Object.keys(myMessages).forEach((key) => {
     res[key] = myMessages[key][languageCode] || myMessages[key].en;
   });
   return res;
+}
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/Auth/ProfileStore.js"
+/*!****************************************************!*\
+  !*** ./node_modules/pryv/src/Auth/ProfileStore.js ***!
+  \****************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * The accounts a sign-in button remembers for one app, as stored in its
+ * authorization data:
+ * `{ apiEndpoint, username, actingAs?, authUrl?, profiles: [...] }`.
+ * The top-level `apiEndpoint` / `username` are the active account (what
+ * versions without profiles read); `profiles` lists every remembered
+ * account, most recently used first, the active one included.
+ * A profile is `{ username, apiEndpoint, actingAs?, unavailable? }`, where
+ * `actingAs = { username, delegate }` marks an account used through account
+ * delegation (`delegate` is the username of the person acting).
+ * @memberof pryv.Auth
+ */
+module.exports = {
+  DEFAULT_LIMIT: 5,
+  read,
+  write,
+  activate,
+  remove,
+  markUnavailable,
+  profileOf,
+  fromAccepted,
+  carriesToken
+};
+
+const utils = __webpack_require__(/*! ../utils */ "./node_modules/pryv/src/utils.js");
+
+/**
+ * Whether an apiEndpoint carries a token. A stored sign-in without one
+ * cannot call the API (3.13.0 saved such sign-ins after a redirect return,
+ * the credential hand-off not being redeemed).
+ * @param {string} apiEndpoint
+ * @returns {boolean}
+ */
+function carriesToken (apiEndpoint) {
+  try {
+    return Boolean(utils.extractTokenAndAPIEndpoint(apiEndpoint).token);
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Parse stored authorization data (any version) into
+ * `{ active, profiles, authUrl }`; `active` is `profiles[0]` or null.
+ * @param {Object|null|undefined} stored
+ */
+function read (stored) {
+  const store = { active: null, profiles: [], authUrl: undefined };
+  if (stored == null || typeof stored !== 'object' || stored.deleted === true) return store;
+  if (typeof stored.authUrl === 'string') store.authUrl = stored.authUrl;
+  if (Array.isArray(stored.profiles)) {
+    store.profiles = stored.profiles.filter(isProfile).map(profileOf);
+  }
+  if (isProfile(stored)) {
+    const active = profileOf(stored);
+    store.profiles = [active].concat(store.profiles.filter((p) => p.username !== active.username));
+    store.active = active;
+  }
+  return store;
+}
+
+/**
+ * The authorization data to store for `store`.
+ * @returns {Object|null} null when nothing is left to remember
+ */
+function write (store) {
+  if (store.profiles.length === 0) return null;
+  const data = {};
+  if (store.active != null) {
+    data.apiEndpoint = store.active.apiEndpoint;
+    data.username = store.active.username;
+    if (store.active.actingAs != null) data.actingAs = store.active.actingAs;
+  }
+  if (store.authUrl != null) data.authUrl = store.authUrl;
+  data.profiles = store.profiles.map(profileOf);
+  return data;
+}
+
+/**
+ * Make `profile` the active account (replacing a stored one with the same
+ * username), then forget the least recently used accounts beyond `limit`.
+ */
+function activate (store, profile, limit) {
+  const max = Math.max(1, limit || module.exports.DEFAULT_LIMIT);
+  const active = profileOf(profile);
+  const profiles = [active].concat(store.profiles.filter((p) => p.username !== active.username));
+  return Object.assign({}, store, { active, profiles: profiles.slice(0, max) });
+}
+
+/** Forget `username`; forgetting the active account leaves none active. */
+function remove (store, username) {
+  const profiles = store.profiles.filter((p) => p.username !== username);
+  const active = (store.active != null && store.active.username !== username) ? store.active : null;
+  return Object.assign({}, store, { active, profiles });
+}
+
+/** Keep `username` listed, marked as no longer usable (revoked, detached). */
+function markUnavailable (store, username) {
+  const mark = (p) => (p.username === username ? Object.assign(profileOf(p), { unavailable: true }) : p);
+  const profiles = store.profiles.map(mark);
+  const active = (store.active != null && store.active.username === username) ? null : store.active;
+  return Object.assign({}, store, { active, profiles });
+}
+
+/** The stored fields of a profile, nothing else (credentials included). */
+function profileOf (p) {
+  const profile = { username: p.username, apiEndpoint: p.apiEndpoint };
+  if (p.actingAs != null && typeof p.actingAs.delegate === 'string') {
+    profile.actingAs = { username: p.username, delegate: p.actingAs.delegate };
+  }
+  if (p.unavailable === true) profile.unavailable = true;
+  return profile;
+}
+
+function isProfile (p) {
+  return p != null && typeof p.username === 'string' && typeof p.apiEndpoint === 'string';
+}
+
+/**
+ * The profile of an ACCEPTED auth-request body. Its `delegation` block is a
+ * display hint posted by the auth page; `accessInfo().delegation` is
+ * authoritative and replaces it when the profile is next activated.
+ */
+function fromAccepted (body) {
+  const profile = { username: body.username, apiEndpoint: body.apiEndpoint };
+  const d = body.delegation;
+  if (d != null && d.isDelegatedAccess === true && d.controlledUsername === body.username &&
+      typeof d.delegate?.username === 'string') {
+    profile.actingAs = { username: body.username, delegate: d.delegate.username };
+  }
+  return profile;
 }
 
 
@@ -15522,11 +10857,14 @@ module.exports = {
  * @param {string} [settings.authRequest.languageCode] Language code, as per LoginButton Messages: 'en', 'fr
  * @param {string} settings.authRequest.requestingAppId Application id, ex: 'my-app'
  * @param {Object} settings.authRequest.requestedPermissions
- * @param {string | boolean} settings.authRequest.returnURL : false, // set this if you don't want a popup
+ * @param {string | false} [settings.authRequest.returnURL] 'auto#' (default, also when unset or false):
+ *   popup on desktop, redirect on a phone or tablet; 'self#': always redirect back to this page;
+ *   a URL: always redirect back to that URL. Must end with '#', '?' or '&'.
+ * @param {string} [settings.authRequest.authUrl] Your own auth page for this request; honoured only
+ *   when it matches the platform's `access:trustedAuthUrls`
  * @param {string} [settings.authRequest.referer] To track registration source
  * @param {string} settings.spanButtonID set and <span> id in DOM to insert default login button or null for custom
  * @param {Function} settings.onStateChange
- * @param {string} [settings.returnURL] Set to "self#" to disable popup and force using the same page
  * @param {string} serviceInfoUrl
  * @param {Object} [serviceCustomizations] override properties of serviceInfoUrl
  * @returns {Promise<Service>}
@@ -15631,10 +10969,18 @@ function del (cookieKey) {
 const Cookies = __webpack_require__(/*! ./CookieUtils */ "./node_modules/pryv/src/Browser/CookieUtils.js");
 const AuthStates = __webpack_require__(/*! ../Auth/AuthStates */ "./node_modules/pryv/src/Auth/AuthStates.js");
 const AuthController = __webpack_require__(/*! ../Auth/AuthController */ "./node_modules/pryv/src/Auth/AuthController.js");
+const ProfileStore = __webpack_require__(/*! ../Auth/ProfileStore */ "./node_modules/pryv/src/Auth/ProfileStore.js");
 const Messages = __webpack_require__(/*! ../Auth/LoginMessages */ "./node_modules/pryv/src/Auth/LoginMessages.js");
+const handoff = __webpack_require__(/*! ../lib/handoff */ "./node_modules/pryv/src/lib/handoff.js");
+const pollUrls = __webpack_require__(/*! ../lib/pollUrls */ "./node_modules/pryv/src/lib/pollUrls.js");
 const utils = __webpack_require__(/*! ../utils */ "./node_modules/pryv/src/utils.js");
 
-/* global location, confirm */
+/* global location */
+
+/** Suffix of the cookie that holds the remembered accounts. */
+const PROFILES_COOKIE_SUFFIX = '-profiles';
+/** Encoded length kept under the ~4096-byte cookie limit (name and attributes included). */
+const PROFILES_COOKIE_MAX_LENGTH = 3500;
 
 /**
  * @memberof pryv.Browser
@@ -15683,6 +11029,10 @@ class LoginButton {
       case AuthStates.NEED_SIGNIN: {
         const loginUrl = state.authUrl || state.url; // url is deprecated
         if (this.authSettings.authRequest.returnURL) { // open on same page (no Popup)
+          // Remember the request this page started: on the way back, only
+          // its key is accepted and only its (server-issued) poll URL is
+          // fetched (see finishAuthProcessAfterRedirection).
+          writeAuthFlow(this._cookieKey, { key: state.key, poll: state.poll, authUrl: loginUrl });
           location.href = loginUrl;
           return;
         } else {
@@ -15690,19 +11040,32 @@ class LoginButton {
         }
         break;
       }
-      case AuthStates.AUTHORIZED:
-        this.text = state.username;
-        this.saveAuthorizationData({
-          apiEndpoint: state.apiEndpoint,
-          username: state.username
-        });
+      case AuthStates.AUTHORIZED: {
+        const profile = state.profile || ProfileStore.fromAccepted(state);
+        this.text = profileLabel(this, profile);
+        // Never remember a sign-in that cannot call the API (it would be
+        // restored on every page load).
+        if (!ProfileStore.carriesToken(profile?.apiEndpoint)) break;
+        const store = ProfileStore.read(this.getAuthorizationData());
+        // Kept to locate the account app after a reload (see AuthController.accountUrl).
+        const authUrl = withoutQuery(state.authUrl || this.auth?._authUrl) || store.authUrl;
+        this.saveAuthorizationData(ProfileStore.write(Object.assign(
+          ProfileStore.activate(store, profile, this.authSettings.maxProfiles),
+          { authUrl }
+        )));
+        break;
+      }
+      case AuthStates.SWITCHING:
+        this.text = this.messages.SWITCHING || '...';
         break;
       case AuthStates.SIGNOUT: {
-        const message = this.messages.SIGNOUT_CONFIRM ? this.messages.SIGNOUT_CONFIRM : 'Logout ?';
-        if (confirm(message)) {
-          this.deleteAuthorizationData();
-          this.auth.init();
-        }
+        // A confirmed logout (the menu's "Log out", or `auth.signOut()`)
+        // clears the credentials itself.
+        if (this.auth?._signingOut) break;
+        // Menu disabled (`settings.menu: false`): confirm in a small built-in
+        // dialog, then clear the credentials (see buildMenu: the re-init is
+        // awaited there, never left running in the background).
+        this.openMenu({ confirmLogout: true });
         break;
       }
       case AuthStates.ERROR:
@@ -15718,16 +11081,104 @@ class LoginButton {
     }
   }
 
-  getAuthorizationData () {
-    return Cookies.get(this._cookieKey);
+  /**
+   * Open the account menu (signed-in account, "Manage my account",
+   * "Log out"). Returns false, and opens nothing, when the menu is disabled
+   * with `settings.menu: false`: the caller then falls back to the logout
+   * confirmation.
+   * @returns {boolean}
+   */
+  showMenu () {
+    if (this.authSettings.menu === false) return false;
+    return this.openMenu({ confirmLogout: false });
   }
 
+  /**
+   * @private Open the account menu, or (`confirmLogout`) the plain "Log out?"
+   * confirmation used when the menu is disabled.
+   */
+  openMenu ({ confirmLogout }) {
+    if (typeof document === 'undefined') return false;
+    this.closeMenu();
+    this.menu = buildMenu(this, confirmLogout);
+    document.body.appendChild(this.menu.overlay);
+    this.menu.focusables()[0]?.focus();
+    return true;
+  }
+
+  /**
+   * Close the account menu if it is open. Dismissing the "Log out?" question
+   * (anything but "Log out") returns to the signed-in state: SIGNOUT was
+   * already emitted by the click, and the button would otherwise stay inert.
+   * @param {boolean} [loggingOut] - closed by the "Log out" action
+   * @returns {Promise<void>} resolves when any re-init it started is done
+   */
+  closeMenu (loggingOut) {
+    if (this.menu == null) return Promise.resolve();
+    const menu = this.menu;
+    this.menu = null;
+    document.removeEventListener('keydown', menu.onKeyDown, true);
+    if (menu.overlay.parentNode != null) menu.overlay.parentNode.removeChild(menu.overlay);
+    const previousFocus = /** @type {HTMLElement|null} */ (menu.previousFocus);
+    if (previousFocus != null && typeof previousFocus.focus === 'function') {
+      previousFocus.focus();
+    }
+    if (menu.confirmLogout && !loggingOut) {
+      // init() reports its own failures as the ERROR state
+      this.pending = this.auth.init().then(() => {}, (e) => { console.log('Error while re-initializing', e); });
+      return this.pending;
+    }
+    return Promise.resolve();
+  }
+
+  /**
+   * The stored sign-in: the active account from the main cookie (the only
+   * cookie versions without account switching read) and the remembered
+   * accounts from a second one.
+   */
+  getAuthorizationData () {
+    const active = Cookies.get(this._cookieKey);
+    const remembered = Cookies.get(this._cookieKey + PROFILES_COOKIE_SUFFIX);
+    if (remembered == null || !Array.isArray(remembered.profiles)) return active;
+    const data = Object.assign({}, active != null && active.deleted !== true ? active : {}, { profiles: remembered.profiles });
+    if (data.authUrl == null && remembered.authUrl != null) data.authUrl = remembered.authUrl;
+    return data;
+  }
+
+  /**
+   * Store the sign-in. The main cookie holds the active account only (or is
+   * removed when none is active), so an older version never reads a list of
+   * remembered accounts as a signed-in one.
+   */
   saveAuthorizationData (authData) {
-    Cookies.set(this._cookieKey, authData);
+    if (authData == null) {
+      Cookies.del(this._cookieKey);
+      Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX);
+      return;
+    }
+    const { profiles, ...active } = authData;
+    if (typeof active.username === 'string' && typeof active.apiEndpoint === 'string') {
+      Cookies.set(this._cookieKey, active);
+    } else {
+      Cookies.del(this._cookieKey);
+    }
+    if (Array.isArray(profiles)) {
+      const remembered = Object.assign({ profiles: profiles.slice() }, active.authUrl != null ? { authUrl: active.authUrl } : {});
+      // A browser drops a cookie over ~4 KB: forget the least recently used
+      // accounts (the list is most recent first) until it fits.
+      while (remembered.profiles.length > 1 &&
+             encodeURIComponent(JSON.stringify(remembered)).length > PROFILES_COOKIE_MAX_LENGTH) {
+        remembered.profiles.pop();
+      }
+      Cookies.set(this._cookieKey + PROFILES_COOKIE_SUFFIX, remembered);
+    } else {
+      Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX);
+    }
   }
 
   async deleteAuthorizationData () {
     Cookies.del(this._cookieKey);
+    Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX);
   }
 
   /**
@@ -15741,42 +11192,144 @@ class LoginButton {
     // 3. Check if there is a pryvKey / pryvPoll (or legacy prYvkey /
     //    prYvpoll) as result of "out of page login"
     const url = window.location.href;
-    const pollUrl = retrievePollUrl(url);
-    if (pollUrl !== null) {
+    const key = retrieveKey(url);
+    if (key !== null) {
+      // Already signed in (from the stored sign-in): a return that does not
+      // end in a new sign-in (an account switch refused or failed, a stray
+      // link) leaves that account in place, as the popup path does for a
+      // switch. The state is then left as it is (no second AUTHORIZED).
+      const signedIn = authController.state?.status === AuthStates.AUTHORIZED;
+      // Only finish the auth request this page started (kept across the
+      // redirect by onStateChange), and poll the URL the server gave for
+      // it: a link carrying another key or poll URL must not sign the page
+      // in (to a foreign host, or to someone else's account).
+      const flow = readAuthFlow(this._cookieKey);
+      if (flow == null || flow.key !== key || typeof flow.poll !== 'string') {
+        console.warn('pryv: ignoring a sign-in return for a request this page did not start');
+        if (!signedIn) {
+          authController.state = {
+            status: AuthStates.ERROR,
+            message: 'Sign-in return does not match a sign-in started on this page',
+            error: { id: 'unexpected-auth-return' }
+          };
+        }
+        cleanUrl();
+        return;
+      }
+      clearAuthFlow(this._cookieKey);
+      const pollUrl = flow.poll;
+      // an app's connectFromKey(key) on this page then polls the same core
+      pollUrls.remember(key, pollUrl);
+      // the flow of this sign-in: a sign-out clears its cached credential
+      authController._authFlowKey = key;
+      let response, body;
       try {
-        const { body } = await utils.fetchGet(pollUrl);
-        authController.state = body;
+        ({ response, body } = await utils.fetchGet(pollUrl));
       } catch (e) {
-        authController.state = {
+        body = {
           status: AuthStates.ERROR,
           message: 'Cannot fetch result',
           error: e
         };
       }
-      // These params are one-shot; leaving them in the visible URL puts
-      // stale auth state into bookmarks / copied links.
+      if (response?.status === 403 && body?.status === 'REFUSED') {
+        // refused on the auth page: back to the sign-in button (as the popup path)
+        body = { status: AuthStates.INITIALIZED, serviceInfo: authController.serviceInfo };
+      } else if (body?.status == null) {
+        // unknown or expired key, or no answer the button can show
+        body = { status: AuthStates.ERROR, message: 'Cannot fetch result', error: body?.error ?? body };
+      }
+      // Shared-secret delivery: the ACCEPTED body carries a one-time
+      // `handoff` key, not the token. Redeem it exactly as the polling path
+      // does, under the flow key, and never report a token-less AUTHORIZED.
+      // Unlike the polling path, the state keeps its legacy shape (no `key`,
+      // credentials included), which existing redirect apps read.
+      if (handoff.isHandoffBody(body)) {
+        try {
+          const entry = await handoff.resolveHandoff(body, key);
+          body.apiEndpoint = entry.apiEndpoint;
+          body.token = entry.token;
+          body.username = entry.username;
+          delete body.handoff;
+        } catch (e) {
+          body = { status: AuthStates.ERROR, message: 'Credential hand-off failed', error: e };
+        }
+      }
+      if (body?.status === AuthStates.AUTHORIZED && typeof body.username === 'string') {
+        body.profile = ProfileStore.fromAccepted(body);
+        // the auth page of this sign-in locates the account app
+        if (typeof flow.authUrl === 'string') authController._authUrl = flow.authUrl;
+      } else if (signedIn) {
+        // refused or failed: stay on the account already signed in
+        console.warn('pryv: sign-in by redirection did not complete (' +
+          (body?.error?.id ?? body?.message ?? body?.status) + '); keeping the signed-in account');
+        cleanUrl();
+        return;
+      }
+      authController.state = body;
+      cleanUrl();
+    } else if (utils.cleanURLFromPrYvParams(url) !== url) {
+      // leftover one-shot params without a key (e.g. only `prYvstatus`)
+      cleanUrl();
+    }
+
+    // These params are one-shot; leaving them in the visible URL puts
+    // stale auth state into bookmarks / copied links.
+    function cleanUrl () {
       if (window.history && typeof window.history.replaceState === 'function') {
         window.history.replaceState(null, '', utils.cleanURLFromPrYvParams(url));
       }
     }
 
-    function retrievePollUrl (url) {
+    /** The key of the returning auth request, or null when the URL is not a return. */
+    function retrieveKey (url) {
       // Modern lowercase form (pryvKey / pryvPoll) is preferred; the
       // capital-Y form (prYvkey / prYvpoll) is accepted for back-compat
       // with apps emitting the legacy URL contract — see
       // [DEPRECATED] notes on cleanURLFromPrYvParams.
       const params = utils.getQueryParamsFromURL(url);
-      let pollUrl = null;
       const key = params.pryvKey || params.prYvkey;
-      if (key) {
-        pollUrl = authController.serviceInfo.access + key;
-      }
+      if (key) return key;
       const poll = params.pryvPoll || params.prYvpoll;
-      if (poll) {
-        pollUrl = poll;
-      }
-      return pollUrl;
+      // the poll URL ends with the key (`<access>/<key>`); only the key is
+      // used, the poll URL fetched is the one stored when the flow started
+      if (poll) return poll.split(/[?#]/)[0].split('/').filter(Boolean).pop() || null;
+      return null;
     }
+  }
+}
+
+// ---- the auth request started by this page, kept across the redirect ----
+// sessionStorage: per tab and origin, gone when the tab closes, readable by
+// no other origin. Any failure (storage blocked) reads as "no flow".
+
+function authFlowStorageKey (cookieKey) {
+  return cookieKey + '-authflow';
+}
+
+function writeAuthFlow (cookieKey, flow) {
+  try {
+    window.sessionStorage.setItem(authFlowStorageKey(cookieKey), JSON.stringify(flow));
+  } catch (e) {
+    // the return will then be refused, as for any unknown request
+  }
+}
+
+function readAuthFlow (cookieKey) {
+  try {
+    const raw = window.sessionStorage.getItem(authFlowStorageKey(cookieKey));
+    const flow = raw == null ? null : JSON.parse(raw);
+    return flow != null && typeof flow === 'object' ? flow : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearAuthFlow (cookieKey) {
+  try {
+    window.sessionStorage.removeItem(authFlowStorageKey(cookieKey));
+  } catch (e) {
+    // nothing stored
   }
 }
 
@@ -15806,6 +11359,270 @@ async function startLoginScreen (loginButton, authUrl) {
   } else if (window.focus) {
     loginButton.popup.focus();
   }
+}
+
+const MENU_OPTIONS = ['logout', 'account', 'switch', 'info'];
+
+/** `kim-doe (via parent-doe)` for an account used through delegation. */
+function profileLabel (loginButton, profile) {
+  if (profile?.actingAs == null) return profile?.username;
+  return profile.username + ' (' + loginButton.messages.VIA + ' ' + profile.actingAs.delegate + ')';
+}
+
+/** The auth page URL without its query and fragment (they may carry a key). */
+function withoutQuery (url) {
+  if (typeof url !== 'string') return undefined;
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch (e) {
+    return undefined;
+  }
+}
+
+/**
+ * Which menu entries to show: all by default; `settings.menu.<option>: false`
+ * or `settings.menu.hide: ['<option>', ...]` hides one.
+ */
+function menuOptions (menuSettings) {
+  const options = {};
+  MENU_OPTIONS.forEach((o) => { options[o] = true; });
+  if (menuSettings != null && typeof menuSettings === 'object') {
+    MENU_OPTIONS.forEach((o) => { if (menuSettings[o] === false) options[o] = false; });
+    if (Array.isArray(menuSettings.hide)) {
+      menuSettings.hide.forEach((o) => { if (o in options) options[o] = false; });
+    }
+  }
+  return options;
+}
+
+const MENU_CSS = `
+.pryv-menu-overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 2147483000; display: flex;
+  align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.35); }
+.pryv-menu { background: #fff; color: #222; min-width: 280px; max-width: 90vw; border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25); font: 14px/1.4 system-ui, sans-serif; }
+.pryv-menu-header { display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; padding: 16px 16px 8px; }
+.pryv-menu-username { font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
+.pryv-menu-info { color: #666; font-size: 13px; padding: 0 16px 12px; overflow-wrap: anywhere; }
+.pryv-menu-close { border: 0; background: none; font-size: 20px; line-height: 1; cursor: pointer; color: #666; }
+.pryv-menu-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end;
+  padding: 12px 16px 16px; border-top: 1px solid #eee; }
+.pryv-menu-actions button { padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc;
+  background: #f7f7f7; cursor: pointer; font: inherit; }
+.pryv-menu-actions button:focus-visible, .pryv-menu-close:focus-visible,
+.pryv-menu-switch button:focus-visible { outline: 2px solid #4a90d9; }
+.pryv-menu-acting { font-weight: 400; color: #666; font-size: 13px; }
+.pryv-menu-switch { padding: 8px 16px 12px; border-top: 1px solid #eee; }
+.pryv-menu-switch-title { color: #666; font-size: 13px; margin-bottom: 4px; }
+.pryv-menu-switch button { display: block; width: 100%; text-align: left; padding: 6px 8px; border: 0;
+  border-radius: 4px; background: none; cursor: pointer; font: inherit; color: inherit; }
+.pryv-menu-switch button:hover { background: #f2f2f2; }
+.pryv-menu-switch button[aria-current="true"] { font-weight: 600; cursor: default; }
+.pryv-menu-switch .pryv-menu-note { color: #888; font-size: 12px; }
+`;
+
+/** The built-in menu style, added once. A service's button CSS can override
+ * the `.pryv-menu*` classes. */
+function ensureMenuStyle () {
+  if (document.getElementById('pryv-menu-style') != null) return;
+  const style = document.createElement('style');
+  style.id = 'pryv-menu-style';
+  style.textContent = MENU_CSS;
+  // First in <head>: a service stylesheet loaded before or after the menu
+  // opens then wins at equal specificity.
+  document.head.insertBefore(style, document.head.firstChild);
+}
+
+function menuElement (tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+/**
+ * Build the account menu: a modal dialog, closed by its close button,
+ * Escape, or a click outside it, with focus kept inside while open.
+ * `confirmLogout`: the same dialog reduced to the "Log out?" question, for
+ * `settings.menu: false` (SIGNOUT was already emitted by the click).
+ */
+function buildMenu (loginBtn, confirmLogout) {
+  ensureMenuStyle();
+  const auth = loginBtn.auth;
+  const messages = Object.assign({}, loginBtn.messages, auth.messages);
+  const options = confirmLogout
+    ? { logout: true, account: false, info: false }
+    : menuOptions(loginBtn.authSettings.menu);
+  const username = confirmLogout
+    ? (messages.SIGNOUT_CONFIRM || 'Logout?')
+    : (auth.state?.username || '');
+
+  const overlay = menuElement('div', 'pryv-menu-overlay');
+  const dialog = menuElement('div', 'pryv-menu');
+  // A question that needs an answer is an alertdialog; the menu is a dialog.
+  dialog.setAttribute('role', confirmLogout ? 'alertdialog' : 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-labelledby', 'pryv-menu-username');
+  overlay.appendChild(dialog);
+
+  const header = menuElement('div', 'pryv-menu-header');
+  const title = menuElement('div', 'pryv-menu-username', username || messages.MENU_TITLE);
+  title.id = 'pryv-menu-username';
+  const current = confirmLogout ? null : auth.currentProfile();
+  const actingAs = current?.actingAs;
+  if (actingAs != null) {
+    title.appendChild(menuElement('span', 'pryv-menu-acting',
+      ' (' + messages.ACTING_AS + ', ' + messages.VIA + ' ' + actingAs.delegate + ')'));
+  }
+  header.appendChild(title);
+  const close = menuElement('button', 'pryv-menu-close', '×');
+  close.type = 'button';
+  close.setAttribute('aria-label', messages.CLOSE);
+  close.addEventListener('click', () => loginBtn.closeMenu());
+  header.appendChild(close);
+  dialog.appendChild(header);
+
+  if (options.info) {
+    const serviceName = loginBtn.serviceInfo?.name || '';
+    const appId = loginBtn.authSettings.authRequest.requestingAppId;
+    dialog.appendChild(menuElement('div', 'pryv-menu-info', serviceName + ' · ' + messages.APP + ': ' + appId));
+  }
+
+  const profiles = confirmLogout ? [] : auth.profiles();
+  if (options.switch) {
+    const section = switchSection(loginBtn, messages, current, profiles);
+    if (section != null) dialog.appendChild(section);
+  }
+
+  const actions = menuElement('div', 'pryv-menu-actions');
+  if (options.account && auth.accountUrl() != null) {
+    const manageText = actingAs != null
+      ? (messages.MANAGE_ACCOUNT_OF || '').replace('{username}', current.username)
+      : messages.MANAGE_ACCOUNT;
+    const manage = menuElement('button', 'pryv-menu-account', manageText + ' ');
+    const arrow = menuElement('span', null, '↗');
+    arrow.setAttribute('aria-hidden', 'true');
+    manage.appendChild(arrow);
+    manage.type = 'button';
+    manage.addEventListener('click', () => {
+      auth.openAccountApp();
+      loginBtn.closeMenu();
+    });
+    actions.appendChild(manage);
+  }
+  if (options.logout) {
+    const logout = menuElement('button', 'pryv-menu-logout', messages.LOGOUT);
+    logout.type = 'button';
+    logout.addEventListener('click', () => {
+      loginBtn.closeMenu(true);
+      // Kept on the button (`pending`) so the re-init is awaited by whoever
+      // needs it, never left running unnoticed: a stray re-init would later
+      // consume whatever poll URL the page shows.
+      loginBtn.pending = confirmLogout
+        // SIGNOUT was emitted by the click already (legacy contract).
+        ? loginBtn.deleteAuthorizationData().then(() => auth.init()).then(() => {})
+        : auth.signOut();
+    });
+    if (confirmLogout) {
+      const cancel = menuElement('button', 'pryv-menu-cancel', messages.CANCEL);
+      cancel.type = 'button';
+      cancel.addEventListener('click', () => loginBtn.closeMenu());
+      actions.appendChild(cancel);
+    }
+    actions.appendChild(logout);
+    // "Log out" leaves the other remembered accounts; this one forgets them all
+    if (profiles.length > 1) {
+      const logoutAll = menuElement('button', 'pryv-menu-logout-all', messages.LOGOUT_ALL);
+      logoutAll.type = 'button';
+      logoutAll.addEventListener('click', () => {
+        loginBtn.closeMenu(true);
+        loginBtn.pending = auth.signOut({ all: true });
+      });
+      actions.appendChild(logoutAll);
+    }
+  }
+  dialog.appendChild(actions);
+
+  // Close on a click outside the dialog, not on a text selection that
+  // started inside it and ended outside.
+  let pressedOutside = false;
+  overlay.addEventListener('mousedown', (event) => { pressedOutside = event.target === overlay; });
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay && pressedOutside) loginBtn.closeMenu();
+    pressedOutside = false;
+  });
+
+  const focusables = () => Array.from(dialog.querySelectorAll('button'));
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      loginBtn.closeMenu();
+    } else if (event.key === 'Tab') {
+      const list = focusables();
+      if (list.length === 0) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  };
+  document.addEventListener('keydown', onKeyDown, true);
+
+  return { overlay, dialog, onKeyDown, focusables, previousFocus: document.activeElement, confirmLogout };
+}
+
+/**
+ * The account switcher: "Switch back to <delegate>" while acting for an
+ * account; otherwise the remembered accounts and "Another account..." (when
+ * the platform has account delegation). Null when there is nothing to offer.
+ */
+function switchSection (loginBtn, messages, current, profiles) {
+  const auth = loginBtn.auth;
+  const run = (action) => {
+    loginBtn.closeMenu();
+    loginBtn.pending = action().catch((e) => { console.log('Error while switching account', e); });
+  };
+  const section = menuElement('div', 'pryv-menu-switch');
+  if (current?.actingAs != null) {
+    const back = menuElement('button', 'pryv-menu-switch-back',
+      (messages.SWITCH_BACK || '').replace('{username}', current.actingAs.delegate));
+    back.type = 'button';
+    back.addEventListener('click', () => run(() => auth.switchTo(null)));
+    section.appendChild(back);
+    return section;
+  }
+  const delegation = loginBtn.serviceInfo?.features?.delegation === true;
+  if (profiles.length < 2 && !delegation) return null;
+  section.appendChild(menuElement('div', 'pryv-menu-switch-title', messages.USE_FOR));
+  profiles.forEach((p) => {
+    const item = menuElement('button', 'pryv-menu-profile', p.username + ' ');
+    item.type = 'button';
+    const note = p.actingAs != null
+      ? messages.VIA + ' ' + p.actingAs.delegate
+      : '(' + messages.ME + ')';
+    item.appendChild(menuElement('span', 'pryv-menu-note',
+      note + (p.available ? '' : ' · ' + messages.UNAVAILABLE)));
+    if (p.active) {
+      item.setAttribute('aria-current', 'true');
+    } else {
+      item.addEventListener('click', () => run(() => auth.switchTo(p.username)));
+    }
+    section.appendChild(item);
+  });
+  if (delegation) {
+    const other = menuElement('button', 'pryv-menu-add-account', messages.OTHER_ACCOUNT);
+    other.type = 'button';
+    other.addEventListener('click', () => run(() => auth.addAccount()));
+    section.appendChild(other);
+  }
+  return section;
 }
 
 function setupButton (loginBtn) {
@@ -16010,7 +11827,10 @@ class Connection {
    * @param {Object|Array} [params={}] - The params associated with this method
    * @param {string} [expectedKey] - If given, returns the value of this key or throws an error if not present
    * @returns {Promise<Object>} Promise resolving to the API result or the value of expectedKey
-   * @throws {Error} If .error is present in the response or expectedKey is missing
+   * @throws {Error} If .error is present in the response or expectedKey is missing.
+   *   The message names the method and the server's error id and message; the full
+   *   error (or result) is on `innerObject`. The call's params are never in the message:
+   *   they can carry passwords and tokens, and error messages end up in logs and on screen.
    */
   async apiOne (method, params = {}, expectedKey) {
     const result = await this.api([{ method, params }]);
@@ -16019,11 +11839,18 @@ class Connection {
       result[0].error ||
       (expectedKey != null && result[0][expectedKey] == null)
     ) {
-      const innerObject = result[0]?.error || result;
+      const error = result[0]?.error;
+      const innerObject = error || result;
+      let reason;
+      if (error) {
+        reason = [error.id, error.message].filter((v) => v != null && v !== '').join(': ') || 'error answer';
+      } else if (result[0] == null) {
+        reason = 'no result';
+      } else {
+        reason = `"${expectedKey}" missing in result`;
+      }
       throw new PryvError(
-        `Error for api method: "${method}" with params: ${JSON.stringify(
-          params
-        )} >> Result: ${JSON.stringify(innerObject)}"`,
+        `Error for api method: "${method}" >> ${reason}`,
         innerObject
       );
     }
@@ -16091,17 +11918,13 @@ class Connection {
         });
       }
       const resRequest = await callHandler(thisBatch);
-      // result checks
+      // result checks: the answer rides on `innerObject`, never in the message
+      // (results can hold tokens, e.g. from accesses.*)
       if (!resRequest || !Array.isArray(resRequest.results)) {
-        throw new Error(
-          'API call result is not an Array: ' + JSON.stringify(resRequest)
-        );
+        throw new PryvError('API call result is not an Array', resRequest);
       }
       if (resRequest.results.length !== thisBatch.length) {
-        throw new Error(
-          'API call result Array does not match request: ' +
-            JSON.stringify(resRequest)
-        );
+        throw new PryvError('API call result Array does not match request', resRequest);
       }
 
       // eventually call handleResult
@@ -16903,6 +12726,8 @@ module.exports = OAuth2Client;
 const utils = __webpack_require__(/*! ./utils.js */ "./node_modules/pryv/src/utils.js");
 const PryvError = __webpack_require__(/*! ./lib/PryvError.js */ "./node_modules/pryv/src/lib/PryvError.js");
 const MfaRequiredError = __webpack_require__(/*! ./lib/MfaRequiredError.js */ "./node_modules/pryv/src/lib/MfaRequiredError.js");
+const handoff = __webpack_require__(/*! ./lib/handoff.js */ "./node_modules/pryv/src/lib/handoff.js");
+const pollUrls = __webpack_require__(/*! ./lib/pollUrls.js */ "./node_modules/pryv/src/lib/pollUrls.js");
 // Connection is required at the end of this file to allow circular requires.
 const Assets = __webpack_require__(/*! ./ServiceAssets.js */ "./node_modules/pryv/src/ServiceAssets.js");
 
@@ -17101,9 +12926,8 @@ class Service {
     }
 
     if (!body || !body.token) {
-      throw new PryvError(
-        'Invalid login response: ' + JSON.stringify(body)
-      );
+      // The answer rides on `innerObject`, never in the message (it may hold secrets).
+      throw new PryvError('Invalid login response: no token', body);
     }
     return new Connection(
       Service.buildAPIEndpoint(await this.info(), username, body.token),
@@ -17152,9 +12976,7 @@ class Service {
     });
     if (!response.ok) throw PryvError.fromApiResponse(response, body);
     if (!body || !body.token) {
-      throw new PryvError(
-        'mfa.verify did not return a token: ' + JSON.stringify(body)
-      );
+      throw new PryvError('mfa.verify did not return a token', body);
     }
     return new Connection(
       Service.buildAPIEndpoint(await this.info(), userId, body.token),
@@ -17371,13 +13193,30 @@ class Service {
    * @param {Object} authRequest - The auth-request body
    * @param {string} authRequest.requestingAppId
    * @param {Array<{ streamId: string, level: string, defaultName: string }>} authRequest.requestedPermissions
+   * @param {Object} [authRequest.consent] - Says how the consent screen
+   *   should present each requested permission. `mandatory` and `optIn`
+   *   name permission ids (a stream permission's `streamId`, a feature
+   *   permission's `feature`); an id in neither list is optional and
+   *   shown pre-selected. Ignored by cores that predate it, so the flow
+   *   falls back to all-or-nothing rather than failing: the returned
+   *   `consent` tells you which happened.
+   * @param {boolean} [authRequest.consent.allowUserChoice=false] - false
+   *   means the user may only accept the whole set or deny.
+   * @param {string[]} [authRequest.consent.mandatory] - ids the user
+   *   cannot leave out.
+   * @param {string[]} [authRequest.consent.optIn] - ids offered NOT
+   *   pre-selected, so the user has to choose them.
    * @param {string} [authRequest.languageCode='en']
-   * @param {string|boolean} [authRequest.returnUrl]
+   * @param {string} [authRequest.returnURL] - URL the auth page returns
+   *   to after the decision, sent as is (the 'auto#' / 'self#' shortcuts
+   *   are resolved only by the sign-in button, not here).
    * @param {string} [authRequest.referer]
    * @param {Object} [authRequest.clientData]
    * @param {string} [authRequest.deviceName]
    * @param {number} [authRequest.expireAfter]
-   * @returns {Promise<{ key: string, authUrl: string, poll: string, pollRateMs: number }>}
+   * @returns {Promise<{ key: string, authUrl: string, poll: string, pollRateMs: number, consent?: Object }>}
+   *   `consent` is echoed back only by a core that understood the
+   *   annotations, which is how you detect support.
    * @throws {PryvError} on non-2xx
    */
   async startAccessRequest (authRequest) {
@@ -17393,28 +13232,42 @@ class Service {
     );
     if (!response.ok) throw PryvError.fromApiResponse(response, body);
     if (!body || !body.key || !body.poll) {
-      throw new PryvError(
-        'Invalid access-request response: ' + JSON.stringify(body)
-      );
+      throw new PryvError('Invalid access-request response: no key or poll', body);
     }
-    return {
+    const envelope = {
       key: body.key,
       authUrl: body.authUrl || body.url,
       poll: body.poll,
       pollRateMs: body.poll_rate_ms != null ? body.poll_rate_ms : body.pollRateMs
     };
+    // Present only when the core understood a `consent` sidecar. Absent
+    // means the annotations were ignored and the consent screen will be
+    // all-or-nothing, which a caller may want to know before showing the
+    // approve link.
+    if (body.consent != null) envelope.consent = body.consent;
+    // Same for consent invites: echoed only by a core that understood them.
+    if (body.cmcInvites != null) envelope.cmcInvites = body.cmcInvites;
+    // polling by key (pollAccessRequest, connectFromKey) then reaches the
+    // core that holds the request
+    pollUrls.remember(envelope.key, envelope.poll);
+    return envelope;
   }
 
   /**
    * Poll an in-progress access request once. Accepts either:
-   *   - a `key` returned by `startAccessRequest` (poll URL is built from
+   *   - a `key` returned by `startAccessRequest` (polls the poll URL the
+   *     server issued for it when this process started the request, else
    *     `serviceInfo.access + key`)
    *   - a full poll URL (use as-is — recommended, since the server-issued
-   *     URL is canonical and may include a different subdomain).
+   *     URL is canonical and may point at a specific core: on a multi-core
+   *     platform `access + key` can reach a core that does not know the
+   *     request).
    *
    * Returns the raw body. Inspect `body.status` to drive the flow:
    *   - `'NEED_SIGNIN'` → user has not interacted yet; keep polling.
-   *   - `'ACCEPTED'`    → `body.apiEndpoint` + `body.username` + `body.token` are set.
+   *   - `'ACCEPTED'`    → `body.apiEndpoint` + `body.username`, plus either
+   *     `body.token` (inline) or a one-time `body.handoff` key (shared-secret
+   *     delivery). Prefer `connectFromKey`, which handles both shapes.
    *   - `'REFUSED'`     → user declined.
    *
    * @param {string} keyOrPollUrl
@@ -17427,8 +13280,14 @@ class Service {
     }
     let pollUrl = keyOrPollUrl;
     if (!/^https?:\/\//.test(keyOrPollUrl)) {
-      const serviceInfo = await this.info();
-      pollUrl = serviceInfo.access + keyOrPollUrl;
+      // the core-specific URL the server issued, when this process started
+      // the request; `access + key` may reach another core on a multi-core
+      // platform
+      pollUrl = pollUrls.lookup(keyOrPollUrl);
+      if (pollUrl == null) {
+        const serviceInfo = await this.info();
+        pollUrl = serviceInfo.access + keyOrPollUrl;
+      }
     }
     const { response, body } = await utils.fetchGet(pollUrl);
     // 403 with status=REFUSED is the canonical "user declined" terminal
@@ -17449,23 +13308,47 @@ class Service {
    * `key` returned by the auth-flow (not the underlying token /
    * apiEndpoint), and uses this method to build a working `Connection`.
    *
-   * The implementation polls `<access>/<key>` once; the call MUST be
-   * made while the access is still in the ACCEPTED state (which
-   * persists until expiry — see `expireAfter` on the access request).
+   * The implementation polls the request once (at the server-issued poll
+   * URL when this process started it, else `<access>/<key>`, which may
+   * miss the request on a multi-core platform); the call MUST be
+   * made while the access request is still readable in the ACCEPTED
+   * state. Servers keep a decided request only for a short retention
+   * window after it is first polled (default 2 minutes, operator setting
+   * `access.terminalRetentionMs`), so call this promptly after the flow
+   * completes; afterwards the key is unknown. (`expireAfter` on the
+   * access request is the lifetime of the access created, not of the key.)
+   *
+   * When the request asked for shared-secret delivery the ACCEPTED body
+   * carries a one-time `handoff` key instead of the token; this redeems it
+   * exactly once and caches the result keyed by `key`, so it is safe to call
+   * more than once for the same key (the second call reuses the cache rather
+   * than hitting the already-consumed one-time secret). A retrieve that finds
+   * the secret gone throws a `PryvError` (id `credential-handoff-failed`);
+   * restart the auth request.
    *
    * @param {string} key - polling key from `startAccessRequest`
    * @returns {Promise<Connection>}
    * @throws {PryvError} if the key is not ACCEPTED (NEED_SIGNIN, REFUSED, ERROR)
+   *   or the hand-off secret could not be retrieved
    */
   async connectFromKey (key) {
     if (!key) {
       throw new PryvError('connectFromKey requires a key');
     }
+    // A prior resolve (this call, or the AuthController polling loop) may have
+    // already redeemed the one-time secret; reuse it rather than re-polling.
+    const cached = handoff.cacheGet(key);
+    if (cached != null) return new Connection(cached.apiEndpoint, this);
+
     const body = await this.pollAccessRequest(key);
     if (body.status !== 'ACCEPTED') {
       throw new PryvError(
         'connectFromKey: access is not ACCEPTED (status=' + body.status + ')'
       );
+    }
+    if (handoff.isHandoffBody(body)) {
+      const entry = await handoff.resolveHandoff(body, key);
+      return new Connection(entry.apiEndpoint, this);
     }
     if (!body.apiEndpoint) {
       throw new PryvError(
@@ -17689,6 +13572,9 @@ class ServiceAssets {
 module.exports = ServiceAssets;
 
 function loadCSS (url) {
+  // Once per page: the controller re-initializes (and reloads assets) on
+  // logout and on a cancelled logout.
+  if (document.getElementById(url) != null) return;
   const head = document.getElementsByTagName('head')[0];
   const link = document.createElement('link');
   link.id = url;
@@ -17839,6 +13725,9 @@ async function hmacSha256Hex (verifierSecret, message) {
  */
 async function create (connection, params) {
   const { signature, ...rest } = params || {};
+  /** The request body: built here, so its shape is wider than `params`
+   * (the HMAC form adds `keyHash` and a computed `signature`).
+   * @type {Record<string, any>} */
   const body = { ...rest };
   let key = null;
 
@@ -17851,12 +13740,12 @@ async function create (connection, params) {
       type: 'hmac-sha256',
       value: await hmacSha256Hex(signature.verifierSecret, random)
     };
-    const res = await connection.post('shared-secrets', body);
-    return { ...res.sharedSecret, key: res.sharedSecret.id + '.' + random };
+    const hmacRes = /** @type {any} */ (await connection.post('shared-secrets', body));
+    return { ...hmacRes.sharedSecret, key: hmacRes.sharedSecret.id + '.' + random };
   }
 
   if (signature != null) body.signature = signature;
-  const res = await connection.post('shared-secrets', body);
+  const res = /** @type {any} */ (await connection.post('shared-secrets', body));
   key = res.sharedSecret.key;
   return { ...res.sharedSecret, key };
 }
@@ -17892,8 +13781,15 @@ async function retrieve (apiEndpoint, key, options = {}) {
   });
   const parsed = await res.json();
   if (!res.ok) {
-    const err = new Error(parsed?.error?.message || 'Shared secret unavailable.');
-    err.id = parsed?.error?.id;
+    // The API error id and the creator's returnUrl ride on the Error so a
+    // caller can tell WHY it was refused and where to send the user next.
+    const err = /** @type {Error & { id?: string, returnUrl?: string }} */ (
+      new Error(parsed?.error?.message || 'Shared secret unavailable.')
+    );
+    // Prefer the fine machine id the method carries in `data.id`
+    // (e.g. `shared-secret-unavailable`) over the coarse HTTP id (`forbidden`),
+    // so a caller can tell a consumed/expired secret from a generic refusal.
+    err.id = parsed?.error?.data?.id || parsed?.error?.id;
     err.returnUrl = parsed?.error?.data?.returnUrl;
     throw err;
   }
@@ -18214,6 +14110,8 @@ class MfaRequiredError extends PryvError {
     this.id = (apiErr && apiErr.id) || 'mfa-required';
     this.status = response && response.status;
     this.response = { body, status: response && response.status };
+    // Read by name, but not printed with the error (like `innerObject`).
+    Object.defineProperty(this, 'mfaToken', { enumerable: false });
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, MfaRequiredError);
@@ -18269,6 +14167,10 @@ class PryvError extends Error {
     this.status = undefined;
     /** @type {{ body: any, status: number }|undefined} Raw response */
     this.response = undefined;
+    // `innerObject` and `response` hold raw platform answers: still readable and
+    // writable, but not enumerable, so `console.log(err)` does not print them.
+    Object.defineProperty(this, 'innerObject', { enumerable: false });
+    Object.defineProperty(this, 'response', { enumerable: false });
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, PryvError);
@@ -18563,6 +14465,155 @@ async function getEventStreamed (conn, queryParam, parser) {
 
 /***/ },
 
+/***/ "./node_modules/pryv/src/lib/handoff.js"
+/*!**********************************************!*\
+  !*** ./node_modules/pryv/src/lib/handoff.js ***!
+  \**********************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * Credential hand-off (shared-secret delivery) support for the auth-request
+ * flow.
+ *
+ * When an access request set `credentialHandoff: 'shared-secret'`, the ACCEPTED
+ * poll body carries a one-time `handoff.key` and a token-less `apiEndpoint`
+ * instead of the token. This module redeems that key ONCE against the user's
+ * core (`shared-secrets/retrieve`, no credentials needed) and turns the result
+ * into a token-bearing apiEndpoint the rest of the library already understands.
+ *
+ * A module-level cache keyed by the auth-flow poll key holds the result for a
+ * short TTL: `pryv.connectFromKey(key, ...)` builds a fresh `Service` on every
+ * call and the `AuthController` polling loop also reads the ACCEPTED body, so
+ * without a shared cache the one-shot secret would be redeemed twice and the
+ * second read would fail. Whoever redeems first fills the cache; the others
+ * reuse it.
+ */
+
+const utils = __webpack_require__(/*! ../utils */ "./node_modules/pryv/src/utils.js");
+const SharedSecrets = __webpack_require__(/*! ../SharedSecrets */ "./node_modules/pryv/src/SharedSecrets.js");
+const PryvError = __webpack_require__(/*! ./PryvError */ "./node_modules/pryv/src/lib/PryvError.js");
+
+/** How long a redeemed credential stays cached (10 min, or until sign-out). */
+const TTL_MS = 10 * 60 * 1000;
+
+/** poll key -> { apiEndpoint, username, token, expiresAt } */
+const cache = new Map();
+/** poll key -> Promise, so concurrent resolves for one key redeem once. */
+const inflight = new Map();
+
+function cacheGet (key) {
+  if (key == null) return null;
+  const entry = cache.get(key);
+  if (entry == null) return null;
+  if (Date.now() > entry.expiresAt) {
+    cache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+/** Drop expired entries so cached tokens do not linger for the process
+ * lifetime in a long-running Node service (a browser page is short-lived, but
+ * the same module runs server-side too). Called on every set; the map holds
+ * one entry per in-flight sign-in, so the scan is trivially small. */
+function sweep () {
+  const now = Date.now();
+  for (const [k, entry] of cache) {
+    if (now > entry.expiresAt) cache.delete(k);
+  }
+}
+
+function cacheSet (key, value) {
+  if (key == null) return;
+  sweep();
+  cache.set(key, Object.assign({}, value, { expiresAt: Date.now() + TTL_MS }));
+}
+
+/** Drop one entry (sign-out). Passing no key is an explicit clear-all. */
+function cacheClear (key) {
+  if (arguments.length === 0) cache.clear();
+  else cache.delete(key);
+}
+
+/** Does an ACCEPTED poll body deliver by shared-secret hand-off? */
+function isHandoffBody (body) {
+  return body != null && body.handoff != null &&
+    body.handoff.type === 'shared-secret' && typeof body.handoff.key === 'string';
+}
+
+/**
+ * Redeem a hand-off poll body into a token-bearing apiEndpoint, caching the
+ * result under `cacheKey`. Throws a `PryvError` (id `credential-handoff-failed`)
+ * telling the caller to restart the auth request when the one-time secret is
+ * gone (already redeemed, expired) or the retrieve fails.
+ *
+ * @param {Object} pollBody an ACCEPTED body carrying `apiEndpoint` + `handoff.key`
+ * @param {string} [cacheKey] the auth-flow poll key, so a repeat resolve reuses this
+ * @returns {Promise<{ apiEndpoint: string, username: string, token: string }>}
+ */
+async function resolveHandoff (pollBody, cacheKey) {
+  const cached = cacheGet(cacheKey);
+  if (cached != null) return cached;
+  // De-duplicate concurrent redemptions of the same key (e.g. React
+  // StrictMode double-invoking an effect that calls connectFromKey twice):
+  // both would otherwise miss the cache and the second would 403 the
+  // already-consumed one-time secret.
+  if (cacheKey != null && inflight.has(cacheKey)) return inflight.get(cacheKey);
+
+  const promise = doResolve(pollBody, cacheKey);
+  if (cacheKey == null) return promise;
+  inflight.set(cacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    inflight.delete(cacheKey);
+  }
+}
+
+async function doResolve (pollBody, cacheKey) {
+  let result;
+  try {
+    result = await SharedSecrets.retrieve(pollBody.apiEndpoint, pollBody.handoff.key);
+  } catch (err) {
+    const pe = new PryvError(
+      'Credential hand-off could not be retrieved (' +
+        (err && (err.id || err.message)) + '); restart the auth request.',
+      err
+    );
+    // Stable id for callers that branch on the hand-off failure; the finer
+    // reason (`shared-secret-unavailable`) rides on `innerObject.id`, which
+    // `SharedSecrets.retrieve` now takes from the refusal's `data.id`.
+    pe.id = 'credential-handoff-failed';
+    throw pe;
+  }
+
+  const secret = (result && result.secret) || {};
+  if (typeof secret.token !== 'string' || typeof secret.apiEndpoint !== 'string') {
+    const pe = new PryvError('Credential hand-off returned an incomplete secret.');
+    pe.id = 'credential-handoff-failed';
+    throw pe;
+  }
+
+  // The secret's apiEndpoint may be token-less or token-bearing; rebuild a
+  // canonical token-bearing endpoint from the authoritative `token` so the
+  // rest of the library (Connection, the LoginButton cookie) is unchanged.
+  const { endpoint } = utils.extractTokenAndAPIEndpoint(secret.apiEndpoint);
+  const apiEndpoint = utils.buildAPIEndpoint({ endpoint, token: secret.token });
+  const entry = { apiEndpoint, username: secret.username, token: secret.token };
+  cacheSet(cacheKey, entry);
+  return entry;
+}
+
+module.exports = { resolveHandoff, isHandoffBody, cacheGet, cacheSet, cacheClear };
+
+
+/***/ },
+
 /***/ "./node_modules/pryv/src/lib/json-parser.js"
 /*!**************************************************!*\
   !*** ./node_modules/pryv/src/lib/json-parser.js ***!
@@ -18723,6 +14774,87 @@ module.exports = function (foreachEvent, includeDeletions) {
     foreachEvent(JSON.parse(strEvent));
   }
 };
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/lib/pollUrls.js"
+/*!***********************************************!*\
+  !*** ./node_modules/pryv/src/lib/pollUrls.js ***!
+  \***********************************************/
+(module) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * The poll URL the server issued for each auth request started in this
+ * process, by key.
+ *
+ * A pending auth request lives on the core that created it, and its poll URL
+ * points at that core. The service's `access` URL may reach any core of a
+ * multi-core platform, so polling `access + key` can land on a core that does
+ * not know the request. Polling by key therefore uses the server-issued URL
+ * when this process started the request, and falls back to `access + key`
+ * only for a key it never saw.
+ *
+ * Keys are long random server values, so one process-wide map (like the
+ * hand-off cache) serves every Service.
+ */
+
+/** Most entries kept (oldest dropped first), sized for a busy Node service. */
+const MAX_ENTRIES = 1000;
+/** How long an entry is kept: well beyond any auth request's lifetime. */
+const TTL_MS = 60 * 60 * 1000;
+
+/** key -> { pollUrl, expiresAt }, in insertion order */
+const pollUrls = new Map();
+
+/** Drop expired entries (called on every remember). */
+function sweep () {
+  const now = Date.now();
+  for (const [key, entry] of pollUrls) {
+    if (now > entry.expiresAt) pollUrls.delete(key);
+  }
+}
+
+/**
+ * Remember the poll URL of an auth request (ignored unless both look valid).
+ * @param {string} key
+ * @param {string} pollUrl
+ */
+function remember (key, pollUrl) {
+  if (typeof key !== 'string' || key === '' || typeof pollUrl !== 'string' || !/^https?:\/\//.test(pollUrl)) return;
+  sweep();
+  pollUrls.delete(key);
+  pollUrls.set(key, { pollUrl, expiresAt: Date.now() + TTL_MS });
+  while (pollUrls.size > MAX_ENTRIES) pollUrls.delete(pollUrls.keys().next().value);
+}
+
+/**
+ * The server-issued poll URL of `key`, or null when this process did not
+ * start that request (or it expired).
+ * @param {string} key
+ * @returns {string|null}
+ */
+function lookup (key) {
+  const entry = pollUrls.get(key);
+  if (entry == null) return null;
+  if (Date.now() > entry.expiresAt) {
+    pollUrls.delete(key);
+    return null;
+  }
+  return entry.pollUrl;
+}
+
+/** Forget every entry. */
+function clear () {
+  pollUrls.clear();
+}
+
+module.exports = { remember, lookup, clear, MAX_ENTRIES, TTL_MS };
 
 
 /***/ },
@@ -19073,7 +15205,13 @@ const utils = module.exports = {
     url.replace(QUERY_REGEXP,
       // @ts-ignore - replace callback is used for side effects
       function (m, key, value) {
-        vars[key] = decodeURIComponent(value);
+        // a malformed escape (`%` not followed by hex) is kept as is rather
+        // than throwing: any page URL reaches this parser
+        try {
+          vars[key] = decodeURIComponent(value);
+        } catch (e) {
+          vars[key] = value;
+        }
       });
     return vars;
   }
@@ -19830,6 +15968,16 @@ class HDSItemDef {
     get isDeprecated() {
         return this.#data.deprecated === true;
     }
+    /**
+     * Whether this is a system item (`type: system`, e.g. `sync-status`). System
+     * items carry state written by software (a connector's status), not data a
+     * user enters: they stay readable and requestable like any item, but must not
+     * be offered in pickers or rendered as form fields. See
+     * `data-model/documentation/SYNC-STATUS.md`.
+     */
+    get isSystem() {
+        return this.#data.type === 'system';
+    }
     get reminder() {
         return this.#data.reminder || null;
     }
@@ -19929,6 +16077,54 @@ class HDSItemDef {
      * Falls back to plain `(streamId in event.streamIds, type === eventType)`
      * if the model handle isn't available.
      */
+    /**
+     * Event types that count as "this concept was recorded", including the ones
+     * belonging to same-stream twins.
+     *
+     * **Why this is not just `eventTypes`.** A concept can be recorded at more
+     * than one fidelity on the same stream: a presence marker
+     * (`symptom-pain-headache`, `activity/plain`) for sources that only know an
+     * occurrence, and a graded twin (`symptom-pain-headache-severity`,
+     * `ratio/proportion`). A form that asks for the graded item is still
+     * *satisfied* by a bridge that can only report presence — asking the subject
+     * to re-enter what a working bridge already sent is the bug this exists for
+     * (`B-2026-09-15-5`).
+     *
+     * **Use it for "has this been recorded?" — completion, reminders, task
+     * prompts. Never use it to read a value.** The types collected here are
+     * deliberately *not* interchangeable as data: `body-urine-hormones-lh`
+     * (IU/L) and `fertility-hormone-lh` (mg/L) share a stream, and reading one
+     * as the other would be wrong by a factor that looks plausible. Resolve the
+     * event through `forEvent` before interpreting its content.
+     *
+     * Falls back to this item's own `eventTypes` when the itemDef was built
+     * without a model handle.
+     */
+    get satisfyingEventTypes() {
+        if (!this.#model)
+            return this.eventTypes;
+        const streamId = this.#data.streamId;
+        if (typeof streamId !== 'string')
+            return this.eventTypes;
+        const types = new Set(this.eventTypes);
+        for (const sibling of this.#model.itemsDefs.forStreamId(streamId)) {
+            for (const t of sibling.eventTypes)
+                types.add(t);
+        }
+        return [...types];
+    }
+    /**
+     * Whether `event` counts as this concept having been recorded, accepting a
+     * same-stream twin. See {@link satisfyingEventTypes} for the read-vs-record
+     * distinction — this answers "recorded?", not "what value?".
+     */
+    satisfiedByEvent(event) {
+        if (!event || event.type == null || !Array.isArray(event.streamIds))
+            return false;
+        if (!this.satisfyingEventTypes.includes(event.type))
+            return false;
+        return event.streamIds.includes(this.#data.streamId);
+    }
     matchesEvent(event) {
         if (!event || event.type == null || !Array.isArray(event.streamIds))
             return false;
@@ -20573,13 +16769,33 @@ class HDSModelItemsDefs {
         return res;
     }
     /**
-     * get all non-deprecated itemDefs. Use this for any UI that lets a user
-     * pick an item to create new data points (form builders, item picker
-     * sheets, data-model browser default listing). Deprecated items remain
-     * resolvable via `forKey` / `forEvent` so existing events still render.
+     * get all non-deprecated, non-system itemDefs. Use this for any UI that lets
+     * a user pick an item to create new data points (form builders, item picker
+     * sheets, data-model browser default listing). Deprecated and system items
+     * remain resolvable via `forKey` / `forEvent` so existing events still render.
      */
     getAllActive() {
-        return this.getAll().filter((itemDef) => !itemDef.isDeprecated);
+        return this.getAll().filter((itemDef) => !itemDef.isDeprecated && !itemDef.isSystem);
+    }
+    /**
+     * Every itemDef whose `streamId` is `streamId`, deprecated ones included.
+     *
+     * A stream can carry more than one item because the same concept is recorded
+     * at different fidelities: `symptom-pain-headache` (`activity/plain`, a
+     * presence marker for sources that record occurrence only) and
+     * `symptom-pain-headache-severity` (`ratio/proportion`, the graded twin) sit
+     * on `symptom-pain-headache` together. Data-model 3.2.0 published that
+     * contract in prose — the items describe the pairing in their `description`
+     * — but nothing links a pair in machine-readable form, so the shared
+     * `streamId` is what a consumer has to go on.
+     */
+    forStreamId(streamId) {
+        const res = [];
+        for (const [key, data] of Object.entries(this.#model.modelData.items)) {
+            if (data?.streamId === streamId)
+                res.push(this.forKey(key));
+        }
+        return res;
     }
     /**
      * get item for a key
@@ -21623,7 +17839,7 @@ function formatWithItemDef(event, content, itemDef, model) {
         return event.type === 'activity/plain' ? 'Yes' : String(content);
     }
     if (type === 'select') {
-        return formatSelect(event, content, itemDef);
+        return formatSelect(event, content, itemDef, model);
     }
     if (type === 'multi-select') {
         return formatMultiSelect(content, itemDef);
@@ -21805,7 +18021,21 @@ function formatBloodPressure(content) {
     const base = `${systolic}/${diastolic}`;
     return (rate != null) ? `${base} ♥${rate}` : base;
 }
-function formatSelect(event, content, itemDef) {
+/**
+ * A `select` whose stored value matches no option still has to render.
+ *
+ * When the value is a plain number we hand it to `formatNumber` rather than stringifying it,
+ * because the eventType may carry meaning the option list does not cover. `test-result/scale`
+ * is the case that forced this: data-model 3.12.0 made `fertility-test-opk` and
+ * `fertility-test-pregnancy` `type: select` with Negative / Indeterminate / Positive at
+ * -1 / 0 / 1, which is right for data entry — but the scale is continuous, and events already
+ * stored carry partial values. Those matched no option and came out as a bare `0.56` instead of
+ * `Positive 56%`, silently degrading text in every consumer (`[EST17d]`/`[EST17e]`).
+ *
+ * Scoped to the no-prefix case: the `ratio/generic` object branch has already put the raw
+ * numbers in `prefix`, so running them through `formatNumber` would render them twice.
+ */
+function formatSelect(event, content, itemDef, model) {
     let valueForSelect = content;
     let prefix = '';
     if (event.type === 'ratio/generic' && typeof content === 'object') {
@@ -21820,6 +18050,9 @@ function formatSelect(event, content, itemDef) {
             const truncated = text.length > 50 ? text.slice(0, 50) + '...' : text;
             return prefix + truncated;
         }
+    }
+    if (prefix === '' && typeof valueForSelect === 'number' && model) {
+        return formatNumber(event.type, valueForSelect, model);
     }
     return prefix + String(valueForSelect);
 }
@@ -22363,7 +18596,11 @@ function mergeReminders(sources) {
  */
 function findLastEvent(itemDef, events) {
     const streamId = itemDef.data.streamId;
-    const types = new Set(itemDef.eventTypes);
+    // Twin-aware: a presence event satisfies a graded item on the same stream, so
+    // a reminder does not fire for something a bridge already reported
+    // (`B-2026-09-15-5`). Falls back to the item's own types on an itemDef built
+    // without a model handle. This decides "was it recorded", never "what value".
+    const types = new Set(itemDef.satisfyingEventTypes ?? itemDef.eventTypes);
     let latest;
     for (const e of events) {
         if (!types.has(e.type))
@@ -24147,7 +20384,8 @@ class Contact {
             // chat stream. Prefer that server-granted stream (authoritative: it exists
             // and is writable); else derive from the remote chat stream's scope; else
             // fall back to the legacy patientScopeStreamId. (`clientData.cmc.appCode`
-            // is null on counterparty accesses, so the scope can't come from appCode.)
+            // is only stamped on counterparty accesses by cores from 2026-07 on, and is
+            // null on older ones, so the scope can't come from appCode.)
             const grantedChat = (access.permissions ?? []).find(p => typeof p.streamId === 'string' &&
                 p.streamId.endsWith(`:chats:${peerSlug}`) &&
                 (p.level === 'contribute' || p.level === 'manage'));
@@ -24553,7 +20791,7 @@ exports.Questionnaire = Questionnaire;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
+exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = exports.diffFormSpecWithTemplate = exports.diffTemplateScope = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
 const AppManagingAccount_ts_1 = __webpack_require__(/*! ./AppManagingAccount.js */ "./ts/appTemplates/AppManagingAccount.ts");
 Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_ts_1.AppManagingAccount; } }));
 const AppClientAccount_ts_1 = __webpack_require__(/*! ./AppClientAccount.js */ "./ts/appTemplates/AppClientAccount.ts");
@@ -24569,6 +20807,27 @@ Object.defineProperty(exports, "Questionnaire", ({ enumerable: true, get: functi
 var bridgeAccess_ts_1 = __webpack_require__(/*! ./bridgeAccess.js */ "./ts/appTemplates/bridgeAccess.ts");
 Object.defineProperty(exports, "getOrCreateBridgeAccess", ({ enumerable: true, get: function () { return bridgeAccess_ts_1.getOrCreateBridgeAccess; } }));
 Object.defineProperty(exports, "ensureBridgeAccess", ({ enumerable: true, get: function () { return bridgeAccess_ts_1.ensureBridgeAccess; } }));
+// Catalogue connectors: matching rule, connector access, status; hook executor; offer streams.
+var connectors_ts_1 = __webpack_require__(/*! ./connectors.js */ "./ts/appTemplates/connectors.ts");
+Object.defineProperty(exports, "CONNECTOR_STATUS_TYPE", ({ enumerable: true, get: function () { return connectors_ts_1.CONNECTOR_STATUS_TYPE; } }));
+Object.defineProperty(exports, "connectorCmcAppCode", ({ enumerable: true, get: function () { return connectors_ts_1.connectorCmcAppCode; } }));
+Object.defineProperty(exports, "connectorIdFromCmcAppCode", ({ enumerable: true, get: function () { return connectors_ts_1.connectorIdFromCmcAppCode; } }));
+Object.defineProperty(exports, "findConnectorAccesses", ({ enumerable: true, get: function () { return connectors_ts_1.findConnectorAccesses; } }));
+Object.defineProperty(exports, "connectorAccessName", ({ enumerable: true, get: function () { return connectors_ts_1.connectorAccessName; } }));
+Object.defineProperty(exports, "syncStatusLeafFor", ({ enumerable: true, get: function () { return connectors_ts_1.syncStatusLeafFor; } }));
+Object.defineProperty(exports, "connectorAccessRefusal", ({ enumerable: true, get: function () { return connectors_ts_1.connectorAccessRefusal; } }));
+Object.defineProperty(exports, "getOrCreateConnectorAccess", ({ enumerable: true, get: function () { return connectors_ts_1.getOrCreateConnectorAccess; } }));
+Object.defineProperty(exports, "disconnectedStatusContent", ({ enumerable: true, get: function () { return connectors_ts_1.disconnectedStatusContent; } }));
+Object.defineProperty(exports, "markConnectorDisconnected", ({ enumerable: true, get: function () { return connectors_ts_1.markConnectorDisconnected; } }));
+var hookExecutor_ts_1 = __webpack_require__(/*! ./hookExecutor.js */ "./ts/appTemplates/hookExecutor.ts");
+Object.defineProperty(exports, "expand", ({ enumerable: true, get: function () { return hookExecutor_ts_1.expand; } }));
+Object.defineProperty(exports, "executeHook", ({ enumerable: true, get: function () { return hookExecutor_ts_1.executeHook; } }));
+Object.defineProperty(exports, "executeDisconnect", ({ enumerable: true, get: function () { return hookExecutor_ts_1.executeDisconnect; } }));
+Object.defineProperty(exports, "UnresolvedVariableError", ({ enumerable: true, get: function () { return hookExecutor_ts_1.UnresolvedVariableError; } }));
+Object.defineProperty(exports, "HookInitiateError", ({ enumerable: true, get: function () { return hookExecutor_ts_1.HookInitiateError; } }));
+var offerStreams_ts_1 = __webpack_require__(/*! ./offerStreams.js */ "./ts/appTemplates/offerStreams.ts");
+Object.defineProperty(exports, "offerStreamsToCreate", ({ enumerable: true, get: function () { return offerStreams_ts_1.offerStreamsToCreate; } }));
+Object.defineProperty(exports, "offerStreamsToApiCalls", ({ enumerable: true, get: function () { return offerStreams_ts_1.offerStreamsToApiCalls; } }));
 var itemLabels_ts_1 = __webpack_require__(/*! ./itemLabels.js */ "./ts/appTemplates/itemLabels.ts");
 Object.defineProperty(exports, "getSectionItemLabels", ({ enumerable: true, get: function () { return itemLabels_ts_1.getSectionItemLabels; } }));
 Object.defineProperty(exports, "collectItemLabelsFromSections", ({ enumerable: true, get: function () { return itemLabels_ts_1.collectItemLabelsFromSections; } }));
@@ -24590,6 +20849,19 @@ Object.defineProperty(exports, "loadTemplate", ({ enumerable: true, get: functio
 Object.defineProperty(exports, "loadTemplateFromUrl", ({ enumerable: true, get: function () { return loader_ts_1.loadTemplateFromUrl; } }));
 Object.defineProperty(exports, "isCustomFieldDeclaration", ({ enumerable: true, get: function () { return loader_ts_1.isCustomFieldDeclaration; } }));
 Object.defineProperty(exports, "isExistingStreamRef", ({ enumerable: true, get: function () { return loader_ts_1.isExistingStreamRef; } }));
+// Plan 108 — data-set templates published by apps (hds-dataset.json).
+var datasetTemplate_ts_1 = __webpack_require__(/*! ./datasetTemplate.js */ "./ts/appTemplates/datasetTemplate.ts");
+Object.defineProperty(exports, "templateScope", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.templateScope; } }));
+Object.defineProperty(exports, "templateScopeHash", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.templateScopeHash; } }));
+Object.defineProperty(exports, "diffTemplateScope", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.diffTemplateScope; } }));
+Object.defineProperty(exports, "diffFormSpecWithTemplate", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.diffFormSpecWithTemplate; } }));
+Object.defineProperty(exports, "semverBump", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.semverBump; } }));
+Object.defineProperty(exports, "templateToFormSpec", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.templateToFormSpec; } }));
+Object.defineProperty(exports, "templateSource", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.templateSource; } }));
+Object.defineProperty(exports, "withAppPrivatePermissions", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.withAppPrivatePermissions; } }));
+var templateTypes_ts_1 = __webpack_require__(/*! ./templateTypes.js */ "./ts/appTemplates/templateTypes.ts");
+Object.defineProperty(exports, "DATASET_TEMPLATE_FORMAT", ({ enumerable: true, get: function () { return templateTypes_ts_1.DATASET_TEMPLATE_FORMAT; } }));
+Object.defineProperty(exports, "APP_PRIVATE_PURPOSE", ({ enumerable: true, get: function () { return templateTypes_ts_1.APP_PRIVATE_PURPOSE; } }));
 
 
 /***/ },
@@ -24640,6 +20912,7 @@ exports.getOrCreateBridgeAccess = getOrCreateBridgeAccess;
 exports.ensureBridgeAccess = ensureBridgeAccess;
 const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 /**
  * Get or create a bridge access on a user's account.
  * Looks up by name; if found, returns existing. If not, creates new.
@@ -24658,6 +20931,23 @@ async function getOrCreateBridgeAccess(connection, options) {
             updated: false
         };
     }
+    // Build the model's stream hierarchy BEFORE minting the access.
+    //
+    // Pryv's `accesses.create` auto-creates any stream named by a permission's
+    // `defaultName` — but FLAT, at root. So on an account that does not already have
+    // the tree, a permission on `body-temperature-basal` yielded a root-level stream
+    // instead of `body > body-temperature > body-temperature-basal`. The bridge cannot
+    // repair it afterwards: its scoped access is `forbidden` from creating the model
+    // parents, which is why bridge-tempdrop logged exactly that and carried on.
+    //
+    // The comment in bridge-tempdrop's ensureBaseStreams assumed "the webapp provisions
+    // [the parents] when it mints the access". Nothing did — this is now the code that
+    // makes that true, and it fixes every bridge, not just Tempdrop.
+    //
+    // Best-effort by design: a model that is not loaded, or a stream the model does not
+    // know (a bridge's own home stream such as `bridge-tempdrop`), must not block the
+    // connect. Those keep the existing flat-at-root behaviour, which is correct for them.
+    await ensureModelStreamHierarchy(connection, options.permissions);
     const access = await connection.apiOne('accesses.create', {
         name: options.name,
         permissions: options.permissions,
@@ -24669,6 +20959,64 @@ async function getOrCreateBridgeAccess(connection, options) {
         created: true,
         updated: false
     };
+}
+/**
+ * Create the model-defined parent chain for every permission streamId the model
+ * knows about, root-first, on the user's own (personal) connection.
+ *
+ * Idempotent: `item-already-exists` is the normal result on an account that already
+ * has the tree. Never throws — see the rationale at the call site.
+ */
+async function ensureModelStreamHierarchy(connection, permissions) {
+    let toCreate = [];
+    try {
+        const modelStreams = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams;
+        const seen = new Set();
+        for (const permission of permissions) {
+            const streamId = permission.streamId;
+            if (typeof streamId !== 'string')
+                continue;
+            // Not a model stream (e.g. a bridge's own home stream) — leave it to defaultName.
+            if (modelStreams.getDataById(streamId, false) == null)
+                continue;
+            // getParentsIds `unshift`s, so the chain is ALREADY root-first:
+            // ['body', 'body-temperature', 'body-temperature-basal']. Iterate forward — a
+            // parent must exist before its child, because `streams.create` calls in one
+            // batch do not see each other and a forward reference fails
+            // `unknown-referenced-resource`. (getNecessaryListForItems walks this backwards
+            // only so it can `break` early on a known stream, and reverses afterwards.)
+            const chain = modelStreams.getParentsIds(streamId, false, [streamId]);
+            for (const id of chain) {
+                if (seen.has(id))
+                    continue;
+                seen.add(id);
+                const data = modelStreams.getDataById(id, false);
+                if (data == null)
+                    continue;
+                toCreate.push({ id, parentId: data.parentId ?? null, name: data.name });
+            }
+        }
+    }
+    catch (e) {
+        logger.warn(`getOrCreateBridgeAccess: could not resolve model streams, falling back to defaultName: ${e?.message ?? e}`);
+        toCreate = [];
+    }
+    if (toCreate.length === 0)
+        return;
+    try {
+        const results = await connection.api(toCreate.map((s) => ({ method: 'streams.create', params: s })));
+        for (let i = 0; i < results.length; i++) {
+            const r = results[i];
+            if (r?.stream != null)
+                continue;
+            if (r?.error?.id === 'item-already-exists')
+                continue;
+            logger.warn(`getOrCreateBridgeAccess: could not create stream ${toCreate[i]?.id}: ${r?.error?.id ?? 'unknown'}`);
+        }
+    }
+    catch (e) {
+        logger.warn(`getOrCreateBridgeAccess: stream hierarchy creation failed: ${e?.message ?? e}`);
+    }
 }
 /**
  * Get or create a bridge access, with optional permission update detection.
@@ -24695,6 +21043,9 @@ async function ensureBridgeAccess(connection, options) {
         const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
         const existing = accesses.find((a) => a.name === options.name);
         if (!existing) {
+            // Same reason as in getOrCreateBridgeAccess: build the model hierarchy before
+            // `accesses.create`, or `defaultName` creates the streams flat at root.
+            await ensureModelStreamHierarchy(connection, options.permissions);
             const access = await connection.apiOne('accesses.create', {
                 name: options.name,
                 permissions: options.permissions,
@@ -24769,6 +21120,330 @@ function permissionsMatch(a, b) {
 
 /***/ },
 
+/***/ "./ts/appTemplates/connectors.ts"
+/*!***************************************!*\
+  !*** ./ts/appTemplates/connectors.ts ***!
+  \***************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Catalogue connectors (`bridge-<x>` entries of the app catalogue) seen from the
+ * user's own account: which accesses are "the user's connection" to a connector,
+ * the connector's minimal access used to start a connect, and the
+ * `sync-status/connector-v1` status the user's side may have to set itself.
+ *
+ * Shared by the HDS webapp and the account app's `/connect`, so that both apply
+ * the same rule. Everything here runs with the user's personal connection; the
+ * personal token itself is never handed to a connector.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CONNECTOR_STATUS_TYPE = void 0;
+exports.connectorCmcAppCode = connectorCmcAppCode;
+exports.connectorIdFromCmcAppCode = connectorIdFromCmcAppCode;
+exports.findConnectorAccesses = findConnectorAccesses;
+exports.connectorAccessName = connectorAccessName;
+exports.syncStatusLeafFor = syncStatusLeafFor;
+exports.connectorAccessRefusal = connectorAccessRefusal;
+exports.getOrCreateConnectorAccess = getOrCreateConnectorAccess;
+exports.disconnectedStatusContent = disconnectedStatusContent;
+exports.markConnectorDisconnected = markConnectorDisconnected;
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+/** Event type of a connector's status (data-model `sync-status/connector-v1`). */
+exports.CONNECTOR_STATUS_TYPE = 'sync-status/connector-v1';
+// ---- Matching rule ---- //
+/**
+ * The CMC app code a connector invites with: catalogue id `bridge-<x>` →
+ * `hds-bridge-<x>`. Null for an id that is not a bridge.
+ */
+function connectorCmcAppCode(catalogueId) {
+    return /^bridge-[a-z0-9-]+$/.test(catalogueId) ? 'hds-' + catalogueId : null;
+}
+/** The catalogue id behind a CMC app code: `hds-bridge-<x>` → `bridge-<x>`, else null. */
+function connectorIdFromCmcAppCode(appCode) {
+    if (typeof appCode !== 'string')
+        return null;
+    const m = /^hds-(bridge-[a-z0-9-]+)$/.exec(appCode);
+    return m == null ? null : m[1];
+}
+/**
+ * The user's connection to catalogue entry `catalogueId`: every access, not
+ * deleted and not expired, that is either
+ * - a CMC counterparty access (`clientData.cmc.role === 'counterparty'`) whose
+ *   `appCode` is `connectorCmcAppCode(catalogueId)`, or
+ * - an `app` or `shared` access named exactly `catalogueId`: a plain-access connector's data access
+ *   (bridge-tempdrop), or a bridge from before CMC. `getOrCreateBridgeAccess` / `ensureBridgeAccess` create
+ *   it without a type, so the core makes it `shared`.
+ *
+ * Several entries are orphans of earlier double connects. Newest first.
+ *
+ * `appCode` is declared by the inviter: an account inviting under a bridge's
+ * app code matches as that bridge. Use the result for the user's own actions on
+ * those accesses (resync, revoke), not as proof of who the counterparty is.
+ *
+ * @param accesses the user's `accesses.get` result (personal token)
+ */
+function findConnectorAccesses(accesses, catalogueId, nowSeconds = Date.now() / 1000) {
+    const appCode = connectorCmcAppCode(catalogueId);
+    const found = [];
+    for (const access of accesses ?? []) {
+        if (access == null || access.deleted != null)
+            continue;
+        if (typeof access.expires === 'number' && access.expires <= nowSeconds)
+            continue;
+        const cmc = access.clientData?.cmc;
+        if (cmc?.role === 'counterparty') {
+            if (appCode != null && cmc.appCode === appCode)
+                found.push({ access, kind: 'cmc' });
+        }
+        else if ((access.type === 'app' || access.type === 'shared') && access.name === catalogueId) {
+            found.push({ access, kind: 'legacy' });
+        }
+    }
+    return found.sort((x, y) => (y.access.created ?? 0) - (x.access.created ?? 0));
+}
+// ---- The connector's minimal access ---- //
+/**
+ * Name of the connector's own access on the user's account: `<catalogue id>-connect`
+ * (`bridge-mira-connect`). Not the bare id, which older flows use for an access
+ * with broader rights.
+ */
+function connectorAccessName(catalogueId) {
+    return `${catalogueId}-connect`;
+}
+/**
+ * The `sync-status` leaf of a connector: `bridge-mira` → `sync-status-mira`. The
+ * caller checks the leaf exists in the model.
+ */
+function syncStatusLeafFor(catalogueId) {
+    return 'sync-status-' + catalogueId.replace(/^bridge-/, '');
+}
+async function apiOne(connection, method, params) {
+    const [res] = await connection.api([{ method, params }]);
+    if (res == null)
+        throw new Error(`${method}: no result`);
+    if (res.error)
+        throw Object.assign(new Error(res.error.message ?? res.error.id ?? method), { id: res.error.id });
+    return res;
+}
+function apiEndpointOf(connection, access) {
+    if (typeof access.apiEndpoint === 'string' && access.apiEndpoint !== '')
+        return access.apiEndpoint;
+    if (typeof access.token !== 'string' || access.token === '')
+        throw new Error('connector access has no token');
+    return patchedPryv_ts_1.pryv.utils.buildAPIEndpoint({ endpoint: connection.endpoint, token: access.token });
+}
+/**
+ * The stream permissions of `access` as granted, minus what the core adds on its
+ * own: feature entries and the two entries injected into every non-personal
+ * access (`:_system:account` at `none`, `:_audit:access-<own id>` at `read`).
+ */
+function grantedStreamPermissions(access) {
+    return (access.permissions ?? []).filter((p) => {
+        if (p == null || p.streamId == null)
+            return false;
+        if (p.streamId === ':_system:account' && p.level === 'none')
+            return false;
+        if (access.id != null && p.streamId === ':_audit:access-' + access.id && p.level === 'read')
+            return false;
+        return true;
+    });
+}
+/**
+ * Whether an existing access may stand in as the connector access: type `app`,
+ * not expired, granting exactly `read` on the leaf and nothing else. Returns why
+ * not, or null when it may.
+ */
+function connectorAccessRefusal(access, leafStreamId, nowSeconds = Date.now() / 1000) {
+    if (access.type !== 'app')
+        return `type is ${String(access.type)}`;
+    if (typeof access.expires === 'number' && access.expires <= nowSeconds)
+        return 'expired';
+    const perms = grantedStreamPermissions(access);
+    if (perms.length !== 1 || perms[0].streamId !== leafStreamId || perms[0].level !== 'read') {
+        return 'permissions are not exactly read on ' + leafStreamId + ': ' + perms.map((p) => `${p.streamId}:${p.level}`).join(', ');
+    }
+    return null;
+}
+function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function randomHex(bytes) {
+    const buf = new Uint8Array(bytes);
+    globalThis.crypto.getRandomValues(buf);
+    return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+/**
+ * Every app access named `<base>` or `<base>-<4 hex>` with no `deviceName` (the
+ * core keeps (name, type, deviceName) unique). Expired ones included, so their
+ * names are not reused for a create.
+ */
+async function listConnectorAccesses(connection, baseName) {
+    const res = await apiOne(connection, 'accesses.get', { includeExpired: true });
+    const accesses = res.accesses ?? [];
+    const pattern = new RegExp('^' + escapeRegExp(baseName) + '(-[0-9a-f]{4})?$');
+    return accesses.filter((a) => a.type === 'app' && typeof a.name === 'string' && pattern.test(a.name) && (a.deviceName == null || a.deviceName === ''));
+}
+function firstExact(candidates, baseName, leafStreamId) {
+    const ordered = [...candidates].sort((x, y) => Number(x.name !== baseName) - Number(y.name !== baseName));
+    for (const access of ordered) {
+        const refusal = connectorAccessRefusal(access, leafStreamId);
+        if (refusal == null)
+            return access;
+        logger.warn(`connectors: access "${access.name}" (${access.id ?? '?'}) not reused: ${refusal}`);
+    }
+    return null;
+}
+function freeConnectorAccessName(taken, baseName) {
+    const names = new Set(taken.map((a) => a.name));
+    if (!names.has(baseName))
+        return baseName;
+    for (;;) {
+        const name = `${baseName}-${randomHex(2)}`;
+        if (!names.has(name))
+            return name;
+    }
+}
+/**
+ * The apiEndpoint of the connector's own access: type `app`, name
+ * `<id>-connect` (`bridge-mira-connect`), exactly `read` on its `sync-status`
+ * leaf. This, never the personal token, is what a first connect hands the
+ * connector's hook. The leaf must exist (provision it first).
+ *
+ * Idempotent across retries: an existing `<id>-connect[-<4 hex>]` access granting
+ * exactly that is reused. One that grants anything else, is expired or is not
+ * `app` is left alone and its endpoint is sent nowhere; a new access is created
+ * beside it (`<id>-connect-<4 hex>` when the bare name is taken).
+ *
+ * @param connection the user's personal connection
+ */
+async function getOrCreateConnectorAccess(connection, catalogueId, leafStreamId) {
+    const baseName = connectorAccessName(catalogueId);
+    const existing = await listConnectorAccesses(connection, baseName);
+    const exact = firstExact(existing, baseName, leafStreamId);
+    if (exact != null)
+        return apiEndpointOf(connection, exact);
+    const create = async (name) => {
+        const res = await apiOne(connection, 'accesses.create', {
+            type: 'app',
+            name,
+            permissions: [{ streamId: leafStreamId, level: 'read' }]
+        });
+        return apiEndpointOf(connection, res.access ?? {});
+    };
+    try {
+        return await create(freeConnectorAccessName(existing, baseName));
+    }
+    catch (err) {
+        // A concurrent attempt took the name first: use its access if exact, else
+        // create once more under a name still free.
+        if (err.id !== 'item-already-exists')
+            throw err;
+        const now = await listConnectorAccesses(connection, baseName);
+        const raced = firstExact(now, baseName, leafStreamId);
+        if (raced != null)
+            return apiEndpointOf(connection, raced);
+        return await create(freeConnectorAccessName(now, baseName));
+    }
+}
+const STATUS_VALUES = ['active', 'needs-reauth', 'error', 'disconnected'];
+const ERROR_CLASSES = ['auth', 'upstream', 'hds', 'other'];
+const ERROR_CODE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+function seconds(v) {
+    return typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : undefined;
+}
+/**
+ * The content after the user disconnected: `status: disconnected`, every other
+ * field of the previous content carried (only the schema's fields: it is closed).
+ * Same as the bridges' state machine (lib-bridge-js `nextConnectorStatus`).
+ */
+function disconnectedStatusContent(previous) {
+    const next = { status: 'disconnected' };
+    if (previous == null || typeof previous !== 'object')
+        return next;
+    const o = previous;
+    if (typeof o.status !== 'string' || !STATUS_VALUES.includes(o.status))
+        return next;
+    for (const k of ['connectedAt', 'lastRunAt', 'lastSuccessAt', 'syncedUntil']) {
+        const v = seconds(o[k]);
+        if (v != null)
+            next[k] = v;
+    }
+    const e = o.lastError;
+    const at = seconds(e?.at);
+    if (e != null && typeof e.class === 'string' && ERROR_CLASSES.includes(e.class) && at != null) {
+        next.lastError = { class: e.class, at };
+        if (typeof e.code === 'string' && ERROR_CODE.test(e.code))
+            next.lastError.code = e.code;
+    }
+    return next;
+}
+/**
+ * Set the connector's status to `disconnected` on its leaf, as the user: update
+ * the latest status event in place (create one if there is none), trash any
+ * duplicate left by racing writers. Run after the connector's grant is revoked,
+ * this is the last word: the connector can no longer write.
+ *
+ * @param connection the user's personal connection
+ * @returns the content written
+ */
+async function markConnectorDisconnected(connection, leafStreamId) {
+    const found = await apiOne(connection, 'events.get', { streams: [leafStreamId], types: [exports.CONNECTOR_STATUS_TYPE], limit: 10 });
+    const events = (found.events ?? []).filter((e) => e?.id != null);
+    const [latest, ...duplicates] = events;
+    const content = disconnectedStatusContent(latest?.content);
+    if (latest == null) {
+        await apiOne(connection, 'events.create', { streamIds: [leafStreamId], type: exports.CONNECTOR_STATUS_TYPE, content });
+        return content;
+    }
+    await apiOne(connection, 'events.update', { id: latest.id, update: { content } });
+    if (duplicates.length > 0) {
+        try {
+            await connection.api(duplicates.map((e) => ({ method: 'events.delete', params: { id: e.id } })));
+        }
+        catch { /* the next write tries again */ }
+    }
+    return content;
+}
+
+
+/***/ },
+
 /***/ "./ts/appTemplates/customFieldTypes.ts"
 /*!*********************************************!*\
   !*** ./ts/appTemplates/customFieldTypes.ts ***!
@@ -24789,6 +21464,500 @@ exports.isEmptyDef = isEmptyDef;
 /** True when a value is the empty-object opt-out marker. */
 function isEmptyDef(v) {
     return v != null && typeof v === 'object' && Object.keys(v).length === 0;
+}
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/datasetTemplate.ts"
+/*!********************************************!*\
+  !*** ./ts/appTemplates/datasetTemplate.ts ***!
+  \********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Data-set templates (plan 108): an app publishes the scope of the data it collects as an
+ * AppTemplate with publication fields (`hds-dataset.json`), and a data-collection tool
+ * (doctor-dashboard) imports it, keeps it in sync and turns it into a FormSpec.
+ *
+ * - {@link templateScopeHash}: fingerprint of what the template asks access to, so a change is
+ *   detected even when the publisher forgot to bump `version`.
+ * - {@link diffTemplateScope}: what changed between two versions, and the semver bump it requires.
+ * - {@link templateToFormSpec}: the FormSpec a data set starts from. Permissions are always
+ *   derived from the data-model, never read from the template.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.templateScope = templateScope;
+exports.templateScopeHash = templateScopeHash;
+exports.diffTemplateScope = diffTemplateScope;
+exports.diffFormSpecWithTemplate = diffFormSpecWithTemplate;
+exports.semverBump = semverBump;
+exports.templateToFormSpec = templateToFormSpec;
+exports.withAppPrivatePermissions = withAppPrivatePermissions;
+exports.templateSource = templateSource;
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const formSpec_ts_1 = __webpack_require__(/*! ../cmc/formSpec.js */ "./ts/cmc/formSpec.ts");
+const templateTypes_ts_1 = __webpack_require__(/*! ./templateTypes.js */ "./ts/appTemplates/templateTypes.ts");
+// ---------- scope hash ---------- //
+/**
+ * The data-collection scope of a template: each item with the kind of section it sits in
+ * (permanent / recurring) and its cadence (`repeatable`, `reminder`, `required`), the custom
+ * fields provisioned, and the existing streams referenced with their permission levels.
+ * Section keys, names, order and all texts are excluded — reorganising sections or rewording
+ * labels is not a scope change.
+ */
+function templateScope(tpl) {
+    const items = new Map();
+    for (const s of tpl.sections) {
+        for (const k of s.itemKeys ?? []) {
+            items.set(k, [k, s.type, stable(cadenceOf(s.itemCustomizations?.[k]))]);
+        }
+    }
+    return {
+        items: [...items.values()].sort(byFirst),
+        customFields: (tpl.customFields ?? []).map(c => [c.streamId, c.eventType]).sort(byFirst),
+        existingStreamRefs: (tpl.existingStreamRefs ?? [])
+            .map(r => [r.streamId, [...r.permissions].sort()])
+            .sort(byFirst)
+    };
+}
+/** `sha256:<hex>` of {@link templateScope}. Stable under key order and section reorganisation. */
+async function templateScopeHash(tpl) {
+    const bytes = new TextEncoder().encode(JSON.stringify(templateScope(tpl)));
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    const hex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+    return 'sha256:' + hex;
+}
+/** Compare two versions of a template. Pure; no model needed. */
+function diffTemplateScope(prev, next) {
+    const p = itemIndex(prev);
+    const n = itemIndex(next);
+    const added = [...n.keys()].filter(k => !p.has(k)).sort();
+    const removed = [...p.keys()].filter(k => !n.has(k)).sort();
+    const typeChanged = [];
+    const moved = [];
+    const cadenceChanged = [];
+    for (const [k, a] of p) {
+        const b = n.get(k);
+        if (b == null)
+            continue;
+        if (a.type !== b.type)
+            typeChanged.push(k);
+        else if (a.sectionKey !== b.sectionKey)
+            moved.push(k);
+        if (stable(cadenceOf(a.cust)) !== stable(cadenceOf(b.cust)))
+            cadenceChanged.push(k);
+    }
+    const pcf = new Set((prev.customFields ?? []).map(c => c.streamId + '|' + c.eventType));
+    const ncf = new Set((next.customFields ?? []).map(c => c.streamId + '|' + c.eventType));
+    const customFields = {
+        added: [...ncf].filter(x => !pcf.has(x)).sort(),
+        removed: [...pcf].filter(x => !ncf.has(x)).sort()
+    };
+    const pr = refIndex(prev.existingStreamRefs);
+    const nr = refIndex(next.existingStreamRefs);
+    const existingStreamRefs = {
+        added: [...nr.keys()].filter(k => !pr.has(k)).sort(),
+        removed: [...pr.keys()].filter(k => !nr.has(k)).sort(),
+        permissionsChanged: [...pr.keys()].filter(k => nr.has(k) && pr.get(k) !== nr.get(k)).sort()
+    };
+    const textsChanged = stable(textsOf(prev)) !== stable(textsOf(next));
+    const breaking = removed.length > 0 || typeChanged.length > 0 ||
+        customFields.removed.length > 0 || existingStreamRefs.added.length > 0 ||
+        existingStreamRefs.removed.length > 0 || existingStreamRefs.permissionsChanged.length > 0;
+    const additive = added.length > 0 || cadenceChanged.length > 0 || customFields.added.length > 0;
+    const requiredBump = breaking
+        ? 'major'
+        : additive ? 'minor' : (textsChanged || moved.length > 0) ? 'patch' : 'none';
+    const actualBump = semverBump(prev.version, next.version);
+    return {
+        added,
+        removed,
+        typeChanged: typeChanged.sort(),
+        moved: moved.sort(),
+        cadenceChanged: cadenceChanged.sort(),
+        customFields,
+        existingStreamRefs,
+        textsChanged,
+        breaking,
+        requiredBump,
+        actualBump,
+        underBumped: BUMP_RANK[actualBump] < BUMP_RANK[requiredBump]
+    };
+}
+/**
+ * What applying `tpl` would change in an existing data set: the FormSpec (including the
+ * owner's own edits since import) is read as the previous template.
+ *
+ * `requiredBump` describes those changes, owner edits included, so it says nothing about the
+ * publisher: `underBumped` is therefore computed against the stored source instead — true
+ * when the template's scope hash differs from `formSpec.source.scopeHash` while its `version`
+ * equals `formSpec.source.version`.
+ */
+async function diffFormSpecWithTemplate(formSpec, tpl) {
+    const prev = {
+        id: formSpec.source?.templateId ?? tpl.id,
+        title: formSpec.title,
+        description: formSpec.description,
+        chat: !!formSpec.features?.chat,
+        sections: formSpec.sections,
+        customFields: formSpec.customFields,
+        existingStreamRefs: formSpec.existingStreamRefs,
+        consent: formSpec.consent,
+        version: formSpec.source?.version,
+        app: tpl.app
+    };
+    const diff = diffTemplateScope(prev, tpl);
+    const source = formSpec.source;
+    diff.underBumped = source != null && source.version != null && source.version === tpl.version &&
+        await templateScopeHash(tpl) !== source.scopeHash;
+    return diff;
+}
+const BUMP_RANK = { none: 0, patch: 1, minor: 2, major: 3 };
+/** Which semver part changed from `a` to `b`. `none` when equal, missing or not semver. */
+function semverBump(a, b) {
+    const pa = parseSemver(a);
+    const pb = parseSemver(b);
+    if (pa == null || pb == null)
+        return 'none';
+    if (pb[0] !== pa[0])
+        return pb[0] > pa[0] ? 'major' : 'none';
+    if (pb[1] !== pa[1])
+        return pb[1] > pa[1] ? 'minor' : 'none';
+    if (pb[2] !== pa[2])
+        return pb[2] > pa[2] ? 'patch' : 'none';
+    return 'none';
+}
+function parseSemver(v) {
+    const m = typeof v === 'string' ? /^(\d+)\.(\d+)\.(\d+)$/.exec(v) : null;
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+/**
+ * Build the FormSpec a data set starts from.
+ *
+ * Permissions are derived from the sections' item keys through the data-model
+ * (`authorizations.forItemKeys`, level `read`) — a template cannot ask for more. Every
+ * existing-stream ref is carried read-only, and `app-private` refs are added to the
+ * permissions as `read` (labelled by `ref.label`).
+ *
+ * @param tpl A template validated by `loadTemplate` / `loadTemplateFromUrl`.
+ * @param opts.model Defaults to the initialised singleton.
+ * @param opts.source Provenance to store on the FormSpec (URL import).
+ */
+function templateToFormSpec(tpl, opts = {}) {
+    const model = opts.model ?? (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    const sections = tpl.sections.map(s => {
+        const out = { key: s.key, type: s.type, name: structuredClone(s.name), itemKeys: [...(s.itemKeys ?? [])] };
+        if (s.itemCustomizations && Object.keys(s.itemCustomizations).length > 0) {
+            out.itemCustomizations = structuredClone(s.itemCustomizations);
+        }
+        if (s.customFieldKeys && s.customFieldKeys.length > 0)
+            out.customFieldKeys = [...s.customFieldKeys];
+        return out;
+    });
+    const formSpec = {
+        version: 1,
+        title: structuredClone(tpl.title),
+        description: structuredClone(tpl.description),
+        permissions: [],
+        sections
+    };
+    if (tpl.consent != null)
+        formSpec.consent = structuredClone(tpl.consent);
+    if (tpl.chat)
+        formSpec.features = { chat: true };
+    if (tpl.customFields && tpl.customFields.length > 0)
+        formSpec.customFields = structuredClone(tpl.customFields);
+    if (tpl.existingStreamRefs && tpl.existingStreamRefs.length > 0) {
+        formSpec.existingStreamRefs = tpl.existingStreamRefs.map(capToRead);
+    }
+    if (tpl.requiredBridges && tpl.requiredBridges.length > 0) {
+        formSpec.appCustomData = { requiredBridges: [...tpl.requiredBridges] };
+    }
+    if (opts.source)
+        formSpec.source = opts.source;
+    const itemKeyIssues = (0, formSpec_ts_1.validateFormSpecItemKeys)(formSpec, model);
+    const excluded = new Set(itemKeyIssues.filter(i => i.reason !== 'deprecated').map(i => i.itemKey));
+    const grantable = [...new Set(sections.flatMap(s => s.itemKeys ?? []))].filter(k => !excluded.has(k));
+    const permissions = model.authorizations.forItemKeys(grantable)
+        .map(p => ({ streamId: p.streamId, defaultName: p.defaultName, level: p.level }));
+    formSpec.permissions = withAppPrivatePermissions(permissions, formSpec.existingStreamRefs);
+    return { formSpec, itemKeyIssues };
+}
+/**
+ * `permissions` plus `read` on every `app-private` existing-stream ref not already granted
+ * (named by the ref's `label`). App-private streams must be granted explicitly: nothing applies
+ * existing-stream refs at acceptance, so a ref alone would be display-only. Use it wherever
+ * permissions are rebuilt from item keys (e.g. an editor's `buildPermissions`), or the grant is lost.
+ */
+function withAppPrivatePermissions(permissions, refs) {
+    const out = [...permissions];
+    const granted = new Set(out.map(p => p.streamId));
+    for (const ref of refs ?? []) {
+        if (ref.purpose !== templateTypes_ts_1.APP_PRIVATE_PURPOSE || granted.has(ref.streamId))
+            continue;
+        out.push({ streamId: ref.streamId, defaultName: labelOf(ref), level: 'read' });
+        granted.add(ref.streamId);
+    }
+    return out;
+}
+/** Provenance record for a FormSpec imported from a published template. */
+async function templateSource(tpl, url, fetchedAt = Date.now() / 1000) {
+    const source = {
+        url,
+        templateId: tpl.id,
+        scopeHash: await templateScopeHash(tpl),
+        fetchedAt
+    };
+    if (tpl.version != null)
+        source.version = tpl.version;
+    if (tpl.app?.publisher != null)
+        source.publisher = tpl.app.publisher;
+    return source;
+}
+function itemIndex(tpl) {
+    const m = new Map();
+    for (const s of tpl.sections) {
+        for (const k of s.itemKeys ?? []) {
+            m.set(k, { type: s.type, sectionKey: s.key, cust: s.itemCustomizations?.[k] });
+        }
+    }
+    return m;
+}
+function refIndex(refs) {
+    return new Map((refs ?? []).map(r => [r.streamId, [...r.permissions].sort().join(',')]));
+}
+function cadenceOf(cust) {
+    if (cust == null || typeof cust !== 'object')
+        return null;
+    const c = cust;
+    return { repeatable: c.repeatable ?? null, reminder: c.reminder ?? null, required: c.required ?? null };
+}
+function textsOf(tpl) {
+    return {
+        title: tpl.title,
+        description: tpl.description,
+        consent: tpl.consent ?? null,
+        app: tpl.app ?? null,
+        license: tpl.license ?? null,
+        sections: tpl.sections.map(s => [s.key, s.name]),
+        labels: tpl.sections.flatMap(s => Object.entries(s.itemCustomizations ?? {})
+            .filter(([, c]) => c?.labels != null)
+            .map(([k, c]) => [k, c.labels]))
+            .sort(byFirst),
+        refs: (tpl.existingStreamRefs ?? []).map(r => [r.streamId, r.label ?? null, r.purpose ?? null])
+    };
+}
+/** A template is third-party input: whatever it declares, a ref is carried read-only. */
+function capToRead(ref) {
+    const out = structuredClone(ref);
+    out.permissions = ['read'];
+    return out;
+}
+function labelOf(ref) {
+    if (ref.label == null)
+        return ref.streamId;
+    if (typeof ref.label === 'string')
+        return ref.label;
+    const l = ref.label;
+    return l.en ?? Object.values(l)[0] ?? ref.streamId;
+}
+/** JSON with object keys sorted recursively, so equal values compare equal. */
+function stable(v) {
+    return JSON.stringify(v, (_k, val) => {
+        if (val == null || typeof val !== 'object' || Array.isArray(val))
+            return val;
+        return Object.fromEntries(Object.keys(val).sort().map(k => [k, val[k]]));
+    });
+}
+function byFirst(a, b) {
+    const x = String(a[0]);
+    const y = String(b[0]);
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/hookExecutor.ts"
+/*!*****************************************!*\
+  !*** ./ts/appTemplates/hookExecutor.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Runs a catalogue connector's hook (HOOK-PROTOCOL.md v1): the `initiate` HTTP
+ * step, then the `open` URL to embed or redirect to, or the best-effort
+ * `disconnect` step. Shared by the HDS webapp and the account app's `/connect`.
+ *
+ * Pure-function discipline: no DOM, no UI, no side effects beyond the configured
+ * HTTP steps. The caller decides how to act on the returned mode.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HookInitiateError = exports.UnresolvedVariableError = void 0;
+exports.expand = expand;
+exports.executeHook = executeHook;
+exports.executeDisconnect = executeDisconnect;
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+class UnresolvedVariableError extends Error {
+    variable;
+    constructor(variable) {
+        super(`unresolved variable: \${${variable}}`);
+        this.name = 'UnresolvedVariableError';
+        this.variable = variable;
+    }
+}
+exports.UnresolvedVariableError = UnresolvedVariableError;
+class HookInitiateError extends Error {
+    reason;
+    constructor(reason, options) {
+        super(`hook initiate failed: ${reason}`, options);
+        this.name = 'HookInitiateError';
+        this.reason = reason;
+    }
+}
+exports.HookInitiateError = HookInitiateError;
+const VARIABLE_PATTERN = /\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
+function expand(template, vars) {
+    return template.replace(VARIABLE_PATTERN, (_match, name) => {
+        const val = vars[name];
+        if (val === undefined)
+            throw new UnresolvedVariableError(name);
+        return val;
+    });
+}
+async function executeHook(hook, ctx) {
+    const vars = {
+        apiEndpoint: ctx.apiEndpoint,
+        returnUrl: ctx.returnUrl
+    };
+    const useResync = ctx.mode === 'resync' && hook.resync != null;
+    const initiateStep = useResync ? hook.resync?.initiate : hook.initiate;
+    const openStep = useResync ? hook.resync : hook.open;
+    if (initiateStep != null) {
+        await runInitiate(initiateStep, vars);
+    }
+    const expandedUrl = expand(openStep.url, vars);
+    const finalUrl = appendParams(expandedUrl, openStep.params, vars);
+    const allowedOrigin = new URL(finalUrl).origin;
+    const isEmbedded = openStep.embed === true && ctx.embeddable;
+    return {
+        mode: isEmbedded ? 'iframe' : 'redirect',
+        finalUrl,
+        allowedOrigin
+    };
+}
+// Best-effort: disconnect must always succeed locally, so errors are logged and swallowed.
+async function executeDisconnect(hook, ctx) {
+    const step = hook.disconnect;
+    if (step == null)
+        return;
+    const vars = {
+        apiEndpoint: ctx.apiEndpoint,
+        returnUrl: ctx.returnUrl
+    };
+    try {
+        const res = await runHttpStep(step, vars);
+        if (!res.ok)
+            logger.warn(`hookExecutor: disconnect HTTP ${res.status} (swallowed)`);
+    }
+    catch (err) {
+        logger.warn('hookExecutor: disconnect error (swallowed):', err);
+    }
+}
+async function runInitiate(step, vars) {
+    let res;
+    try {
+        res = await runHttpStep(step, vars);
+    }
+    catch (err) {
+        if (err instanceof UnresolvedVariableError)
+            throw err;
+        throw new HookInitiateError(`network: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    }
+    if (!res.ok) {
+        throw new HookInitiateError(`HTTP ${res.status}`);
+    }
+    let json;
+    try {
+        json = await res.json();
+    }
+    catch (err) {
+        throw new HookInitiateError(`invalid JSON: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    }
+    if (json == null || typeof json !== 'object') {
+        throw new HookInitiateError('response is not an object');
+    }
+    const field = step.openUrlField ?? 'openUrl';
+    const value = json[field];
+    if (typeof value !== 'string' || value.length === 0) {
+        throw new HookInitiateError(`response.${field} missing or not a string`);
+    }
+    vars.openUrl = value;
+}
+async function runHttpStep(step, vars) {
+    const method = step.method ?? 'POST';
+    const url = expand(step.url, vars);
+    const headers = {};
+    if (step.body != null)
+        headers['content-type'] = 'application/json';
+    if (step.auth != null)
+        headers['Authorization'] = expand(step.auth, vars);
+    const body = step.body != null ? JSON.stringify(expandBody(step.body, vars)) : undefined;
+    return await fetch(url, { method, headers, body });
+}
+function expandBody(body, vars) {
+    const out = {};
+    for (const [k, v] of Object.entries(body)) {
+        out[k] = typeof v === 'string' ? expand(v, vars) : v;
+    }
+    return out;
+}
+function appendParams(url, params, vars) {
+    if (params == null || Object.keys(params).length === 0)
+        return url;
+    const parsed = new URL(url);
+    for (const [k, v] of Object.entries(params)) {
+        parsed.searchParams.set(k, expand(v, vars));
+    }
+    return parsed.toString();
 }
 
 
@@ -24900,19 +22069,268 @@ function collectItemLabels(itemKey, contacts, opts = {}) {
 /**
  * AppTemplate JSON loader (Plan 45 §5).
  *
- * Validates the template against an Ajv schema, then runs cross-field rules that
- * Ajv can't express:
+ * Validates the template against a precompiled JSON-schema validator, then runs
+ * cross-field rules the schema can't express:
  *   1. Sandbox prefix — every customFields[i].streamId starts with `${id}-`
  *   2. No mode-2/mode-3 collision — existingStreamRefs[i].streamId does NOT match `${id}-*`
  *   3. customFields[i].def.templateId === id
  *   4. customFields[i].def.key consistent with streamId suffix
  *   5. section?: customFields[i].def.section references existing section.key
  *   6. customFieldKeys[]: each section.customFieldKeys[i] resolves to a customFields[].def.key
+ *   7. Data-set templates (plan 108, `format` present): `version` + `formatVersion` + `app` required,
+ *      `app.url` is https, `purpose: 'app-private'` refs are read-only,
+ *      `itemCustomizations[*].repeatable` follows the data-model grammar, `.required` is boolean
  *
  * Use:
  *   const tpl = loadTemplate(jsonObject);   // synchronous; throws on any failure
  *   const tpl = await loadTemplateFromUrl(url);  // fetches then validates
  */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.loadTemplate = loadTemplate;
+exports.loadTemplateFromUrl = loadTemplateFromUrl;
+exports.isCustomFieldDeclaration = isCustomFieldDeclaration;
+exports.isExistingStreamRef = isExistingStreamRef;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const appTemplate_validator_js_1 = __webpack_require__(/*! ./schemas/appTemplate.validator.js */ "./ts/appTemplates/schemas/appTemplate.validator.js");
+const templateTypes_ts_1 = __webpack_require__(/*! ./templateTypes.js */ "./ts/appTemplates/templateTypes.ts");
+/** Same grammar as data-model `items.repeatable`: once | any | unlimited | ISO-8601 duration. */
+const REPEATABLE_RE = /^(once|any|unlimited|P(\d+[YMWD])+(T(\d+[HMS])+)?|PT(\d+[HMS])+)$/;
+// The validator is PRECOMPILED at build time (scripts/build-validators.mjs), not built
+// here from the schema. Ajv 8 compiles schemas with `new Function`, which a
+// Content-Security-Policy without `unsafe-eval` refuses — and because the old
+// `ajv.compile()` ran at module top level, that refusal threw during module-graph init and
+// left the consuming app rendering a blank page instead of degrading. B-2026-09-23-1.
+//
+// So: nothing in `ts/` may import `ajv` (it is a devDependency now), and no schema
+// compilation happens at runtime. Edit the schema, then `npm run build:validators`;
+// tests/validatorDrift.test.js fails if you forget.
+/** Validate the JSON shape and run cross-field rules. Returns the validated AppTemplate or throws HDSLibError. */
+function loadTemplate(json) {
+    if (json == null || typeof json !== 'object') {
+        throw new errors_ts_1.HDSLibError('AppTemplate must be a non-null object', json);
+    }
+    const ok = (0, appTemplate_validator_js_1.validate)(json);
+    if (!ok) {
+        throw new errors_ts_1.HDSLibError('AppTemplate JSON schema validation failed: ' + formatAjvErrors(appTemplate_validator_js_1.validate.errors), appTemplate_validator_js_1.validate.errors);
+    }
+    const tpl = json;
+    validateCrossFieldRules(tpl);
+    return tpl;
+}
+/**
+ * Fetch a template from a URL and run loadTemplate.
+ *
+ * The document is third-party input (plan 108 — an app's published `hds-dataset.json`), so:
+ * https only, no credentials, no cache, bounded time and size. Errors are HDSLibError with
+ * `innerObject.reason` one of `url`, `network`, `timeout`, `http`, `too-large`, `json`.
+ */
+async function loadTemplateFromUrl(url, opts = {}) {
+    const timeoutMs = opts.timeoutMs ?? 8000;
+    const maxBytes = opts.maxBytes ?? 262144;
+    const doFetch = opts.fetch ?? fetch;
+    let parsed;
+    try {
+        parsed = new URL(url);
+    }
+    catch {
+        throw new errors_ts_1.HDSLibError(`Invalid template URL "${url}"`, { reason: 'url', url });
+    }
+    if (parsed.protocol !== 'https:') {
+        throw new errors_ts_1.HDSLibError(`Template URL must use https: "${url}"`, { reason: 'url', url });
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const fail = (e) => {
+        if (e instanceof errors_ts_1.HDSLibError)
+            throw e;
+        if (controller.signal.aborted) {
+            throw new errors_ts_1.HDSLibError(`Timed out after ${timeoutMs} ms fetching template from ${url}`, { reason: 'timeout', url });
+        }
+        throw new errors_ts_1.HDSLibError(`Failed to fetch template from ${url}: ${e?.message}`, { reason: 'network', url });
+    };
+    let text = '';
+    try {
+        const r = await doFetch(parsed.href, {
+            signal: controller.signal,
+            credentials: 'omit',
+            cache: 'no-store',
+            redirect: 'follow',
+            headers: { Accept: 'application/json' }
+        });
+        // Browsers block an https→http hop as mixed content; Node follows it. Check where we landed.
+        if (typeof r.url === 'string' && r.url !== '' && !/^https:/i.test(r.url)) {
+            throw new errors_ts_1.HDSLibError(`Template URL ${url} redirected to a non-https URL`, { reason: 'url', url });
+        }
+        if (!r.ok)
+            throw new errors_ts_1.HDSLibError(`Failed to fetch template from ${url}: HTTP ${r.status}`, { reason: 'http', status: r.status, url });
+        const declared = Number(r.headers?.get?.('content-length'));
+        if (Number.isFinite(declared) && declared > maxBytes) {
+            throw new errors_ts_1.HDSLibError(`Template at ${url} is too large (${declared} bytes, max ${maxBytes})`, { reason: 'too-large', url });
+        }
+        text = await readBounded(r, maxBytes, url, controller);
+    }
+    catch (e) {
+        fail(e);
+    }
+    finally {
+        clearTimeout(timer);
+    }
+    let json;
+    try {
+        json = JSON.parse(text);
+    }
+    catch (e) {
+        throw new errors_ts_1.HDSLibError(`Template at ${url} is not valid JSON: ${e.message}`, { reason: 'json', url });
+    }
+    return loadTemplate(json);
+}
+/** Read a response body as text, aborting as soon as it exceeds `maxBytes`. */
+async function readBounded(r, maxBytes, url, controller) {
+    const tooLarge = () => new errors_ts_1.HDSLibError(`Template at ${url} is too large (max ${maxBytes} bytes)`, { reason: 'too-large', url });
+    const reader = r.body?.getReader?.();
+    if (reader == null) {
+        const text = await r.text();
+        if (new TextEncoder().encode(text).length > maxBytes)
+            throw tooLarge();
+        return text;
+    }
+    const chunks = [];
+    let received = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done)
+            break;
+        received += value.byteLength;
+        if (received > maxBytes) {
+            controller.abort();
+            throw tooLarge();
+        }
+        chunks.push(value);
+    }
+    const all = new Uint8Array(received);
+    let offset = 0;
+    for (const c of chunks) {
+        all.set(c, offset);
+        offset += c.byteLength;
+    }
+    return new TextDecoder().decode(all);
+}
+function validateCrossFieldRules(tpl) {
+    const errors = [];
+    const sandboxPrefix = `${tpl.id}-`;
+    const sectionKeys = new Set(tpl.sections.map((s) => s.key));
+    const customFieldKeysByDef = new Set();
+    // Rule 1+3+4: sandbox prefix + def self-identification + key consistency.
+    if (tpl.customFields) {
+        for (const cf of tpl.customFields) {
+            if (!cf.streamId.startsWith(sandboxPrefix)) {
+                errors.push(`customFields[].streamId "${cf.streamId}" violates sandbox prefix rule (must start with "${sandboxPrefix}")`);
+            }
+            if (cf.def.templateId !== tpl.id) {
+                errors.push(`customFields[].def.templateId "${cf.def.templateId}" must equal template.id "${tpl.id}" (streamId="${cf.streamId}")`);
+            }
+            if (!cf.streamId.endsWith('-' + cf.def.key) && cf.streamId !== sandboxPrefix + cf.def.key) {
+                errors.push(`customFields[].streamId "${cf.streamId}" must end with "-${cf.def.key}" to match def.key`);
+            }
+            if (cf.def.section != null && !sectionKeys.has(cf.def.section)) {
+                errors.push(`customFields[].def.section "${cf.def.section}" does not match any section.key (streamId="${cf.streamId}")`);
+            }
+            customFieldKeysByDef.add(cf.def.key);
+        }
+    }
+    // Rule 2: existingStreamRefs[i].streamId must NOT match the template's sandbox.
+    if (tpl.existingStreamRefs) {
+        const customStreamIds = new Set((tpl.customFields || []).map((c) => c.streamId));
+        for (const ref of tpl.existingStreamRefs) {
+            // An app's own streams (data-set templates, plan 108) naturally carry the app id as
+            // prefix; the collision that matters — the same stream declared in customFields — is
+            // still checked below.
+            if (ref.streamId.startsWith(sandboxPrefix) && ref.purpose !== templateTypes_ts_1.APP_PRIVATE_PURPOSE) {
+                errors.push(`existingStreamRefs[].streamId "${ref.streamId}" collides with this template's sandbox prefix "${sandboxPrefix}" — refs are for streams someone else provisioned`);
+            }
+            if (customStreamIds.has(ref.streamId)) {
+                errors.push(`existingStreamRefs[].streamId "${ref.streamId}" is also declared in customFields[] — choose mode-2 OR mode-3, not both`);
+            }
+        }
+    }
+    // Rule 6: each section.customFieldKeys[] entry resolves to a known customField.def.key
+    for (const s of tpl.sections) {
+        if (!s.customFieldKeys)
+            continue;
+        for (const key of s.customFieldKeys) {
+            if (!customFieldKeysByDef.has(key)) {
+                errors.push(`section "${s.key}".customFieldKeys references unknown key "${key}" (no matching customFields[].def.key)`);
+            }
+        }
+    }
+    // Rule 7: data-set template publication fields (plan 108)
+    if (tpl.format != null) {
+        if (tpl.formatVersion == null)
+            errors.push('data-set template: "formatVersion" is required when "format" is set');
+        if (tpl.version == null)
+            errors.push('data-set template: "version" is required when "format" is set');
+        if (tpl.app == null)
+            errors.push('data-set template: "app" is required when "format" is set');
+    }
+    if (tpl.app != null && !/^https:\/\//i.test(tpl.app.url)) {
+        errors.push(`app.url "${tpl.app.url}" must be an https URL`);
+    }
+    for (const ref of tpl.existingStreamRefs ?? []) {
+        if (ref.purpose === templateTypes_ts_1.APP_PRIVATE_PURPOSE && !(ref.permissions.length === 1 && ref.permissions[0] === 'read')) {
+            errors.push(`existingStreamRefs[].streamId "${ref.streamId}" has purpose "${templateTypes_ts_1.APP_PRIVATE_PURPOSE}" and must request ["read"] only`);
+        }
+    }
+    for (const s of tpl.sections) {
+        for (const [itemKey, cust] of Object.entries(s.itemCustomizations ?? {})) {
+            if (cust == null || typeof cust !== 'object') {
+                errors.push(`section "${s.key}".itemCustomizations["${itemKey}"] must be an object`);
+                continue;
+            }
+            const c = cust;
+            if (c.repeatable != null && (typeof c.repeatable !== 'string' || !REPEATABLE_RE.test(c.repeatable))) {
+                errors.push(`section "${s.key}".itemCustomizations["${itemKey}"].repeatable "${String(c.repeatable)}" must be once | any | unlimited | an ISO-8601 duration`);
+            }
+            if (c.required != null && typeof c.required !== 'boolean') {
+                errors.push(`section "${s.key}".itemCustomizations["${itemKey}"].required must be a boolean`);
+            }
+        }
+    }
+    if (errors.length > 0) {
+        throw new errors_ts_1.HDSLibError('AppTemplate cross-field validation failed:\n  - ' + errors.join('\n  - '), { errors, template: tpl });
+    }
+}
+function formatAjvErrors(errors) {
+    if (!errors || errors.length === 0)
+        return '(no errors)';
+    return errors.map((e) => `${e.instancePath || '/'}: ${e.message}`).join('; ');
+}
+/** Type guards for downstream consumers. */
+function isCustomFieldDeclaration(v) {
+    return (v != null &&
+        typeof v === 'object' &&
+        typeof v.streamId === 'string' &&
+        typeof v.eventType === 'string' &&
+        v.def != null &&
+        typeof v.def === 'object');
+}
+function isExistingStreamRef(v) {
+    return (v != null &&
+        typeof v === 'object' &&
+        typeof v.streamId === 'string' &&
+        Array.isArray(v.permissions));
+}
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/offerStreams.ts"
+/*!*****************************************!*\
+  !*** ./ts/appTemplates/offerStreams.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -24946,114 +22364,61 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.loadTemplate = loadTemplate;
-exports.loadTemplateFromUrl = loadTemplateFromUrl;
-exports.isCustomFieldDeclaration = isCustomFieldDeclaration;
-exports.isExistingStreamRef = isExistingStreamRef;
-const AjvNs = __importStar(__webpack_require__(/*! ajv */ "./node_modules/ajv/dist/ajv.js"));
-const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
-const appTemplate_schema_json_1 = __importDefault(__webpack_require__(/*! ./schemas/appTemplate.schema.json */ "./ts/appTemplates/schemas/appTemplate.schema.json"));
-// Ajv ships an ESM default + CJS interop. `default` may be the class itself
-// or the namespace depending on bundler. Resolve once at load.
-const Ajv = AjvNs.default ?? AjvNs;
-const ajv = new Ajv({ allErrors: true, strict: false });
-// ajv core ships without formats; absent this, compile() logs
-// `unknown format "uri" ignored in schema` to the console on import.
-ajv.addFormat('uri', /^[a-zA-Z][a-zA-Z0-9+.-]*:\S+$/);
-const validate = ajv.compile(appTemplate_schema_json_1.default);
-/** Validate the JSON shape (Ajv) and run cross-field rules. Returns the validated AppTemplate or throws HDSLibError. */
-function loadTemplate(json) {
-    if (json == null || typeof json !== 'object') {
-        throw new errors_ts_1.HDSLibError('AppTemplate must be a non-null object', json);
-    }
-    const ok = validate(json);
-    if (!ok) {
-        throw new errors_ts_1.HDSLibError('AppTemplate JSON schema validation failed: ' + formatAjvErrors(validate.errors), validate.errors);
-    }
-    const tpl = json;
-    validateCrossFieldRules(tpl);
-    return tpl;
-}
-/** Fetch JSON from a URL and run loadTemplate. */
-async function loadTemplateFromUrl(url) {
-    const r = await fetch(url);
-    if (!r.ok)
-        throw new errors_ts_1.HDSLibError(`Failed to fetch AppTemplate from ${url}: ${r.status}`);
-    const json = await r.json();
-    return loadTemplate(json);
-}
-function validateCrossFieldRules(tpl) {
-    const errors = [];
-    const sandboxPrefix = `${tpl.id}-`;
-    const sectionKeys = new Set(tpl.sections.map((s) => s.key));
-    const customFieldKeysByDef = new Set();
-    // Rule 1+3+4: sandbox prefix + def self-identification + key consistency.
-    if (tpl.customFields) {
-        for (const cf of tpl.customFields) {
-            if (!cf.streamId.startsWith(sandboxPrefix)) {
-                errors.push(`customFields[].streamId "${cf.streamId}" violates sandbox prefix rule (must start with "${sandboxPrefix}")`);
-            }
-            if (cf.def.templateId !== tpl.id) {
-                errors.push(`customFields[].def.templateId "${cf.def.templateId}" must equal template.id "${tpl.id}" (streamId="${cf.streamId}")`);
-            }
-            if (!cf.streamId.endsWith('-' + cf.def.key) && cf.streamId !== sandboxPrefix + cf.def.key) {
-                errors.push(`customFields[].streamId "${cf.streamId}" must end with "-${cf.def.key}" to match def.key`);
-            }
-            if (cf.def.section != null && !sectionKeys.has(cf.def.section)) {
-                errors.push(`customFields[].def.section "${cf.def.section}" does not match any section.key (streamId="${cf.streamId}")`);
-            }
-            customFieldKeysByDef.add(cf.def.key);
+exports.offerStreamsToCreate = offerStreamsToCreate;
+exports.offerStreamsToApiCalls = offerStreamsToApiCalls;
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+/**
+ * Resolve the granted permissions into streams to create, ancestors first.
+ *
+ * Insertion order is parent-before-child, so the batch applies top-down with no
+ * separate sort.
+ */
+function offerStreamsToCreate(permissions, modelStreams) {
+    const wanted = new Map();
+    const add = (id, { granted = false } = {}) => {
+        if (wanted.has(id))
+            return;
+        const data = modelStreams.getDataById(id, false);
+        if (data == null) {
+            // Unknown to the model. What reaches here is the requester's OWN root
+            // (e.g. `bridge-mira`), since `:_cmc:*` and `:_system:*` are filtered below.
+            //
+            // Only ever create an id the user explicitly granted, never an inferred
+            // ancestor: inventing a hierarchy inside someone else's subtree is the
+            // requester's business, not ours. Hence `granted` is not defaulted true.
+            if (!granted)
+                return;
+            wanted.set(id, { id, name: id });
+            return;
         }
-    }
-    // Rule 2: existingStreamRefs[i].streamId must NOT match the template's sandbox.
-    if (tpl.existingStreamRefs) {
-        const customStreamIds = new Set((tpl.customFields || []).map((c) => c.streamId));
-        for (const ref of tpl.existingStreamRefs) {
-            if (ref.streamId.startsWith(sandboxPrefix)) {
-                errors.push(`existingStreamRefs[].streamId "${ref.streamId}" collides with this template's sandbox prefix "${sandboxPrefix}" — refs are for streams someone else provisioned`);
-            }
-            if (customStreamIds.has(ref.streamId)) {
-                errors.push(`existingStreamRefs[].streamId "${ref.streamId}" is also declared in customFields[] — choose mode-2 OR mode-3, not both`);
-            }
-        }
-    }
-    // Rule 6: each section.customFieldKeys[] entry resolves to a known customField.def.key
-    for (const s of tpl.sections) {
-        if (!s.customFieldKeys)
+        wanted.set(id, { id, name: data.name ?? id, parentId: data.parentId ?? undefined });
+    };
+    for (const perm of permissions) {
+        const streamId = perm?.streamId;
+        if (typeof streamId !== 'string' || streamId.startsWith(':'))
             continue;
-        for (const key of s.customFieldKeys) {
-            if (!customFieldKeysByDef.has(key)) {
-                errors.push(`section "${s.key}".customFieldKeys references unknown key "${key}" (no matching customFields[].def.key)`);
-            }
+        // `getParentsIds` recurses with `throwErrorIfNotFound` hardcoded true further
+        // down, so a single stream the model does not know can abort the whole walk.
+        // Isolate each one: a bad entry must not cost the others their ancestors.
+        try {
+            for (const ancestorId of modelStreams.getParentsIds(streamId, false))
+                add(ancestorId);
         }
+        catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            logger.warn(`offerStreams: could not resolve ancestors of "${streamId}":`, message);
+        }
+        add(streamId, { granted: true });
     }
-    if (errors.length > 0) {
-        throw new errors_ts_1.HDSLibError('AppTemplate cross-field validation failed:\n  - ' + errors.join('\n  - '), { errors, template: tpl });
-    }
+    return [...wanted.values()];
 }
-function formatAjvErrors(errors) {
-    if (!errors || errors.length === 0)
-        return '(no errors)';
-    return errors.map((e) => `${e.instancePath || '/'}: ${e.message}`).join('; ');
-}
-/** Type guards for downstream consumers. */
-function isCustomFieldDeclaration(v) {
-    return (v != null &&
-        typeof v === 'object' &&
-        typeof v.streamId === 'string' &&
-        typeof v.eventType === 'string' &&
-        v.def != null &&
-        typeof v.def === 'object');
-}
-function isExistingStreamRef(v) {
-    return (v != null &&
-        typeof v === 'object' &&
-        typeof v.streamId === 'string' &&
-        Array.isArray(v.permissions));
+/** Turn the resolved list into `streams.create` API calls. */
+function offerStreamsToApiCalls(streams) {
+    return streams.map((s) => ({
+        method: 'streams.create',
+        params: s.parentId != null ? { id: s.id, name: s.name, parentId: s.parentId } : { id: s.id, name: s.name },
+    }));
 }
 
 
@@ -25371,6 +22736,31 @@ function customFieldDeclarationToVirtualItem(decl) {
         eventTemplate() { return { streamIds: [decl.streamId], type: decl.eventType }; }
     };
 }
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/templateTypes.ts"
+/*!******************************************!*\
+  !*** ./ts/appTemplates/templateTypes.ts ***!
+  \******************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * AppTemplate type definitions (Plan 45 §1).
+ *
+ * Top-level shape used by templates loaded via `loadTemplate(json | url)`.
+ * Three stream-reference modes (§2.9): canonical (sections.itemKeys), provision-new
+ * (customFields), and existing-stream-ref (existingStreamRefs).
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = void 0;
+/** `format` value identifying a published data-set template. */
+exports.DATASET_TEMPLATE_FORMAT = 'hds-dataset-template';
+/** `purpose` value for an app's own (non data-model) streams referenced by a data-set template. Read-only. */
+exports.APP_PRIVATE_PURPOSE = 'app-private';
 
 
 /***/ },
@@ -25731,6 +23121,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HDS_NOOP_PERMISSION = exports.HDS_NOOP_STREAM_ID = exports.FORM_SPEC_EVENT_TYPE = void 0;
+exports.formSpecFingerprint = formSpecFingerprint;
 exports.validateFormSpecItemKeys = validateFormSpecItemKeys;
 exports.saveFormSpec = saveFormSpec;
 exports.loadFormSpec = loadFormSpec;
@@ -25764,6 +23155,20 @@ exports.FORM_SPEC_EVENT_TYPE = 'hds-form-spec/v1';
 exports.HDS_NOOP_STREAM_ID = 'hds-noop';
 /** Permission level used by the chat-only placeholder. Read on an empty stream is a no-op. */
 exports.HDS_NOOP_PERMISSION = { streamId: exports.HDS_NOOP_STREAM_ID, level: 'read' };
+/**
+ * `sha256:<hex>` of a FormSpec's content, excluding `source` and `openLink` (bookkeeping,
+ * not part of what an invite shares). Stable under object key order.
+ */
+async function formSpecFingerprint(formSpec) {
+    const { source: _s, openLink: _o, ...content } = formSpec;
+    const json = JSON.stringify(content, (_k, val) => {
+        if (val == null || typeof val !== 'object' || Array.isArray(val))
+            return val;
+        return Object.fromEntries(Object.keys(val).sort().map(k => [k, val[k]]));
+    });
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
+    return 'sha256:' + [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
 /**
  * Check every `sections[].itemKeys` entry of a FormSpec against the published
  * data-model.
@@ -25805,6 +23210,10 @@ function validateFormSpecItemKeys(formSpec, model) {
                 issues.push({ sectionKey: section.key, itemKey, reason: 'unknown' });
                 continue;
             }
+            if (def.isSystem) {
+                issues.push({ sectionKey: section.key, itemKey, reason: 'system' });
+                continue;
+            }
             if (!def.isDeprecated)
                 continue;
             // Only suggest a replacement when it is unambiguous. Several active items
@@ -25824,6 +23233,8 @@ function describeItemKeyIssue(issue) {
     const where = `${issue.sectionKey}/${issue.itemKey}`;
     if (issue.reason === 'unknown')
         return `${where} (not defined by the published data-model)`;
+    if (issue.reason === 'system')
+        return `${where} (system item — not a form field)`;
     return issue.replacement
         ? `${where} (deprecated — use ${issue.replacement})`
         : `${where} (deprecated)`;
@@ -25955,6 +23366,9 @@ async function getFormSpecById(connection, collectorId, opts) {
  * @returns the same shape as `cmc.createInvite` for caller compatibility.
  */
 async function createInviteWithFormSpec(connection, params) {
+    if (params.expiresAt === null && params.mode !== 'open-link') {
+        throw new Error('createInviteWithFormSpec: expiresAt null (no expiry) requires mode "open-link"');
+    }
     const requesterMeta = Object.assign({ displayName: params.displayName, appId: params.appCode }, params.requesterMeta ?? {});
     const request = {
         title: params.title ?? params.formSpec.title ?? { en: params.displayName },
@@ -25964,7 +23378,9 @@ async function createInviteWithFormSpec(connection, params) {
     };
     if (params.features)
         request.features = params.features;
-    if (params.expiresAt)
+    if (params.expiresAt === null)
+        request.expiresAt = null;
+    else if (params.expiresAt)
         request.expiresAt = params.expiresAt;
     if (params.accessType)
         request.accessType = params.accessType;
@@ -26503,7 +23919,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -26513,6 +23929,7 @@ const patchedPryv_ts_1 = __webpack_require__(/*! ./patchedPryv.js */ "./ts/patch
 Object.defineProperty(exports, "pryv", ({ enumerable: true, get: function () { return patchedPryv_ts_1.pryv; } }));
 Object.defineProperty(exports, "cmc", ({ enumerable: true, get: function () { return patchedPryv_ts_1.cmc; } }));
 Object.defineProperty(exports, "encryption", ({ enumerable: true, get: function () { return patchedPryv_ts_1.encryption; } }));
+Object.defineProperty(exports, "delegation", ({ enumerable: true, get: function () { return patchedPryv_ts_1.delegation; } }));
 const HDSModel_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel.js */ "./ts/HDSModel/HDSModel.ts");
 Object.defineProperty(exports, "HDSModel", ({ enumerable: true, get: function () { return HDSModel_ts_1.HDSModel; } }));
 const appTemplates = __importStar(__webpack_require__(/*! ./appTemplates/appTemplates.js */ "./ts/appTemplates/appTemplates.ts"));
@@ -26576,6 +23993,7 @@ const HDSLib = {
     pryv: patchedPryv_ts_1.pryv,
     cmc: patchedPryv_ts_1.cmc,
     encryption: patchedPryv_ts_1.encryption,
+    delegation: patchedPryv_ts_1.delegation,
     settings,
     HDSService: HDSService_ts_1.HDSService,
     HDSModel: HDSModel_ts_1.HDSModel,
@@ -26821,7 +24239,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.encryption = exports.cmc = exports.pryv = void 0;
+exports.delegation = exports.encryption = exports.cmc = exports.pryv = void 0;
 /**
  * CJS→ESM interop for the pryv package with plugin patching.
  *
@@ -26834,6 +24252,7 @@ const monitor_1 = __importDefault(__webpack_require__(/*! @pryv/monitor */ "./no
 const socket_io_1 = __importDefault(__webpack_require__(/*! @pryv/socket.io */ "./node_modules/@pryv/socket.io/src/index.js"));
 const _cmc = __importStar(__webpack_require__(/*! @pryv/cmc */ "./node_modules/@pryv/cmc/src/index.js"));
 const _encryption = __importStar(__webpack_require__(/*! @pryv/encryption */ "./node_modules/@pryv/encryption/src/index.js"));
+const _delegation = __importStar(__webpack_require__(/*! @pryv/delegation */ "./node_modules/@pryv/delegation/src/index.js"));
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
 (0, monitor_1.default)(pryv_1.default);
 // @ts-expect-error CJS plugin pattern: module.exports = function(pryv) { ... }
@@ -26845,6 +24264,15 @@ exports.cmc = _cmc;
 // Re-exported so consumers reach it through hds-lib and version-alignment with the embedded
 // pryv ecosystem stays hds-lib's responsibility (see healthdatasafe/hds-lib-js#12).
 exports.encryption = _encryption;
+// Account-delegation client (`delegations.*` API family), for guardian- and
+// caregiver-controlled accounts. Re-exported here for the same reason as cmc
+// and encryption: consumers must reach the pryv ecosystem through hds-lib, so
+// that `pryv` stays a single PATCHED module instance. `Delegation.openControlled`
+// builds a `Connection` and therefore needs an explicit `pryv`; callers must pass
+// the one exported here (`Delegation.fromConnection(conn, { pryv })`), never a
+// direct `import 'pryv'`, which would be a second unpatched instance with
+// neither the monitor nor the socket.io plugin applied.
+exports.delegation = _delegation;
 
 
 /***/ },
@@ -27196,6 +24624,12 @@ const HDSProfile = {
         if (!_connection) {
             throw new Error('HDSProfile: call hookToConnection() first');
         }
+        // Clearing the avatar trashes its event: nulling the content would keep the attachment, and the
+        // URL resolves from the attachment, so the photo came back on the next load (B-2026-09-25-3).
+        if (key === 'avatar' && value === null) {
+            await trashExistingAvatar();
+            return;
+        }
         const field = exports.PROFILE_FIELDS[key];
         const existing = _cache[key];
         if (existing) {
@@ -27221,6 +24655,16 @@ const HDSProfile = {
         if (!event)
             return null;
         return resolveAvatarUrl(event);
+    },
+    /**
+     * Remove the avatar: trashes its event (attachment included), so no avatar resolves on the next
+     * load. Same as `set('avatar', null)`. No-op when there is no avatar.
+     */
+    async removeAvatar() {
+        if (!_connection) {
+            throw new Error('HDSProfile: call hookToConnection() first');
+        }
+        await trashExistingAvatar();
     },
     /**
      * Set avatar from a file (Blob/Buffer) — creates a picture/attached event with attachment.
@@ -31749,1685 +29193,6 @@ function createPacketDecoderStream(maxPayload, binaryType) {
     });
 }
 exports.protocol = 4;
-
-
-/***/ },
-
-/***/ "./node_modules/fast-uri/index.js"
-/*!****************************************!*\
-  !*** ./node_modules/fast-uri/index.js ***!
-  \****************************************/
-(module, __unused_webpack_exports, __webpack_require__) {
-
-"use strict";
-
-
-const { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, serializePathEncoding, normalizeQueryFragmentEncoding, encodeQuery, encodeFragment, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = __webpack_require__(/*! ./lib/utils */ "./node_modules/fast-uri/lib/utils.js")
-const { SCHEMES, getSchemeHandler } = __webpack_require__(/*! ./lib/schemes */ "./node_modules/fast-uri/lib/schemes.js")
-
-const VALID_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*$/u
-const MALFORMED_SCHEME_ERROR = 'URI scheme is malformed.'
-
-/**
- * @param {string} scheme
- * @returns {string}
- */
-function decodeValidScheme (scheme) {
-  const decodedScheme = unescape(String(scheme))
-  if (!VALID_SCHEME.test(decodedScheme)) {
-    throw new TypeError(MALFORMED_SCHEME_ERROR)
-  }
-  return decodedScheme
-}
-
-/**
- * @template {import('./types/index').URIComponent|string} T
- * @param {T} uri
- * @param {import('./types/index').Options} [options]
- * @returns {T}
- */
-function normalize (uri, options) {
-  if (typeof uri === 'string') {
-    uri = /** @type {T} */ (normalizeString(uri, options))
-  } else if (typeof uri === 'object') {
-    uri = /** @type {T} */ (parse(serialize(uri, options), options))
-  }
-  return uri
-}
-
-/**
- * @param {string} baseURI
- * @param {string} relativeURI
- * @param {import('./types/index').Options} [options]
- * @returns {string}
- */
-function resolve (baseURI, relativeURI, options) {
-  const schemelessOptions = options ? Object.assign({ scheme: 'null' }, options) : { scheme: 'null' }
-  const {
-    parsed: baseParsed,
-    malformedAuthorityOrPort: baseMalformed,
-    malformedPercentEncoding: baseMalformedPercentEncoding,
-    malformedSchemeSpecific: baseMalformedSchemeSpecific,
-    malformedHost: baseMalformedHost,
-    malformedScheme: baseMalformedScheme
-  } = parseWithStatus(baseURI, schemelessOptions)
-  const {
-    parsed: relativeParsed,
-    malformedAuthorityOrPort: relativeMalformed,
-    malformedPercentEncoding: relativeMalformedPercentEncoding,
-    malformedSchemeSpecific: relativeMalformedSchemeSpecific,
-    malformedHost: relativeMalformedHost,
-    malformedScheme: relativeMalformedScheme
-  } = parseWithStatus(relativeURI, schemelessOptions)
-  if (
-    baseMalformed ||
-    relativeMalformed ||
-    baseMalformedPercentEncoding ||
-    relativeMalformedPercentEncoding ||
-    baseMalformedSchemeSpecific ||
-    relativeMalformedSchemeSpecific ||
-    baseMalformedHost ||
-    relativeMalformedHost ||
-    baseMalformedScheme ||
-    relativeMalformedScheme
-  ) {
-    throw new Error(baseParsed.error || relativeParsed.error || 'URI is malformed.')
-  }
-  const resolved = resolveComponent(baseParsed, relativeParsed, schemelessOptions, true)
-  const resolvedSchemeHandler = getSchemeHandler((options && options.scheme) || resolved.scheme)
-  const resolvedHost = resolved.host
-  const resolvedHostIsIP = resolvedHost !== undefined && resolvedHost !== '' &&
-    (isIPv4(resolvedHost) || normalizeIPv6(resolvedHost).isIPV6)
-  canonicalizeHost(resolved, options || {}, resolvedSchemeHandler, resolvedHostIsIP)
-  // Percent escapes in an ASCII reg-name are encoded data. The WHATWG hostname
-  // parser can reject them even though fast-uri preserves them safely as RFC
-  // 3986 data. A raw non-ASCII host must still fail closed if conversion fails.
-  const encodedASCIIHost = resolvedHost && resolvedHost.indexOf('%') !== -1 &&
-    !/\P{ASCII}/u.test(resolvedHost)
-  if (resolved.error && !encodedASCIIHost) {
-    throw new Error(resolved.error)
-  }
-  schemelessOptions.skipEscape = true
-  return serialize(resolved, schemelessOptions)
-}
-
-/**
- * @param {import ('./types/index').URIComponent} base
- * @param {import ('./types/index').URIComponent} relative
- * @param {import('./types/index').Options} [options]
- * @param {boolean} [skipNormalization=false]
- * @returns {import ('./types/index').URIComponent}
- */
-function resolveComponent (base, relative, options, skipNormalization) {
-  /** @type {import('./types/index').URIComponent} */
-  const target = {}
-  if (!skipNormalization) {
-    base = parse(serialize(base, options), options) // normalize base component
-    relative = parse(serialize(relative, options), options) // normalize relative component
-  }
-  options = options || {}
-
-  if (!options.tolerant && relative.scheme) {
-    target.scheme = relative.scheme
-    // target.authority = relative.authority;
-    target.userinfo = relative.userinfo
-    target.host = relative.host
-    target.port = relative.port
-    target.path = removeDotSegments(relative.path || '')
-    target.query = relative.query
-  } else {
-    if (relative.userinfo !== undefined || relative.host !== undefined || relative.port !== undefined) {
-      // target.authority = relative.authority;
-      target.userinfo = relative.userinfo
-      target.host = relative.host
-      target.port = relative.port
-      target.path = removeDotSegments(relative.path || '')
-      target.query = relative.query
-    } else {
-      if (!relative.path) {
-        target.path = base.path
-        if (relative.query !== undefined) {
-          target.query = relative.query
-        } else {
-          target.query = base.query
-        }
-      } else {
-        if (relative.path[0] === '/') {
-          target.path = removeDotSegments(relative.path)
-        } else {
-          if ((base.userinfo !== undefined || base.host !== undefined || base.port !== undefined) && !base.path) {
-            target.path = '/' + relative.path
-          } else if (!base.path) {
-            target.path = relative.path
-          } else {
-            target.path = base.path.slice(0, base.path.lastIndexOf('/') + 1) + relative.path
-          }
-          target.path = removeDotSegments(target.path)
-        }
-        target.query = relative.query
-      }
-      // target.authority = base.authority;
-      target.userinfo = base.userinfo
-      target.host = base.host
-      target.port = base.port
-    }
-    target.scheme = base.scheme
-  }
-
-  target.fragment = relative.fragment
-
-  return target
-}
-
-/**
- * @param {import ('./types/index').URIComponent|string} uriA
- * @param {import ('./types/index').URIComponent|string} uriB
- * @param {import ('./types/index').Options} options
- * @returns {boolean}
- */
-function equal (uriA, uriB, options) {
-  const normalizedA = normalizeComparableURI(uriA, options)
-  const normalizedB = normalizeComparableURI(uriB, options)
-
-  return normalizedA !== undefined && normalizedB !== undefined && normalizedA === normalizedB
-}
-
-/**
- * @param {Readonly<import('./types/index').URIComponent>} cmpts
- * @param {import('./types/index').Options} [opts]
- * @returns {string}
- */
-function serialize (cmpts, opts) {
-  const component = {
-    host: cmpts.host,
-    scheme: cmpts.scheme,
-    userinfo: cmpts.userinfo,
-    port: cmpts.port,
-    path: cmpts.path,
-    query: cmpts.query,
-    nid: cmpts.nid,
-    nss: cmpts.nss,
-    uuid: cmpts.uuid,
-    fragment: cmpts.fragment,
-    reference: cmpts.reference,
-    resourceName: cmpts.resourceName,
-    secure: cmpts.secure,
-    error: ''
-  }
-  const options = Object.assign({}, opts)
-  const uriTokens = []
-
-  if (component.scheme) {
-    component.scheme = decodeValidScheme(component.scheme)
-  }
-
-  // find scheme handler
-  const schemeHandler = getSchemeHandler(options.scheme || component.scheme)
-
-  // perform scheme specific serialization
-  if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(component, options)
-
-  const hasAuthority = component.userinfo !== undefined || component.host !== undefined || component.port !== undefined
-  const pathNoScheme = !options.skipEscape && component.scheme === undefined && !hasAuthority
-
-  if (component.path !== undefined) {
-    if (!options.skipEscape) {
-      component.path = serializePathEncoding(component.path, pathNoScheme)
-    } else {
-      component.path = normalizePercentEncoding(component.path)
-    }
-  }
-
-  if (options.reference !== 'suffix' && component.scheme) {
-    // Scheme handlers may replace the scheme during serialization.
-    component.scheme = decodeValidScheme(component.scheme)
-    uriTokens.push(component.scheme, ':')
-  }
-
-  const authority = recomposeAuthority(component)
-  if (authority !== undefined) {
-    if (options.reference !== 'suffix') {
-      uriTokens.push('//')
-    }
-
-    uriTokens.push(authority)
-
-    if (component.path && component.path[0] !== '/') {
-      uriTokens.push('/')
-    }
-  }
-  if (component.path !== undefined) {
-    let s = component.path
-
-    if (!options.absolutePath && (!schemeHandler || !schemeHandler.absolutePath)) {
-      s = removeDotSegments(s)
-    }
-
-    // Dot-segment removal can expose a colon that was not originally in the
-    // first segment (for example, "./a:b"). Reapply path-noscheme encoding so
-    // the serialized relative reference cannot be reparsed as a URI scheme.
-    if (pathNoScheme) {
-      s = serializePathEncoding(s, true)
-    }
-
-    if (
-      authority === undefined &&
-      s[0] === '/' &&
-      s[1] === '/'
-    ) {
-      // don't allow the path to start with "//"
-      s = '/%2F' + s.slice(2)
-    }
-
-    uriTokens.push(s)
-  }
-
-  if (component.query !== undefined) {
-    uriTokens.push('?', encodeQuery(component.query))
-  }
-
-  if (component.fragment !== undefined) {
-    uriTokens.push('#', encodeFragment(component.fragment))
-  }
-  return uriTokens.join('')
-}
-
-const URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u
-
-// Captures the authority component (between "//" and the next "/", "?" or "#"),
-// with or without a scheme prefix, for the literal-backslash rejection below.
-const AUTHORITY_PREFIX = /^(?:[^#/:?]+:)?\/\/([^/?#]*)/
-
-// Captures the leading authority-introducer region after an optional scheme: a
-// run of forward slashes, backslashes, and the characters the WHATWG URL parser
-// removes before parsing (TAB U+0009, LF U+000A, CR U+000D). A valid introducer
-// is exactly "//". Node treats "\" as "/" on special schemes and strips those
-// characters first, so forms like "\\", "/\", "\/", "/<TAB>/", or a leading
-// "<TAB>//" reach an authority in Node while fast-uri's URI_PARSE folds them into
-// the path group (host confusion / SSRF / redirect bypass).
-const AUTHORITY_INTRODUCER_REGION = /^(?:[^#/:?]+:)?([/\\\t\n\r]*)/
-
-/**
- * @param {import('./types/index').URIComponent} parsed
- * @param {RegExpMatchArray} matches
- * @returns {string|undefined}
- */
-function getParseError (parsed, matches) {
-  if (matches[2] !== undefined && parsed.path && parsed.path[0] !== '/') {
-    return 'URI path must start with "/" when authority is present.'
-  }
-
-  if (typeof parsed.port === 'number' && (parsed.port < 0 || parsed.port > 65535)) {
-    return 'URI port is malformed.'
-  }
-
-  return undefined
-}
-
-/**
- * Checks percent syntax without decoding the represented octets. RFC 3986
- * percent-encoding is byte-oriented, so sequences such as `%FF` are valid even
- * though they are not independently valid UTF-8.
- *
- * @param {string|undefined} component
- * @returns {boolean}
- */
-function hasMalformedPercentEncoding (component) {
-  if (component === undefined) return false
-
-  let percent = component.indexOf('%')
-  while (percent !== -1) {
-    if (percent + 2 >= component.length || !/^[\da-f]{2}$/iu.test(component.slice(percent + 1, percent + 3))) {
-      return true
-    }
-    percent = component.indexOf('%', percent + 3)
-  }
-
-  return false
-}
-
-/**
- * Whether the host is a bracketed IP literal (RFC 3986 `IP-literal`).
- * An unterminated `[` is not a literal, so it must still be validated as a
- * reg-name instead of being waved through as an IP.
- *
- * @param {string} host
- * @returns {boolean}
- */
-function isIPLiteral (host) {
-  return host[0] === '[' && host[host.length - 1] === ']'
-}
-
-/**
- * @param {RegExpMatchArray} matches
- * @returns {boolean}
- */
-function hasMalformedComponentPercentEncoding (matches) {
-  // Bracketed IP literals use a raw "%" as the zone separator for historical
-  // compatibility. Their parsing is intentionally left to normalizeIPv6.
-  const host = matches[4]
-  return hasMalformedPercentEncoding(matches[3]) ||
-    (host !== undefined && !isIPLiteral(host) && hasMalformedPercentEncoding(host)) ||
-    hasMalformedPercentEncoding(matches[6]) ||
-    hasMalformedPercentEncoding(matches[7]) ||
-    hasMalformedPercentEncoding(matches[8])
-}
-
-/**
- * @param {import('./types/index').URIComponent} parsed
- * @param {import('./types/index').Options} options
- * @param {{ domainHost?: boolean, unicodeSupport?: boolean }|undefined} schemeHandler
- * @param {boolean} isIP
- * @returns {boolean} whether host conversion failed
- */
-function canonicalizeHost (parsed, options, schemeHandler, isIP) {
-  if (
-    !options.unicodeSupport &&
-    (!schemeHandler || !schemeHandler.unicodeSupport) &&
-    parsed.host &&
-    !isIPLiteral(parsed.host) &&
-    (options.domainHost || (schemeHandler && schemeHandler.domainHost)) &&
-    isIP === false &&
-    nonSimpleDomain(parsed.host)
-  ) {
-    try {
-      parsed.host = new URL('http://' + parsed.host).hostname
-    } catch (e) {
-      parsed.error = parsed.error || "Host's domain name can not be converted to ASCII: " + e
-      return true
-    }
-  }
-  return false
-}
-
-/**
- * @param {string} uri
- * @param {import('./types/index').Options} [opts]
- * @returns {{ parsed: import('./types/index').URIComponent, malformedAuthorityOrPort: boolean, malformedPercentEncoding: boolean, malformedSchemeSpecific: boolean, malformedHost: boolean, malformedScheme: boolean }}
- */
-function parseWithStatus (uri, opts) {
-  const options = Object.assign({}, opts)
-  /** @type {import('./types/index').URIComponent} */
-  const parsed = {
-    scheme: undefined,
-    userinfo: undefined,
-    host: '',
-    port: undefined,
-    path: '',
-    query: undefined,
-    fragment: undefined
-  }
-
-  let malformedAuthorityOrPort = false
-  let malformedPercentEncoding = false
-  let malformedSchemeSpecific = false
-  let malformedHost = false
-  let malformedIPLiteral = false
-  let malformedScheme = false
-
-  let isIP = false
-  if (options.reference === 'suffix') {
-    if (options.scheme) {
-      uri = options.scheme + ':' + uri
-    } else {
-      uri = '//' + uri
-    }
-  }
-
-  // A literal backslash (U+005C) is not a valid RFC 3986 URI character and is
-  // not an authority delimiter. Reject it in the authority rather than
-  // rewriting it: normalizing "\" -> "/" (WHATWG error recovery) could silently
-  // change the resource identified by an otherwise-invalid input, and lets "\"
-  // act as a host delimiter here while Node's native URL parses a different
-  // host (SSRF / redirect / origin-allowlist bypass). Percent-encoded %5C is
-  // untouched and remains valid encoded data.
-  const authorityMatch = uri.match(AUTHORITY_PREFIX)
-  if (authorityMatch !== null && authorityMatch[1].indexOf('\\') !== -1) {
-    parsed.error = 'URI authority must not contain a literal backslash.'
-    malformedAuthorityOrPort = true
-  }
-
-  // Reject a malformed or whitespace-smuggled authority introducer. fast-uri
-  // only recognizes a literal "//"; anything else in the leading separator run
-  // (a backslash, or a "//" that appears only after removing the TAB/LF/CR that
-  // Node strips) means the authority fast-uri parses differs from the one Node's
-  // URL resolves. Reject rather than rewrite, mirroring the literal-backslash
-  // guard above. Percent-encoded forms (%5C, %09) are untouched, valid data.
-  const introducerMatch = uri.match(AUTHORITY_INTRODUCER_REGION)
-  if (introducerMatch !== null) {
-    const region = introducerMatch[1]
-    const normalizedRegion = region.replace(/[\t\n\r]/g, '')
-    // Two or more leading separators introduce an authority.
-    if (normalizedRegion.length >= 2) {
-      if (normalizedRegion.slice(0, 2) !== '//') {
-        parsed.error = parsed.error || 'URI authority must not contain a literal backslash.'
-        malformedAuthorityOrPort = true
-      } else if (region.length !== normalizedRegion.length) {
-        parsed.error = parsed.error || 'URI authority introducer must not contain whitespace.'
-        malformedAuthorityOrPort = true
-      }
-    }
-  }
-
-  const matches = uri.match(URI_PARSE)
-
-  if (matches) {
-    // store each component
-    parsed.scheme = matches[1]
-    parsed.userinfo = matches[3]
-    parsed.host = matches[4]
-    parsed.port = parseInt(matches[5], 10)
-    parsed.path = matches[6] || ''
-    parsed.query = matches[7]
-    parsed.fragment = matches[8]
-
-    if (parsed.scheme !== undefined) {
-      const decodedScheme = unescape(parsed.scheme)
-      if (VALID_SCHEME.test(decodedScheme)) {
-        parsed.scheme = decodedScheme.toLowerCase()
-      } else {
-        parsed.error = parsed.error || MALFORMED_SCHEME_ERROR
-        malformedScheme = true
-      }
-    }
-
-    malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches)
-    if (malformedPercentEncoding) {
-      parsed.error = parsed.error || 'URI contains malformed percent-encoding.'
-    }
-
-    // fix port number
-    if (isNaN(parsed.port)) {
-      parsed.port = matches[5]
-    }
-
-    const parseError = getParseError(parsed, matches)
-    if (parseError !== undefined) {
-      parsed.error = parsed.error || parseError
-      malformedAuthorityOrPort = true
-    }
-
-    if (parsed.host) {
-      const ipv4result = isIPv4(parsed.host)
-      if (ipv4result === false) {
-        const bracketedIPLiteral = isIPLiteral(parsed.host)
-        const hasIPLiteralBracket = parsed.host.indexOf('[') !== -1 || parsed.host.indexOf(']') !== -1
-        const ipv6result = normalizeIPv6(parsed.host)
-        isIP = ipv6result.isIPV6 || ipv6result.isIPVFuture === true
-        malformedIPLiteral = hasIPLiteralBracket && (!bracketedIPLiteral || ipv6result.error === true)
-        parsed.host = isIP ? ipv6result.host : ipv6result.host.toLowerCase()
-
-        if (malformedIPLiteral) {
-          parsed.error = parsed.error || 'URI host is malformed.'
-          malformedAuthorityOrPort = true
-        }
-      } else {
-        isIP = true
-      }
-    }
-    if (parsed.scheme === undefined && parsed.userinfo === undefined && parsed.host === undefined && parsed.port === undefined && parsed.query === undefined && !parsed.path) {
-      parsed.reference = 'same-document'
-    } else if (parsed.scheme === undefined) {
-      parsed.reference = 'relative'
-    } else if (parsed.fragment === undefined) {
-      parsed.reference = 'absolute'
-    } else {
-      parsed.reference = 'uri'
-    }
-
-    // check for reference errors
-    if (options.reference && options.reference !== 'suffix' && options.reference !== parsed.reference) {
-      parsed.error = parsed.error || 'URI is not a ' + options.reference + ' reference.'
-    }
-
-    // find scheme handler
-    const schemeHandler = getSchemeHandler(options.scheme || parsed.scheme)
-
-    // convert Unicode IDN -> ASCII IDN when the effective scheme uses domain hosts
-    if (!malformedIPLiteral) {
-      malformedHost = canonicalizeHost(parsed, options, schemeHandler, isIP)
-    }
-
-    if (!schemeHandler || (schemeHandler && !schemeHandler.skipNormalize)) {
-      if (uri.indexOf('%') !== -1) {
-        if (parsed.host !== undefined && !malformedIPLiteral) {
-          const host = isIP ? parsed.host : normalizePercentEncoding(parsed.host, true)
-          parsed.host = reescapeHostDelimiters(host, isIP)
-        }
-      }
-      if (parsed.path) {
-        parsed.path = normalizePathEncoding(parsed.path)
-      }
-      if (parsed.query) {
-        parsed.query = normalizeQueryFragmentEncoding(parsed.query)
-      }
-      if (parsed.fragment) {
-        parsed.fragment = normalizeQueryFragmentEncoding(parsed.fragment)
-      }
-    }
-
-    // perform scheme specific parsing
-    if (schemeHandler && schemeHandler.parse) {
-      schemeHandler.parse(parsed, options)
-      if (schemeHandler === SCHEMES.urn && parsed.nid === undefined) {
-        malformedSchemeSpecific = true
-      }
-    }
-  } else {
-    parsed.error = parsed.error || 'URI can not be parsed.'
-  }
-  return { parsed, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme }
-}
-
-/**
- * @param {string} uri
- * @param {import('./types/index').Options} [opts]
- * @returns
- */
-function parse (uri, opts) {
-  return parseWithStatus(uri, opts).parsed
-}
-
-/**
- * @param {string} uri
- * @param {import('./types/index').Options} [opts]
- * @returns {string}
- */
-function normalizeString (uri, opts) {
-  return normalizeStringWithStatus(uri, opts).normalized
-}
-
-/**
- * @param {string} uri
- * @param {import('./types/index').Options} [opts]
- * @returns {{ normalized: string, malformedAuthorityOrPort: boolean, malformedPercentEncoding: boolean, malformedSchemeSpecific: boolean, malformedHost: boolean, malformedScheme: boolean }}
- */
-function normalizeStringWithStatus (uri, opts) {
-  const { parsed, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme } = parseWithStatus(uri, opts)
-  return {
-    normalized: malformedAuthorityOrPort || malformedPercentEncoding || malformedSchemeSpecific || malformedHost || malformedScheme ? uri : serialize(parsed, opts),
-    malformedAuthorityOrPort,
-    malformedPercentEncoding,
-    malformedSchemeSpecific,
-    malformedHost,
-    malformedScheme
-  }
-}
-
-/**
- * @param {import ('./types/index').URIComponent|string} uri
- * @param {import('./types/index').Options} [opts]
- * @returns {string|undefined}
- */
-function normalizeComparableURI (uri, opts) {
-  if (typeof uri !== 'string' && typeof uri !== 'object') {
-    return undefined
-  }
-
-  let value
-  try {
-    value = typeof uri === 'string' ? uri : serialize(uri, opts)
-  } catch {
-    return undefined
-  }
-  const { normalized, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme } = normalizeStringWithStatus(value, opts)
-  return malformedAuthorityOrPort || malformedPercentEncoding || malformedSchemeSpecific || malformedHost || malformedScheme ? undefined : normalized
-}
-
-const fastUri = {
-  SCHEMES,
-  normalize,
-  resolve,
-  resolveComponent,
-  equal,
-  serialize,
-  parse
-}
-
-module.exports = fastUri
-module.exports["default"] = fastUri
-module.exports.fastUri = fastUri
-
-
-/***/ },
-
-/***/ "./node_modules/fast-uri/lib/schemes.js"
-/*!**********************************************!*\
-  !*** ./node_modules/fast-uri/lib/schemes.js ***!
-  \**********************************************/
-(module, __unused_webpack_exports, __webpack_require__) {
-
-"use strict";
-
-
-const { isUUID } = __webpack_require__(/*! ./utils */ "./node_modules/fast-uri/lib/utils.js")
-const URN_REG = /^([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-./:;=@]|%[\da-f]{2})+)$/iu
-
-const supportedSchemeNames = /** @type {const} */ (['http', 'https', 'ws',
-  'wss', 'urn', 'urn:uuid'])
-
-/** @typedef {supportedSchemeNames[number]} SchemeName */
-
-/**
- * @param {string} name
- * @returns {name is SchemeName}
- */
-function isValidSchemeName (name) {
-  return supportedSchemeNames.indexOf(/** @type {*} */ (name)) !== -1
-}
-
-/**
- * @callback SchemeFn
- * @param {import('../types/index').URIComponent} component
- * @param {import('../types/index').Options} options
- * @returns {import('../types/index').URIComponent}
- */
-
-/**
- * @typedef {Object} SchemeHandler
- * @property {SchemeName} scheme - The scheme name.
- * @property {boolean} [domainHost] - Indicates if the scheme supports domain hosts.
- * @property {SchemeFn} parse - Function to parse the URI component for this scheme.
- * @property {SchemeFn} serialize - Function to serialize the URI component for this scheme.
- * @property {boolean} [skipNormalize] - Indicates if normalization should be skipped for this scheme.
- * @property {boolean} [absolutePath] - Indicates if the scheme uses absolute paths.
- * @property {boolean} [unicodeSupport] - Indicates if the scheme supports Unicode.
- */
-
-/**
- * @param {import('../types/index').URIComponent} wsComponent
- * @returns {boolean}
- */
-function wsIsSecure (wsComponent) {
-  if (wsComponent.secure === true) {
-    return true
-  } else if (wsComponent.secure === false) {
-    return false
-  } else if (wsComponent.scheme) {
-    return (
-      wsComponent.scheme.length === 3 &&
-      (wsComponent.scheme[0] === 'w' || wsComponent.scheme[0] === 'W') &&
-      (wsComponent.scheme[1] === 's' || wsComponent.scheme[1] === 'S') &&
-      (wsComponent.scheme[2] === 's' || wsComponent.scheme[2] === 'S')
-    )
-  } else {
-    return false
-  }
-}
-
-/** @type {SchemeFn} */
-function httpParse (component) {
-  if (!component.host) {
-    component.error = component.error || 'HTTP URIs must have a host.'
-  }
-
-  return component
-}
-
-/** @type {SchemeFn} */
-function httpSerialize (component) {
-  const secure = String(component.scheme).toLowerCase() === 'https'
-
-  // normalize the default port
-  if (component.port === (secure ? 443 : 80) || component.port === '') {
-    component.port = undefined
-  }
-
-  // normalize the empty path
-  if (!component.path) {
-    component.path = '/'
-  }
-
-  // NOTE: We do not parse query strings for HTTP URIs
-  // as WWW Form Url Encoded query strings are part of the HTML4+ spec,
-  // and not the HTTP spec.
-
-  return component
-}
-
-/** @type {SchemeFn} */
-function wsParse (wsComponent) {
-// indicate if the secure flag is set
-  wsComponent.secure = wsIsSecure(wsComponent)
-
-  // construct resouce name
-  wsComponent.resourceName = (wsComponent.path || '/') + (wsComponent.query ? '?' + wsComponent.query : '')
-  wsComponent.path = undefined
-  wsComponent.query = undefined
-
-  return wsComponent
-}
-
-/** @type {SchemeFn} */
-function wsSerialize (wsComponent) {
-// normalize the default port
-  if (wsComponent.port === (wsIsSecure(wsComponent) ? 443 : 80) || wsComponent.port === '') {
-    wsComponent.port = undefined
-  }
-
-  // ensure scheme matches secure flag
-  if (typeof wsComponent.secure === 'boolean') {
-    wsComponent.scheme = (wsComponent.secure ? 'wss' : 'ws')
-    wsComponent.secure = undefined
-  }
-
-  // reconstruct path from resource name
-  if (wsComponent.resourceName) {
-    const queryIndex = wsComponent.resourceName.indexOf('?')
-    const path = queryIndex === -1
-      ? wsComponent.resourceName
-      : wsComponent.resourceName.slice(0, queryIndex)
-    wsComponent.path = (path && path !== '/' ? path : undefined)
-    wsComponent.query = queryIndex === -1
-      ? undefined
-      : wsComponent.resourceName.slice(queryIndex + 1)
-    wsComponent.resourceName = undefined
-  }
-
-  // forbid fragment component
-  wsComponent.fragment = undefined
-
-  return wsComponent
-}
-
-/** @type {SchemeFn} */
-function urnParse (urnComponent, options) {
-  if (!urnComponent.path) {
-    urnComponent.error = 'URN can not be parsed'
-    return urnComponent
-  }
-  const matches = urnComponent.path.match(URN_REG)
-  if (matches && matches[0] === urnComponent.path) {
-    const scheme = options.scheme || urnComponent.scheme || 'urn'
-    urnComponent.nid = matches[1].toLowerCase()
-    urnComponent.nss = matches[2]
-    const urnScheme = `${scheme}:${options.nid || urnComponent.nid}`
-    const schemeHandler = getSchemeHandler(urnScheme)
-    urnComponent.path = undefined
-
-    if (schemeHandler) {
-      urnComponent = schemeHandler.parse(urnComponent, options)
-    }
-  } else {
-    urnComponent.error = urnComponent.error || 'URN can not be parsed.'
-  }
-
-  return urnComponent
-}
-
-/** @type {SchemeFn} */
-function urnSerialize (urnComponent, options) {
-  if (urnComponent.nid === undefined) {
-    throw new Error('URN without nid cannot be serialized')
-  }
-  const scheme = options.scheme || urnComponent.scheme || 'urn'
-  const nid = urnComponent.nid.toLowerCase()
-  const urnScheme = `${scheme}:${options.nid || nid}`
-  const schemeHandler = getSchemeHandler(urnScheme)
-
-  if (schemeHandler) {
-    urnComponent = schemeHandler.serialize(urnComponent, options)
-  }
-
-  const uriComponent = urnComponent
-  const nss = urnComponent.nss
-  uriComponent.path = `${nid || options.nid}:${nss}`
-
-  options.skipEscape = true
-  return uriComponent
-}
-
-/** @type {SchemeFn} */
-function urnuuidParse (urnComponent, options) {
-  const uuidComponent = urnComponent
-  uuidComponent.uuid = uuidComponent.nss
-  uuidComponent.nss = undefined
-
-  if (!options.tolerant && (!uuidComponent.uuid || !isUUID(uuidComponent.uuid))) {
-    uuidComponent.error = uuidComponent.error || 'UUID is not valid.'
-  }
-
-  return uuidComponent
-}
-
-/** @type {SchemeFn} */
-function urnuuidSerialize (uuidComponent) {
-  const urnComponent = uuidComponent
-  // normalize UUID
-  urnComponent.nss = (uuidComponent.uuid || '').toLowerCase()
-  return urnComponent
-}
-
-const http = /** @type {SchemeHandler} */ ({
-  scheme: 'http',
-  domainHost: true,
-  parse: httpParse,
-  serialize: httpSerialize
-})
-
-const https = /** @type {SchemeHandler} */ ({
-  scheme: 'https',
-  domainHost: http.domainHost,
-  parse: httpParse,
-  serialize: httpSerialize
-})
-
-const ws = /** @type {SchemeHandler} */ ({
-  scheme: 'ws',
-  domainHost: true,
-  parse: wsParse,
-  serialize: wsSerialize
-})
-
-const wss = /** @type {SchemeHandler} */ ({
-  scheme: 'wss',
-  domainHost: ws.domainHost,
-  parse: ws.parse,
-  serialize: ws.serialize
-})
-
-const urn = /** @type {SchemeHandler} */ ({
-  scheme: 'urn',
-  parse: urnParse,
-  serialize: urnSerialize,
-  skipNormalize: true
-})
-
-const urnuuid = /** @type {SchemeHandler} */ ({
-  scheme: 'urn:uuid',
-  parse: urnuuidParse,
-  serialize: urnuuidSerialize,
-  skipNormalize: true
-})
-
-const SCHEMES = /** @type {Record<SchemeName, SchemeHandler>} */ ({
-  http,
-  https,
-  ws,
-  wss,
-  urn,
-  'urn:uuid': urnuuid
-})
-
-Object.setPrototypeOf(SCHEMES, null)
-
-/**
- * @param {string|undefined} scheme
- * @returns {SchemeHandler|undefined}
- */
-function getSchemeHandler (scheme) {
-  return (
-    scheme && (
-      SCHEMES[/** @type {SchemeName} */ (scheme)] ||
-      SCHEMES[/** @type {SchemeName} */(scheme.toLowerCase())])
-  ) ||
-    undefined
-}
-
-module.exports = {
-  wsIsSecure,
-  SCHEMES,
-  isValidSchemeName,
-  getSchemeHandler,
-}
-
-
-/***/ },
-
-/***/ "./node_modules/fast-uri/lib/utils.js"
-/*!********************************************!*\
-  !*** ./node_modules/fast-uri/lib/utils.js ***!
-  \********************************************/
-(module) {
-
-"use strict";
-
-
-/** @type {(value: string) => boolean} */
-const isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu)
-
-/** @type {(value: string) => boolean} */
-const isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u)
-
-/** @type {(value: string) => boolean} */
-const isPort = RegExp.prototype.test.bind(/^\d*$/u)
-
-/** @type {(value: string) => boolean} */
-const isHexPair = RegExp.prototype.test.bind(/^[\da-f]{2}$/iu)
-
-/** @type {(value: string) => boolean} */
-const isUnreserved = RegExp.prototype.test.bind(/^[\da-z\-._~]$/iu)
-
-/** @type {(value: string) => boolean} */
-const isPathCharacter = RegExp.prototype.test.bind(/^[A-Za-z0-9\-._~!$&'()*+,;=:@/]$/u)
-
-/** @type {(value: string) => boolean} */
-const isQueryFragmentCharacter = RegExp.prototype.test.bind(/^[A-Za-z0-9\-._~!$&'()*+,;=:@/?]$/u)
-
-/** @type {(value: string) => boolean} */
-const isUserinfoCharacter = RegExp.prototype.test.bind(/^[A-Za-z0-9\-._~!$&'()*+,;=:]$/u)
-
-const BYTE_HEX = new Array(256)
-{
-  const HEX_DIGITS = '0123456789ABCDEF'
-  for (let i = 0; i < 256; i++) {
-    BYTE_HEX[i] = '%' + HEX_DIGITS[i >> 4] + HEX_DIGITS[i & 0xF]
-  }
-}
-function percentEncodeNonAscii (cp) {
-  if (cp < 0x800) {
-    return BYTE_HEX[0xC0 | (cp >> 6)] +
-           BYTE_HEX[0x80 | (cp & 0x3F)]
-  }
-  if (cp < 0x10000) {
-    return BYTE_HEX[0xE0 | (cp >> 12)] +
-           BYTE_HEX[0x80 | ((cp >> 6) & 0x3F)] +
-           BYTE_HEX[0x80 | (cp & 0x3F)]
-  }
-  return BYTE_HEX[0xF0 | (cp >> 18)] +
-         BYTE_HEX[0x80 | ((cp >> 12) & 0x3F)] +
-         BYTE_HEX[0x80 | ((cp >> 6) & 0x3F)] +
-         BYTE_HEX[0x80 | (cp & 0x3F)]
-}
-
-/**
- * @param {Array<string>} input
- * @returns {string}
- */
-function stringArrayToHexStripped (input) {
-  let acc = ''
-  let code = 0
-  let i = 0
-
-  for (i = 0; i < input.length; i++) {
-    code = input[i].charCodeAt(0)
-    if (code === 48) {
-      continue
-    }
-    if (!((code >= 48 && code <= 57) || (code >= 65 && code <= 70) || (code >= 97 && code <= 102))) {
-      return ''
-    }
-    acc += input[i]
-    break
-  }
-
-  for (i += 1; i < input.length; i++) {
-    code = input[i].charCodeAt(0)
-    if (!((code >= 48 && code <= 57) || (code >= 65 && code <= 70) || (code >= 97 && code <= 102))) {
-      return ''
-    }
-    acc += input[i]
-  }
-  return acc
-}
-
-/** @type {(value: string) => boolean} */
-const isHextet = RegExp.prototype.test.bind(/^[\dA-Fa-f]{1,4}$/)
-
-/** @type {(value: string) => boolean} */
-const isIPvFuture = RegExp.prototype.test.bind(/^[vV][\dA-Fa-f]+\.[A-Za-z\d\-._~!$&'()*+,;=:]+$/)
-
-/** @type {(value: string) => boolean} */
-const isZoneCharacter = RegExp.prototype.test.bind(/^[A-Za-z\d\-._~]$/)
-
-/**
- * @param {string} value
- * @returns {boolean}
- */
-const nonSimpleDomain = RegExp.prototype.test.bind(/[^!"$&'()*+,\-.;=_`a-z{}~]/u)
-
-/**
- * @param {string} zone
- * @returns {boolean}
- */
-function isZoneIdentifier (zone) {
-  if (zone.length === 0) return false
-
-  for (let i = 0; i < zone.length; i++) {
-    if (isZoneCharacter(zone[i])) continue
-    if (zone[i] === '%' && i + 2 < zone.length && isHexPair(zone.slice(i + 1, i + 3))) {
-      i += 2
-      continue
-    }
-    return false
-  }
-
-  return true
-}
-
-/**
- * Compresses the longest run of zero hextets to "::" per RFC 5952. A run of a
- * single zero hextet is left uncompressed. On ties the leftmost run wins.
- *
- * @param {string[]} hextets
- * @returns {string}
- */
-function compressIPv6ZeroRun (hextets) {
-  let bestStart = -1
-  let bestLength = 0
-  let runStart = -1
-  let runLength = 0
-  for (let i = 0; i < hextets.length; i++) {
-    if (hextets[i] === '0') {
-      if (runStart === -1) runStart = i
-      runLength++
-      if (runLength > bestLength) {
-        bestLength = runLength
-        bestStart = runStart
-      }
-    } else {
-      runStart = -1
-      runLength = 0
-    }
-  }
-
-  if (bestLength < 2) return hextets.join(':')
-
-  const head = hextets.slice(0, bestStart).join(':')
-  const tail = hextets.slice(bestStart + bestLength).join(':')
-  return head + '::' + tail
-}
-
-/**
- * Validates an IPv6 address against the alternatives in RFC 3986 section
- * 3.2.2 and returns the same address with leading hextet zeroes removed.
- * An embedded IPv4 address counts as two hextets and is only valid at the end.
- *
- * @param {string} input
- * @returns {string|undefined}
- */
-function normalizeIPv6Address (input) {
-  const compression = input.indexOf('::')
-  if (compression !== -1 && input.indexOf('::', compression + 1) !== -1) return undefined
-
-  const left = compression === -1 ? input.split(':') : input.slice(0, compression).split(':')
-  const right = compression === -1 ? [] : input.slice(compression + 2).split(':')
-  if (compression !== -1) {
-    if (left.length === 1 && left[0] === '') left.length = 0
-    if (right.length === 1 && right[0] === '') right.length = 0
-  }
-
-  const parts = left.concat(right)
-  let hextetCount = 0
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]
-    if (part === '') return undefined
-
-    if (part.indexOf('.') !== -1) {
-      if (i !== parts.length - 1 || (compression !== -1 && right.length === 0) || !isIPv4(part)) return undefined
-      hextetCount += 2
-      continue
-    }
-
-    if (!isHextet(part)) return undefined
-    parts[i] = parseInt(part, 16).toString(16)
-    hextetCount++
-  }
-
-  if (compression === -1) {
-    if (hextetCount !== 8) return undefined
-    return compressIPv6ZeroRun(parts)
-  }
-  if (hextetCount >= 8) return undefined
-
-  // expand "::" then re-compress the longest run for a canonical result
-  const expanded = parts.slice(0, left.length)
-  for (let i = hextetCount; i < 8; i++) expanded.push('0')
-  for (let i = left.length; i < parts.length; i++) expanded.push(parts[i])
-  return compressIPv6ZeroRun(expanded)
-}
-
-/**
- * @typedef {Object} NormalizeIPv6Result
- * @property {string} host - The normalized host.
- * @property {string} [escapedHost] - The escaped host.
- * @property {boolean} isIPV6 - Indicates if the host is an IPv6 address.
- * @property {boolean} [isIPVFuture] - Indicates if the host is an IPvFuture literal.
- * @property {boolean} [error] - Indicates if a bracketed IP literal is malformed.
- */
-
-/**
- * Validates and normalizes a bracketed IP literal. Raw zone separators remain
- * accepted for backwards compatibility, while encoded separators and zone
- * contents follow RFC 6874.
- *
- * @param {string} host
- * @returns {NormalizeIPv6Result}
- */
-function normalizeIPv6 (host) {
-  const bracketed = host[0] === '[' && host[host.length - 1] === ']'
-  const hasBracket = host[0] === '[' || host[host.length - 1] === ']'
-  if (hasBracket && !bracketed) return { host, isIPV6: false, error: true }
-
-  let input = bracketed ? host.slice(1, -1) : host
-  if (bracketed && isIPvFuture(input)) {
-    input = input.toLowerCase()
-    return { host: `[${input}]`, escapedHost: input, isIPV6: false, isIPVFuture: true }
-  }
-
-  if (findToken(input, ':') < 2) {
-    return { host, isIPV6: false, error: bracketed }
-  }
-
-  let zoneIdentifier = ''
-  const zoneSeparator = input.indexOf('%')
-  if (zoneSeparator !== -1) {
-    const separatorLength = input.slice(zoneSeparator, zoneSeparator + 3).toLowerCase() === '%25' ? 3 : 1
-    zoneIdentifier = input.slice(zoneSeparator + separatorLength)
-    if (!isZoneIdentifier(zoneIdentifier)) return { host, isIPV6: false, error: true }
-    input = input.slice(0, zoneSeparator)
-  }
-
-  const address = normalizeIPv6Address(input)
-  if (address === undefined) return { host, isIPV6: false, error: true }
-
-  return {
-    host: address + (zoneIdentifier ? '%' + zoneIdentifier : ''),
-    escapedHost: address + (zoneIdentifier ? '%25' + zoneIdentifier : ''),
-    isIPV6: true
-  }
-}
-
-/**
- * @param {string} str
- * @param {string} token
- * @returns {number}
- */
-function findToken (str, token) {
-  let ind = 0
-  for (let i = 0; i < str.length; i++) {
-    if (str[i] === token) ind++
-  }
-  return ind
-}
-
-/**
- * @param {string} path
- * @returns {string}
- *
- * @see https://datatracker.ietf.org/doc/html/rfc3986#section-5.2.4
- */
-function removeDotSegments (path) {
-  let input = path
-  const output = []
-  let nextSlash = -1
-  let len = 0
-
-  // eslint-disable-next-line no-cond-assign
-  while (len = input.length) {
-    if (len === 1) {
-      if (input === '.') {
-        break
-      } else if (input === '/') {
-        output.push('/')
-        break
-      } else {
-        output.push(input)
-        break
-      }
-    } else if (len === 2) {
-      if (input[0] === '.') {
-        if (input[1] === '.') {
-          break
-        } else if (input[1] === '/') {
-          input = input.slice(2)
-          continue
-        }
-      } else if (input[0] === '/') {
-        if (input[1] === '.' || input[1] === '/') {
-          output.push('/')
-          break
-        }
-      }
-    } else if (len === 3) {
-      if (input === '/..') {
-        if (output.length !== 0) {
-          output.pop()
-        }
-        output.push('/')
-        break
-      }
-    }
-    if (input[0] === '.') {
-      if (input[1] === '.') {
-        if (input[2] === '/') {
-          input = input.slice(3)
-          continue
-        }
-      } else if (input[1] === '/') {
-        input = input.slice(2)
-        continue
-      }
-    } else if (input[0] === '/') {
-      if (input[1] === '.') {
-        if (input[2] === '/') {
-          input = input.slice(2)
-          continue
-        } else if (input[2] === '.') {
-          if (input[3] === '/') {
-            input = input.slice(3)
-            if (output.length !== 0) {
-              output.pop()
-            }
-            continue
-          }
-        }
-      }
-    }
-
-    // Rule 2E: Move normal path segment to output
-    if ((nextSlash = input.indexOf('/', 1)) === -1) {
-      output.push(input)
-      break
-    } else {
-      output.push(input.slice(0, nextSlash))
-      input = input.slice(nextSlash)
-    }
-  }
-
-  return output.join('')
-}
-
-/**
- * Re-escape RFC 3986 gen-delims that must not appear literally in the host.
- * After the URI regex parses, these characters cannot be literal in the host
- * field, so any that appear after decoding came from percent-encoding and
- * must be restored to prevent authority structure changes.
- *
- * @param {string} host
- * @param {boolean} isIP - true for IPv4/IPv6 hosts (skip colon re-escaping)
- * @returns {string}
- */
-const HOST_DELIMS = { '@': '%40', '/': '%2F', '?': '%3F', '#': '%23', ':': '%3A' }
-const HOST_DELIM_RE = /[@/?#:]/g
-const HOST_DELIM_NO_COLON_RE = /[@/?#]/g
-
-function reescapeHostDelimiters (host, isIP) {
-  const re = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE
-  re.lastIndex = 0
-  return host.replace(re, (ch) => HOST_DELIMS[ch])
-}
-
-/**
- * Normalizes percent escapes and optionally decodes only unreserved ASCII bytes.
- * Reserved delimiters such as `%2F` stay escaped; `%2E` is unreserved.
- *
- * @param {string} input
- * @param {boolean} [decodeUnreserved=false]
- * @returns {string}
- */
-function normalizePercentEncoding (input, decodeUnreserved = false) {
-  if (input.indexOf('%') === -1) {
-    return input
-  }
-
-  let output = ''
-
-  for (let i = 0; i < input.length; i++) {
-    if (input[i] === '%' && i + 2 < input.length) {
-      const hex = input.slice(i + 1, i + 3)
-      if (isHexPair(hex)) {
-        const normalizedHex = hex.toUpperCase()
-        const decoded = String.fromCharCode(parseInt(normalizedHex, 16))
-
-        if (decodeUnreserved && isUnreserved(decoded)) {
-          output += decoded
-        } else {
-          output += '%' + normalizedHex
-        }
-
-        i += 2
-        continue
-      }
-    }
-
-    output += input[i]
-  }
-
-  return output
-}
-
-/**
- * Normalizes path data without turning reserved escapes into live path syntax.
- * Valid escapes are uppercased, raw unsafe characters are escaped, and only
- * unreserved bytes that are not `.` are decoded.
- *
- * @param {string} input
- * @returns {string}
- */
-function normalizePathEncoding (input) {
-  let output = ''
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i]
-    if (ch === '%' && i + 2 < input.length) {
-      const hex = input.slice(i + 1, i + 3)
-      if (isHexPair(hex)) {
-        const normalizedHex = hex.toUpperCase()
-        const decoded = String.fromCharCode(parseInt(normalizedHex, 16))
-
-        if (decoded !== '.' && isUnreserved(decoded)) {
-          output += decoded
-        } else {
-          output += '%' + normalizedHex
-        }
-
-        i += 2
-        continue
-      }
-    }
-
-    if (isPathCharacter(ch)) {
-      output += ch
-    } else {
-      const code = input.charCodeAt(i)
-      if (code < 0x80) {
-        output += isEscapeSafe(code) ? ch : BYTE_HEX[code]
-      } else if (code < 0xD800 || code > 0xDFFF) {
-        output += percentEncodeNonAscii(code)
-      } else if (code <= 0xDBFF && i + 1 < input.length) {
-        const low = input.charCodeAt(i + 1)
-        if (low >= 0xDC00 && low <= 0xDFFF) {
-          output += percentEncodeNonAscii(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
-          i++
-        } else {
-          output += percentEncodeNonAscii(0xFFFD)
-        }
-      } else {
-        output += percentEncodeNonAscii(0xFFFD)
-      }
-    }
-  }
-
-  return output
-}
-
-/**
- * Serializes a path without rewriting reserved data. Raw RFC 3986 path
- * characters remain literal, valid escapes are preserved and uppercased, and
- * everything else is UTF-8 percent-encoded. In a path-noscheme, a colon in the
- * first segment must be escaped so the result cannot be parsed as a scheme.
- *
- * @param {string} input
- * @param {boolean} [pathNoScheme=false]
- * @returns {string}
- */
-function serializePathEncoding (input, pathNoScheme = false) {
-  let output = ''
-  let firstSegment = pathNoScheme && input[0] !== '/'
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i]
-    if (ch === '%' && i + 2 < input.length) {
-      const hex = input.slice(i + 1, i + 3)
-      if (isHexPair(hex)) {
-        output += '%' + hex.toUpperCase()
-        i += 2
-        continue
-      }
-    }
-
-    if (ch === '/') {
-      firstSegment = false
-    }
-
-    if (isPathCharacter(ch) && (ch !== ':' || !firstSegment)) {
-      output += ch
-    } else {
-      const code = input.charCodeAt(i)
-      if (code < 0x80) {
-        output += BYTE_HEX[code]
-      } else if (code < 0xD800 || code > 0xDFFF) {
-        output += percentEncodeNonAscii(code)
-      } else if (code <= 0xDBFF && i + 1 < input.length) {
-        const low = input.charCodeAt(i + 1)
-        if (low >= 0xDC00 && low <= 0xDFFF) {
-          output += percentEncodeNonAscii(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
-          i++
-        } else {
-          output += percentEncodeNonAscii(0xFFFD)
-        }
-      } else {
-        output += percentEncodeNonAscii(0xFFFD)
-      }
-    }
-  }
-
-  return output
-}
-
-/**
- * Percent-encodes a URI component using its RFC 3986 literal character set.
- * Existing valid escapes are preserved and normalized to uppercase hex.
- *
- * @param {string} input
- * @param {(value: string) => boolean} isAllowed
- * @returns {string}
- */
-function encodeComponent (input, isAllowed) {
-  let output = ''
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i]
-    if (ch === '%' && i + 2 < input.length) {
-      const hex = input.slice(i + 1, i + 3)
-      if (isHexPair(hex)) {
-        output += '%' + hex.toUpperCase()
-        i += 2
-        continue
-      }
-    }
-
-    if (isAllowed(ch)) {
-      output += ch
-    } else {
-      const code = input.charCodeAt(i)
-      if (code < 0x80) {
-        output += BYTE_HEX[code]
-      } else if (code < 0xD800 || code > 0xDFFF) {
-        output += percentEncodeNonAscii(code)
-      } else if (code <= 0xDBFF && i + 1 < input.length) {
-        const low = input.charCodeAt(i + 1)
-        if (low >= 0xDC00 && low <= 0xDFFF) {
-          output += percentEncodeNonAscii(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
-          i++
-        } else {
-          output += percentEncodeNonAscii(0xFFFD)
-        }
-      } else {
-        output += percentEncodeNonAscii(0xFFFD)
-      }
-    }
-  }
-
-  return output
-}
-
-/**
- * Encodes userinfo while preserving its RFC 3986 §3.2.1 literal characters.
- * In particular, authority delimiters such as `@`, `/`, `?`, and `#` are data.
- *
- * @param {string} input
- * @returns {string}
- */
-function encodeUserinfo (input) {
-  return encodeComponent(input, isUserinfoCharacter)
-}
-
-/**
- * Encodes query data using the RFC 3986 §3.4 grammar. A literal `#` must be
- * escaped because it would otherwise begin the fragment component.
- *
- * @param {string} input
- * @returns {string}
- */
-function encodeQuery (input) {
-  return encodeComponent(input, isQueryFragmentCharacter)
-}
-
-/**
- * Encodes fragment data using the RFC 3986 §3.5 grammar.
- *
- * @param {string} input
- * @returns {string}
- */
-function encodeFragment (input) {
-  return encodeComponent(input, isQueryFragmentCharacter)
-}
-
-function isEscapeSafe (cp) {
-  return (
-    (cp >= 0x30 && cp <= 0x39) ||
-    (cp >= 0x41 && cp <= 0x5A) ||
-    (cp >= 0x61 && cp <= 0x7A) ||
-    cp === 0x2A || cp === 0x2B || cp === 0x2D || cp === 0x2E ||
-    cp === 0x2F || cp === 0x40 || cp === 0x5F
-  )
-}
-
-/**
- * Normalizes the percent-encoding of a query or fragment component.
- *
- * Like `normalizePathEncoding`, but uses the query/fragment character set
- * (which additionally allows `?`) and decodes `.` since it has no dot-segment
- * meaning outside of a path.
- *
- * @param {string} input
- * @returns {string}
- */
-function normalizeQueryFragmentEncoding (input) {
-  let output = ''
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i]
-    if (ch === '%' && i + 2 < input.length) {
-      const hex = input.slice(i + 1, i + 3)
-      if (isHexPair(hex)) {
-        const normalizedHex = hex.toUpperCase()
-        const decoded = String.fromCharCode(parseInt(normalizedHex, 16))
-
-        if (isUnreserved(decoded)) {
-          output += decoded
-        } else {
-          output += '%' + normalizedHex
-        }
-
-        i += 2
-        continue
-      }
-    }
-
-    if (isQueryFragmentCharacter(ch)) {
-      output += ch
-    } else {
-      const code = input.charCodeAt(i)
-      if (code < 0x80) {
-        output += isEscapeSafe(code) ? ch : BYTE_HEX[code]
-      } else if (code < 0xD800 || code > 0xDFFF) {
-        output += percentEncodeNonAscii(code)
-      } else if (code <= 0xDBFF && i + 1 < input.length) {
-        const low = input.charCodeAt(i + 1)
-        if (low >= 0xDC00 && low <= 0xDFFF) {
-          output += percentEncodeNonAscii(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
-          i++
-        } else {
-          output += percentEncodeNonAscii(0xFFFD)
-        }
-      } else {
-        output += percentEncodeNonAscii(0xFFFD)
-      }
-    }
-  }
-
-  return output
-}
-
-/**
- * Escapes a component while preserving existing valid percent escapes.
- *
- * @param {string} input
- * @returns {string}
- */
-function escapePreservingEscapes (input) {
-  let output = ''
-
-  for (let i = 0; i < input.length; i++) {
-    if (input[i] === '%' && i + 2 < input.length) {
-      const hex = input.slice(i + 1, i + 3)
-      if (isHexPair(hex)) {
-        output += '%' + hex.toUpperCase()
-        i += 2
-        continue
-      }
-    }
-
-    output += escape(input[i])
-  }
-
-  return output
-}
-
-/**
- * @param {import('../types/index').URIComponent} component
- * @returns {string|undefined}
- */
-function recomposeAuthority (component) {
-  const uriTokens = []
-
-  if (component.userinfo !== undefined) {
-    uriTokens.push(encodeUserinfo(component.userinfo))
-    uriTokens.push('@')
-  }
-
-  if (component.host !== undefined) {
-    let host = component.host
-    if (!isIPv4(host)) {
-      let ipV6res = normalizeIPv6(host)
-      if (ipV6res.isIPV6 !== true && ipV6res.isIPVFuture !== true) {
-        // Decode only unreserved bytes, once. In particular, keep %25 encoded
-        // so it cannot introduce a second escape during recomposition.
-        host = normalizePercentEncoding(host, true)
-        ipV6res = normalizeIPv6(host)
-      }
-      if (ipV6res.isIPV6 === true || ipV6res.isIPVFuture === true) {
-        host = `[${ipV6res.escapedHost}]`
-      } else {
-        host = reescapeHostDelimiters(host, false)
-      }
-    }
-    uriTokens.push(host)
-  }
-
-  if (typeof component.port === 'number' || typeof component.port === 'string') {
-    const port = String(component.port)
-    if (!isPort(port)) {
-      throw new TypeError('URI port is malformed.')
-    }
-    uriTokens.push(':')
-    uriTokens.push(port)
-  }
-
-  return uriTokens.length ? uriTokens.join('') : undefined
-};
-
-module.exports = {
-  nonSimpleDomain,
-  recomposeAuthority,
-  reescapeHostDelimiters,
-  normalizePercentEncoding,
-  normalizePathEncoding,
-  serializePathEncoding,
-  normalizeQueryFragmentEncoding,
-  encodeUserinfo,
-  encodeQuery,
-  encodeFragment,
-  escapePreservingEscapes,
-  removeDotSegments,
-  isIPv4,
-  isUUID,
-  normalizeIPv6,
-  stringArrayToHexStripped
-}
 
 
 /***/ },
@@ -38694,6 +34459,36 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(newUrl.includes('readToken='), 'Should contain readToken');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notStrictEqual(newUrl, previousUrl, 'URL should differ from previous');
     });
+
+    it('[HDSP-A7] removeAvatar removes an attached avatar, and it stays removed after reload', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl(), 'Should have the attached avatar from previous test');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.removeAvatar();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl(), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('avatar'), null);
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl(), null, 'Avatar must not come back after reload');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('avatar'), false);
+    });
+
+    it('[HDSP-A8] set(\'avatar\', null) removes the avatar too (B-2026-09-25-3)', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4E, 0x47])], { type: 'image/png' });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.setAvatarFromFile(blob, 'again.png');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl());
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('avatar', null);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl(), null, 'Avatar must not come back after reload');
+    });
+
+    it('[HDSP-A9] removeAvatar without an avatar is a no-op', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.removeAvatar();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAvatarUrl(), null);
+    });
   });
 
   describe('[HDSP-R] reload', () => {
@@ -38744,6 +34539,10 @@ describe('[HDSP] HDSProfile (dev API)', function () {
     });
 
     it('[HDSP-X2] reads avatar via shared connection', async () => {
+      // Own setup: the avatar tests end with it removed ([HDSP-A7] to [HDSP-A9]).
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4E, 0x47])], { type: 'image/png' });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.setAvatarFromFile(blob, 'shared.png');
       const profile = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.readFromConnection(sharedConnection);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(profile.avatar, 'Should have avatar URL');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(profile.avatar.includes('/events/'), 'Avatar should be an attachment URL');
@@ -39640,7 +35439,9 @@ describe('[APAX] Application class', function () {
       }
     });
 
-    it('[APAE] Application should throw error if master token not provided and required', async () => {
+    it('[APAE] Application should throw error if master token not provided and required', async function () {
+      // live backend: a dropped keep-alive socket surfaces as undici's 'fetch failed' (B-2026-09-29-9)
+      this.retries(2);
       class Dummy extends Application {
         get appSettings () {
           return {
@@ -39653,6 +35454,7 @@ describe('[APAX] Application class', function () {
         await Dummy.newFromApiEndpoint('uuuu', user.appApiEndpoint, appName);
         throw new Error('Should throw an error');
       } catch (e) {
+        if (e.message === 'fetch failed') throw e; // retried, and reported with its cause, not as an assertion diff
         _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
       }
     });
@@ -40415,6 +36217,540 @@ describe('[CONV] HDSModel Conversions', function () {
         `Roundtrip: ${original} → ${toLb.value} → ${backToKg.value}`
       );
     });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/datasetTemplate.test.js"
+/*!***************************************!*\
+  !*** ./tests/datasetTemplate.test.js ***!
+  \***************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/appTemplates/loader.ts */ "./ts/appTemplates/loader.ts");
+/* harmony import */ var _ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/datasetTemplate.ts */ "./ts/appTemplates/datasetTemplate.ts");
+/* harmony import */ var _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/cmc/formSpec.ts */ "./ts/cmc/formSpec.ts");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+
+
+
+
+
+
+/**
+ * Plan 108 — data-set templates: an app publishes `hds-dataset.json` (an AppTemplate with
+ * publication fields), a data-collection tool imports it by URL, detects scope changes and
+ * builds a FormSpec whose permissions come from the data-model, never from the file.
+ */
+
+function datasetTemplate (overrides = {}) {
+  return {
+    $schema: 'https://hds-lib.datasafe.dev/schemas/appTemplate.json',
+    format: 'hds-dataset-template',
+    formatVersion: 1,
+    id: 'cycle-app',
+    version: '1.0.0',
+    publishedAt: '2026-10-05',
+    app: {
+      id: 'cycle-app',
+      name: { en: 'Cycle App' },
+      publisher: 'Example Clinic',
+      url: 'https://example.org/cycle-app/'
+    },
+    title: { en: 'Cycle chart' },
+    description: { en: 'Daily fertility-awareness log' },
+    consent: { en: 'I share my chart read-only.' },
+    chat: true,
+    sections: [
+      {
+        key: 'landmarks',
+        type: 'recurring',
+        name: { en: 'Cycle landmarks' },
+        itemKeys: ['fertility-cycles-start'],
+        itemCustomizations: {
+          'fertility-cycles-start': { required: true, reminder: { expectedInterval: { min: 'P21D', max: 'P35D' } } }
+        }
+      },
+      {
+        key: 'daily',
+        type: 'recurring',
+        name: { en: 'Daily observations' },
+        itemKeys: ['body-temperature-basal', 'body-vulva-bleeding'],
+        itemCustomizations: { 'body-temperature-basal': { repeatable: 'P1D' } }
+      }
+    ],
+    existingStreamRefs: [
+      { streamId: 'cycle-notes', permissions: ['read'], purpose: 'app-private', label: { en: 'Daily notes' } }
+    ],
+    requiredBridges: ['bridge-mira'],
+    ...overrides
+  };
+}
+
+function clone (o) { return JSON.parse(JSON.stringify(o)); }
+
+function fixtureModel () {
+  const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_4__.HDSModel('http://fake/pack.json');
+  model.loadFromObject({
+    items: {
+      'fertility-cycles-start': {
+        version: 'v1',
+        label: { en: 'Period start' },
+        streamId: 'fertility-cycles-start',
+        eventType: 'activity/plain',
+        type: 'checkbox',
+        repeatable: 'P1D'
+      },
+      'body-temperature-basal': {
+        version: 'v1',
+        label: { en: 'BBT' },
+        streamId: 'body-temperature-basal',
+        eventType: 'temperature/c',
+        type: 'number',
+        repeatable: 'unlimited'
+      },
+      'body-vulva-bleeding': {
+        version: 'v1',
+        label: { en: 'Bleeding' },
+        streamId: 'body-vulva-bleeding',
+        eventType: 'ratio/generic',
+        type: 'number',
+        repeatable: 'unlimited'
+      },
+      'old-bleeding': {
+        version: 'v1',
+        deprecated: true,
+        label: { en: 'Bleeding (legacy)' },
+        streamId: 'body-vulva-bleeding',
+        eventType: 'count/generic',
+        type: 'number',
+        repeatable: 'unlimited'
+      }
+    },
+    streams: [
+      { id: 'fertility-cycles-start', name: 'Period start', parentId: null },
+      { id: 'body-temperature-basal', name: 'Basal temperature', parentId: null },
+      { id: 'body-vulva-bleeding', name: 'Bleeding', parentId: null }
+    ]
+  });
+  return model;
+}
+
+function fakeResponse (body, { status = 200, headers = {} } = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (k) => headers[k.toLowerCase()] ?? null },
+    text: async () => body
+  };
+}
+
+describe('[DSTP] data-set templates (plan 108)', function () {
+  describe('[DSTL] loader rules', function () {
+    it('[DSTL1] accepts a full data-set template', () => {
+      const tpl = (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.version, '1.0.0');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.app.publisher, 'Example Clinic');
+    });
+
+    it('[DSTL2] requires version, formatVersion and app once `format` is set', () => {
+      const t = datasetTemplate();
+      delete t.version; delete t.formatVersion; delete t.app;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /"formatVersion" is required[\s\S]*"version" is required[\s\S]*"app" is required/);
+    });
+
+    it('[DSTL3] rejects a non-https app.url', () => {
+      const t = datasetTemplate();
+      t.app.url = 'http://example.org/';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /must be an https URL/);
+    });
+
+    it('[DSTL4] app-private refs must be read-only', () => {
+      const t = datasetTemplate();
+      t.existingStreamRefs[0].permissions = ['manage'];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /must request \["read"\] only/);
+    });
+
+    it('[DSTL4b] app-private refs may carry the template id as prefix; customFields collision still refused', () => {
+      const t = datasetTemplate();
+      t.existingStreamRefs[0].streamId = 'cycle-app-notes';
+      (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t);
+      const other = datasetTemplate();
+      other.existingStreamRefs = [{ streamId: 'cycle-app-notes', permissions: ['read'] }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(other), /collides with this template's sandbox prefix/);
+    });
+
+    it('[DSTL5] repeatable follows the data-model grammar; required is boolean', () => {
+      for (const ok of ['once', 'any', 'unlimited', 'P1D', 'P1W', 'PT12H', 'P1DT6H']) {
+        const t = datasetTemplate();
+        t.sections[1].itemCustomizations['body-temperature-basal'].repeatable = ok;
+        (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t);
+      }
+      const bad = datasetTemplate();
+      bad.sections[1].itemCustomizations['body-temperature-basal'].repeatable = 'daily';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(bad), /repeatable "daily"/);
+      const badReq = datasetTemplate();
+      badReq.sections[0].itemCustomizations['fertility-cycles-start'].required = 'yes';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(badReq), /required must be a boolean/);
+    });
+
+    it('[DSTL6] rejects a malformed version, date and an unknown format', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate({ publishedAt: '2026-99-99x' })), /schema validation failed/);
+      (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate({ publishedAt: '2026-10-05T12:00:00Z' }));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate({ version: '1.0' })), /schema validation failed/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate({ format: 'other' })), /schema validation failed/);
+    });
+
+    it('[DSTL7] a plain AppTemplate (no publication fields) still loads', () => {
+      (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)({ id: 'plain', title: { en: 'p' }, description: { en: 'p' }, chat: false, sections: [] });
+    });
+  });
+
+  describe('[DSTU] loadTemplateFromUrl', function () {
+    const url = 'https://example.org/cycle-app/hds-dataset.json';
+
+    it('[DSTU1] fetches, validates and returns the template', async () => {
+      let seen;
+      const tpl = await (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, {
+        fetch: async (u, init) => { seen = init; return fakeResponse(JSON.stringify(datasetTemplate())); }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.id, 'cycle-app');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(seen.credentials, 'omit');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(seen.cache, 'no-store');
+    });
+
+    it('[DSTU2] refuses non-https and malformed URLs without fetching', async () => {
+      const fetch = async () => { throw new Error('must not fetch'); };
+      for (const bad of ['http://example.org/x.json', 'file:///etc/passwd', 'javascript:alert(1)', 'not a url']) {
+        await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(bad, { fetch }), (e) => e.innerObject.reason === 'url');
+      }
+    });
+
+    it('[DSTU3] maps HTTP errors, oversized bodies and invalid JSON', async () => {
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { fetch: async () => fakeResponse('', { status: 404 }) }),
+        (e) => e.innerObject.reason === 'http' && e.innerObject.status === 404
+      );
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { fetch: async () => fakeResponse('{}', { headers: { 'content-length': '999999' } }) }),
+        (e) => e.innerObject.reason === 'too-large'
+      );
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { maxBytes: 10, fetch: async () => fakeResponse('x'.repeat(11)) }),
+        (e) => e.innerObject.reason === 'too-large'
+      );
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { fetch: async () => fakeResponse('<html>') }),
+        (e) => e.innerObject.reason === 'json'
+      );
+    });
+
+    it('[DSTU4] times out', async () => {
+      const fetch = (u, init) => new Promise((resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { fetch, timeoutMs: 20 }), (e) => e.innerObject.reason === 'timeout');
+    });
+
+    it('[DSTU4b] a timeout while reading the body is reported as a timeout', async () => {
+      const fetch = async (u, init) => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: () => new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+        })
+      });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { fetch, timeoutMs: 20 }), (e) => e.innerObject.reason === 'timeout');
+    });
+
+    it('[DSTU4c] a streamed body over the cap is cut off without content-length', async () => {
+      let reads = 0;
+      const chunk = new Uint8Array(100);
+      const fetch = async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        body: { getReader: () => ({ read: async () => { reads++; return { done: false, value: chunk }; } }) }
+      });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { fetch, maxBytes: 250 }), (e) => e.innerObject.reason === 'too-large');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(reads, 3, 'stops reading once over the cap');
+    });
+
+    it('[DSTU4d] a redirect landing on http is refused', async () => {
+      const fetch = async () => ({ ...fakeResponse(JSON.stringify(datasetTemplate())), url: 'http://example.org/x.json' });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { fetch }), (e) => e.innerObject.reason === 'url');
+    });
+
+    it('[DSTU5] a valid fetch of an invalid template surfaces the validation error', async () => {
+      const bad = datasetTemplate();
+      bad.app.url = 'http://x';
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplateFromUrl)(url, { fetch: async () => fakeResponse(JSON.stringify(bad)) }),
+        /must be an https URL/
+      );
+    });
+  });
+
+  describe('[DSTH] templateScopeHash', function () {
+    it('[DSTH1] is stable under key order, section reorganisation and text edits', async () => {
+      const a = datasetTemplate();
+      const b = clone(a);
+      b.sections.reverse();
+      b.title = { en: 'Renamed' };
+      b.sections[0].name = { en: 'Renamed section' };
+      // move an item (with its customization) to another section of the same type
+      b.sections[0].itemKeys.push(...b.sections[1].itemKeys.splice(0, 1));
+      b.sections[0].itemCustomizations['fertility-cycles-start'] = b.sections[1].itemCustomizations['fertility-cycles-start'];
+      delete b.sections[1].itemCustomizations['fertility-cycles-start'];
+      const reordered = Object.fromEntries(Object.entries(a).reverse());
+      const h = await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(a);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(h, /^sha256:[0-9a-f]{64}$/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(b), h);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(reordered), h);
+    });
+
+    it('[DSTH2] changes when an item, a section type, a cadence or a ref permission changes', async () => {
+      const a = datasetTemplate();
+      const h = await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(a);
+      const added = clone(a); added.sections[1].itemKeys.push('x-new');
+      const typed = clone(a); typed.sections[0].type = 'permanent';
+      const perm = clone(a); perm.existingStreamRefs[0].permissions = ['read', 'contribute'];
+      const cadence = clone(a); cadence.sections[1].itemCustomizations['body-temperature-basal'].repeatable = 'P2D';
+      for (const t of [added, typed, perm, cadence]) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(t), h);
+    });
+  });
+
+  describe('[DSTD] diffTemplateScope', function () {
+    it('[DSTD1] an added item is a minor change', () => {
+      const a = datasetTemplate();
+      const b = clone(a); b.sections[1].itemKeys.push('x-new'); b.version = '1.1.0';
+      const d = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, b);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.added, ['x-new']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.breaking, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.requiredBump, 'minor');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.actualBump, 'minor');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.underBumped, false);
+    });
+
+    it('[DSTD2] a removed item or a section-type change is breaking (major)', () => {
+      const a = datasetTemplate();
+      const removed = clone(a); removed.sections[1].itemKeys = ['body-temperature-basal'];
+      const d1 = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, removed);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d1.removed, ['body-vulva-bleeding']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d1.breaking, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d1.requiredBump, 'major');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d1.underBumped, true, 'same version → under-bumped');
+      const typed = clone(a); typed.sections[0].type = 'permanent';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, typed).typeChanged, ['fertility-cycles-start']);
+    });
+
+    it('[DSTD3] cadence change is minor; texts or a move only is patch; identical is none', () => {
+      const a = datasetTemplate();
+      const cad = clone(a); cad.sections[1].itemCustomizations['body-temperature-basal'].repeatable = 'P2D';
+      const dc = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, cad);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(dc.cadenceChanged, ['body-temperature-basal']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dc.requiredBump, 'minor');
+      const txt = clone(a); txt.description = { en: 'Reworded' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, txt).requiredBump, 'patch');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, clone(a)).requiredBump, 'none');
+    });
+
+    it('[DSTD4] existing-stream-ref changes', () => {
+      const a = datasetTemplate();
+      const b = clone(a);
+      b.existingStreamRefs[0].permissions = ['read', 'contribute'];
+      b.existingStreamRefs.push({ streamId: 'other', permissions: ['read'] });
+      const d = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, b);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.existingStreamRefs, { added: ['other'], removed: [], permissionsChanged: ['cycle-notes'] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.breaking, true);
+      // adding a ref alone is a new grant request: major (plan 108 D3)
+      const c = clone(a);
+      c.existingStreamRefs.push({ streamId: 'other', permissions: ['read'] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, c).requiredBump, 'major');
+    });
+
+    it('[DSTD4b] item label and license edits are patch', () => {
+      const a = datasetTemplate();
+      const lab = clone(a); lab.sections[1].itemCustomizations['body-temperature-basal'].labels = { question: { en: 'Temp?' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, lab).requiredBump, 'patch');
+      // a customization without labels added to an item is cadence, not text
+      const cad = clone(a); cad.sections[1].itemCustomizations['body-vulva-bleeding'] = { repeatable: 'P1D' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, cad).textsChanged, false);
+      const lic = clone(a); lic.license = { name: 'CC-BY', notice: { en: 'n' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, lic).requiredBump, 'patch');
+    });
+
+    it('[DSTD5] semverBump', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.semverBump)('1.0.0', '2.0.0'), 'major');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.semverBump)('1.0.0', '1.2.0'), 'minor');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.semverBump)('1.0.0', '1.0.3'), 'patch');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.semverBump)('1.0.0', '1.0.0'), 'none');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.semverBump)('2.0.0', '1.9.9'), 'none');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.semverBump)(undefined, '1.0.0'), 'none');
+    });
+
+    it('[DSTD6] diffFormSpecWithTemplate reads the data set (owner edits included) as the previous version', async () => {
+      const tpl = (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate());
+      const source = await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateSource)(tpl, 'https://example.org/cycle-app/hds-dataset.json', 1);
+      const { formSpec } = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateToFormSpec)(tpl, { model: fixtureModel(), source });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffFormSpecWithTemplate)(formSpec, tpl)).requiredBump, 'none');
+      // the owner removed an item after import → re-applying the template would add it back,
+      // but the unchanged template is not "under-bumped": the change is the owner's
+      formSpec.sections[1].itemKeys = ['body-temperature-basal'];
+      const own = await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffFormSpecWithTemplate)(formSpec, tpl);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(own.added, ['body-vulva-bleeding']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(own.underBumped, false);
+      const next = clone(tpl);
+      next.version = '1.1.0';
+      next.sections[1].itemKeys.push('x-new');
+      const d = await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffFormSpecWithTemplate)(formSpec, next);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.added, ['body-vulva-bleeding', 'x-new']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.actualBump, 'minor');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.underBumped, false);
+      // publisher changed the scope without bumping
+      const sneaky = clone(tpl);
+      sneaky.sections[1].itemKeys.push('x-new');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffFormSpecWithTemplate)(formSpec, sneaky)).underBumped, true);
+    });
+
+    it('[DSTD7] a plain template (no version) never reports a bump', async () => {
+      const plain = { id: 'plain', title: { en: 'p' }, description: { en: 'p' }, chat: false, sections: [] };
+      const d = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(plain, { ...plain, sections: [{ key: 's', type: 'recurring', name: { en: 's' }, itemKeys: ['k'] }] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.actualBump, 'none');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.requiredBump, 'minor');
+    });
+  });
+
+  describe('[DSTF] templateToFormSpec', function () {
+    it('[DSTF1] derives read permissions from the data-model and carries the template fields', () => {
+      const { formSpec, itemKeyIssues } = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateToFormSpec)((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate()), { model: fixtureModel() });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(itemKeyIssues, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(
+        formSpec.permissions.map(p => [p.streamId, p.level]).sort(),
+        [['body-temperature-basal', 'read'], ['body-vulva-bleeding', 'read'], ['cycle-notes', 'read'], ['fertility-cycles-start', 'read']]
+      );
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(formSpec.permissions.find(p => p.streamId === 'cycle-notes').defaultName, 'Daily notes');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(formSpec.version, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(formSpec.features, { chat: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(formSpec.consent, { en: 'I share my chart read-only.' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(formSpec.appCustomData, { requiredBridges: ['bridge-mira'] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(formSpec.sections[0].itemCustomizations['fertility-cycles-start'].required, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(formSpec.existingStreamRefs[0].permissions, ['read']);
+    });
+
+    it('[DSTF1b] every existing-stream ref is carried read-only; only app-private ones are granted', () => {
+      const t = datasetTemplate();
+      t.existingStreamRefs.push({ streamId: 'someone-else', permissions: ['manage'], purpose: 'system-out' });
+      const { formSpec } = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateToFormSpec)((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), { model: fixtureModel() });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(formSpec.existingStreamRefs.map(r => r.permissions), [['read'], ['read']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!formSpec.permissions.some(p => p.streamId === 'someone-else'));
+    });
+
+    it('[DSTF1c] withAppPrivatePermissions adds app-private reads once, leaves others alone', () => {
+      const refs = [
+        { streamId: 'n', permissions: ['read'], purpose: 'app-private', label: { en: 'Notes' } },
+        { streamId: 'x', permissions: ['read'], purpose: 'system-out' }
+      ];
+      const out = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.withAppPrivatePermissions)([{ streamId: 'a', level: 'read' }], refs);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, [{ streamId: 'a', level: 'read' }, { streamId: 'n', defaultName: 'Notes', level: 'read' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.withAppPrivatePermissions)(out, refs).length, 2);
+    });
+
+    it('[DSTF2] unknown keys are reported, kept in sections, and left out of permissions', () => {
+      const t = datasetTemplate();
+      t.sections[1].itemKeys.push('not-in-model', 'old-bleeding');
+      const { formSpec, itemKeyIssues } = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateToFormSpec)((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), { model: fixtureModel() });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(itemKeyIssues.map(i => [i.itemKey, i.reason]), [['not-in-model', 'unknown'], ['old-bleeding', 'deprecated']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(formSpec.sections[1].itemKeys.includes('not-in-model'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!formSpec.permissions.some(p => p.streamId === 'not-in-model'));
+    });
+
+    it('[DSTF3] does not alias the template (edits to the FormSpec leave it intact)', () => {
+      const tpl = (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate());
+      const { formSpec } = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateToFormSpec)(tpl, { model: fixtureModel() });
+      formSpec.sections[0].itemKeys.push('x');
+      formSpec.sections[0].itemCustomizations['fertility-cycles-start'].required = false;
+      formSpec.title.en = 'changed';
+      formSpec.sections[0].name.en = 'changed';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.title.en, 'Cycle chart');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.sections[0].name.en, 'Cycle landmarks');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(tpl.sections[0].itemKeys, ['fertility-cycles-start']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.sections[0].itemCustomizations['fertility-cycles-start'].required, true);
+    });
+
+    it('[DSTF4] templateSource records provenance and the scope hash', async () => {
+      const tpl = (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(datasetTemplate());
+      const src = await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateSource)(tpl, 'https://example.org/cycle-app/hds-dataset.json', 1000);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(src, {
+        url: 'https://example.org/cycle-app/hds-dataset.json',
+        templateId: 'cycle-app',
+        scopeHash: await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(tpl),
+        fetchedAt: 1000,
+        version: '1.0.0',
+        publisher: 'Example Clinic'
+      });
+      const { formSpec } = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateToFormSpec)(tpl, { model: fixtureModel(), source: src });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(formSpec.source.version, '1.0.0');
+    });
+  });
+
+  describe('[DSTI] createInviteWithFormSpec open-link without expiry', function () {
+    function fakeConnection () {
+      const calls = [];
+      return {
+        calls,
+        apiOne: async (method, params) => {
+          calls.push({ method, params });
+          return { id: 'evt1', content: { ...params.content, capabilityUrl: 'https://cap', capabilityExpiresAt: null } };
+        }
+      };
+    }
+    const base = {
+      appCode: 'hds-collector',
+      scopeStreamId: ':_cmc:apps:hds-collector:c1',
+      displayName: 'Dr X',
+      requestedPermissions: [{ streamId: 'a', level: 'read' }],
+      formSpec: { version: 1, title: { en: 't' }, description: { en: 'd' }, permissions: [], sections: [] }
+    };
+
+    it('[DSTI1] sends request.expiresAt null with capability mode open-link and returns null', async () => {
+      const conn = fakeConnection();
+      const res = await (0,_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_3__.createInviteWithFormSpec)(conn, { ...base, mode: 'open-link', expiresAt: null });
+      const content = conn.calls[0].params.content;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(content.request.expiresAt, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(content.capability, { mode: 'open-link' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.expiresAt, null);
+    });
+
+    it('[DSTI2] refuses no-expiry on a single-use invite before writing', async () => {
+      const conn = fakeConnection();
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_3__.createInviteWithFormSpec)(conn, { ...base, expiresAt: null }), /requires mode "open-link"/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls.length, 0);
+    });
+
+    it('[DSTI3] omits expiresAt when undefined (core default)', async () => {
+      const conn = fakeConnection();
+      await (0,_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_3__.createInviteWithFormSpec)(conn, { ...base });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('expiresAt' in conn.calls[0].params.content.request));
+    });
+  });
+});
+
+describe('[DSTX] formSpecFingerprint', function () {
+  it('[DSTX1] ignores source/openLink and key order, changes with content', async () => {
+    const { formSpecFingerprint } = await Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! ../ts/cmc/formSpec.ts */ "./ts/cmc/formSpec.ts", 19));
+    const a = { version: 1, title: { en: 't' }, description: { en: 'd' }, permissions: [], sections: [] };
+    const b = { sections: [], permissions: [], description: { en: 'd' }, title: { en: 't' }, version: 1, source: { url: 'https://x' }, openLink: { inviteEventId: 'e' } };
+    const h = await formSpecFingerprint(a);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(h, /^sha256:[0-9a-f]{64}$/);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await formSpecFingerprint(b), h);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(await formSpecFingerprint({ ...a, title: { en: 'other' } }), h);
   });
 });
 
@@ -41443,13 +37779,26 @@ describe('[MODX] Model', () => {
       // make sure locales are set back to default after each test
       (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
     });
+    // Labels are asserted exactly: they are short, stable names and pinning them is the point.
+    //
+    // Descriptions are asserted BEHAVIOURALLY — that they are present and change with the locale
+    // — rather than by their exact prose. This test used to pin 'Measured body weight', and
+    // data-model 3.11.0's editorial coherence pass reworded it to 'Your measured body weight.',
+    // which turned hds-lib-js CI red with no code change on either side and, by the red badge,
+    // blocked all 13 consumers. A localization test should fail when localization breaks, not
+    // when someone improves a sentence.
     it('[MOLL] Label  & Description properties are localized', () => {
       const itemDef = model.itemsDefs.forKey('body-weight');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.label, 'Body weight');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.description, 'Measured body weight');
+      const descriptionEn = itemDef.description;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(descriptionEn && descriptionEn.length > 0, 'en description should be non-empty');
+
       (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.label, 'Poids corporel');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.description, 'Poids corporel mesuré');
+      const descriptionFr = itemDef.description;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(descriptionFr && descriptionFr.length > 0, 'fr description should be non-empty');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(descriptionFr, descriptionEn,
+        'the description should change with the locale — equal values mean localization fell back');
     });
   });
 
@@ -42279,6 +38628,56 @@ describe('[REMX] Reminders', () => {
       return { streamId, type, time };
     }
 
+    /**
+     * Twin-awareness (`B-2026-09-15-5`). A reminder must not fire for a concept
+     * a bridge already reported at a lower fidelity — a presence event on the
+     * same stream satisfies a graded item. `satisfyingEventTypes` is optional on
+     * the itemDef-like input, so hand-built items keep the old strict behaviour.
+     */
+    function makeTwinItem (key, streamId, ownType, twinType, reminder) {
+      return {
+        key,
+        eventTypes: [ownType],
+        satisfyingEventTypes: [ownType, twinType],
+        reminder: reminder || null,
+        data: { streamId }
+      };
+    }
+
+    // Assert on `lastEvent` / `lastEntry`, not on `status`: this `frequency`
+    // config reports `due` either way, so a status assertion passes vacuously.
+    // `lastEvent` is the value the fix actually changes, and the one completion
+    // and the ribbon read.
+    it('[CRM-TWIN1] a presence event is picked up as the graded item\'s last entry', () => {
+      const items = [makeTwinItem('symptom-pain-headache-severity', 'symptom-pain-headache',
+        'ratio/proportion', 'activity/plain', { frequency: 'P1D' })];
+      const events = [makeEvent('symptom-pain-headache', 'activity/plain', NOW - 60)];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].lastEntry, NOW - 60);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].lastEvent.type, 'activity/plain');
+    });
+
+    it('[CRM-TWIN2] without satisfyingEventTypes the old strict behaviour stands', () => {
+      const items = [makeItem('symptom-pain-headache-severity', 'symptom-pain-headache',
+        'ratio/proportion', { frequency: 'P1D' })];
+      const events = [makeEvent('symptom-pain-headache', 'activity/plain', NOW - 60)];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].lastEvent, undefined, 'a presence event must not satisfy a strict itemDef');
+    });
+
+    it('[CRM-TWIN3] the item\'s own type still wins when both are present', () => {
+      const items = [makeTwinItem('symptom-pain-headache-severity', 'symptom-pain-headache',
+        'ratio/proportion', 'activity/plain', { frequency: 'P1D' })];
+      const events = [
+        makeEvent('symptom-pain-headache', 'activity/plain', NOW - 600),
+        makeEvent('symptom-pain-headache', 'ratio/proportion', NOW - 60)
+      ];
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, events, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].lastEvent.type, 'ratio/proportion', 'latest wins, regardless of fidelity');
+    });
+
     it('[CRM1] no reminder config → not in results', () => {
       const items = [makeItem('body-height', 'body-height', 'length/m', null)];
       const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(items, [], {}, NOW);
@@ -42982,25 +39381,29 @@ describe('[TKTX] toolKit Streams Tools', function () {
 
 /***/ },
 
-/***/ "./node_modules/ajv/dist/refs/data.json"
-/*!**********************************************!*\
-  !*** ./node_modules/ajv/dist/refs/data.json ***!
-  \**********************************************/
-(module) {
+/***/ "./ts/appTemplates/schemas/appTemplate.validator.js"
+/*!**********************************************************!*\
+  !*** ./ts/appTemplates/schemas/appTemplate.validator.js ***!
+  \**********************************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"$id":"https://raw.githubusercontent.com/ajv-validator/ajv/master/lib/refs/data.json#","description":"Meta-schema for $data reference (JSON AnySchema extension proposal)","type":"object","required":["$data"],"properties":{"$data":{"type":"string","anyOf":[{"format":"relative-json-pointer"},{"format":"json-pointer"}]}},"additionalProperties":false}');
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__),
+/* harmony export */   validate: () => (/* binding */ validate)
+/* harmony export */ });
+// GENERATED FILE — DO NOT EDIT.
+// Source: ts/appTemplates/schemas/appTemplate.schema.json
+// Regenerate: npm run build:validators
+//
+// Precompiled by Ajv standalone so the runtime never invokes the Function constructor,
+// which a Content-Security-Policy without `unsafe-eval` refuses.
+// See scripts/build-validators.mjs. (The forbidden spellings are deliberately not written
+// out here: tests/validatorDrift.test.js greps this whole file, comments included.)
 
-/***/ },
+const validate = validate10;/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (validate10);const schema11 = {"$schema":"http://json-schema.org/draft-07/schema#","$id":"https://hds-lib.datasafe.dev/schemas/appTemplate.json","type":"object","additionalProperties":false,"required":["id","title","description","chat","sections"],"properties":{"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]*[a-z0-9]$"},"title":{"$ref":"#/definitions/localizableText"},"description":{"$ref":"#/definitions/localizableText"},"chat":{"type":"boolean"},"sections":{"type":"array","items":{"$ref":"#/definitions/section"}},"customFields":{"type":"array","items":{"$ref":"#/definitions/customFieldDeclaration"}},"existingStreamRefs":{"type":"array","items":{"$ref":"#/definitions/existingStreamRef"}},"license":{"$ref":"#/definitions/license"},"$schema":{"type":"string"},"format":{"enum":["hds-dataset-template"]},"formatVersion":{"enum":[1]},"version":{"type":"string","pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},"publishedAt":{"type":"string","pattern":"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])($|T)"},"app":{"$ref":"#/definitions/app"},"dataModel":{"$ref":"#/definitions/dataModel"},"consent":{"$ref":"#/definitions/localizableText"},"requiredBridges":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"definitions":{"localizableText":{"oneOf":[{"type":"string"},{"type":"object","additionalProperties":{"type":"string"}}]},"section":{"type":"object","additionalProperties":false,"required":["key","type","name"],"properties":{"key":{"type":"string"},"type":{"enum":["permanent","recurring"]},"name":{"$ref":"#/definitions/localizableText"},"itemKeys":{"type":"array","items":{"type":"string"}},"itemCustomizations":{"type":"object"},"customFieldKeys":{"type":"array","items":{"type":"string"}}}},"customFieldDeclaration":{"type":"object","additionalProperties":false,"required":["streamId","eventType","def"],"properties":{"streamId":{"type":"string"},"eventType":{"enum":["note/txt","note/html","count/generic","date/iso-8601","activity/plain"]},"parentId":{"type":"string"},"name":{"type":"string"},"def":{"$ref":"#/definitions/customFieldDef"}}},"customFieldDef":{"type":"object","additionalProperties":false,"required":["version","templateId","key","label"],"properties":{"version":{"enum":["v1"]},"templateId":{"type":"string"},"key":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]*[a-z0-9]$"},"label":{"$ref":"#/definitions/localizableText"},"description":{"$ref":"#/definitions/localizableText"},"section":{"type":"string"},"required":{"type":"boolean"},"maxLength":{"type":"integer","minimum":0},"options":{"type":"array","items":{"type":"string"},"uniqueItems":true},"min":{"type":"number"},"max":{"type":"number"},"step":{"type":"number"},"minDate":{"type":"string"},"maxDate":{"type":"string"},"repeatable":{"type":"string"}}},"existingStreamRef":{"type":"object","additionalProperties":false,"required":["streamId","permissions"],"properties":{"streamId":{"type":"string"},"permissions":{"type":"array","items":{"enum":["read","manage","contribute"]},"minItems":1},"purpose":{"type":"string"},"label":{"$ref":"#/definitions/localizableText"}}},"app":{"type":"object","additionalProperties":false,"required":["id","name","publisher","url"],"properties":{"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]*[a-z0-9]$"},"name":{"$ref":"#/definitions/localizableText"},"publisher":{"type":"string","pattern":"\\S"},"url":{"type":"string","format":"uri"},"contact":{"type":"string"},"appVersion":{"type":"string"}}},"dataModel":{"type":"object","additionalProperties":false,"properties":{"publicationDate":{"type":"string"}}},"license":{"type":"object","additionalProperties":false,"required":["name","notice"],"properties":{"name":{"type":"string"},"url":{"type":"string","format":"uri"},"notice":{"$ref":"#/definitions/localizableText"}}}}};const schema12 = {"oneOf":[{"type":"string"},{"type":"object","additionalProperties":{"type":"string"}}]};const schema26 = {"type":"object","additionalProperties":false,"properties":{"publicationDate":{"type":"string"}}};const func2 = Object.prototype.hasOwnProperty;const pattern0 = new RegExp("^[a-z0-9][a-z0-9-]*[a-z0-9]$", "u");const pattern2 = new RegExp("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$", "u");const pattern3 = new RegExp("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])($|T)", "u");const schema14 = {"type":"object","additionalProperties":false,"required":["key","type","name"],"properties":{"key":{"type":"string"},"type":{"enum":["permanent","recurring"]},"name":{"$ref":"#/definitions/localizableText"},"itemKeys":{"type":"array","items":{"type":"string"}},"itemCustomizations":{"type":"object"},"customFieldKeys":{"type":"array","items":{"type":"string"}}}};function validate11(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){let vErrors = null;let errors = 0;if(data && typeof data == "object" && !Array.isArray(data)){if(data.key === undefined){const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "key"},message:"must have required property '"+"key"+"'"};if(vErrors === null){vErrors = [err0];}else {vErrors.push(err0);}errors++;}if(data.type === undefined){const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "type"},message:"must have required property '"+"type"+"'"};if(vErrors === null){vErrors = [err1];}else {vErrors.push(err1);}errors++;}if(data.name === undefined){const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "name"},message:"must have required property '"+"name"+"'"};if(vErrors === null){vErrors = [err2];}else {vErrors.push(err2);}errors++;}for(const key0 in data){if(!((((((key0 === "key") || (key0 === "type")) || (key0 === "name")) || (key0 === "itemKeys")) || (key0 === "itemCustomizations")) || (key0 === "customFieldKeys"))){const err3 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};if(vErrors === null){vErrors = [err3];}else {vErrors.push(err3);}errors++;}}if(data.key !== undefined){if(typeof data.key !== "string"){const err4 = {instancePath:instancePath+"/key",schemaPath:"#/properties/key/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err4];}else {vErrors.push(err4);}errors++;}}if(data.type !== undefined){let data1 = data.type;if(!((data1 === "permanent") || (data1 === "recurring"))){const err5 = {instancePath:instancePath+"/type",schemaPath:"#/properties/type/enum",keyword:"enum",params:{allowedValues: schema14.properties.type.enum},message:"must be equal to one of the allowed values"};if(vErrors === null){vErrors = [err5];}else {vErrors.push(err5);}errors++;}}if(data.name !== undefined){let data2 = data.name;const _errs7 = errors;let valid2 = false;let passing0 = null;const _errs8 = errors;if(typeof data2 !== "string"){const err6 = {instancePath:instancePath+"/name",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err6];}else {vErrors.push(err6);}errors++;}var _valid0 = _errs8 === errors;if(_valid0){valid2 = true;passing0 = 0;}const _errs10 = errors;if(data2 && typeof data2 == "object" && !Array.isArray(data2)){for(const key1 in data2){if(typeof data2[key1] !== "string"){const err7 = {instancePath:instancePath+"/name/" + key1.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err7];}else {vErrors.push(err7);}errors++;}}}else {const err8 = {instancePath:instancePath+"/name",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err8];}else {vErrors.push(err8);}errors++;}var _valid0 = _errs10 === errors;if(_valid0 && valid2){valid2 = false;passing0 = [passing0, 1];}else {if(_valid0){valid2 = true;passing0 = 1;}}if(!valid2){const err9 = {instancePath:instancePath+"/name",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err9];}else {vErrors.push(err9);}errors++;}else {errors = _errs7;if(vErrors !== null){if(_errs7){vErrors.length = _errs7;}else {vErrors = null;}}}}if(data.itemKeys !== undefined){let data4 = data.itemKeys;if(Array.isArray(data4)){const len0 = data4.length;for(let i0=0; i0<len0; i0++){if(typeof data4[i0] !== "string"){const err10 = {instancePath:instancePath+"/itemKeys/" + i0,schemaPath:"#/properties/itemKeys/items/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err10];}else {vErrors.push(err10);}errors++;}}}else {const err11 = {instancePath:instancePath+"/itemKeys",schemaPath:"#/properties/itemKeys/type",keyword:"type",params:{type: "array"},message:"must be array"};if(vErrors === null){vErrors = [err11];}else {vErrors.push(err11);}errors++;}}if(data.itemCustomizations !== undefined){let data6 = data.itemCustomizations;if(!(data6 && typeof data6 == "object" && !Array.isArray(data6))){const err12 = {instancePath:instancePath+"/itemCustomizations",schemaPath:"#/properties/itemCustomizations/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err12];}else {vErrors.push(err12);}errors++;}}if(data.customFieldKeys !== undefined){let data7 = data.customFieldKeys;if(Array.isArray(data7)){const len1 = data7.length;for(let i1=0; i1<len1; i1++){if(typeof data7[i1] !== "string"){const err13 = {instancePath:instancePath+"/customFieldKeys/" + i1,schemaPath:"#/properties/customFieldKeys/items/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err13];}else {vErrors.push(err13);}errors++;}}}else {const err14 = {instancePath:instancePath+"/customFieldKeys",schemaPath:"#/properties/customFieldKeys/type",keyword:"type",params:{type: "array"},message:"must be array"};if(vErrors === null){vErrors = [err14];}else {vErrors.push(err14);}errors++;}}}else {const err15 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err15];}else {vErrors.push(err15);}errors++;}validate11.errors = vErrors;return errors === 0;}const schema16 = {"type":"object","additionalProperties":false,"required":["streamId","eventType","def"],"properties":{"streamId":{"type":"string"},"eventType":{"enum":["note/txt","note/html","count/generic","date/iso-8601","activity/plain"]},"parentId":{"type":"string"},"name":{"type":"string"},"def":{"$ref":"#/definitions/customFieldDef"}}};const schema17 = {"type":"object","additionalProperties":false,"required":["version","templateId","key","label"],"properties":{"version":{"enum":["v1"]},"templateId":{"type":"string"},"key":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]*[a-z0-9]$"},"label":{"$ref":"#/definitions/localizableText"},"description":{"$ref":"#/definitions/localizableText"},"section":{"type":"string"},"required":{"type":"boolean"},"maxLength":{"type":"integer","minimum":0},"options":{"type":"array","items":{"type":"string"},"uniqueItems":true},"min":{"type":"number"},"max":{"type":"number"},"step":{"type":"number"},"minDate":{"type":"string"},"maxDate":{"type":"string"},"repeatable":{"type":"string"}}};function validate14(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){let vErrors = null;let errors = 0;if(data && typeof data == "object" && !Array.isArray(data)){if(data.version === undefined){const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "version"},message:"must have required property '"+"version"+"'"};if(vErrors === null){vErrors = [err0];}else {vErrors.push(err0);}errors++;}if(data.templateId === undefined){const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "templateId"},message:"must have required property '"+"templateId"+"'"};if(vErrors === null){vErrors = [err1];}else {vErrors.push(err1);}errors++;}if(data.key === undefined){const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "key"},message:"must have required property '"+"key"+"'"};if(vErrors === null){vErrors = [err2];}else {vErrors.push(err2);}errors++;}if(data.label === undefined){const err3 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "label"},message:"must have required property '"+"label"+"'"};if(vErrors === null){vErrors = [err3];}else {vErrors.push(err3);}errors++;}for(const key0 in data){if(!(func2.call(schema17.properties, key0))){const err4 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};if(vErrors === null){vErrors = [err4];}else {vErrors.push(err4);}errors++;}}if(data.version !== undefined){if(!(data.version === "v1")){const err5 = {instancePath:instancePath+"/version",schemaPath:"#/properties/version/enum",keyword:"enum",params:{allowedValues: schema17.properties.version.enum},message:"must be equal to one of the allowed values"};if(vErrors === null){vErrors = [err5];}else {vErrors.push(err5);}errors++;}}if(data.templateId !== undefined){if(typeof data.templateId !== "string"){const err6 = {instancePath:instancePath+"/templateId",schemaPath:"#/properties/templateId/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err6];}else {vErrors.push(err6);}errors++;}}if(data.key !== undefined){let data2 = data.key;if(typeof data2 === "string"){if(!pattern0.test(data2)){const err7 = {instancePath:instancePath+"/key",schemaPath:"#/properties/key/pattern",keyword:"pattern",params:{pattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"},message:"must match pattern \""+"^[a-z0-9][a-z0-9-]*[a-z0-9]$"+"\""};if(vErrors === null){vErrors = [err7];}else {vErrors.push(err7);}errors++;}}else {const err8 = {instancePath:instancePath+"/key",schemaPath:"#/properties/key/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err8];}else {vErrors.push(err8);}errors++;}}if(data.label !== undefined){let data3 = data.label;const _errs9 = errors;let valid2 = false;let passing0 = null;const _errs10 = errors;if(typeof data3 !== "string"){const err9 = {instancePath:instancePath+"/label",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err9];}else {vErrors.push(err9);}errors++;}var _valid0 = _errs10 === errors;if(_valid0){valid2 = true;passing0 = 0;}const _errs12 = errors;if(data3 && typeof data3 == "object" && !Array.isArray(data3)){for(const key1 in data3){if(typeof data3[key1] !== "string"){const err10 = {instancePath:instancePath+"/label/" + key1.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err10];}else {vErrors.push(err10);}errors++;}}}else {const err11 = {instancePath:instancePath+"/label",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err11];}else {vErrors.push(err11);}errors++;}var _valid0 = _errs12 === errors;if(_valid0 && valid2){valid2 = false;passing0 = [passing0, 1];}else {if(_valid0){valid2 = true;passing0 = 1;}}if(!valid2){const err12 = {instancePath:instancePath+"/label",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err12];}else {vErrors.push(err12);}errors++;}else {errors = _errs9;if(vErrors !== null){if(_errs9){vErrors.length = _errs9;}else {vErrors = null;}}}}if(data.description !== undefined){let data5 = data.description;const _errs19 = errors;let valid5 = false;let passing1 = null;const _errs20 = errors;if(typeof data5 !== "string"){const err13 = {instancePath:instancePath+"/description",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err13];}else {vErrors.push(err13);}errors++;}var _valid1 = _errs20 === errors;if(_valid1){valid5 = true;passing1 = 0;}const _errs22 = errors;if(data5 && typeof data5 == "object" && !Array.isArray(data5)){for(const key2 in data5){if(typeof data5[key2] !== "string"){const err14 = {instancePath:instancePath+"/description/" + key2.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err14];}else {vErrors.push(err14);}errors++;}}}else {const err15 = {instancePath:instancePath+"/description",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err15];}else {vErrors.push(err15);}errors++;}var _valid1 = _errs22 === errors;if(_valid1 && valid5){valid5 = false;passing1 = [passing1, 1];}else {if(_valid1){valid5 = true;passing1 = 1;}}if(!valid5){const err16 = {instancePath:instancePath+"/description",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing1},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err16];}else {vErrors.push(err16);}errors++;}else {errors = _errs19;if(vErrors !== null){if(_errs19){vErrors.length = _errs19;}else {vErrors = null;}}}}if(data.section !== undefined){if(typeof data.section !== "string"){const err17 = {instancePath:instancePath+"/section",schemaPath:"#/properties/section/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err17];}else {vErrors.push(err17);}errors++;}}if(data.required !== undefined){if(typeof data.required !== "boolean"){const err18 = {instancePath:instancePath+"/required",schemaPath:"#/properties/required/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"};if(vErrors === null){vErrors = [err18];}else {vErrors.push(err18);}errors++;}}if(data.maxLength !== undefined){let data9 = data.maxLength;if(!((typeof data9 == "number") && (!(data9 % 1) && !isNaN(data9)))){const err19 = {instancePath:instancePath+"/maxLength",schemaPath:"#/properties/maxLength/type",keyword:"type",params:{type: "integer"},message:"must be integer"};if(vErrors === null){vErrors = [err19];}else {vErrors.push(err19);}errors++;}if(typeof data9 == "number"){if(data9 < 0 || isNaN(data9)){const err20 = {instancePath:instancePath+"/maxLength",schemaPath:"#/properties/maxLength/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"};if(vErrors === null){vErrors = [err20];}else {vErrors.push(err20);}errors++;}}}if(data.options !== undefined){let data10 = data.options;if(Array.isArray(data10)){const len0 = data10.length;for(let i0=0; i0<len0; i0++){if(typeof data10[i0] !== "string"){const err21 = {instancePath:instancePath+"/options/" + i0,schemaPath:"#/properties/options/items/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err21];}else {vErrors.push(err21);}errors++;}}let i1 = data10.length;let j0;if(i1 > 1){const indices0 = {};for(;i1--;){let item0 = data10[i1];if(typeof item0 !== "string"){continue;}if(typeof indices0[item0] == "number"){j0 = indices0[item0];const err22 = {instancePath:instancePath+"/options",schemaPath:"#/properties/options/uniqueItems",keyword:"uniqueItems",params:{i: i1, j: j0},message:"must NOT have duplicate items (items ## "+j0+" and "+i1+" are identical)"};if(vErrors === null){vErrors = [err22];}else {vErrors.push(err22);}errors++;break;}indices0[item0] = i1;}}}else {const err23 = {instancePath:instancePath+"/options",schemaPath:"#/properties/options/type",keyword:"type",params:{type: "array"},message:"must be array"};if(vErrors === null){vErrors = [err23];}else {vErrors.push(err23);}errors++;}}if(data.min !== undefined){if(!(typeof data.min == "number")){const err24 = {instancePath:instancePath+"/min",schemaPath:"#/properties/min/type",keyword:"type",params:{type: "number"},message:"must be number"};if(vErrors === null){vErrors = [err24];}else {vErrors.push(err24);}errors++;}}if(data.max !== undefined){if(!(typeof data.max == "number")){const err25 = {instancePath:instancePath+"/max",schemaPath:"#/properties/max/type",keyword:"type",params:{type: "number"},message:"must be number"};if(vErrors === null){vErrors = [err25];}else {vErrors.push(err25);}errors++;}}if(data.step !== undefined){if(!(typeof data.step == "number")){const err26 = {instancePath:instancePath+"/step",schemaPath:"#/properties/step/type",keyword:"type",params:{type: "number"},message:"must be number"};if(vErrors === null){vErrors = [err26];}else {vErrors.push(err26);}errors++;}}if(data.minDate !== undefined){if(typeof data.minDate !== "string"){const err27 = {instancePath:instancePath+"/minDate",schemaPath:"#/properties/minDate/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err27];}else {vErrors.push(err27);}errors++;}}if(data.maxDate !== undefined){if(typeof data.maxDate !== "string"){const err28 = {instancePath:instancePath+"/maxDate",schemaPath:"#/properties/maxDate/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err28];}else {vErrors.push(err28);}errors++;}}if(data.repeatable !== undefined){if(typeof data.repeatable !== "string"){const err29 = {instancePath:instancePath+"/repeatable",schemaPath:"#/properties/repeatable/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err29];}else {vErrors.push(err29);}errors++;}}}else {const err30 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err30];}else {vErrors.push(err30);}errors++;}validate14.errors = vErrors;return errors === 0;}function validate13(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){let vErrors = null;let errors = 0;if(data && typeof data == "object" && !Array.isArray(data)){if(data.streamId === undefined){const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "streamId"},message:"must have required property '"+"streamId"+"'"};if(vErrors === null){vErrors = [err0];}else {vErrors.push(err0);}errors++;}if(data.eventType === undefined){const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "eventType"},message:"must have required property '"+"eventType"+"'"};if(vErrors === null){vErrors = [err1];}else {vErrors.push(err1);}errors++;}if(data.def === undefined){const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "def"},message:"must have required property '"+"def"+"'"};if(vErrors === null){vErrors = [err2];}else {vErrors.push(err2);}errors++;}for(const key0 in data){if(!(((((key0 === "streamId") || (key0 === "eventType")) || (key0 === "parentId")) || (key0 === "name")) || (key0 === "def"))){const err3 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};if(vErrors === null){vErrors = [err3];}else {vErrors.push(err3);}errors++;}}if(data.streamId !== undefined){if(typeof data.streamId !== "string"){const err4 = {instancePath:instancePath+"/streamId",schemaPath:"#/properties/streamId/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err4];}else {vErrors.push(err4);}errors++;}}if(data.eventType !== undefined){let data1 = data.eventType;if(!(((((data1 === "note/txt") || (data1 === "note/html")) || (data1 === "count/generic")) || (data1 === "date/iso-8601")) || (data1 === "activity/plain"))){const err5 = {instancePath:instancePath+"/eventType",schemaPath:"#/properties/eventType/enum",keyword:"enum",params:{allowedValues: schema16.properties.eventType.enum},message:"must be equal to one of the allowed values"};if(vErrors === null){vErrors = [err5];}else {vErrors.push(err5);}errors++;}}if(data.parentId !== undefined){if(typeof data.parentId !== "string"){const err6 = {instancePath:instancePath+"/parentId",schemaPath:"#/properties/parentId/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err6];}else {vErrors.push(err6);}errors++;}}if(data.name !== undefined){if(typeof data.name !== "string"){const err7 = {instancePath:instancePath+"/name",schemaPath:"#/properties/name/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err7];}else {vErrors.push(err7);}errors++;}}if(data.def !== undefined){if(!(validate14(data.def, {instancePath:instancePath+"/def",parentData:data,parentDataProperty:"def",rootData}))){vErrors = vErrors === null ? validate14.errors : vErrors.concat(validate14.errors);errors = vErrors.length;}}}else {const err8 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err8];}else {vErrors.push(err8);}errors++;}validate13.errors = vErrors;return errors === 0;}const schema20 = {"type":"object","additionalProperties":false,"required":["streamId","permissions"],"properties":{"streamId":{"type":"string"},"permissions":{"type":"array","items":{"enum":["read","manage","contribute"]},"minItems":1},"purpose":{"type":"string"},"label":{"$ref":"#/definitions/localizableText"}}};function validate17(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){let vErrors = null;let errors = 0;if(data && typeof data == "object" && !Array.isArray(data)){if(data.streamId === undefined){const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "streamId"},message:"must have required property '"+"streamId"+"'"};if(vErrors === null){vErrors = [err0];}else {vErrors.push(err0);}errors++;}if(data.permissions === undefined){const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "permissions"},message:"must have required property '"+"permissions"+"'"};if(vErrors === null){vErrors = [err1];}else {vErrors.push(err1);}errors++;}for(const key0 in data){if(!((((key0 === "streamId") || (key0 === "permissions")) || (key0 === "purpose")) || (key0 === "label"))){const err2 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};if(vErrors === null){vErrors = [err2];}else {vErrors.push(err2);}errors++;}}if(data.streamId !== undefined){if(typeof data.streamId !== "string"){const err3 = {instancePath:instancePath+"/streamId",schemaPath:"#/properties/streamId/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err3];}else {vErrors.push(err3);}errors++;}}if(data.permissions !== undefined){let data1 = data.permissions;if(Array.isArray(data1)){if(data1.length < 1){const err4 = {instancePath:instancePath+"/permissions",schemaPath:"#/properties/permissions/minItems",keyword:"minItems",params:{limit: 1},message:"must NOT have fewer than 1 items"};if(vErrors === null){vErrors = [err4];}else {vErrors.push(err4);}errors++;}const len0 = data1.length;for(let i0=0; i0<len0; i0++){let data2 = data1[i0];if(!(((data2 === "read") || (data2 === "manage")) || (data2 === "contribute"))){const err5 = {instancePath:instancePath+"/permissions/" + i0,schemaPath:"#/properties/permissions/items/enum",keyword:"enum",params:{allowedValues: schema20.properties.permissions.items.enum},message:"must be equal to one of the allowed values"};if(vErrors === null){vErrors = [err5];}else {vErrors.push(err5);}errors++;}}}else {const err6 = {instancePath:instancePath+"/permissions",schemaPath:"#/properties/permissions/type",keyword:"type",params:{type: "array"},message:"must be array"};if(vErrors === null){vErrors = [err6];}else {vErrors.push(err6);}errors++;}}if(data.purpose !== undefined){if(typeof data.purpose !== "string"){const err7 = {instancePath:instancePath+"/purpose",schemaPath:"#/properties/purpose/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err7];}else {vErrors.push(err7);}errors++;}}if(data.label !== undefined){let data4 = data.label;const _errs11 = errors;let valid4 = false;let passing0 = null;const _errs12 = errors;if(typeof data4 !== "string"){const err8 = {instancePath:instancePath+"/label",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err8];}else {vErrors.push(err8);}errors++;}var _valid0 = _errs12 === errors;if(_valid0){valid4 = true;passing0 = 0;}const _errs14 = errors;if(data4 && typeof data4 == "object" && !Array.isArray(data4)){for(const key1 in data4){if(typeof data4[key1] !== "string"){const err9 = {instancePath:instancePath+"/label/" + key1.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err9];}else {vErrors.push(err9);}errors++;}}}else {const err10 = {instancePath:instancePath+"/label",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err10];}else {vErrors.push(err10);}errors++;}var _valid0 = _errs14 === errors;if(_valid0 && valid4){valid4 = false;passing0 = [passing0, 1];}else {if(_valid0){valid4 = true;passing0 = 1;}}if(!valid4){const err11 = {instancePath:instancePath+"/label",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err11];}else {vErrors.push(err11);}errors++;}else {errors = _errs11;if(vErrors !== null){if(_errs11){vErrors.length = _errs11;}else {vErrors = null;}}}}}else {const err12 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err12];}else {vErrors.push(err12);}errors++;}validate17.errors = vErrors;return errors === 0;}const schema22 = {"type":"object","additionalProperties":false,"required":["name","notice"],"properties":{"name":{"type":"string"},"url":{"type":"string","format":"uri"},"notice":{"$ref":"#/definitions/localizableText"}}};const formats0 = /^[a-zA-Z][a-zA-Z0-9+.-]*:\S+$/;function validate19(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){let vErrors = null;let errors = 0;if(data && typeof data == "object" && !Array.isArray(data)){if(data.name === undefined){const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "name"},message:"must have required property '"+"name"+"'"};if(vErrors === null){vErrors = [err0];}else {vErrors.push(err0);}errors++;}if(data.notice === undefined){const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "notice"},message:"must have required property '"+"notice"+"'"};if(vErrors === null){vErrors = [err1];}else {vErrors.push(err1);}errors++;}for(const key0 in data){if(!(((key0 === "name") || (key0 === "url")) || (key0 === "notice"))){const err2 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};if(vErrors === null){vErrors = [err2];}else {vErrors.push(err2);}errors++;}}if(data.name !== undefined){if(typeof data.name !== "string"){const err3 = {instancePath:instancePath+"/name",schemaPath:"#/properties/name/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err3];}else {vErrors.push(err3);}errors++;}}if(data.url !== undefined){let data1 = data.url;if(typeof data1 === "string"){if(!(formats0.test(data1))){const err4 = {instancePath:instancePath+"/url",schemaPath:"#/properties/url/format",keyword:"format",params:{format: "uri"},message:"must match format \""+"uri"+"\""};if(vErrors === null){vErrors = [err4];}else {vErrors.push(err4);}errors++;}}else {const err5 = {instancePath:instancePath+"/url",schemaPath:"#/properties/url/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err5];}else {vErrors.push(err5);}errors++;}}if(data.notice !== undefined){let data2 = data.notice;const _errs8 = errors;let valid2 = false;let passing0 = null;const _errs9 = errors;if(typeof data2 !== "string"){const err6 = {instancePath:instancePath+"/notice",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err6];}else {vErrors.push(err6);}errors++;}var _valid0 = _errs9 === errors;if(_valid0){valid2 = true;passing0 = 0;}const _errs11 = errors;if(data2 && typeof data2 == "object" && !Array.isArray(data2)){for(const key1 in data2){if(typeof data2[key1] !== "string"){const err7 = {instancePath:instancePath+"/notice/" + key1.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err7];}else {vErrors.push(err7);}errors++;}}}else {const err8 = {instancePath:instancePath+"/notice",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err8];}else {vErrors.push(err8);}errors++;}var _valid0 = _errs11 === errors;if(_valid0 && valid2){valid2 = false;passing0 = [passing0, 1];}else {if(_valid0){valid2 = true;passing0 = 1;}}if(!valid2){const err9 = {instancePath:instancePath+"/notice",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err9];}else {vErrors.push(err9);}errors++;}else {errors = _errs8;if(vErrors !== null){if(_errs8){vErrors.length = _errs8;}else {vErrors = null;}}}}}else {const err10 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err10];}else {vErrors.push(err10);}errors++;}validate19.errors = vErrors;return errors === 0;}const schema24 = {"type":"object","additionalProperties":false,"required":["id","name","publisher","url"],"properties":{"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]*[a-z0-9]$"},"name":{"$ref":"#/definitions/localizableText"},"publisher":{"type":"string","pattern":"\\S"},"url":{"type":"string","format":"uri"},"contact":{"type":"string"},"appVersion":{"type":"string"}}};const pattern5 = new RegExp("\\S", "u");function validate21(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){let vErrors = null;let errors = 0;if(data && typeof data == "object" && !Array.isArray(data)){if(data.id === undefined){const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "id"},message:"must have required property '"+"id"+"'"};if(vErrors === null){vErrors = [err0];}else {vErrors.push(err0);}errors++;}if(data.name === undefined){const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "name"},message:"must have required property '"+"name"+"'"};if(vErrors === null){vErrors = [err1];}else {vErrors.push(err1);}errors++;}if(data.publisher === undefined){const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "publisher"},message:"must have required property '"+"publisher"+"'"};if(vErrors === null){vErrors = [err2];}else {vErrors.push(err2);}errors++;}if(data.url === undefined){const err3 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "url"},message:"must have required property '"+"url"+"'"};if(vErrors === null){vErrors = [err3];}else {vErrors.push(err3);}errors++;}for(const key0 in data){if(!((((((key0 === "id") || (key0 === "name")) || (key0 === "publisher")) || (key0 === "url")) || (key0 === "contact")) || (key0 === "appVersion"))){const err4 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};if(vErrors === null){vErrors = [err4];}else {vErrors.push(err4);}errors++;}}if(data.id !== undefined){let data0 = data.id;if(typeof data0 === "string"){if(!pattern0.test(data0)){const err5 = {instancePath:instancePath+"/id",schemaPath:"#/properties/id/pattern",keyword:"pattern",params:{pattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"},message:"must match pattern \""+"^[a-z0-9][a-z0-9-]*[a-z0-9]$"+"\""};if(vErrors === null){vErrors = [err5];}else {vErrors.push(err5);}errors++;}}else {const err6 = {instancePath:instancePath+"/id",schemaPath:"#/properties/id/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err6];}else {vErrors.push(err6);}errors++;}}if(data.name !== undefined){let data1 = data.name;const _errs6 = errors;let valid2 = false;let passing0 = null;const _errs7 = errors;if(typeof data1 !== "string"){const err7 = {instancePath:instancePath+"/name",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err7];}else {vErrors.push(err7);}errors++;}var _valid0 = _errs7 === errors;if(_valid0){valid2 = true;passing0 = 0;}const _errs9 = errors;if(data1 && typeof data1 == "object" && !Array.isArray(data1)){for(const key1 in data1){if(typeof data1[key1] !== "string"){const err8 = {instancePath:instancePath+"/name/" + key1.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err8];}else {vErrors.push(err8);}errors++;}}}else {const err9 = {instancePath:instancePath+"/name",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err9];}else {vErrors.push(err9);}errors++;}var _valid0 = _errs9 === errors;if(_valid0 && valid2){valid2 = false;passing0 = [passing0, 1];}else {if(_valid0){valid2 = true;passing0 = 1;}}if(!valid2){const err10 = {instancePath:instancePath+"/name",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err10];}else {vErrors.push(err10);}errors++;}else {errors = _errs6;if(vErrors !== null){if(_errs6){vErrors.length = _errs6;}else {vErrors = null;}}}}if(data.publisher !== undefined){let data3 = data.publisher;if(typeof data3 === "string"){if(!pattern5.test(data3)){const err11 = {instancePath:instancePath+"/publisher",schemaPath:"#/properties/publisher/pattern",keyword:"pattern",params:{pattern: "\\S"},message:"must match pattern \""+"\\S"+"\""};if(vErrors === null){vErrors = [err11];}else {vErrors.push(err11);}errors++;}}else {const err12 = {instancePath:instancePath+"/publisher",schemaPath:"#/properties/publisher/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err12];}else {vErrors.push(err12);}errors++;}}if(data.url !== undefined){let data4 = data.url;if(typeof data4 === "string"){if(!(formats0.test(data4))){const err13 = {instancePath:instancePath+"/url",schemaPath:"#/properties/url/format",keyword:"format",params:{format: "uri"},message:"must match format \""+"uri"+"\""};if(vErrors === null){vErrors = [err13];}else {vErrors.push(err13);}errors++;}}else {const err14 = {instancePath:instancePath+"/url",schemaPath:"#/properties/url/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err14];}else {vErrors.push(err14);}errors++;}}if(data.contact !== undefined){if(typeof data.contact !== "string"){const err15 = {instancePath:instancePath+"/contact",schemaPath:"#/properties/contact/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err15];}else {vErrors.push(err15);}errors++;}}if(data.appVersion !== undefined){if(typeof data.appVersion !== "string"){const err16 = {instancePath:instancePath+"/appVersion",schemaPath:"#/properties/appVersion/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err16];}else {vErrors.push(err16);}errors++;}}}else {const err17 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err17];}else {vErrors.push(err17);}errors++;}validate21.errors = vErrors;return errors === 0;}function validate10(data, {instancePath="", parentData, parentDataProperty, rootData=data}={}){/*# sourceURL="https://hds-lib.datasafe.dev/schemas/appTemplate.json" */;let vErrors = null;let errors = 0;if(data && typeof data == "object" && !Array.isArray(data)){if(data.id === undefined){const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "id"},message:"must have required property '"+"id"+"'"};if(vErrors === null){vErrors = [err0];}else {vErrors.push(err0);}errors++;}if(data.title === undefined){const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "title"},message:"must have required property '"+"title"+"'"};if(vErrors === null){vErrors = [err1];}else {vErrors.push(err1);}errors++;}if(data.description === undefined){const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "description"},message:"must have required property '"+"description"+"'"};if(vErrors === null){vErrors = [err2];}else {vErrors.push(err2);}errors++;}if(data.chat === undefined){const err3 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "chat"},message:"must have required property '"+"chat"+"'"};if(vErrors === null){vErrors = [err3];}else {vErrors.push(err3);}errors++;}if(data.sections === undefined){const err4 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "sections"},message:"must have required property '"+"sections"+"'"};if(vErrors === null){vErrors = [err4];}else {vErrors.push(err4);}errors++;}for(const key0 in data){if(!(func2.call(schema11.properties, key0))){const err5 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};if(vErrors === null){vErrors = [err5];}else {vErrors.push(err5);}errors++;}}if(data.id !== undefined){let data0 = data.id;if(typeof data0 === "string"){if(!pattern0.test(data0)){const err6 = {instancePath:instancePath+"/id",schemaPath:"#/properties/id/pattern",keyword:"pattern",params:{pattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"},message:"must match pattern \""+"^[a-z0-9][a-z0-9-]*[a-z0-9]$"+"\""};if(vErrors === null){vErrors = [err6];}else {vErrors.push(err6);}errors++;}}else {const err7 = {instancePath:instancePath+"/id",schemaPath:"#/properties/id/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err7];}else {vErrors.push(err7);}errors++;}}if(data.title !== undefined){let data1 = data.title;const _errs6 = errors;let valid2 = false;let passing0 = null;const _errs7 = errors;if(typeof data1 !== "string"){const err8 = {instancePath:instancePath+"/title",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err8];}else {vErrors.push(err8);}errors++;}var _valid0 = _errs7 === errors;if(_valid0){valid2 = true;passing0 = 0;}const _errs9 = errors;if(data1 && typeof data1 == "object" && !Array.isArray(data1)){for(const key1 in data1){if(typeof data1[key1] !== "string"){const err9 = {instancePath:instancePath+"/title/" + key1.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err9];}else {vErrors.push(err9);}errors++;}}}else {const err10 = {instancePath:instancePath+"/title",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err10];}else {vErrors.push(err10);}errors++;}var _valid0 = _errs9 === errors;if(_valid0 && valid2){valid2 = false;passing0 = [passing0, 1];}else {if(_valid0){valid2 = true;passing0 = 1;}}if(!valid2){const err11 = {instancePath:instancePath+"/title",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err11];}else {vErrors.push(err11);}errors++;}else {errors = _errs6;if(vErrors !== null){if(_errs6){vErrors.length = _errs6;}else {vErrors = null;}}}}if(data.description !== undefined){let data3 = data.description;const _errs16 = errors;let valid5 = false;let passing1 = null;const _errs17 = errors;if(typeof data3 !== "string"){const err12 = {instancePath:instancePath+"/description",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err12];}else {vErrors.push(err12);}errors++;}var _valid1 = _errs17 === errors;if(_valid1){valid5 = true;passing1 = 0;}const _errs19 = errors;if(data3 && typeof data3 == "object" && !Array.isArray(data3)){for(const key2 in data3){if(typeof data3[key2] !== "string"){const err13 = {instancePath:instancePath+"/description/" + key2.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err13];}else {vErrors.push(err13);}errors++;}}}else {const err14 = {instancePath:instancePath+"/description",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err14];}else {vErrors.push(err14);}errors++;}var _valid1 = _errs19 === errors;if(_valid1 && valid5){valid5 = false;passing1 = [passing1, 1];}else {if(_valid1){valid5 = true;passing1 = 1;}}if(!valid5){const err15 = {instancePath:instancePath+"/description",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing1},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err15];}else {vErrors.push(err15);}errors++;}else {errors = _errs16;if(vErrors !== null){if(_errs16){vErrors.length = _errs16;}else {vErrors = null;}}}}if(data.chat !== undefined){if(typeof data.chat !== "boolean"){const err16 = {instancePath:instancePath+"/chat",schemaPath:"#/properties/chat/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"};if(vErrors === null){vErrors = [err16];}else {vErrors.push(err16);}errors++;}}if(data.sections !== undefined){let data6 = data.sections;if(Array.isArray(data6)){const len0 = data6.length;for(let i0=0; i0<len0; i0++){if(!(validate11(data6[i0], {instancePath:instancePath+"/sections/" + i0,parentData:data6,parentDataProperty:i0,rootData}))){vErrors = vErrors === null ? validate11.errors : vErrors.concat(validate11.errors);errors = vErrors.length;}}}else {const err17 = {instancePath:instancePath+"/sections",schemaPath:"#/properties/sections/type",keyword:"type",params:{type: "array"},message:"must be array"};if(vErrors === null){vErrors = [err17];}else {vErrors.push(err17);}errors++;}}if(data.customFields !== undefined){let data8 = data.customFields;if(Array.isArray(data8)){const len1 = data8.length;for(let i1=0; i1<len1; i1++){if(!(validate13(data8[i1], {instancePath:instancePath+"/customFields/" + i1,parentData:data8,parentDataProperty:i1,rootData}))){vErrors = vErrors === null ? validate13.errors : vErrors.concat(validate13.errors);errors = vErrors.length;}}}else {const err18 = {instancePath:instancePath+"/customFields",schemaPath:"#/properties/customFields/type",keyword:"type",params:{type: "array"},message:"must be array"};if(vErrors === null){vErrors = [err18];}else {vErrors.push(err18);}errors++;}}if(data.existingStreamRefs !== undefined){let data10 = data.existingStreamRefs;if(Array.isArray(data10)){const len2 = data10.length;for(let i2=0; i2<len2; i2++){if(!(validate17(data10[i2], {instancePath:instancePath+"/existingStreamRefs/" + i2,parentData:data10,parentDataProperty:i2,rootData}))){vErrors = vErrors === null ? validate17.errors : vErrors.concat(validate17.errors);errors = vErrors.length;}}}else {const err19 = {instancePath:instancePath+"/existingStreamRefs",schemaPath:"#/properties/existingStreamRefs/type",keyword:"type",params:{type: "array"},message:"must be array"};if(vErrors === null){vErrors = [err19];}else {vErrors.push(err19);}errors++;}}if(data.license !== undefined){if(!(validate19(data.license, {instancePath:instancePath+"/license",parentData:data,parentDataProperty:"license",rootData}))){vErrors = vErrors === null ? validate19.errors : vErrors.concat(validate19.errors);errors = vErrors.length;}}if(data.$schema !== undefined){if(typeof data.$schema !== "string"){const err20 = {instancePath:instancePath+"/$schema",schemaPath:"#/properties/%24schema/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err20];}else {vErrors.push(err20);}errors++;}}if(data.format !== undefined){if(!(data.format === "hds-dataset-template")){const err21 = {instancePath:instancePath+"/format",schemaPath:"#/properties/format/enum",keyword:"enum",params:{allowedValues: schema11.properties.format.enum},message:"must be equal to one of the allowed values"};if(vErrors === null){vErrors = [err21];}else {vErrors.push(err21);}errors++;}}if(data.formatVersion !== undefined){if(!(data.formatVersion === 1)){const err22 = {instancePath:instancePath+"/formatVersion",schemaPath:"#/properties/formatVersion/enum",keyword:"enum",params:{allowedValues: schema11.properties.formatVersion.enum},message:"must be equal to one of the allowed values"};if(vErrors === null){vErrors = [err22];}else {vErrors.push(err22);}errors++;}}if(data.version !== undefined){let data16 = data.version;if(typeof data16 === "string"){if(!pattern2.test(data16)){const err23 = {instancePath:instancePath+"/version",schemaPath:"#/properties/version/pattern",keyword:"pattern",params:{pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},message:"must match pattern \""+"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"+"\""};if(vErrors === null){vErrors = [err23];}else {vErrors.push(err23);}errors++;}}else {const err24 = {instancePath:instancePath+"/version",schemaPath:"#/properties/version/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err24];}else {vErrors.push(err24);}errors++;}}if(data.publishedAt !== undefined){let data17 = data.publishedAt;if(typeof data17 === "string"){if(!pattern3.test(data17)){const err25 = {instancePath:instancePath+"/publishedAt",schemaPath:"#/properties/publishedAt/pattern",keyword:"pattern",params:{pattern: "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])($|T)"},message:"must match pattern \""+"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])($|T)"+"\""};if(vErrors === null){vErrors = [err25];}else {vErrors.push(err25);}errors++;}}else {const err26 = {instancePath:instancePath+"/publishedAt",schemaPath:"#/properties/publishedAt/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err26];}else {vErrors.push(err26);}errors++;}}if(data.app !== undefined){if(!(validate21(data.app, {instancePath:instancePath+"/app",parentData:data,parentDataProperty:"app",rootData}))){vErrors = vErrors === null ? validate21.errors : vErrors.concat(validate21.errors);errors = vErrors.length;}}if(data.dataModel !== undefined){let data19 = data.dataModel;if(data19 && typeof data19 == "object" && !Array.isArray(data19)){for(const key3 in data19){if(!(key3 === "publicationDate")){const err27 = {instancePath:instancePath+"/dataModel",schemaPath:"#/definitions/dataModel/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key3},message:"must NOT have additional properties"};if(vErrors === null){vErrors = [err27];}else {vErrors.push(err27);}errors++;}}if(data19.publicationDate !== undefined){if(typeof data19.publicationDate !== "string"){const err28 = {instancePath:instancePath+"/dataModel/publicationDate",schemaPath:"#/definitions/dataModel/properties/publicationDate/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err28];}else {vErrors.push(err28);}errors++;}}}else {const err29 = {instancePath:instancePath+"/dataModel",schemaPath:"#/definitions/dataModel/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err29];}else {vErrors.push(err29);}errors++;}}if(data.consent !== undefined){let data21 = data.consent;const _errs53 = errors;let valid16 = false;let passing2 = null;const _errs54 = errors;if(typeof data21 !== "string"){const err30 = {instancePath:instancePath+"/consent",schemaPath:"#/definitions/localizableText/oneOf/0/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err30];}else {vErrors.push(err30);}errors++;}var _valid2 = _errs54 === errors;if(_valid2){valid16 = true;passing2 = 0;}const _errs56 = errors;if(data21 && typeof data21 == "object" && !Array.isArray(data21)){for(const key4 in data21){if(typeof data21[key4] !== "string"){const err31 = {instancePath:instancePath+"/consent/" + key4.replace(/~/g, "~0").replace(/\//g, "~1"),schemaPath:"#/definitions/localizableText/oneOf/1/additionalProperties/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err31];}else {vErrors.push(err31);}errors++;}}}else {const err32 = {instancePath:instancePath+"/consent",schemaPath:"#/definitions/localizableText/oneOf/1/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err32];}else {vErrors.push(err32);}errors++;}var _valid2 = _errs56 === errors;if(_valid2 && valid16){valid16 = false;passing2 = [passing2, 1];}else {if(_valid2){valid16 = true;passing2 = 1;}}if(!valid16){const err33 = {instancePath:instancePath+"/consent",schemaPath:"#/definitions/localizableText/oneOf",keyword:"oneOf",params:{passingSchemas: passing2},message:"must match exactly one schema in oneOf"};if(vErrors === null){vErrors = [err33];}else {vErrors.push(err33);}errors++;}else {errors = _errs53;if(vErrors !== null){if(_errs53){vErrors.length = _errs53;}else {vErrors = null;}}}}if(data.requiredBridges !== undefined){let data23 = data.requiredBridges;if(Array.isArray(data23)){const len3 = data23.length;for(let i3=0; i3<len3; i3++){if(typeof data23[i3] !== "string"){const err34 = {instancePath:instancePath+"/requiredBridges/" + i3,schemaPath:"#/properties/requiredBridges/items/type",keyword:"type",params:{type: "string"},message:"must be string"};if(vErrors === null){vErrors = [err34];}else {vErrors.push(err34);}errors++;}}let i4 = data23.length;let j0;if(i4 > 1){const indices0 = {};for(;i4--;){let item0 = data23[i4];if(typeof item0 !== "string"){continue;}if(typeof indices0[item0] == "number"){j0 = indices0[item0];const err35 = {instancePath:instancePath+"/requiredBridges",schemaPath:"#/properties/requiredBridges/uniqueItems",keyword:"uniqueItems",params:{i: i4, j: j0},message:"must NOT have duplicate items (items ## "+j0+" and "+i4+" are identical)"};if(vErrors === null){vErrors = [err35];}else {vErrors.push(err35);}errors++;break;}indices0[item0] = i4;}}}else {const err36 = {instancePath:instancePath+"/requiredBridges",schemaPath:"#/properties/requiredBridges/type",keyword:"type",params:{type: "array"},message:"must be array"};if(vErrors === null){vErrors = [err36];}else {vErrors.push(err36);}errors++;}}}else {const err37 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};if(vErrors === null){vErrors = [err37];}else {vErrors.push(err37);}errors++;}validate10.errors = vErrors;return errors === 0;}
 
-/***/ "./node_modules/ajv/dist/refs/json-schema-draft-07.json"
-/*!**************************************************************!*\
-  !*** ./node_modules/ajv/dist/refs/json-schema-draft-07.json ***!
-  \**************************************************************/
-(module) {
-
-"use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"$schema":"http://json-schema.org/draft-07/schema#","$id":"http://json-schema.org/draft-07/schema#","title":"Core schema meta-schema","definitions":{"schemaArray":{"type":"array","minItems":1,"items":{"$ref":"#"}},"nonNegativeInteger":{"type":"integer","minimum":0},"nonNegativeIntegerDefault0":{"allOf":[{"$ref":"#/definitions/nonNegativeInteger"},{"default":0}]},"simpleTypes":{"enum":["array","boolean","integer","null","number","object","string"]},"stringArray":{"type":"array","items":{"type":"string"},"uniqueItems":true,"default":[]}},"type":["object","boolean"],"properties":{"$id":{"type":"string","format":"uri-reference"},"$schema":{"type":"string","format":"uri"},"$ref":{"type":"string","format":"uri-reference"},"$comment":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"default":true,"readOnly":{"type":"boolean","default":false},"examples":{"type":"array","items":true},"multipleOf":{"type":"number","exclusiveMinimum":0},"maximum":{"type":"number"},"exclusiveMaximum":{"type":"number"},"minimum":{"type":"number"},"exclusiveMinimum":{"type":"number"},"maxLength":{"$ref":"#/definitions/nonNegativeInteger"},"minLength":{"$ref":"#/definitions/nonNegativeIntegerDefault0"},"pattern":{"type":"string","format":"regex"},"additionalItems":{"$ref":"#"},"items":{"anyOf":[{"$ref":"#"},{"$ref":"#/definitions/schemaArray"}],"default":true},"maxItems":{"$ref":"#/definitions/nonNegativeInteger"},"minItems":{"$ref":"#/definitions/nonNegativeIntegerDefault0"},"uniqueItems":{"type":"boolean","default":false},"contains":{"$ref":"#"},"maxProperties":{"$ref":"#/definitions/nonNegativeInteger"},"minProperties":{"$ref":"#/definitions/nonNegativeIntegerDefault0"},"required":{"$ref":"#/definitions/stringArray"},"additionalProperties":{"$ref":"#"},"definitions":{"type":"object","additionalProperties":{"$ref":"#"},"default":{}},"properties":{"type":"object","additionalProperties":{"$ref":"#"},"default":{}},"patternProperties":{"type":"object","additionalProperties":{"$ref":"#"},"propertyNames":{"format":"regex"},"default":{}},"dependencies":{"type":"object","additionalProperties":{"anyOf":[{"$ref":"#"},{"$ref":"#/definitions/stringArray"}]}},"propertyNames":{"$ref":"#"},"const":true,"enum":{"type":"array","items":true,"minItems":1,"uniqueItems":true},"type":{"anyOf":[{"$ref":"#/definitions/simpleTypes"},{"type":"array","items":{"$ref":"#/definitions/simpleTypes"},"minItems":1,"uniqueItems":true}]},"format":{"type":"string"},"contentMediaType":{"type":"string"},"contentEncoding":{"type":"string"},"if":{"$ref":"#"},"then":{"$ref":"#"},"else":{"$ref":"#"},"allOf":{"$ref":"#/definitions/schemaArray"},"anyOf":{"$ref":"#/definitions/schemaArray"},"oneOf":{"$ref":"#/definitions/schemaArray"},"not":{"$ref":"#"}},"default":true}');
 
 /***/ },
 
@@ -43011,18 +39414,7 @@ module.exports = /*#__PURE__*/JSON.parse('{"$schema":"http://json-schema.org/dra
 (module) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.11.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
-
-/***/ },
-
-/***/ "./ts/appTemplates/schemas/appTemplate.schema.json"
-/*!*********************************************************!*\
-  !*** ./ts/appTemplates/schemas/appTemplate.schema.json ***!
-  \*********************************************************/
-(module) {
-
-"use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"$schema":"http://json-schema.org/draft-07/schema#","$id":"https://hds-lib.datasafe.dev/schemas/appTemplate.json","type":"object","additionalProperties":false,"required":["id","title","description","chat","sections"],"properties":{"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]*[a-z0-9]$"},"title":{"$ref":"#/definitions/localizableText"},"description":{"$ref":"#/definitions/localizableText"},"chat":{"type":"boolean"},"sections":{"type":"array","items":{"$ref":"#/definitions/section"}},"customFields":{"type":"array","items":{"$ref":"#/definitions/customFieldDeclaration"}},"existingStreamRefs":{"type":"array","items":{"$ref":"#/definitions/existingStreamRef"}},"license":{"$ref":"#/definitions/license"}},"definitions":{"localizableText":{"oneOf":[{"type":"string"},{"type":"object","additionalProperties":{"type":"string"}}]},"section":{"type":"object","additionalProperties":false,"required":["key","type","name"],"properties":{"key":{"type":"string"},"type":{"enum":["permanent","recurring"]},"name":{"$ref":"#/definitions/localizableText"},"itemKeys":{"type":"array","items":{"type":"string"}},"itemCustomizations":{"type":"object"},"customFieldKeys":{"type":"array","items":{"type":"string"}}}},"customFieldDeclaration":{"type":"object","additionalProperties":false,"required":["streamId","eventType","def"],"properties":{"streamId":{"type":"string"},"eventType":{"enum":["note/txt","note/html","count/generic","date/iso-8601","activity/plain"]},"parentId":{"type":"string"},"name":{"type":"string"},"def":{"$ref":"#/definitions/customFieldDef"}}},"customFieldDef":{"type":"object","additionalProperties":false,"required":["version","templateId","key","label"],"properties":{"version":{"enum":["v1"]},"templateId":{"type":"string"},"key":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]*[a-z0-9]$"},"label":{"$ref":"#/definitions/localizableText"},"description":{"$ref":"#/definitions/localizableText"},"section":{"type":"string"},"required":{"type":"boolean"},"maxLength":{"type":"integer","minimum":0},"options":{"type":"array","items":{"type":"string"},"uniqueItems":true},"min":{"type":"number"},"max":{"type":"number"},"step":{"type":"number"},"minDate":{"type":"string"},"maxDate":{"type":"string"},"repeatable":{"type":"string"}}},"existingStreamRef":{"type":"object","additionalProperties":false,"required":["streamId","permissions"],"properties":{"streamId":{"type":"string"},"permissions":{"type":"array","items":{"enum":["read","manage","contribute"]},"minItems":1},"purpose":{"type":"string"}}},"license":{"type":"object","additionalProperties":false,"required":["name","notice"],"properties":{"name":{"type":"string"},"url":{"type":"string","format":"uri"},"notice":{"$ref":"#/definitions/localizableText"}}}}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.15.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
 
 /***/ }
 
@@ -43142,24 +39534,26 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _applicationClass_test_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./applicationClass.test.js */ "./tests/applicationClass.test.js");
 /* harmony import */ var _apptemplatesRequest_test_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./apptemplatesRequest.test.js */ "./tests/apptemplatesRequest.test.js");
 /* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
+
 
 
 
