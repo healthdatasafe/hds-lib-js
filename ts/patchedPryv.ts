@@ -52,6 +52,10 @@ export namespace pryv {
   export type ItemDeletion = _PryvTypes.ItemDeletion;
   export type PryvError = _PryvTypes.PryvError;
   export type KeyValue = _PryvTypes.KeyValue;
+  // pryv 3.15.0: consent invites answered inside the authorisation request (`authRequest.cmcInvites`).
+  export type AuthRequestCmcInvite = _PryvTypes.AuthRequestCmcInvite;
+  export type AuthCmcInvite = _PryvTypes.AuthCmcInvite;
+  export type AuthCmcInviteOutcome = _PryvTypes.AuthCmcInviteOutcome;
 }
 
 export const cmc = _cmc;

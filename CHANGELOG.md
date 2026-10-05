@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.10.0] - 2026-10-05
+
+### Changed
+- **`pryv`, `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor`, `@pryv/socket.io` 3.14.2 → 3.15.0, `@pryv/cmc`
+  3.17.0 → 3.17.1** (exact pins). 660 tests pass unchanged.
+
+### Added
+- `pryv.AuthRequestCmcInvite`, `pryv.AuthCmcInvite`, `pryv.AuthCmcInviteOutcome` in the `pryv` type namespace: the
+  typings for consent invites answered inside the authorisation request (`authRequest.cmcInvites`, core rc.32+).
+  `AuthSettings.authRequest.cmcInvites` and the `NEED_SIGNIN` / `ACCEPTED` state payloads carry them too.
+- Through `delegation`: `detachDelegate(username, { keepAccessIds })`, so an account owner keeps the consent grants
+  a delegate gave (core rc.31+); an older core ignores the list.
+
+### What 3.15.0 changes at runtime (lib-js)
+- `PryvError.innerObject` / `.response` and `MfaRequiredError.mfaToken` are no longer **enumerable**: still readable
+  by name, but `console.log(err)`, `JSON.stringify(err)`, `{...err}` and `Object.keys(err)` no longer include them.
+  Read them by name (as `pryvErrorCode` does).
+- `Service` passes `cmcInvites` through from the access-request answer when the core echoes it.
+
 ## [2.9.1] - 2026-10-05
 
 ### Fixed
