@@ -19869,7 +19869,8 @@ class CollectorRequest {
         this.#existingStreamRefs.push({
             streamId: ref.streamId,
             permissions: ref.permissions,
-            ...(ref.purpose != null ? { purpose: ref.purpose } : {})
+            ...(ref.purpose != null ? { purpose: ref.purpose } : {}),
+            ...(ref.label != null ? { label: ref.label } : {})
         });
     }
     // ---------- customFields (Plan 45 mode-2) ----------- //
@@ -35679,6 +35680,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/CollectorRequest.ts */ "./ts/appTemplates/CollectorRequest.ts");
 /* harmony import */ var _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/appTemplates/Questionnaire.ts */ "./ts/appTemplates/Questionnaire.ts");
+/* harmony import */ var _ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../ts/appTemplates/datasetTemplate.ts */ "./ts/appTemplates/datasetTemplate.ts");
+
 
 
 
@@ -35914,6 +35917,16 @@ describe('[APRX] appTemplates Requests', function () {
       const content1 = r1.content;
       const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(content1);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(r2.existingStreamRefs, r1.existingStreamRefs);
+    });
+
+    it('[ARES9] should keep the label, so app-private read grants are named (B-2026-10-05-15)', () => {
+      const label = { en: 'Daily notes (Cycle Example)' };
+      const r1 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      r1.addExistingStreamRef({ streamId: 'cycle-example-notes', permissions: ['read'], purpose: 'app-private', label });
+      const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(r1.content);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(r2.existingStreamRefs[0].label, label);
+      const perms = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_4__.withAppPrivatePermissions)([], r2.existingStreamRefs);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(perms, [{ streamId: 'cycle-example-notes', defaultName: 'Daily notes (Cycle Example)', level: 'read' }]);
     });
   });
 
