@@ -2,6 +2,7 @@ import { initHDSModel } from '../ts/index.ts';
 import { assert } from './test-utils/deps-node.js';
 import { CollectorRequest } from '../ts/appTemplates/CollectorRequest.ts';
 import { Questionnaire } from '../ts/appTemplates/Questionnaire.ts';
+import { withAppPrivatePermissions } from '../ts/appTemplates/datasetTemplate.ts';
 
 describe('[APRX] appTemplates Requests', function () {
   this.timeout(8000);
@@ -233,6 +234,16 @@ describe('[APRX] appTemplates Requests', function () {
       const content1 = r1.content;
       const r2 = new CollectorRequest(content1);
       assert.deepEqual(r2.existingStreamRefs, r1.existingStreamRefs);
+    });
+
+    it('[ARES9] should keep the label, so app-private read grants are named (B-2026-10-05-15)', () => {
+      const label = { en: 'Daily notes (Cycle Example)' };
+      const r1 = new CollectorRequest({});
+      r1.addExistingStreamRef({ streamId: 'cycle-example-notes', permissions: ['read'], purpose: 'app-private', label });
+      const r2 = new CollectorRequest(r1.content);
+      assert.deepEqual(r2.existingStreamRefs[0].label, label);
+      const perms = withAppPrivatePermissions([], r2.existingStreamRefs);
+      assert.deepEqual(perms, [{ streamId: 'cycle-example-notes', defaultName: 'Daily notes (Cycle Example)', level: 'read' }]);
     });
   });
 

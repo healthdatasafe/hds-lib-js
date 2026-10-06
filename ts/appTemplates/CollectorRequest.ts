@@ -359,7 +359,8 @@ export class CollectorRequest {
     this.#existingStreamRefs.push({
       streamId: ref.streamId,
       permissions: ref.permissions,
-      ...(ref.purpose != null ? { purpose: ref.purpose } : {})
+      ...(ref.purpose != null ? { purpose: ref.purpose } : {}),
+      ...(ref.label != null ? { label: ref.label } : {})
     });
   }
 

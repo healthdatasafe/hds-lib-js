@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.13.1] - 2026-10-06
+
+### Fixed
+- `CollectorRequest.addExistingStreamRef` kept `streamId`, `permissions` and `purpose` but dropped `label`, so a data
+  set built through a `CollectorRequest` (doctor-dashboard's FormBuilder) lost the app-private stream's name, and
+  `withAppPrivatePermissions` then named the read grant by its stream id: patients saw `cycle-example-notes` instead of
+  "Daily notes (Cycle Example)" on the invite and consent screens (B-2026-10-05-15). `label` is not part of the template
+  scope, so no scope hash changes. Data sets saved before this release keep the id until they are re-imported.
+
 ## [2.13.0] - 2026-10-06
 
 ### Changed
