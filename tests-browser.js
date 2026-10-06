@@ -1129,10 +1129,17 @@ async function revokeAcceptance (conn, params) {
  * List accepted relationships from the accepter side. Reads
  * `consent/accept-cmc` triggers under the given scope.
  *
+ * A relationship that has ended carries `content.withdrawal` on its accept
+ * event (stamped by the server, whatever ended it: deleting the data grant,
+ * a revoke by either side, a delegation detach). Those are left out unless
+ * `params.includeWithdrawn` is true. A core that does not record withdrawals
+ * leaves ended relationships looking active.
+ *
  * @param {Object} conn
  * @param {Object} [params]
  * @param {string} [params.scopeStreamId=':_cmc:apps']  - root or sub-scope to search recursively
- * @param {number} [params.limit=1000]
+ * @param {number} [params.limit=1000] - most accept events read (withdrawn ones included)
+ * @param {boolean} [params.includeWithdrawn=false] - also list ended relationships
  * @returns {Promise<Array>}
  */
 async function listAcceptedRelationships (conn, params) {
@@ -1147,7 +1154,12 @@ async function listAcceptedRelationships (conn, params) {
     types: [ET_ACCEPT],
     limit
   }, 'events');
-  return events.map(function (event) {
+  const listed = params.includeWithdrawn === true
+    ? events
+    : events.filter(function (event) {
+      return event?.content?.withdrawal == null;
+    });
+  return listed.map(function (event) {
     const c = (event && event.content) || {};
     return {
       acceptEventId: event.id,
@@ -1162,7 +1174,9 @@ async function listAcceptedRelationships (conn, params) {
       // the contract fix and is no longer reachable for events written
       // by pryv-cmc >= 1.1.1; we leave the field-omission default at
       // true to honour the documented contract.
-      features: c.features || { chat: true, systemMessaging: true }
+      features: c.features || { chat: true, systemMessaging: true },
+      // Set when the relationship has ended (see above); null while active.
+      withdrawal: c.withdrawal || null
     };
   });
 }
@@ -3604,6 +3618,7 @@ class Socket extends UpdateMethod {
       if (keys.includes('monStreams')) onStreams();
     });
     const scope = this.monitor.eventsGetScope || {};
+    /** @type {Record<string, unknown>} */
     const eventsQuery = {};
     for (const f of ['streams', 'types', 'content', 'clientData']) {
       if (scope[f] != null) eventsQuery[f] = scope[f];
@@ -3635,7 +3650,8 @@ class Socket extends UpdateMethod {
       // (i.e. SocketIO emitted 'error' after reconnect_failed), drop our
       // reference so a future Changes.READY can rebuild instead of
       // short-circuiting on the cached, dead handle.
-      if (this.socket && !this.socket._io) {
+      // `_io` is the SocketIO instance's internal transport handle (not typed)
+      if (this.socket && !(/** @type {any} */ (this.socket))._io) {
         this.socket = null;
       }
     });
@@ -4022,7 +4038,7 @@ class SocketIO extends EventEmitter {
   /**
    * Identical to Connection.api() but using Socket.IO transport
    * @param {Array<MethodCall>} arrayOfAPICalls - Array of Method Calls
-   * @param {Function} [progress] - Return percentage of progress (0 - 100)
+   * @param {(percentage: number) => void} [progress] - Return percentage of progress (0 - 100)
    * @returns {Promise<Array>} Promise to Array of results matching each method call in order
    */
   async api (arrayOfAPICalls, progress) {
@@ -9839,6 +9855,7 @@ const ProfileStore = __webpack_require__(/*! ./ProfileStore */ "./node_modules/p
 const handoff = __webpack_require__(/*! ../lib/handoff */ "./node_modules/pryv/src/lib/handoff.js");
 const pollUrls = __webpack_require__(/*! ../lib/pollUrls */ "./node_modules/pryv/src/lib/pollUrls.js");
 const PryvError = __webpack_require__(/*! ../lib/PryvError */ "./node_modules/pryv/src/lib/PryvError.js");
+const { refusedState, unreadableAnswerState } = __webpack_require__(/*! ./pollOutcome */ "./node_modules/pryv/src/Auth/pollOutcome.js");
 
 /**
  * Controller for authentication flow
@@ -9856,7 +9873,8 @@ class AuthController {
     validateSettings.call(this, settings);
 
     this.stateChangeListeners = [];
-    // External `onStateChange` callers only see `{ status, id, key, serviceInfo? }`
+    // External `onStateChange` callers only see
+    // `{ status, id, key, serviceInfo?, cmcInvites?, delegation? }`
     // on AUTHORIZED — credentials (`username`, `token`, `apiEndpoint`) stay
     // inside the lib. Internal listeners (e.g. LoginButton, for cookie
     // autologin) get the full unfiltered state.
@@ -9972,12 +9990,35 @@ class AuthController {
       }
       this.state = { status: AuthStates.SIGNOUT };
     } else if (isInitialized.call(this)) {
-      this.startAuthRequest();
+      // Not awaited (the click returns at once), so the rejection is handled
+      // here. A failed request is already the state (ERROR, or the previous
+      // account). A failure in the first poll round leaves NEED_SIGNIN: it
+      // becomes ERROR, as in the later rounds (a click-started request is
+      // never an account switch). Any other failure is logged rather than lost.
+      const started = this.startAuthRequest();
+      // startAuthRequest begins a new flow synchronously: this is its id
+      const flowId = this._authFlowId;
+      started.catch((e) => {
+        const status = this.state?.status;
+        if (status === AuthStates.NEED_SIGNIN && this._authFlowId === flowId) {
+          this.state = { status: AuthStates.ERROR, message: 'Error while polling for auth request', error: e };
+        } else if (status !== AuthStates.ERROR && status !== AuthStates.AUTHORIZED) {
+          console.warn('pryv: sign-in request failed', e);
+        }
+      });
     } else if (this.state.status === AuthStates.SWITCHING) {
       // a switch is running; its outcome arrives as a state change
     } else if (this.state.status === AuthStates.ERROR) {
       // start over (stored sign-in or the sign-in button) rather than stay inert
-      await this.init();
+      try {
+        await this.init();
+      } catch (e) {
+        // failed before reaching a usable state: show it, as a failed request does
+        if (this.state.status === AuthStates.LOADING) {
+          this.state = { status: AuthStates.ERROR, message: 'Initializing', error: e };
+        }
+        throw e;
+      }
     } else if (isNeedSignIn.call(this)) {
       // reopen popup (HACK for now: set to private property to avoid self-assignment)
       this.state = this._state;
@@ -9989,7 +10030,9 @@ class AuthController {
       return this.state.status === AuthStates.AUTHORIZED;
     }
     function isInitialized () {
-      return this.state.status === AuthStates.INITIALIZED;
+      // REFUSED is followed by INITIALIZED in the same dispatch: a click
+      // from a listener in between is a click on the reset button
+      return this.state.status === AuthStates.INITIALIZED || this.state.status === AuthStates.REFUSED;
     }
     function isNeedSignIn () {
       return this.state.status === AuthStates.NEED_SIGNIN;
@@ -10256,11 +10299,15 @@ class AuthController {
     /** @this {AuthController} */
     async function postAccess () {
       try {
+        // @ts-ignore - this is bound via .call()
+        const request = Object.assign({}, this.settings.authRequest, overrides);
+        // A core refuses `actAsManagedOnly` with `actAs: 'deny'`, which a
+        // switch back to the signed-in account sends.
+        if (request.actAs === 'deny') delete request.actAsManagedOnly;
         const { response, body } = await utils.fetchPost(
           // @ts-ignore - this is bound via .call()
           this.serviceInfo.access,
-          // @ts-ignore - this is bound via .call()
-          Object.assign({}, this.settings.authRequest, overrides)
+          request
         );
         if (!response.ok) {
           // The server's message, id and status; the body stays on `response`,
@@ -10294,8 +10341,17 @@ class AuthController {
       if (this._authFlowId !== flowId) return;
 
       if (pollResponse.status === AuthStates.NEED_SIGNIN) {
-        // @ts-ignore - this is bound via .call()
-        setTimeout(await doPolling.bind(this), this.state?.poll_rate_ms);
+        // A later round has no caller to reject to: its failure becomes the
+        // state, as a poll that cannot reach the server does.
+        setTimeout(() => {
+          doPolling.call(this).catch((e) => {
+            if (this._authFlowId !== flowId) return;
+            const previous = this._switchPrevious;
+            this._switchPrevious = null;
+            if (previous != null) console.warn('pryv: account switch did not complete (polling failed); keeping the previous account');
+            this.state = previous ?? { status: AuthStates.ERROR, message: 'Error while polling for auth request', error: e };
+          });
+        }, this.state?.poll_rate_ms);
       } else {
         // Shared-secret delivery: the ACCEPTED body carries a one-time
         // `handoff` key, not the token. Redeem it once here (caching under the
@@ -10339,16 +10395,26 @@ class AuthController {
             (pollResponse?.error?.id ?? pollResponse?.message ?? pollResponse?.status) + '); keeping the previous account');
           this.state = previous;
           return;
+        } else if (pollResponse.status === AuthStates.REFUSED) {
+          // Refused on the auth page (403): tell the listeners why, then
+          // return to the sign-in button.
+          this.state = refusedState(pollResponse, this.serviceInfo);
+          // a listener started over (new request, sign-out, re-initialization)
+          // @ts-ignore - this is bound via .call()
+          if (this._authFlowId !== flowId) return;
+          this.state = { status: AuthStates.INITIALIZED, serviceInfo: this.serviceInfo };
+          return;
         }
         this.state = pollResponse;
       }
 
       async function pollAccess (pollUrl) {
         try {
-          const { response, body } = await utils.fetchGet(pollUrl);
-          if (response.status === 403 && body?.status === 'REFUSED') {
-            return { status: AuthStates.INITIALIZED };
-          }
+          // a REFUSED answer (403) is handled by the caller like any other body
+          const { body } = await utils.fetchGet(pollUrl);
+          // unknown or expired key, a server error body, no body: ERROR, as
+          // the redirect path (never a state without a status)
+          if (body?.status == null) return unreadableAnswerState(body);
           return body;
         } catch (e) {
           return { status: AuthStates.ERROR, message: 'Error while polling for auth request', error: e };
@@ -10389,7 +10455,8 @@ class AuthController {
 
 /**
  * Narrow the state passed to *external* `onStateChange` callers so the
- * calling app sees only `{ status, id, key, serviceInfo? }` on the
+ * calling app sees only `{ status, id, key, serviceInfo?, cmcInvites?,
+ * delegation? }` on the
  * terminal AUTHORIZED state reached through the auth-flow polling path.
  * `username` / `token` / `apiEndpoint` are kept inside the lib; the
  * calling app uses `pryv.connectFromKey(key, serviceInfoUrl)` to obtain
@@ -10399,6 +10466,10 @@ class AuthController {
  * `LoginButton.getAuthorizationData()`) passes through unchanged so
  * existing pages that build a `Connection` directly from the restored
  * state on page load keep working.
+ *
+ * `cmcInvites` (the auth page's outcome for each invite: event and access
+ * ids, or why not) and `delegation` (a display hint) carry no credential
+ * and are kept when present.
  *
  * Non-AUTHORIZED states pass through unchanged so error messages /
  * loading flags / etc. still reach the listener.
@@ -10416,6 +10487,8 @@ function filterForExternalListener (state) {
   }
   const out = { status: state.status, id: state.id, key: state.key };
   if (state.serviceInfo != null) out.serviceInfo = state.serviceInfo;
+  if (state.cmcInvites != null) out.cmcInvites = state.cmcInvites;
+  if (state.delegation != null) out.delegation = state.delegation;
   return out;
 }
 
@@ -10882,6 +10955,53 @@ async function setupAuth (settings, serviceInfoUrl, serviceCustomizations, Human
 
 /***/ },
 
+/***/ "./node_modules/pryv/src/Auth/pollOutcome.js"
+/*!***************************************************!*\
+  !*** ./node_modules/pryv/src/Auth/pollOutcome.js ***!
+  \***************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+const AuthStates = __webpack_require__(/*! ./AuthStates */ "./node_modules/pryv/src/Auth/AuthStates.js");
+
+/**
+ * States built from the answer to an auth-request poll, shared by the popup
+ * (AuthController) and the redirect (LoginButton) paths so both emit the
+ * same shapes.
+ */
+module.exports = {
+  refusedState,
+  unreadableAnswerState
+};
+
+/**
+ * The REFUSED state for a refused auth request: the core's `reasonId`
+ * (e.g. `REFUSED_BY_USER`, `REFUSED_MANDATORY_CONSENT`) and `message`, with
+ * the service info. Nothing else of the answer is kept.
+ * @param {Object} body - the poll answer (`status: 'REFUSED'`)
+ * @param {Object} [serviceInfo]
+ * @returns {Object}
+ */
+function refusedState (body, serviceInfo) {
+  return { status: AuthStates.REFUSED, reasonId: body?.reasonId, message: body?.message, serviceInfo };
+}
+
+/**
+ * The ERROR state for a poll answer without a `status` (unknown or expired
+ * key, a server error body, no body): nothing the sign-in button can show.
+ * @param {Object} [body] - the poll answer
+ * @returns {Object}
+ */
+function unreadableAnswerState (body) {
+  return { status: AuthStates.ERROR, message: 'Cannot fetch result', error: body?.error ?? body };
+}
+
+
+/***/ },
+
 /***/ "./node_modules/pryv/src/Browser/CookieUtils.js"
 /*!******************************************************!*\
   !*** ./node_modules/pryv/src/Browser/CookieUtils.js ***!
@@ -10970,6 +11090,7 @@ const Cookies = __webpack_require__(/*! ./CookieUtils */ "./node_modules/pryv/sr
 const AuthStates = __webpack_require__(/*! ../Auth/AuthStates */ "./node_modules/pryv/src/Auth/AuthStates.js");
 const AuthController = __webpack_require__(/*! ../Auth/AuthController */ "./node_modules/pryv/src/Auth/AuthController.js");
 const ProfileStore = __webpack_require__(/*! ../Auth/ProfileStore */ "./node_modules/pryv/src/Auth/ProfileStore.js");
+const { refusedState, unreadableAnswerState } = __webpack_require__(/*! ../Auth/pollOutcome */ "./node_modules/pryv/src/Auth/pollOutcome.js");
 const Messages = __webpack_require__(/*! ../Auth/LoginMessages */ "./node_modules/pryv/src/Auth/LoginMessages.js");
 const handoff = __webpack_require__(/*! ../lib/handoff */ "./node_modules/pryv/src/lib/handoff.js");
 const pollUrls = __webpack_require__(/*! ../lib/pollUrls */ "./node_modules/pryv/src/lib/pollUrls.js");
@@ -11015,7 +11136,11 @@ class LoginButton {
   }
 
   onClick () {
-    this.auth.handleClick();
+    // A click handler has no caller to reject to: a failure is shown as the
+    // ERROR state; anything else is logged rather than left unhandled.
+    Promise.resolve(this.auth.handleClick()).catch((e) => {
+      if (this.auth.state?.status !== AuthStates.ERROR) console.warn('pryv: sign-in button click failed', e);
+    });
   }
 
   async onStateChange (state) {
@@ -11070,6 +11195,9 @@ class LoginButton {
       }
       case AuthStates.ERROR:
         this.text = getErrorMessage(this, state.message);
+        break;
+      case AuthStates.REFUSED:
+        // followed by INITIALIZED, which resets the button
         break;
       default:
         console.log('WARNING Unhandled state for Login: ' + state.status);
@@ -11222,9 +11350,9 @@ class LoginButton {
       pollUrls.remember(key, pollUrl);
       // the flow of this sign-in: a sign-out clears its cached credential
       authController._authFlowKey = key;
-      let response, body;
+      let body;
       try {
-        ({ response, body } = await utils.fetchGet(pollUrl));
+        ({ body } = await utils.fetchGet(pollUrl));
       } catch (e) {
         body = {
           status: AuthStates.ERROR,
@@ -11232,12 +11360,21 @@ class LoginButton {
           error: e
         };
       }
-      if (response?.status === 403 && body?.status === 'REFUSED') {
-        // refused on the auth page: back to the sign-in button (as the popup path)
-        body = { status: AuthStates.INITIALIZED, serviceInfo: authController.serviceInfo };
-      } else if (body?.status == null) {
+      if (body?.status === AuthStates.REFUSED && !signedIn) {
+        // Refused on the auth page (403): tell the listeners why, then back
+        // to the sign-in button (as the popup path).
+        const flowId = authController._authFlowId;
+        authController.state = refusedState(body, authController.serviceInfo);
+        // unless a listener started over (new request, sign-out, re-initialization)
+        if (authController._authFlowId === flowId) {
+          authController.state = { status: AuthStates.INITIALIZED, serviceInfo: authController.serviceInfo };
+        }
+        cleanUrl();
+        return;
+      }
+      if (body?.status == null) {
         // unknown or expired key, or no answer the button can show
-        body = { status: AuthStates.ERROR, message: 'Cannot fetch result', error: body?.error ?? body };
+        body = unreadableAnswerState(body);
       }
       // Shared-secret delivery: the ACCEPTED body carries a one-time
       // `handoff` key, not the token. Redeem it exactly as the polling path
@@ -12122,7 +12259,7 @@ class Connection {
   /**
    * Create an event with attached file
    * NODE.jS ONLY
-   * @param {Event} event
+   * @param {PryvEvent} event
    * @param {string} filePath
    */
   async createEventWithFile (event, filePath) {
@@ -12169,7 +12306,7 @@ class Connection {
   /**
    * Create an event with attached formData
    * !! BROWSER ONLY
-   * @param {Event} event
+   * @param {PryvEvent} event
    * @param {FormData} formData https://developer.mozilla.org/en-US/docs/Web/API/FormData/FormData
    */
   async createEventWithFormData (event, formData) {
@@ -13214,9 +13351,12 @@ class Service {
    * @param {Object} [authRequest.clientData]
    * @param {string} [authRequest.deviceName]
    * @param {number} [authRequest.expireAfter]
-   * @returns {Promise<{ key: string, authUrl: string, poll: string, pollRateMs: number, consent?: Object }>}
-   *   `consent` is echoed back only by a core that understood the
-   *   annotations, which is how you detect support.
+   * @param {boolean} [authRequest.actAsManagedOnly] - true: the access must
+   *   be granted for an account the user manages; requires `actAs: 'allow'`
+   *   or a username.
+   * @returns {Promise<{ key: string, authUrl: string, poll: string, pollRateMs: number, consent?: Object, cmcInvites?: Array<Object>, actAsManagedOnly?: true }>}
+   *   `consent`, `cmcInvites` and `actAsManagedOnly` are echoed back only by
+   *   a core that understood them, which is how you detect support.
    * @throws {PryvError} on non-2xx
    */
   async startAccessRequest (authRequest) {
@@ -13247,6 +13387,9 @@ class Service {
     if (body.consent != null) envelope.consent = body.consent;
     // Same for consent invites: echoed only by a core that understood them.
     if (body.cmcInvites != null) envelope.cmcInvites = body.cmcInvites;
+    // Echoed only by a core that understood `actAsManagedOnly`: an older core
+    // drops the field, and the auth page then behaves per `actAs` alone.
+    if (body.actAsManagedOnly === true) envelope.actAsManagedOnly = true;
     // polling by key (pollAccessRequest, connectFromKey) then reaches the
     // core that holds the request
     pollUrls.remember(envelope.key, envelope.poll);
@@ -39478,7 +39621,7 @@ const validate = validate10;/* harmony default export */ const __WEBPACK_DEFAULT
 (module) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.15.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.16.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
 
 /***/ }
 
