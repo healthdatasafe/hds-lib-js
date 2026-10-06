@@ -20791,7 +20791,7 @@ exports.Questionnaire = Questionnaire;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = exports.diffFormSpecWithTemplate = exports.diffTemplateScope = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
+exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = exports.diffFormSpecWithTemplate = exports.diffTemplateScope = exports.scopeHashMatches = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
 const AppManagingAccount_ts_1 = __webpack_require__(/*! ./AppManagingAccount.js */ "./ts/appTemplates/AppManagingAccount.ts");
 Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_ts_1.AppManagingAccount; } }));
 const AppClientAccount_ts_1 = __webpack_require__(/*! ./AppClientAccount.js */ "./ts/appTemplates/AppClientAccount.ts");
@@ -20853,6 +20853,7 @@ Object.defineProperty(exports, "isExistingStreamRef", ({ enumerable: true, get: 
 var datasetTemplate_ts_1 = __webpack_require__(/*! ./datasetTemplate.js */ "./ts/appTemplates/datasetTemplate.ts");
 Object.defineProperty(exports, "templateScope", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.templateScope; } }));
 Object.defineProperty(exports, "templateScopeHash", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.templateScopeHash; } }));
+Object.defineProperty(exports, "scopeHashMatches", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.scopeHashMatches; } }));
 Object.defineProperty(exports, "diffTemplateScope", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.diffTemplateScope; } }));
 Object.defineProperty(exports, "diffFormSpecWithTemplate", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.diffFormSpecWithTemplate; } }));
 Object.defineProperty(exports, "semverBump", ({ enumerable: true, get: function () { return datasetTemplate_ts_1.semverBump; } }));
@@ -21491,6 +21492,7 @@ function isEmptyDef(v) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.templateScope = templateScope;
 exports.templateScopeHash = templateScopeHash;
+exports.scopeHashMatches = scopeHashMatches;
 exports.diffTemplateScope = diffTemplateScope;
 exports.diffFormSpecWithTemplate = diffFormSpecWithTemplate;
 exports.semverBump = semverBump;
@@ -21504,9 +21506,9 @@ const templateTypes_ts_1 = __webpack_require__(/*! ./templateTypes.js */ "./ts/a
 /**
  * The data-collection scope of a template: each item with the kind of section it sits in
  * (permanent / recurring) and its cadence (`repeatable`, `reminder`, `required`), the custom
- * fields provisioned, and the existing streams referenced with their permission levels.
- * Section keys, names, order and all texts are excluded — reorganising sections or rewording
- * labels is not a scope change.
+ * fields provisioned, the existing streams referenced with their permission levels, and
+ * whether the data set opens a chat channel. Section keys, names, order and all texts are
+ * excluded — reorganising sections or rewording labels is not a scope change.
  */
 function templateScope(tpl) {
     const items = new Map();
@@ -21520,15 +21522,39 @@ function templateScope(tpl) {
         customFields: (tpl.customFields ?? []).map(c => [c.streamId, c.eventType]).sort(byFirst),
         existingStreamRefs: (tpl.existingStreamRefs ?? [])
             .map(r => [r.streamId, [...r.permissions].sort()])
-            .sort(byFirst)
+            .sort(byFirst),
+        chat: !!tpl.chat
     };
 }
-/** `sha256:<hex>` of {@link templateScope}. Stable under key order and section reorganisation. */
+/** Prefix of the current scope-hash format (2.12.0+: includes `chat`). */
+const SCOPE_HASH_PREFIX = 'sha256v2:';
+/**
+ * `sha256v2:<hex>` of {@link templateScope}. Stable under key order and section reorganisation.
+ * Compare a stored hash with {@link scopeHashMatches}, which also accepts the 2.11.0 format.
+ */
 async function templateScopeHash(tpl) {
-    const bytes = new TextEncoder().encode(JSON.stringify(templateScope(tpl)));
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-    const hex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
-    return 'sha256:' + hex;
+    return SCOPE_HASH_PREFIX + await sha256Hex(JSON.stringify(templateScope(tpl)));
+}
+/**
+ * Does `stored` (e.g. `formSpec.source.scopeHash`) fingerprint the scope of `tpl`? Accepts the
+ * current format and the 2.11.0 one (`sha256:`, computed without `chat`), so data sets imported
+ * with 2.11.0 are not reported as changed after an upgrade. A chat-only change is invisible to
+ * a 2.11.0 hash; it is still reported once the publisher bumps `version`.
+ */
+async function scopeHashMatches(tpl, stored) {
+    if (stored == null)
+        return false;
+    if (stored.startsWith(SCOPE_HASH_PREFIX))
+        return stored === await templateScopeHash(tpl);
+    if (stored.startsWith('sha256:')) {
+        const { chat: _chat, ...v1 } = templateScope(tpl);
+        return stored === 'sha256:' + await sha256Hex(JSON.stringify(v1));
+    }
+    return false;
+}
+async function sha256Hex(text) {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 /** Compare two versions of a template. Pure; no model needed. */
 function diffTemplateScope(prev, next) {
@@ -21563,9 +21589,10 @@ function diffTemplateScope(prev, next) {
         removed: [...pr.keys()].filter(k => !nr.has(k)).sort(),
         permissionsChanged: [...pr.keys()].filter(k => nr.has(k) && pr.get(k) !== nr.get(k)).sort()
     };
+    const featuresChanged = !!prev.chat !== !!next.chat ? ['chat'] : [];
     const textsChanged = stable(textsOf(prev)) !== stable(textsOf(next));
     const breaking = removed.length > 0 || typeChanged.length > 0 ||
-        customFields.removed.length > 0 || existingStreamRefs.added.length > 0 ||
+        customFields.removed.length > 0 || existingStreamRefs.added.length > 0 || featuresChanged.length > 0 ||
         existingStreamRefs.removed.length > 0 || existingStreamRefs.permissionsChanged.length > 0;
     const additive = added.length > 0 || cadenceChanged.length > 0 || customFields.added.length > 0;
     const requiredBump = breaking
@@ -21580,6 +21607,7 @@ function diffTemplateScope(prev, next) {
         cadenceChanged: cadenceChanged.sort(),
         customFields,
         existingStreamRefs,
+        featuresChanged,
         textsChanged,
         breaking,
         requiredBump,
@@ -21612,7 +21640,7 @@ async function diffFormSpecWithTemplate(formSpec, tpl) {
     const diff = diffTemplateScope(prev, tpl);
     const source = formSpec.source;
     diff.underBumped = source != null && source.version != null && source.version === tpl.version &&
-        await templateScopeHash(tpl) !== source.scopeHash;
+        !(await scopeHashMatches(tpl, source.scopeHash));
     return diff;
 }
 const BUMP_RANK = { none: 0, patch: 1, minor: 2, major: 3 };
@@ -36510,7 +36538,7 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       delete b.sections[1].itemCustomizations['fertility-cycles-start'];
       const reordered = Object.fromEntries(Object.entries(a).reverse());
       const h = await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(a);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(h, /^sha256:[0-9a-f]{64}$/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(h, /^sha256v2:[0-9a-f]{64}$/);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(b), h);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(reordered), h);
     });
@@ -36617,6 +36645,42 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       const sneaky = clone(tpl);
       sneaky.sections[1].itemKeys.push('x-new');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffFormSpecWithTemplate)(formSpec, sneaky)).underBumped, true);
+    });
+
+    it('[DSTD8] switching chat on or off is a breaking (major) change and changes the hash', async () => {
+      const a = datasetTemplate();
+      const off = clone(a); off.chat = false;
+      const d = (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, off);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.featuresChanged, ['chat']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.breaking, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.requiredBump, 'major');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(off, a).featuresChanged, ['chat']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffTemplateScope)(a, clone(a)).featuresChanged, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(off), await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(a));
+    });
+
+    it('[DSTD9] scopeHashMatches accepts the current and the 2.11.0 hash format', async () => {
+      // Golden value computed by the released 2.11.0 `templateScopeHash` (no `chat` in the scope).
+      const golden = {
+        id: 'golden',
+        title: { en: 'g' },
+        description: { en: 'g' },
+        chat: true,
+        sections: [{ key: 'd', type: 'recurring', name: { en: 'd' }, itemKeys: ['body-temperature-basal', 'body-vulva-bleeding'], itemCustomizations: { 'body-temperature-basal': { repeatable: 'P1D' } } }],
+        existingStreamRefs: [{ streamId: 'golden-notes', permissions: ['read'], purpose: 'app-private' }]
+      };
+      const v211 = 'sha256:b651d7cb4857c6694a6b417fa6b99e9ef5efbf5d169289fc2f656676b7c5e73d';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.scopeHashMatches)(golden, v211), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.scopeHashMatches)(golden, await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.templateScopeHash)(golden)), true);
+      const more = clone(golden); more.sections[0].itemKeys.push('x');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.scopeHashMatches)(more, v211), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.scopeHashMatches)(golden, undefined), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.scopeHashMatches)(golden, 'md5:abc'), false);
+      // a data set imported with 2.11.0 is not reported as under-bumped after the upgrade
+      const formSpec = { version: 1, title: golden.title, description: golden.description, permissions: [], sections: golden.sections, existingStreamRefs: golden.existingStreamRefs, features: { chat: true }, source: { url: 'https://x', templateId: 'golden', version: '1.0.0', scopeHash: v211, fetchedAt: 1 } };
+      const d = await (0,_ts_appTemplates_datasetTemplate_ts__WEBPACK_IMPORTED_MODULE_2__.diffFormSpecWithTemplate)(formSpec, { ...golden, version: '1.0.0' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.underBumped, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.requiredBump, 'none');
     });
 
     it('[DSTD7] a plain template (no version) never reports a bump', async () => {
