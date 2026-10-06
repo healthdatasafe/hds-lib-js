@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.13.3] - 2026-10-06
+
+### Changed
+- **`@pryv/cmc` 3.18.0 → 3.19.0** (exact pin). The only change is a new error id, `errorIds.SELF_ACCEPT_FORBIDDEN`
+  (`cmc-self-accept-forbidden`): open-pryv.io 2.0.0-rc.38+ refuses an approval from the account that made the offer.
+  The account app v0.16.0+ reads it. 702 tests pass unchanged; typecheck and lint clean.
+
 ## [2.13.2] - 2026-10-06
 
 ### Fixed
