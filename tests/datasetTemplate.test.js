@@ -3,6 +3,7 @@ import { loadTemplate, loadTemplateFromUrl } from '../ts/appTemplates/loader.ts'
 import {
   withAppPrivatePermissions,
   templateScopeHash,
+  scopeHashMatches,
   diffTemplateScope,
   diffFormSpecWithTemplate,
   semverBump,
@@ -280,7 +281,7 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       delete b.sections[1].itemCustomizations['fertility-cycles-start'];
       const reordered = Object.fromEntries(Object.entries(a).reverse());
       const h = await templateScopeHash(a);
-      assert.match(h, /^sha256:[0-9a-f]{64}$/);
+      assert.match(h, /^sha256v2:[0-9a-f]{64}$/);
       assert.equal(await templateScopeHash(b), h);
       assert.equal(await templateScopeHash(reordered), h);
     });
@@ -387,6 +388,42 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       const sneaky = clone(tpl);
       sneaky.sections[1].itemKeys.push('x-new');
       assert.equal((await diffFormSpecWithTemplate(formSpec, sneaky)).underBumped, true);
+    });
+
+    it('[DSTD8] switching chat on or off is a breaking (major) change and changes the hash', async () => {
+      const a = datasetTemplate();
+      const off = clone(a); off.chat = false;
+      const d = diffTemplateScope(a, off);
+      assert.deepEqual(d.featuresChanged, ['chat']);
+      assert.equal(d.breaking, true);
+      assert.equal(d.requiredBump, 'major');
+      assert.deepEqual(diffTemplateScope(off, a).featuresChanged, ['chat']);
+      assert.deepEqual(diffTemplateScope(a, clone(a)).featuresChanged, []);
+      assert.notEqual(await templateScopeHash(off), await templateScopeHash(a));
+    });
+
+    it('[DSTD9] scopeHashMatches accepts the current and the 2.11.0 hash format', async () => {
+      // Golden value computed by the released 2.11.0 `templateScopeHash` (no `chat` in the scope).
+      const golden = {
+        id: 'golden',
+        title: { en: 'g' },
+        description: { en: 'g' },
+        chat: true,
+        sections: [{ key: 'd', type: 'recurring', name: { en: 'd' }, itemKeys: ['body-temperature-basal', 'body-vulva-bleeding'], itemCustomizations: { 'body-temperature-basal': { repeatable: 'P1D' } } }],
+        existingStreamRefs: [{ streamId: 'golden-notes', permissions: ['read'], purpose: 'app-private' }]
+      };
+      const v211 = 'sha256:b651d7cb4857c6694a6b417fa6b99e9ef5efbf5d169289fc2f656676b7c5e73d';
+      assert.equal(await scopeHashMatches(golden, v211), true);
+      assert.equal(await scopeHashMatches(golden, await templateScopeHash(golden)), true);
+      const more = clone(golden); more.sections[0].itemKeys.push('x');
+      assert.equal(await scopeHashMatches(more, v211), false);
+      assert.equal(await scopeHashMatches(golden, undefined), false);
+      assert.equal(await scopeHashMatches(golden, 'md5:abc'), false);
+      // a data set imported with 2.11.0 is not reported as under-bumped after the upgrade
+      const formSpec = { version: 1, title: golden.title, description: golden.description, permissions: [], sections: golden.sections, existingStreamRefs: golden.existingStreamRefs, features: { chat: true }, source: { url: 'https://x', templateId: 'golden', version: '1.0.0', scopeHash: v211, fetchedAt: 1 } };
+      const d = await diffFormSpecWithTemplate(formSpec, { ...golden, version: '1.0.0' });
+      assert.equal(d.underBumped, false);
+      assert.equal(d.requiredBump, 'none');
     });
 
     it('[DSTD7] a plain template (no version) never reports a bump', async () => {

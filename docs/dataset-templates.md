@@ -73,14 +73,16 @@ deprecated and system keys are reported to the data-set owner, never dropped sil
 
 - **major** — the scope narrows or a grant changes: an item removed, an item moved between a
   permanent and a recurring section, a custom field removed, an existing-stream ref added, removed
-  or with other permissions. Patients who consented to the old scope no longer match it.
+  or with other permissions, or `chat` switched on or off. Patients who consented to the old scope
+  no longer match it.
 - **minor** — additive: items or custom fields added; cadence (`repeatable`, `reminder`, `required`)
   changed.
 - **patch** — texts only: titles, descriptions, consent, section names, item labels, license, app
   identity, or an item moved between sections of the same type.
 
 Importers do not rely on the bump alone: `templateScopeHash` fingerprints the scope (items with
-their section type and cadence, custom fields, refs with permissions — not texts), and
+their section type and cadence, custom fields, refs with permissions, chat — not texts; compare a
+stored hash with `scopeHashMatches`, which also accepts the 2.11.0 format), and
 `diffTemplateScope` reports the bump a change requires and whether the file is **under-bumped**.
 
 ## Hosting
@@ -110,12 +112,12 @@ const { formSpec, itemKeyIssues } = appTemplates.templateToFormSpec(tpl, { sourc
 
 // later: has the published scope changed?
 const latest = await appTemplates.loadTemplateFromUrl(formSpec.source.url);
-if (await appTemplates.templateScopeHash(latest) !== formSpec.source.scopeHash ||
+if (!(await appTemplates.scopeHashMatches(latest, formSpec.source.scopeHash)) ||
     latest.version !== formSpec.source.version) {
   // what applying `latest` would change in the data set (owner's edits included);
   // `underBumped` = scope changed while `version` stayed the same
   const diff = await appTemplates.diffFormSpecWithTemplate(formSpec, latest);
-  // diff.added / removed / typeChanged / cadenceChanged / breaking / requiredBump / underBumped
+  // diff.added / removed / typeChanged / cadenceChanged / featuresChanged / breaking / requiredBump / underBumped
 }
 // two template versions: appTemplates.diffTemplateScope(prevTemplate, nextTemplate)
 ```

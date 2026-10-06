@@ -22,14 +22,15 @@ import type { AppTemplate, AppTemplateSection, ExistingStreamRef } from './templ
 /**
  * The data-collection scope of a template: each item with the kind of section it sits in
  * (permanent / recurring) and its cadence (`repeatable`, `reminder`, `required`), the custom
- * fields provisioned, and the existing streams referenced with their permission levels.
- * Section keys, names, order and all texts are excluded — reorganising sections or rewording
- * labels is not a scope change.
+ * fields provisioned, the existing streams referenced with their permission levels, and
+ * whether the data set opens a chat channel. Section keys, names, order and all texts are
+ * excluded — reorganising sections or rewording labels is not a scope change.
  */
 export function templateScope (tpl: AppTemplate): {
   items: Array<[string, string, string]>;
   customFields: Array<[string, string]>;
   existingStreamRefs: Array<[string, string[]]>;
+  chat: boolean;
 } {
   const items = new Map<string, [string, string, string]>();
   for (const s of tpl.sections) {
@@ -42,16 +43,41 @@ export function templateScope (tpl: AppTemplate): {
     customFields: (tpl.customFields ?? []).map(c => [c.streamId, c.eventType] as [string, string]).sort(byFirst),
     existingStreamRefs: (tpl.existingStreamRefs ?? [])
       .map(r => [r.streamId, [...r.permissions].sort()] as [string, string[]])
-      .sort(byFirst)
+      .sort(byFirst),
+    chat: !!tpl.chat
   };
 }
 
-/** `sha256:<hex>` of {@link templateScope}. Stable under key order and section reorganisation. */
+/** Prefix of the current scope-hash format (2.12.0+: includes `chat`). */
+const SCOPE_HASH_PREFIX = 'sha256v2:';
+
+/**
+ * `sha256v2:<hex>` of {@link templateScope}. Stable under key order and section reorganisation.
+ * Compare a stored hash with {@link scopeHashMatches}, which also accepts the 2.11.0 format.
+ */
 export async function templateScopeHash (tpl: AppTemplate): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(templateScope(tpl)));
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  const hex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
-  return 'sha256:' + hex;
+  return SCOPE_HASH_PREFIX + await sha256Hex(JSON.stringify(templateScope(tpl)));
+}
+
+/**
+ * Does `stored` (e.g. `formSpec.source.scopeHash`) fingerprint the scope of `tpl`? Accepts the
+ * current format and the 2.11.0 one (`sha256:`, computed without `chat`), so data sets imported
+ * with 2.11.0 are not reported as changed after an upgrade. A chat-only change is invisible to
+ * a 2.11.0 hash; it is still reported once the publisher bumps `version`.
+ */
+export async function scopeHashMatches (tpl: AppTemplate, stored: string | undefined): Promise<boolean> {
+  if (stored == null) return false;
+  if (stored.startsWith(SCOPE_HASH_PREFIX)) return stored === await templateScopeHash(tpl);
+  if (stored.startsWith('sha256:')) {
+    const { chat: _chat, ...v1 } = templateScope(tpl);
+    return stored === 'sha256:' + await sha256Hex(JSON.stringify(v1));
+  }
+  return false;
+}
+
+async function sha256Hex (text: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ---------- diff ---------- //
@@ -72,12 +98,14 @@ export interface TemplateScopeDiff {
   cadenceChanged: string[];
   customFields: { added: string[]; removed: string[] };
   existingStreamRefs: { added: string[]; removed: string[]; permissionsChanged: string[] };
+  /** Features switched on or off (`chat`): a messaging channel opened or closed. */
+  featuresChanged: string[];
   /** Titles, descriptions, consent, section names, item labels, license or app identity changed. */
   textsChanged: boolean;
   /**
-   * Something was removed, moved between permanent and recurring, or a grant changed (an
-   * existing-stream ref added, removed or with other permissions): patients' existing consent
-   * no longer matches.
+   * Something was removed, moved between permanent and recurring, a grant changed (an
+   * existing-stream ref added, removed or with other permissions), or chat was switched on or
+   * off: patients' existing consent no longer matches.
    */
   breaking: boolean;
   /** The bump this diff requires from the publisher. */
@@ -120,10 +148,12 @@ export function diffTemplateScope (prev: AppTemplate, next: AppTemplate): Templa
     permissionsChanged: [...pr.keys()].filter(k => nr.has(k) && pr.get(k) !== nr.get(k)).sort()
   };
 
+  const featuresChanged = !!prev.chat !== !!next.chat ? ['chat'] : [];
+
   const textsChanged = stable(textsOf(prev)) !== stable(textsOf(next));
 
   const breaking = removed.length > 0 || typeChanged.length > 0 ||
-    customFields.removed.length > 0 || existingStreamRefs.added.length > 0 ||
+    customFields.removed.length > 0 || existingStreamRefs.added.length > 0 || featuresChanged.length > 0 ||
     existingStreamRefs.removed.length > 0 || existingStreamRefs.permissionsChanged.length > 0;
   const additive = added.length > 0 || cadenceChanged.length > 0 || customFields.added.length > 0;
   const requiredBump: TemplateBump = breaking
@@ -138,6 +168,7 @@ export function diffTemplateScope (prev: AppTemplate, next: AppTemplate): Templa
     cadenceChanged: cadenceChanged.sort(),
     customFields,
     existingStreamRefs,
+    featuresChanged,
     textsChanged,
     breaking,
     requiredBump,
@@ -171,7 +202,7 @@ export async function diffFormSpecWithTemplate (formSpec: FormSpec, tpl: AppTemp
   const diff = diffTemplateScope(prev, tpl);
   const source = formSpec.source;
   diff.underBumped = source != null && source.version != null && source.version === tpl.version &&
-    await templateScopeHash(tpl) !== source.scopeHash;
+    !(await scopeHashMatches(tpl, source.scopeHash));
   return diff;
 }
 

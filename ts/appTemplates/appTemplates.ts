@@ -99,6 +99,7 @@ export type { LoadTemplateFromUrlOptions } from './loader.ts';
 export {
   templateScope,
   templateScopeHash,
+  scopeHashMatches,
   diffTemplateScope,
   diffFormSpecWithTemplate,
   semverBump,

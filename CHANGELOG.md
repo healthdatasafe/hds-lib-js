@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.12.0] - 2026-10-06
+
+### Changed
+- Data-set templates: switching `chat` on or off is now part of the scope. `diffTemplateScope` reports it in
+  `featuresChanged` and classes it as breaking (major): it opens or closes a messaging channel patients consented to.
+  2.11.0 ignored it, so a chat change produced an empty diff and, without a version bump, no change at all.
+- `templateScopeHash` now includes `chat` and returns `sha256v2:<hex>`.
+
+### Added
+- `appTemplates.scopeHashMatches(tpl, storedHash)`: compares a stored scope hash with a template, accepting both the
+  current format and the 2.11.0 one (`sha256:`), so data sets imported with 2.11.0 are not reported as changed after
+  the upgrade. `diffFormSpecWithTemplate` uses it for `underBumped`. Compare hashes with it, not with `===`.
+
 ## [2.11.0] - 2026-10-05
 
 ### Added
