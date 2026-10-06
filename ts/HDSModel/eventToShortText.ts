@@ -459,9 +459,12 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
     ? resolveObservationLabel(engine, source.key, source.sourceData)
     : formatSourceLabel(source);
   const sourceMethodName = getMethodName(engine, source?.key);
+  // A conversion needs every dimension: on a partial vector (e.g. mood with only `valence`)
+  // the engine invents the missing ones and the confidence comes out NaN (B-2026-10-06-2).
+  const vectorComplete = isCompleteVector(engine, vectors);
 
   // Check for autoConvert setting
-  if (HDSSettings.isHooked && vectors) {
+  if (HDSSettings.isHooked && vectors && vectorComplete) {
     try {
       const settingKey = `preferred-display-${itemDef.key}`;
       const targetMethod = HDSSettings.get(settingKey);
@@ -491,7 +494,7 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
   }
 
   // No source — RAW vector input, convert via _raw virtual method
-  if (vectors && typeof vectors === 'object' && engine) {
+  if (vectors && typeof vectors === 'object' && engine && vectorComplete) {
     try {
       const result = engine.fromVector('_raw', vectors);
       const resultLabel = resolveObservationLabel(engine, '_raw', result.data);
@@ -500,12 +503,25 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
       return `${resultLabel}${confStr}`;
     } catch { /* fall through */ }
   }
+  // Partial vector, or no engine loaded: label the dimensions present from the item's own
+  // composite options ("Valence: Unpleasant"), never the raw "valence:0.3".
+  if (vectors && typeof vectors === 'object' && itemDef.data.composite) {
+    const text = formatComposite(vectors, itemDef);
+    if (text) return text;
+  }
   // Fallback: raw dimension summary
   if (vectors && typeof vectors === 'object') {
     return formatVectorSummary(vectors, itemKey, model);
   }
 
   return formatObject(content);
+}
+
+/** True when the vector carries a number for every dimension the engine knows. */
+function isCompleteVector (engine: any, vectors: any): boolean {
+  if (!engine || vectors == null || typeof vectors !== 'object') return false;
+  const names: string[] = engine.dimensionNames ?? Object.keys(engine.dimensions ?? {});
+  return names.length > 0 && names.every((d) => typeof vectors[d] === 'number');
 }
 
 /** Get the localized method name from the engine, fallback to methodId */

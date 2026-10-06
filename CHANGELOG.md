@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.13.2] - 2026-10-06
+
+### Fixed
+- **`eventToShortText` no longer invents mood dimensions** (B-2026-10-06-2). A convertible event whose vector
+  lacks some of the engine's dimensions (e.g. a mood with only `valence`, as CycleIntelligence writes it) went
+  through the `_raw` conversion, which filled in the missing ones and printed a `NaN%` confidence: "Unpleasant,
+  Very calm, Powerless, Self-focused, Past-dwelling NaN%". Conversion (raw and `preferred-display-*`) now runs
+  only on a complete vector. A partial vector, or any vector while the engine is not loaded, is labelled from the
+  item's own composite options, dimensions present only: "Valence: Unpleasant" (was "valence:0.3" without an
+  engine). Tests [EST20f], [EST20g].
+
 ## [2.13.1] - 2026-10-06
 
 ### Fixed

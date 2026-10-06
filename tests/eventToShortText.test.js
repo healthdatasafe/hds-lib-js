@@ -452,6 +452,21 @@ describe('[ESTX] eventToShortText', () => {
       assert.ok(result.startsWith('Very unpleasant, Very calm, Powerless'), `Expected start, got: ${result}`);
       assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
     });
+
+    // B-2026-10-06-2: a partial vector was run through the _raw conversion, which invented the
+    // missing dimensions ("Unpleasant, Very calm, Powerless, ... NaN%"), or, with no engine
+    // loaded, dumped it raw ("valence:0.3").
+    it('[EST20f] mood partial vector — labels only the dimensions present', () => {
+      const event = { content: { vectors: { valence: 0.25 } }, streamIds: ['wellbeing-mood'], type: 'mood/5d-vectors' };
+      assert.equal(eventToShortText(event), 'Valence: Unpleasant');
+    });
+
+    it('[EST20g] mood partial vector — several dimensions, between stops snap to the nearest option', () => {
+      const event = { content: { vectors: { valence: 0.7, arousal: 0.25 } }, streamIds: ['wellbeing-mood'], type: 'mood/5d-vectors' };
+      const result = eventToShortText(event);
+      assert.equal(result, 'Valence: Pleasant · Energy: Calm');
+      assert.ok(!result.includes('NaN'), `No NaN confidence, got: ${result}`);
+    });
   });
 
   // ─── Convertible: cervical fluid ─────────────────────────────────
