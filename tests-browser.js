@@ -277,6 +277,8 @@ const errorIds = Object.freeze({
   HANDLER_OFFER_READ_FAILED: 'cmc-handler-offer-read-failed',
   // Counterparty resolution
   HANDLER_COUNTERPARTY_UNKNOWN: 'cmc-handler-counterparty-unknown',
+  // The accepting account made the offer itself (open-pryv.io 2.0.0-rc.38+).
+  SELF_ACCEPT_FORBIDDEN: 'cmc-self-accept-forbidden',
   // Access mint
   HANDLER_DATA_GRANT_CREATE_FAILED: 'cmc-handler-data-grant-create-failed',
   HANDLER_DATA_GRANT_NO_APIENDPOINT: 'cmc-handler-data-grant-no-apiendpoint',
@@ -18341,8 +18343,11 @@ function formatConvertible(_event, content, itemDef, model) {
         ? resolveObservationLabel(engine, source.key, source.sourceData)
         : formatSourceLabel(source);
     const sourceMethodName = getMethodName(engine, source?.key);
+    // A conversion needs every dimension: on a partial vector (e.g. mood with only `valence`)
+    // the engine invents the missing ones and the confidence comes out NaN (B-2026-10-06-2).
+    const vectorComplete = isCompleteVector(engine, vectors);
     // Check for autoConvert setting
-    if (HDSSettings_ts_1.default.isHooked && vectors) {
+    if (HDSSettings_ts_1.default.isHooked && vectors && vectorComplete) {
         try {
             const settingKey = `preferred-display-${itemDef.key}`;
             const targetMethod = HDSSettings_ts_1.default.get(settingKey);
@@ -18371,7 +18376,7 @@ function formatConvertible(_event, content, itemDef, model) {
         return `${sourceLabel} (${sourceMethodName})`;
     }
     // No source — RAW vector input, convert via _raw virtual method
-    if (vectors && typeof vectors === 'object' && engine) {
+    if (vectors && typeof vectors === 'object' && engine && vectorComplete) {
         try {
             const result = engine.fromVector('_raw', vectors);
             const resultLabel = resolveObservationLabel(engine, '_raw', result.data);
@@ -18381,11 +18386,25 @@ function formatConvertible(_event, content, itemDef, model) {
         }
         catch { /* fall through */ }
     }
+    // Partial vector, or no engine loaded: label the dimensions present from the item's own
+    // composite options ("Valence: Unpleasant"), never the raw "valence:0.3".
+    if (vectors && typeof vectors === 'object' && itemDef.data.composite) {
+        const text = formatComposite(vectors, itemDef);
+        if (text)
+            return text;
+    }
     // Fallback: raw dimension summary
     if (vectors && typeof vectors === 'object') {
         return formatVectorSummary(vectors, itemKey, model);
     }
     return formatObject(content);
+}
+/** True when the vector carries a number for every dimension the engine knows. */
+function isCompleteVector(engine, vectors) {
+    if (!engine || vectors == null || typeof vectors !== 'object')
+        return false;
+    const names = engine.dimensionNames ?? Object.keys(engine.dimensions ?? {});
+    return names.length > 0 && names.every((d) => typeof vectors[d] === 'number');
 }
 /** Get the localized method name from the engine, fallback to methodId */
 function getMethodName(engine, methodId) {
@@ -37480,6 +37499,21 @@ describe('[ESTX] eventToShortText', () => {
       const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.startsWith('Very unpleasant, Very calm, Powerless'), `Expected start, got: ${result}`);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('%'), `Expected confidence %, got: ${result}`);
+    });
+
+    // B-2026-10-06-2: a partial vector was run through the _raw conversion, which invented the
+    // missing dimensions ("Unpleasant, Very calm, Powerless, ... NaN%"), or, with no engine
+    // loaded, dumped it raw ("valence:0.3").
+    it('[EST20f] mood partial vector — labels only the dimensions present', () => {
+      const event = { content: { vectors: { valence: 0.25 } }, streamIds: ['wellbeing-mood'], type: 'mood/5d-vectors' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Valence: Unpleasant');
+    });
+
+    it('[EST20g] mood partial vector — several dimensions, between stops snap to the nearest option', () => {
+      const event = { content: { vectors: { valence: 0.7, arousal: 0.25 } }, streamIds: ['wellbeing-mood'], type: 'mood/5d-vectors' };
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Valence: Pleasant · Energy: Calm');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!result.includes('NaN'), `No NaN confidence, got: ${result}`);
     });
   });
 
