@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.13.0] - 2026-10-06
+
+### Changed
+- **`pryv`, `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor`, `@pryv/socket.io` 3.15.0 → 3.16.0, `@pryv/cmc`
+  3.17.1 → 3.18.0** (exact pins). 699 tests pass unchanged; typecheck and lint clean.
+- **Behaviour (through `@pryv/cmc` 3.18.0):** `cmc.listAcceptedRelationships` no longer lists ended relationships
+  (accept events with `content.withdrawal`, stamped by open-pryv.io rc.36+ on every teardown); pass
+  `includeWithdrawn: true` to list them. `AppClientAccount` and `Contact` read relationships through it, so a patient
+  app on this version stops showing a practitioner whose relationship was revoked, deleted or detached.
+
+### What 3.16.0 brings (lib-js)
+- `authRequest.actAsManagedOnly`, `cmcInvites[].accessName` (types), `RelationshipWithdrawal` typing (core rc.36+).
+- A refused sign-in emits `REFUSED` (with `reasonId`, `message`) before `INITIALIZED`; the popup `ACCEPTED` state keeps
+  `cmcInvites` and `delegation`; sign-in button and poll failures end in `ERROR` instead of unhandled rejections;
+  declaration files compile without `skipLibCheck`.
+
 ## [2.12.0] - 2026-10-06
 
 ### Changed
