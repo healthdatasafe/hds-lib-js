@@ -37,6 +37,13 @@ describe('[APAX] Application class', function () {
       assert.deepEqual(newSettings1, newSettings3);
       assert.notEqual(newSettings1, newSettings3, 'should not be the same object');
     });
+
+    it('[APIM] AppManagingAccount and AppClientAccount accept a scoped app access (no master token) (B-2026-10-07-6)', async () => {
+      const managing = await HDSLib.appTemplates.AppManagingAccount.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+      assert.equal(managing.baseStreamId, baseStreamId);
+      const client = await HDSLib.appTemplates.AppClientAccount.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+      assert.equal(client.baseStreamId, baseStreamId);
+    });
   });
 
   describe('[APAE] Application class errors', () => {
@@ -124,7 +131,7 @@ describe('[APAX] Application class', function () {
       class Dummy extends Application {
         get appSettings () {
           return {
-            mustBemaster: true
+            mustBeMaster: true
           };
         }
       }

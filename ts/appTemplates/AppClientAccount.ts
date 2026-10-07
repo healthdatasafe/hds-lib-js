@@ -14,10 +14,10 @@ import { Application } from './Application.ts';
  * Useful primarily as the target of `HDSSettings.hookToApplication()`.
  */
 export class AppClientAccount extends Application {
+  // No `mustBeMaster`: a scoped `app` access with manage on the base stream is enough (B-2026-10-07-6).
   get appSettings (): any {
     return {
-      canBePersonnal: true,
-      mustBeMaster: true
+      canBePersonnal: true
     };
   }
 }

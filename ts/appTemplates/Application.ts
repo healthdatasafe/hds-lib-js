@@ -193,7 +193,7 @@ async function createAppStreams (app: Application): Promise<void> {
     if (infos.type !== 'app') throw new Error(`Application requires a ${allowPersonalStr} "app" type of access`);
     const masterFound = infos.permissions.find((p: any) => (p.streamId === '*' && p.level === 'manage'));
     isPersonalOrMaster = true;
-    if (app.appSettings.mustBemaster && !masterFound) {
+    if (app.appSettings.mustBeMaster && !masterFound) {
       throw new Error('Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
     }
     if (!masterFound) { // check that app has "manage" level on baseStreamId

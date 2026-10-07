@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.14.1] - 2026-10-07
+
+### Fixed
+- **`Application`'s `mustBeMaster` setting now works** (B-2026-10-07-6). `init()` read `appSettings.mustBemaster`, so
+  the "requires a `*` / manage access" check never ran for any subclass. The key is now `mustBeMaster`, as documented.
+- **`AppManagingAccount` and `AppClientAccount` no longer declare `mustBeMaster: true`.** The check never ran, so they
+  have always accepted an `app` access with `manage` on their base stream, and that is how doctor-dashboard and
+  bridge-redcap log in. Correcting the key alone would have made both throw at login, so the declaration goes:
+  behaviour for every consumer is unchanged. Test [APIM]; [APAE] now exercises the real key.
+
 ## [2.14.0] - 2026-10-07
 
 Fixes from B-2026-10-05-11 (plan 108 analysis). Minor rather than patch: two dead `CollectorRequest` methods are

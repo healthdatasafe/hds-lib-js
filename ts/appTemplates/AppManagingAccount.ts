@@ -16,10 +16,11 @@ import { Application } from './Application.ts';
  */
 export class AppManagingAccount extends Application {
   // used by Application.init();
+  // No `mustBeMaster`: doctor-dashboard and bridge-redcap log in with an `app` access scoped to their base
+  // stream (+ profile, CMC), never `*` / manage (B-2026-10-07-6).
   get appSettings (): any {
     return {
       canBePersonnal: true,
-      mustBeMaster: true,
       appNameFromAccessInfo: true // application name will be taken from Access-Info Name
     };
   }
