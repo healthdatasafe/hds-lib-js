@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.15.0] - 2026-10-07
+
+### Changed
+- **`pryv`, `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor`, `@pryv/socket.io` 3.16.0 → 3.17.0** (exact pins;
+  `@pryv/cmc` stays 3.19.0). 707 tests pass unchanged; lint clean. Minor rather than patch: browser sign-in cookie
+  behaviour changes for every consumer.
+
+### What 3.17.0 brings (lib-js, pryv/lib-js#74)
+- Sign-in cookies (`pryv-libjs-<appId>`, `-profiles`) are written with `path=/`, host-only (no `Domain`),
+  `SameSite=Strict` and `Secure` on https. A page opened on a deep route no longer adds a second, path-scoped copy
+  that read as signed out on the next load; log out from a deep route removes every copy. Copies left by older
+  versions are cleaned the first time each route loads. New `authSettings.cookiePath` (default `'/'`).
+- `CookieUtils.get()` returns `undefined` instead of throwing on an unreadable value; `set()` / `del()` take
+  `{ path, secure, sameSite, domain }`. Existing `CookieUtils.del(key)` calls keep working unchanged.
+
 ## [2.14.1] - 2026-10-07
 
 ### Fixed
