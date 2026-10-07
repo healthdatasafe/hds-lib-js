@@ -11028,51 +11028,112 @@ module.exports = {
 };
 
 /**
-  * Set a local cookie
+ * @typedef {Object} CookieOptions
+ * @property {string} [path='/'] - Cookie path (the whole site by default)
+ * @property {boolean} [secure] - Defaults to true on https pages
+ * @property {'Strict'|'Lax'|'None'} [sameSite='Strict']
+ * @property {string} [domain] - Omitted by default: the cookie is sent to this exact host only
+ */
+
+const EXPIRED = ';expires=Thu, 01 Jan 1970 00:00:00 GMT;max-age=0';
+
+/**
+  * Set a local cookie. Copies of the same cookie left on the current page's
+  * path or its parents (versions up to 3.16 wrote the cookie for the page's
+  * own path and for every subdomain) are removed, so only one copy remains.
   * @memberof pryv.Browser.CookieUtils
   * @template T
   * @param {string} cookieKey - The key for the cookie
   * @param {T} value - The value (will be JSON stringified)
   * @param {number} [expireInDays=365] - Expiration date in days from now
+  * @param {CookieOptions} [options]
   */
-function set (cookieKey, value, expireInDays) {
+function set (cookieKey, value, expireInDays, options) {
   if (!utils.isBrowser()) return;
   expireInDays = expireInDays || 365;
+  const opts = withDefaults(options);
+  const name = encodeURIComponent(cookieKey);
+  removeCopies(name, opts, opts.path);
   const myDate = new Date();
-  const hostName = window.location.hostname;
-  const path = window.location.pathname;
   myDate.setDate(myDate.getDate() + expireInDays);
-  let cookieStr = encodeURIComponent(cookieKey) + '=' +
+  document.cookie = name + '=' +
     encodeURIComponent(JSON.stringify(value)) +
-    ';expires=' + myDate.toUTCString() +
-    ';domain=.' + hostName + ';path=' + path;
-  // do not add SameSite when removing a cookie
-  if (expireInDays >= 0) cookieStr += ';SameSite=Strict';
-  document.cookie = cookieStr;
+    ';expires=' + myDate.toUTCString() + attributes(opts, opts.path, opts.domain);
 }
 
 /**
- * Return the value of a local cookie
+ * Return the value of a local cookie. When several copies are sent (copies
+ * left on a deeper path by an older version), the one with the shortest path
+ * is used: browsers list it last.
  * @memberof pryv.Browser.CookieUtils
  * @template T
  * @param {string} cookieKey - The key
- * @returns {T|undefined} The parsed cookie value or undefined if not found
+ * @returns {T|undefined} The parsed cookie value or undefined if not found or unreadable
  */
 function get (cookieKey) {
   const name = encodeURIComponent(cookieKey);
   if (!utils.isBrowser()) return;
-  const value = '; ' + document.cookie;
-  const parts = value.split('; ' + name + '=');
-  if (parts.length === 2) return JSON.parse(decodeURIComponent(parts.pop().split(';').shift()));
+  const parts = ('; ' + document.cookie).split('; ' + name + '=');
+  if (parts.length < 2) return;
+  try {
+    return JSON.parse(decodeURIComponent(parts[parts.length - 1].split(';').shift()));
+  } catch (e) {
+    return undefined;
+  }
 }
 
 /**
- * Delete a local cookie
+ * Delete a local cookie, including the copies older versions left on the
+ * current page's path and its parents.
  * @memberof pryv.Browser.CookieUtils
  * @param {string} cookieKey - The key
+ * @param {CookieOptions} [options] - `path` (default '/') and `domain` as given to set()
  */
-function del (cookieKey) {
-  set(cookieKey, { deleted: true }, -1);
+function del (cookieKey, options) {
+  if (!utils.isBrowser()) return;
+  removeCopies(encodeURIComponent(cookieKey), withDefaults(options), null);
+}
+
+function withDefaults (options) {
+  const opts = Object.assign({}, options);
+  if (opts.path == null) opts.path = '/';
+  if (opts.secure == null) opts.secure = window.location.protocol === 'https:';
+  if (opts.sameSite == null) opts.sameSite = 'Strict';
+  return opts;
+}
+
+function attributes (opts, path, domain) {
+  return (domain != null ? ';domain=' + domain : '') + ';path=' + path +
+    ';SameSite=' + opts.sameSite + (opts.secure ? ';Secure' : '');
+}
+
+/**
+ * Expire every copy of the cookie this page can see or that `opts` targets,
+ * host-only and Domain variants, except the host-only copy at `keepPath`.
+ * A script cannot read a cookie's path; the paths a copy visible here can
+ * have are the page's path and its parents, with and without a trailing slash.
+ */
+function removeCopies (name, opts, keepPath) {
+  const legacyDomain = '.' + window.location.hostname;
+  const paths = candidatePaths(window.location.pathname);
+  if (!paths.includes(opts.path)) paths.push(opts.path);
+  for (const path of paths) {
+    document.cookie = name + '=' + EXPIRED + attributes(opts, path, legacyDomain);
+    if (opts.domain != null && opts.domain !== legacyDomain) {
+      document.cookie = name + '=' + EXPIRED + attributes(opts, path, opts.domain);
+    }
+    if (path !== keepPath || opts.domain != null) document.cookie = name + '=' + EXPIRED + attributes(opts, path, null);
+  }
+}
+
+function candidatePaths (pathname) {
+  const paths = ['/'];
+  let path = '';
+  for (const segment of pathname.split('/').filter(Boolean)) {
+    path += '/' + segment;
+    paths.push(path, path + '/');
+  }
+  return paths;
 }
 
 
@@ -11113,6 +11174,7 @@ class LoginButton {
     this.authSettings = authSettings;
     this.service = service;
     this.serviceInfo = service.infoSync();
+    this._cookieOptions = cookieOptions(authSettings);
   }
 
   /**
@@ -11281,16 +11343,17 @@ class LoginButton {
    * remembered accounts as a signed-in one.
    */
   saveAuthorizationData (authData) {
+    const options = this._cookieOptions;
     if (authData == null) {
-      Cookies.del(this._cookieKey);
-      Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX);
+      Cookies.del(this._cookieKey, options);
+      Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX, options);
       return;
     }
     const { profiles, ...active } = authData;
     if (typeof active.username === 'string' && typeof active.apiEndpoint === 'string') {
-      Cookies.set(this._cookieKey, active);
+      Cookies.set(this._cookieKey, active, undefined, options);
     } else {
-      Cookies.del(this._cookieKey);
+      Cookies.del(this._cookieKey, options);
     }
     if (Array.isArray(profiles)) {
       const remembered = Object.assign({ profiles: profiles.slice() }, active.authUrl != null ? { authUrl: active.authUrl } : {});
@@ -11300,15 +11363,15 @@ class LoginButton {
              encodeURIComponent(JSON.stringify(remembered)).length > PROFILES_COOKIE_MAX_LENGTH) {
         remembered.profiles.pop();
       }
-      Cookies.set(this._cookieKey + PROFILES_COOKIE_SUFFIX, remembered);
+      Cookies.set(this._cookieKey + PROFILES_COOKIE_SUFFIX, remembered, undefined, options);
     } else {
-      Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX);
+      Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX, options);
     }
   }
 
   async deleteAuthorizationData () {
-    Cookies.del(this._cookieKey);
-    Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX);
+    Cookies.del(this._cookieKey, this._cookieOptions);
+    Cookies.del(this._cookieKey + PROFILES_COOKIE_SUFFIX, this._cookieOptions);
   }
 
   /**
@@ -11517,6 +11580,20 @@ function withoutQuery (url) {
   } catch (e) {
     return undefined;
   }
+}
+
+/**
+ * Cookie options of the stored sign-in: the whole site by default;
+ * `settings.cookiePath` scopes it to a sub-path (for example two deployments
+ * of the same app id on one host).
+ */
+function cookieOptions (settings) {
+  const path = settings?.cookiePath;
+  if (path == null) return { path: '/' };
+  if (typeof path !== 'string' || !path.startsWith('/')) {
+    throw new Error('authSettings.cookiePath must be a path starting with "/", got: ' + JSON.stringify(path));
+  }
+  return { path };
 }
 
 /**
@@ -39703,7 +39780,7 @@ const validate = validate10;/* harmony default export */ const __WEBPACK_DEFAULT
 (module) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.16.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.17.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
 
 /***/ }
 
