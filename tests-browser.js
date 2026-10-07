@@ -19283,10 +19283,10 @@ const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTe
  * Useful primarily as the target of `HDSSettings.hookToApplication()`.
  */
 class AppClientAccount extends Application_ts_1.Application {
+    // No `mustBeMaster`: a scoped `app` access with manage on the base stream is enough (B-2026-10-07-6).
     get appSettings() {
         return {
-            canBePersonnal: true,
-            mustBeMaster: true
+            canBePersonnal: true
         };
     }
 }
@@ -19322,10 +19322,11 @@ const Application_ts_1 = __webpack_require__(/*! ./Application.js */ "./ts/appTe
  */
 class AppManagingAccount extends Application_ts_1.Application {
     // used by Application.init();
+    // No `mustBeMaster`: doctor-dashboard and bridge-redcap log in with an `app` access scoped to their base
+    // stream (+ profile, CMC), never `*` / manage (B-2026-10-07-6).
     get appSettings() {
         return {
             canBePersonnal: true,
-            mustBeMaster: true,
             appNameFromAccessInfo: true // application name will be taken from Access-Info Name
         };
     }
@@ -19515,7 +19516,7 @@ async function createAppStreams(app) {
             throw new Error(`Application requires a ${allowPersonalStr} "app" type of access`);
         const masterFound = infos.permissions.find((p) => (p.streamId === '*' && p.level === 'manage'));
         isPersonalOrMaster = true;
-        if (app.appSettings.mustBemaster && !masterFound) {
+        if (app.appSettings.mustBeMaster && !masterFound) {
             throw new Error('Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
         }
         if (!masterFound) { // check that app has "manage" level on baseStreamId
@@ -35544,6 +35545,13 @@ describe('[APAX] Application class', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(newSettings1, newSettings3);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(newSettings1, newSettings3, 'should not be the same object');
     });
+
+    it('[APIM] AppManagingAccount and AppClientAccount accept a scoped app access (no master token) (B-2026-10-07-6)', async () => {
+      const managing = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.appTemplates.AppManagingAccount.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(managing.baseStreamId, baseStreamId);
+      const client = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_2__.appTemplates.AppClientAccount.newFromApiEndpoint(baseStreamId, user.appApiEndpoint, appName);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(client.baseStreamId, baseStreamId);
+    });
   });
 
   describe('[APAE] Application class errors', () => {
@@ -35631,7 +35639,7 @@ describe('[APAX] Application class', function () {
       class Dummy extends Application {
         get appSettings () {
           return {
-            mustBemaster: true
+            mustBeMaster: true
           };
         }
       }

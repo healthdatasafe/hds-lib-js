@@ -79,6 +79,9 @@ Access requirements checked by `init()`:
 - a `personal` access, or
 - an `app` access with `manage` on `*`, or with `manage` on `baseStreamId` (then the app streams must already exist).
 
+A custom `Application` subclass can require the `*` / `manage` access by returning `mustBeMaster: true` from
+`appSettings`. `AppManagingAccount` and `AppClientAccount` do not: their apps log in with scoped accesses.
+
 `appName` is required unless the subclass takes it from the access info. `AppManagingAccount` does (`appNameFromAccessInfo`), so its `appName` argument is optional and is replaced by the access name.
 
 ### Custom settings
