@@ -16,7 +16,7 @@ Generic toolkit for server and web applications built for the [Health Data Safe]
 1. **Global settings** — Configure service endpoints and localization preferences
 2. **Pryv extensions** — Extends the [Pryv JS library](https://github.com/pryv/lib-js) with Socket.io and Monitor support
 3. **HDS Data Model** — Load and query the [HDS data model](https://github.com/healthdatasafe/data-model) as a singleton: item definitions, streams, authorizations, event types, datasources
-4. **App Templates** — Framework for building consent-based data collection and sharing applications (Manager, Collector, Invite, Client flows)
+4. **App Templates** — Building blocks for consent-based data collection on CMC: request editing (`CollectorRequest`), FormSpec storage and invites (`cmcFormSpec`), patient-side relationships (`Contact`), questionnaires
 5. **Toolkit** — Helpers for stream auto-creation, reminders, duration parsing, and more
 
 ---
@@ -51,7 +51,7 @@ HDSLib.computeReminders()  // Reminder status computation
 | [Getting Started](getting-started) | Installation, setup, browser and Node.js usage |
 | [Settings](settings) | Service URL, locales configuration |
 | [HDS Model](hds-model) | Data model singleton, items, streams, authorizations, event types, datasources |
-| [App Templates](app-templates) | Consent workflows: Manager, Collector, Invite, Client |
+| [App Templates](app-templates) | Consent workflows on CMC: CollectorRequest, FormSpec, invites, Contact, Questionnaire |
 | [Localization](localization) | Multi-language text handling |
 | [Toolkit](toolkit) | Stream auto-creation, stream utilities |
 | [Utilities](utilities) | Duration parsing, reminders, error handling, logging |
@@ -102,14 +102,14 @@ graph TB
 
 ```mermaid
 graph LR
-    subgraph "Manager side"
-        AppManaging[AppManagingAccount] --> Collector
-        Collector --> CollectorRequest
-        Collector --> CollectorInvite
+    subgraph "Doctor side"
+        CollectorRequest -->|converted to| FormSpec
+        FormSpec -->|saveFormSpec| ScopeStream[":_cmc:apps:hds-collector:id"]
+        FormSpec -->|createInviteWithFormSpec| Invite[CMC invite]
     end
 
-    subgraph "Client side"
-        AppClient[AppClientAccount] --> CollectorClient
-        CollectorClient --> CollectorRequest2[CollectorRequest]
+    subgraph "Patient side"
+        Invite -->|cmc.acceptInvite| Relationship[CMC relationship]
+        Relationship -->|Contact.aggregateCmc| Contact
     end
 ```
