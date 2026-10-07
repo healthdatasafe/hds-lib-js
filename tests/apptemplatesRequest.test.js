@@ -72,6 +72,38 @@ describe('[APRX] appTemplates Requests', function () {
       assert.deepEqual(request.features.chat, { type: 'usernames' });
       assert.equal(request.hasChatFeature, true);
     });
+
+    it('[AREG] features.chat accepts the FormSpec boolean shape (B-2026-10-05-11)', () => {
+      const on = new CollectorRequest({ features: { chat: true } });
+      assert.deepEqual(on.features.chat, { type: 'user' });
+      const off = new CollectorRequest({ features: { chat: false } });
+      assert.equal(off.hasChatFeature, false);
+      assert.deepEqual(off.content.features, {});
+      on.addChatFeature(false);
+      assert.equal(on.hasChatFeature, false);
+    });
+
+    it('[AREH] a plain-string localizableText is the English text (B-2026-10-05-11)', () => {
+      const request = new CollectorRequest({
+        title: 'Title',
+        description: 'Description',
+        consent: 'Consent',
+        sections: [{ key: 's1', type: 'permanent', name: 'Section one', itemKeys: [] }]
+      });
+      assert.deepEqual(request.title, { en: 'Title' });
+      assert.deepEqual(request.description, { en: 'Description' });
+      assert.deepEqual(request.consent, { en: 'Consent' });
+      assert.deepEqual(request.getSectionByKey('s1').name, { en: 'Section one' });
+    });
+
+    it('[AREI] buildPermissions does not complete permissionsExtra in place (B-2026-10-05-11)', () => {
+      const request = new CollectorRequest({});
+      request.addPermissionExtra({ streamId: 'profile' });
+      request.createSection('s1', 'permanent').addItemKeys(['profile-name']);
+      request.buildPermissions();
+      assert.deepEqual(request.permissions, [{ streamId: 'profile', defaultName: 'Profile', level: 'read' }]);
+      assert.deepEqual(request.permissionsExtra, [{ streamId: 'profile' }]);
+    });
   });
 
   describe('[ARSO] Section ordering and customizations', function () {

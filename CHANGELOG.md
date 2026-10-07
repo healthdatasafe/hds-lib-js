@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.14.0] - 2026-10-07
+
+Fixes from B-2026-10-05-11 (plan 108 analysis). Minor rather than patch: two dead `CollectorRequest` methods are
+removed and the template schema is stricter on `repeatable`.
+
+### Fixed
+- **A plain-string `localizableText` no longer turns into character indexes.** The AppTemplate schema accepts a
+  string for any localizable text, but `CollectorRequest` section names went through `Object.entries`, storing
+  `{ 0: 'S', 1: 'e', … }` as language codes, and a string title, description or consent threw. A string is now
+  the English text (`{ en: … }`) everywhere in `CollectorRequest`. Test [AREH].
+- **`features.chat` accepts the FormSpec / AppTemplate boolean.** `CollectorRequest` expects `{ type }`; `true`
+  threw "Invalid chat type" and `false` threw "Found unkown features" when the FormSpec adapter was skipped.
+  `true` is now `{ type: 'user' }` and `false` means no chat, in `setContent` and `addChatFeature`. Test [AREG].
+- **`model.authorizations.forItemKeys` no longer mutates the caller's `preRequest`** (it completed `defaultName`
+  and `level` in place, so `CollectorRequest.buildPermissions` rewrote `permissionsExtra`), and stops scanning a
+  stream's parents once one overrides it (`break`, was `continue`). Output unchanged. Test [AREI].
+
+### Changed
+- **AppTemplate schema: `customFieldDef.repeatable` follows the data-model grammar** (`once | any | unlimited |`
+  ISO-8601 duration), the same rule the loader already applied to `itemCustomizations[*].repeatable`. A template
+  with any other string is now rejected at load. Test [CFLD-AJV-7].
+
+### Removed
+- `CollectorRequest.loadFromInviteEvent` and `loadFromStatusEvent`: leftovers of the `Collector` / `CollectorClient`
+  flow removed in 1.0.0, with no caller in the workspace. Use `new CollectorRequest(content)` or `setContent`.
+
+### Docs
+- `AppTemplates.md` and `docs/app-templates.md` rewritten for the current API: they still described
+  `createCollector`, `publish()` and `CollectorInvite.getSharingData()`, all removed in 1.0.0.
+
 ## [2.13.3] - 2026-10-06
 
 ### Changed
@@ -34,8 +64,9 @@
   3.17.1 → 3.18.0** (exact pins). 699 tests pass unchanged; typecheck and lint clean.
 - **Behaviour (through `@pryv/cmc` 3.18.0):** `cmc.listAcceptedRelationships` no longer lists ended relationships
   (accept events with `content.withdrawal`, stamped by open-pryv.io rc.36+ on every teardown); pass
-  `includeWithdrawn: true` to list them. `AppClientAccount` and `Contact` read relationships through it, so a patient
-  app on this version stops showing a practitioner whose relationship was revoked, deleted or detached.
+  `includeWithdrawn: true` to list them. The patient app calls it and hands the result to `Contact.aggregateCmc`
+  (hds-lib does not call it itself; corrected 2026-10-07), so a patient app on this version stops showing a
+  practitioner whose relationship was revoked, deleted or detached.
 
 ### What 3.16.0 brings (lib-js)
 - `authRequest.actAsManagedOnly`, `cmcInvites[].accessName` (types), `RelationshipWithdrawal` typing (core rc.36+).

@@ -13,7 +13,8 @@ docs/                          (source, in repo)
 ├── getting-started.md         # Installation, setup, browser/Node usage
 ├── settings.md                # Settings module reference
 ├── hds-model.md               # HDSModel, items, streams, authorizations, event types, datasources
-├── app-templates.md           # Detailed App Templates guide (Manager, Collector, Invite, Client)
+├── app-templates.md           # App Templates guide (Application, CollectorRequest, CMC FormSpec flow, Contact, Questionnaire)
+├── dataset-templates.md       # Data-set templates (hds-dataset.json)
 ├── localization.md            # Localization utilities
 ├── toolkit.md                 # StreamsAutoCreate, StreamTools
 ├── utilities.md               # Duration, reminders, errors, logger
@@ -40,11 +41,11 @@ processes it as a single flat site.
    - Update `index.md` exports table and architecture diagram
    - Add to `_config.yml` nav if it's a new page
 
-4. **Changing the appTemplates flow** (new statuses, new event types, new stream suffixes)
-   - Update the sequence diagram, state diagrams, and SVG stream structure in `app-templates.md`
+4. **Changing the appTemplates / CMC flow** (FormSpec shape, invite or accept helpers, CMC event types or scope streams)
+   - Update the overview sequence diagram and the "CMC FormSpec flow" section in `app-templates.md`
 
 5. **Changing CollectorRequest structure** (new properties, new section types)
-   - Update the data structure diagram and property tables in `app-templates.md`
+   - Update the property tables, the `content` shape and the CollectorRequest / FormSpec table in `app-templates.md`
 
 6. **Adding or changing event types**
    - Update the event types table in `app-templates.md` and/or `hds-model.md`

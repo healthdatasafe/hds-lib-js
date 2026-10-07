@@ -62,28 +62,6 @@ export class CollectorRequest {
   }
 
   /**
-   * Loadfrom invite event
-   * used by CollectorClient only
-   * @param invite
-   */
-  loadFromInviteEvent (inviteEvent: any) {
-    this.setContent(inviteEvent.content);
-  }
-
-  /**
-   * Loadfrom status event from Collector
-   * used by Collector only
-   * @param statusEvent
-   */
-  loadFromStatusEvent (statusEvent: any) {
-    // content.data is deprecated it was used in a previous version, should be removed
-    let potentialContent = statusEvent.content.request || statusEvent.content.data;
-    // for some reason to be investigated sometime the data is in requestContent
-    if (potentialContent.requestContent) potentialContent = potentialContent.requestContent;
-    this.setContent(potentialContent);
-  }
-
-  /**
    * Temp content
    * @param content
    */
@@ -163,10 +141,10 @@ export class CollectorRequest {
     }
     // -- features
     if (futureContent.features) {
-      if (futureContent.features.chat) {
+      if (futureContent.features.chat != null) {
         this.addChatFeature(futureContent.features.chat);
-        delete futureContent.features.chat;
       }
+      delete futureContent.features.chat;
       if (Object.keys(futureContent.features).length > 0) {
         throw new HDSLibError('Found unkown features', futureContent.features);
       }
@@ -192,8 +170,9 @@ export class CollectorRequest {
     }
 
     // -- questionnaires (Plan 71 — bundle Questionnaire(s) into first-contact
-    //    request; on patient accept the CollectorClient writes one
-    //    questionnaire/request-v1 event per entry in the patient's stream).
+    //    request; on patient accept the patient app writes one
+    //    questionnaire/request-v1 event per entry in the patient's stream,
+    //    see Questionnaire.writeBundled).
     //    For an established relationship the doctor sends a bare Questionnaire
     //    directly — no CollectorRequest involved.
     if (futureContent.questionnaires) {
@@ -214,13 +193,13 @@ export class CollectorRequest {
 
   get version () { return this.#version; }
 
-  set title (title: localizableText) { this.#title = validateLocalizableText('title', title); }
+  set title (title: localizableText | string) { this.#title = validateLocalizableText('title', asLocalizableText(title)); }
   get title () { return this.#title; }
 
-  set consent (consent: localizableText) { this.#consent = validateLocalizableText('consent', consent); }
+  set consent (consent: localizableText | string) { this.#consent = validateLocalizableText('consent', asLocalizableText(consent)); }
   get consent () { return this.#consent; }
 
-  set description (description: localizableText) { this.#description = validateLocalizableText('description', description); }
+  set description (description: localizableText | string) { this.#description = validateLocalizableText('description', asLocalizableText(description)); }
   get description () { return this.#description; }
 
   set requesterName (name: string) { this.#requester.name = validateString('requester:name', name); }
@@ -329,8 +308,13 @@ export class CollectorRequest {
     return this.#features.chat != null;
   }
 
-  addChatFeature (settings: { type: 'usernames' | 'user' } = { type: 'user' }) {
-    if (!['user', 'usernames'].includes(settings.type)) throw new HDSLibError('Invalid chat type', settings);
+  /**
+   * Also accepts the FormSpec / AppTemplate boolean shape: `true` is `{ type: 'user' }`, `false` is no chat.
+   */
+  addChatFeature (settings: { type: 'usernames' | 'user' } | boolean = { type: 'user' }) {
+    if (settings === false) { delete this.#features.chat; return; }
+    if (settings === true) settings = { type: 'user' };
+    if (settings == null || !['user', 'usernames'].includes(settings.type)) throw new HDSLibError('Invalid chat type', settings);
     this.#features.chat = settings;
   }
 
@@ -374,8 +358,8 @@ export class CollectorRequest {
    * structurally (streamId must start with `${templateId}-`); cross-template
    * collisions are rejected by the loader.
    *
-   * The CollectorRequest itself does not know its enclosing template id (that's
-   * a Collector concern), so we validate against `def.templateId` here as a
+   * The CollectorRequest itself does not know its enclosing template id (the
+   * template's), so we validate against `def.templateId` here as a
    * defence-in-depth check — `loader.ts` is the canonical enforcer.
    */
   addCustomField (cf: CustomFieldDeclaration) {
@@ -425,9 +409,8 @@ export class CollectorRequest {
    * `QuestionnaireRequestContent` object (validated through a Questionnaire
    * round-trip so we surface errors at add-time rather than at send-time).
    *
-   * On patient accept (`CollectorClient.acceptInvite` — Plan 71 C6+ work),
-   * one `questionnaire/request-v1` event is written per stored entry, in the
-   * same batch as the access-grant side-effects. For pre-accept inspection
+   * On patient accept, the patient app writes one `questionnaire/request-v1`
+   * event per stored entry (`Questionnaire.writeBundled`). For pre-accept inspection
    * (e.g. preview UI) consumers can iterate `request.questionnaires`.
    */
   addQuestionnaire (q: Questionnaire | QuestionnaireRequestContent): QuestionnaireRequestContent {
@@ -513,6 +496,11 @@ export class CollectorRequest {
   }
 }
 
+/** A plain string localizable text (allowed by the AppTemplate schema) is the English text. */
+function asLocalizableText (text: localizableText | string): localizableText {
+  return (typeof text === 'string') ? { en: text } : text;
+}
+
 function validateString (key, totest) {
   if (totest == null || typeof totest !== 'string') throw new HDSLibError(`Invalid ${key} value: ${totest}`, { [key]: totest });
   return totest;
@@ -547,8 +535,9 @@ class CollectorRequestSection implements CollectorSectionInterface {
     this.#itemKeys.push(key);
   }
 
-  setName (localizedName: localizableText) {
-    for (const [languageCode, name] of Object.entries(localizedName)) {
+  setName (localizedName: localizableText | string) {
+    // the AppTemplate schema allows a plain string (English); Object.entries on it would store character indexes
+    for (const [languageCode, name] of Object.entries(asLocalizableText(localizedName))) {
       this.setNameLocal(languageCode as localizableTextLanguages, name as string);
     }
   }

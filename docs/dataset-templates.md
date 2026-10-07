@@ -1,3 +1,8 @@
+---
+layout: default
+title: Data-set Templates
+---
+
 # Data-set templates (`hds-dataset.json`)
 
 An app that writes health data to HDS can publish **the scope of the data it collects** as a

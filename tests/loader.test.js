@@ -101,6 +101,19 @@ describe('[CFLD] AppTemplate loader', function () {
       t.id = 'BAD_ID';
       assert.throws(() => loadTemplate(t), /pattern|id/);
     });
+
+    it('[CFLD-AJV-7] customField def.repeatable follows the data-model grammar (B-2026-10-05-11)', function () {
+      for (const ok of ['once', 'any', 'unlimited', 'P1D', 'P1W', 'PT12H', 'P1DT6H']) {
+        const t = validTemplate();
+        t.customFields[0].def.repeatable = ok;
+        loadTemplate(t);
+      }
+      for (const bad of ['daily', 'P', '1D', 'p1d', '']) {
+        const t = validTemplate();
+        t.customFields[0].def.repeatable = bad;
+        assert.throws(() => loadTemplate(t), /pattern|repeatable/, `"${bad}" should be rejected`);
+      }
+    });
   });
 
   describe('[CFLD-CF] cross-field rules', function () {

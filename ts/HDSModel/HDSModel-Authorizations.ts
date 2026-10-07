@@ -42,7 +42,9 @@ export class HDSModelAuthorizations {
     Object.assign(opts, options);
     const streamsRequested: { [key: string]: any } = {};
 
-    for (const pre of opts.preRequest) {
+    for (const preIn of opts.preRequest) {
+      // work on a copy: the caller's preRequest (e.g. CollectorRequest.permissionsExtra) must not be completed in place
+      const pre = { ...preIn };
       if (!pre.streamId) throw new Error(`Missing streamId in options.preRequest item: ${JSON.stringify(pre)}`);
       // complete pre with defaultName if missing
       if (opts.includeDefaultName && !pre.defaultName) {
@@ -89,8 +91,8 @@ export class HDSModelAuthorizations {
         if (found && authorizationOverride(found.level, auth.level)) {
           // delete entry
           delete streamsRequested[auth.streamId];
-          // break loop
-          continue;
+          // no need to check the other parents
+          break;
         }
       }
     }

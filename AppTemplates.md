@@ -2,146 +2,76 @@ This document is part of [Generic toolkit for server and web applications](READM
 
 # APPLICATION TEMPLATES
 
+Short API reference for `appTemplates` and the CMC helpers. The full guide, with the doctor and patient flows and examples, is [docs/app-templates.md](docs/app-templates.md) (published at <https://healthdatasafe.github.io/hds-lib-js/app-templates>). Data-set templates (`hds-dataset.json`) are in [docs/dataset-templates.md](docs/dataset-templates.md).
 
-App templates based on HDS Model, provide frameworks to build applications for HDS.
+Since 1.0.0 the consent flow runs on CMC (`@pryv/cmc`, re-exported as `cmc`). `Collector`, `CollectorInvite`, `CollectorClient`, `AppManagingAccount.createCollector` and `AppClientAccount.handleIncomingRequest` no longer exist; see the 1.0.0 entry of [CHANGELOG.md](CHANGELOG.md).
 
-- **AppManagingAccount**: App which manages Collectors. A "Collector" handles a "Request" and set of "Responses". => With access to some HDS data from other accounts.
-- **AppClientAccount**: Handles requests from `AppManagingAccount` and corresponding responses (agree, refuse, revoke).
+## Application, AppManagingAccount, AppClientAccount
 
-## Application class
-Both templates extend `Application` class 
+`AppManagingAccount` (doctor side) and `AppClientAccount` (patient side) extend `Application` and add nothing else.
 
-An application is based on 
-- one `connection`: an instance of `pryv.Connection`
-- one `baseStreamId`: the streamId where the application will store its own operation data (i.e. state management) - This stream should be a children of stream `applications`.
-- one `appName`
+- `App*.newFromApiEndpoint(baseStreamId, apiEndpoint, appName?, features?)`
+- `App*.newFromConnection(baseStreamId, connection, appName?, features?)`
 
-### instantiating an Application 
-Either use: 
-- `App{ExtensionName}.newFromApiEndpoint(baseStreamId, apiEndpoint, appName)`
-- `App{ExtensionName}.newFromConnection(baseStreamId, connection, appName)`
+Both return an initialized instance: the access is checked (`personal`, or `app` with `manage` on `*` or on `baseStreamId`) and `applications/<baseStreamId>` is created when missing. `appName` is required for `AppClientAccount`; `AppManagingAccount` takes it from the access info. `features.streamsAutoCreate` (default `true`) attaches `toolkit.StreamsAutoCreate` to the connection.
 
-It will return an instance already initialized with eventual necessary streams created. 
+- `app.connection`, `app.baseStreamId`, `app.appName`, `app.streamData`
+- `await app.loadStreamData()`
+- `await app.getCustomSettings(forceRefresh?)`, `await app.setCustomSettings(content)`, `await app.setCustomSetting(key, value)` (`null` deletes the key)
 
-### extending Application class
-Check the code for mode details. 
+## CollectorRequest
 
-## AppManagingAccount
+Editor state of a data request (used by FormBuilder UIs). No I/O.
 
-### instantiating
-Either use: 
-- `AppManagingAccount.newFromApiEndpoint(baseStreamId, apiEndpoint, appName)`
-- `AppManagingAccount.newFromConnection(baseStreamId, connection, appName)`
+- `new CollectorRequest(content)`, `request.setContent(content)`, `request.content`
+- Texts: `title`, `description`, `consent` (`localizableText` or a plain string, stored as English), `requesterName`, `appId`, `appUrl`, `appCustomData`
+- Sections: `createSection(key, 'permanent' | 'recurring')`, `getSectionByKey(key)`, `moveSection(key, toIndex)`, `removeSection(key)`, `sections`, `sectionsData`
+- Section: `setName(text)`, `setNameLocal(lang, name)`, `addItemKey(key)`, `addItemKeys(keys)`, `removeItemKey(key)`, `moveItemKey(key, toIndex)`, `setItemCustomization(key, data)`, `getItemCustomization(key)`, `setCustomFieldKeys(keys)`, `addCustomFieldKey(key)`, `getData()`
+- Permissions: `buildPermissions()` (from section item keys plus `permissionsExtra`), `addPermission(streamId, defaultName, level)`, `addPermissions(list)`, `addPermissionExtra({ streamId, defaultName?, level? })`, `resetPermissions()`, `permissions`, `permissionsExtra`
+- Chat: `addChatFeature(settings?)` (`{ type: 'user' | 'usernames' }`, or `true` / `false`), `hasChatFeature`, `features`
+- `addExistingStreamRef(ref)`, `existingStreamRefs`, `addCustomField(declaration)`, `customFields`
+- Questionnaires: `addQuestionnaire(q)`, `questionnaires`, `getQuestionnaire(i)`, `removeQuestionnaire(i)`, `checkQuestionnaireCoverage(q)`, `applyQuestionnaireCoverage(q)`
 
-Params:
-- **apiEndpoint or connection** must have `master` or `personnal` access rights.
+## Questionnaire
 
-### appManagingAccount.getCollectors();
-Get current `Collector` instances related to this app
+- `new Questionnaire(content?)`, `addQuestion(key, def)`, `removeQuestion(key)`, `getQuestion(key)`, `questionKeys`, `questions`, `toRequestEventContent()`
+- `Questionnaire.fromRequestEvent(event)`, `Questionnaire.makeRequestEvent(content, streamIds, time?)`, `Questionnaire.writeBundled(connection, request, streamIds, opts?)`, `Questionnaire.buildAnswerEvent(requestEventId, answers, knownKeys?)`
+- `appTemplates.checkQuestionnaireCoverage(q, request)`
 
-### appManagingAccount.getCollectorById();
-Get one `Collector`from its id.
+## CMC FormSpec helpers (`cmcFormSpec`, `cmcAppScope`, `cmcConstants`)
 
-### appManagingAccount.createCollector(name)
-Create new `Collector`
+Doctor side:
 
+- `cmcAppScope.ensureAppScope(connection, appCode, subPath?)`
+- `cmcFormSpec.saveFormSpec(connection, scopeStreamId, formSpec)`, `loadFormSpec(connection, scopeStreamId)`
+- `cmcFormSpec.listFormSpecs(connection, opts?)`, `getFormSpecById(connection, collectorId, opts?)`, `eventToFormSpecRecord(event, appCode?)`
+- `cmcFormSpec.validateFormSpecItemKeys(formSpec, model?)`, `formSpecFingerprint(formSpec)`
+- `cmcFormSpec.createInviteWithFormSpec(connection, params)`, `deriveCmcPermissions(formSpec)`, `isChatOnlyFormSpec(formSpec)`
 
-### AppManagingAccount Collectors class
-A collector is holding 
-- A single request for accessing a set of streams 
-- A set of `CollectorInvite` which are to be submitted to **clients**
+Patient side:
 
-It has 3 possible states `draft`=> `active` => `deactivated`
+- `cmcFormSpec.provisionHdsNoop(connection)`
+- `cmcFormSpec.readOfferWithFormSpec(capabilityUrl, opts?)` (before `cmc.acceptInvite`)
+- `cmcFormSpec.mirrorFormSpecOnAcceptEvent(connection, acceptEventId, formSpec)` (after it)
 
-Collector instances are created and managed by AppManagingAccount.
+Constants: `cmcConstants.CMC_APP_CODES`, `CMC_EVENT_TYPES`, `appSubScope(appCode, sub)`, `extractAppSubScopeSuffix(streamId, appCode)`, `cmcFormSpec.FORM_SPEC_EVENT_TYPE`, `HDS_NOOP_STREAM_ID`, `HDS_NOOP_PERMISSION`.
 
-#### collector.id
-You may use this as a reference to retrieve a specific collector from an app
- 
-#### collector.statusCode
-One of 'draft', 'active', 'deactivated'
+Data-export requests: `cmcDataExport.requestDataExport`, `fulfillDataExportRequest`, `listDataExportRequests`, `buildDataExportRequestContent`, `parseDataExportEvents`.
 
-#### collector.request
-Payload that can be modified
+## Contact
 
-#### async collector.save()
-After modifying `collector.request` you should save it.
+Patient-side view of CMC relationships, one `Contact` per counterparty.
 
-#### async collector.publish()
-Once the edition is done and saved, validate and publish. (Can be done just once);
+- `Contact.aggregateCmc(accesses, accepts, patientScopeStreamId)`, `Contact.cmcDetectKind(appCode)`
+- Fields: `remoteUsername`, `displayName`, `counterparty`, `kind`, `cmcRelationships`, `accessObjects`
+- Getters: `status`, `isActive`, `isPerson`, `hasChat`, `appStreamIds`, `allPermissions`, `accessIds`, `cmcIsActive`, `cmcHasChat`, `cmcChatStreams`, `cmcFormSpecs`, `cmcFormSections`, `cmcAllPermissions`
+- Methods: `initStreamCache(streamsById)`, `eventIsAccessible(event)`, `eventIsFromContact(event)`, `chatEventInfos(event)`, `addAccessObject(access)`
 
-#### async collector.getInvites()
-List of current invites
+## AppTemplate JSON
 
-#### async collector.checkInbox ()
-Check if new 'accept', 'refuse', 'revoke' messages have been received.
-
-#### AppManagingAccount - CollectorInvite class
-A collector invite represents the state of a 1 - 1 relationship between a Collector => A User
-It's materialized by an `event` in one of the streams of the Collector
-
-`collectorInvite` instances are created and retrieved by `Collector` instances.
-
-##### collectorInvite.displayName()
-Returns the display name set at creation
-
-
-##### collectorInvite.getSharingData()
-When `pending` this will return an `apiEndpoint` and an `eventId` to be shared with a 3rd party app using `ApplicationClient`. This data will be consumed by `appclient.handleIncomingRequest(apiEndpoint, eventId)` to initiate the relationship.
-
-##### collectorInvite.status()
-Returns one of `pending`, `active`, `error`.
-
-In case of error, (meaning, means not accessible) the call `collectorInvite.errorType()` will return `revoked` or `refused`.
-
-##### collectorInvite.connection and collectorInvite.apiEndpoint
-As an invite is a 1 - 1 relationship, when active, it holds a connection to the matching account.
-
-#### collectorInvite.dateCreation()
-Returns a `Date`object.
-
-##### async collectorInvite.checkAndGetAccessInfo()
-Check if connection is valid. (only if active)
-If the result is "forbidden" update and set as revoked.
-
-Returns the `accessInfo` on success, which can be useful to get the hds username or other infos and the account.
-
-## AppClientAccount
-
-The counterpart of `AppManagingAccount` for "client" applications.
-
-### instantiating
-Either use: 
-- `AppClientAccount.newFromApiEndpoint(baseStreamId, apiEndpoint, appName)`
-- `AppClientAccount.newFromConnection(baseStreamId, connection, appName)`
-### appClientAccount.handleIncomingRequest(apiEndpoint, incomingEventId)
-To be called when the app receives a new request issued by `AppManagingAccount's collectorInvite.getSharingData()`. Returns a `CollectorClient` instance.
-
-### appClientAccount.getCollectorClients()
-Get current `CollectorClient` instances.
-
-### appClientAccount.getCollectorClientByKey(collectorKey)
-Get a specific `CollectorClient` instance.
-
-### CollectorClient class
-
-#### collectorClient.key
-Identifier to retrieve a collector from appClientAccount.
-
-#### collectorClient.status
-One of 'Incoming', 'Active', 'Deactivated', 'Refused'
-
-#### collectorClient.requestData
-The data holding the requestFrom the invite
-
-#### collectorClient.accept()
-Accept current request
-
-#### collectorClient.revoke()
-Revoke current request
-
-#### collectorClient.refuse()
-Refuse current request
+- `appTemplates.loadTemplate(json)`, `appTemplates.loadTemplateFromUrl(url, opts?)`
+- `appTemplates.isCustomFieldDeclaration(value)`, `appTemplates.isExistingStreamRef(value)`
+- Data-set templates: `templateToFormSpec`, `templateSource`, `templateScope`, `templateScopeHash`, `scopeHashMatches`, `diffTemplateScope`, `diffFormSpecWithTemplate`, `semverBump`, `withAppPrivatePermissions` (see [docs/dataset-templates.md](docs/dataset-templates.md))
 
 ## Overloading the data model
 

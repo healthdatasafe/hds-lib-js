@@ -74,7 +74,7 @@
         "step":        { "type": "number" },
         "minDate":     { "type": "string" },
         "maxDate":     { "type": "string" },
-        "repeatable":  { "type": "string" }
+        "repeatable":  { "type": "string", "pattern": "^(once|any|unlimited|P([0-9]+[YMWD])+(T([0-9]+[HMS])+)?|PT([0-9]+[HMS])+)$" }
       }
     },
     "existingStreamRef": {
