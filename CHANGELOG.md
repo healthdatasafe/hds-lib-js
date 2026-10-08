@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.15.1] - 2026-10-08
+
+### Fixed
+- **`CollectorRequest` `title`, `consent` and `description` getters are typed `localizableText` again.** Since 2.14.0
+  their setters also accept a string, and without an explicit return type the declaration files widened the getters
+  to `localizableText | string`, so a consumer assigning them to a `localizableText` stopped compiling (TS2322). The
+  values were always `localizableText` at runtime; types only, no behaviour change.
+
 ## [2.15.0] - 2026-10-07
 
 ### Changed

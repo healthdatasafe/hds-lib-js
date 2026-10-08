@@ -194,13 +194,13 @@ export class CollectorRequest {
   get version () { return this.#version; }
 
   set title (title: localizableText | string) { this.#title = validateLocalizableText('title', asLocalizableText(title)); }
-  get title () { return this.#title; }
+  get title (): localizableText { return this.#title; }
 
   set consent (consent: localizableText | string) { this.#consent = validateLocalizableText('consent', asLocalizableText(consent)); }
-  get consent () { return this.#consent; }
+  get consent (): localizableText { return this.#consent; }
 
   set description (description: localizableText | string) { this.#description = validateLocalizableText('description', asLocalizableText(description)); }
-  get description () { return this.#description; }
+  get description (): localizableText { return this.#description; }
 
   set requesterName (name: string) { this.#requester.name = validateString('requester:name', name); }
   get requesterName () { return this.#requester.name; }
