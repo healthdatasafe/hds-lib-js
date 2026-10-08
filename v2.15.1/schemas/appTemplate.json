@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hds-lib.datasafe.dev/schemas/appTemplate.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "description", "chat", "sections"],
+  "properties": {
+    "id":          { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$" },
+    "title":       { "$ref": "#/definitions/localizableText" },
+    "description": { "$ref": "#/definitions/localizableText" },
+    "chat":        { "type": "boolean" },
+    "sections":    { "type": "array", "items": { "$ref": "#/definitions/section" } },
+    "customFields":       { "type": "array", "items": { "$ref": "#/definitions/customFieldDeclaration" } },
+    "existingStreamRefs": { "type": "array", "items": { "$ref": "#/definitions/existingStreamRef" } },
+    "license":     { "$ref": "#/definitions/license" },
+    "$schema":       { "type": "string" },
+    "format":        { "enum": ["hds-dataset-template"] },
+    "formatVersion": { "enum": [1] },
+    "version":       { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "publishedAt":   { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])($|T)" },
+    "app":           { "$ref": "#/definitions/app" },
+    "dataModel":     { "$ref": "#/definitions/dataModel" },
+    "consent":       { "$ref": "#/definitions/localizableText" },
+    "requiredBridges": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+  },
+  "definitions": {
+    "localizableText": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object", "additionalProperties": { "type": "string" } }
+      ]
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "name"],
+      "properties": {
+        "key":                { "type": "string" },
+        "type":               { "enum": ["permanent", "recurring"] },
+        "name":               { "$ref": "#/definitions/localizableText" },
+        "itemKeys":           { "type": "array", "items": { "type": "string" } },
+        "itemCustomizations": { "type": "object" },
+        "customFieldKeys":    { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "customFieldDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["streamId", "eventType", "def"],
+      "properties": {
+        "streamId":  { "type": "string" },
+        "eventType": { "enum": ["note/txt", "note/html", "count/generic", "date/iso-8601", "activity/plain"] },
+        "parentId":  { "type": "string" },
+        "name":      { "type": "string" },
+        "def":       { "$ref": "#/definitions/customFieldDef" }
+      }
+    },
+    "customFieldDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "templateId", "key", "label"],
+      "properties": {
+        "version":     { "enum": ["v1"] },
+        "templateId":  { "type": "string" },
+        "key":         { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$" },
+        "label":       { "$ref": "#/definitions/localizableText" },
+        "description": { "$ref": "#/definitions/localizableText" },
+        "section":     { "type": "string" },
+        "required":    { "type": "boolean" },
+        "maxLength":   { "type": "integer", "minimum": 0 },
+        "options":     { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "min":         { "type": "number" },
+        "max":         { "type": "number" },
+        "step":        { "type": "number" },
+        "minDate":     { "type": "string" },
+        "maxDate":     { "type": "string" },
+        "repeatable":  { "type": "string", "pattern": "^(once|any|unlimited|P([0-9]+[YMWD])+(T([0-9]+[HMS])+)?|PT([0-9]+[HMS])+)$" }
+      }
+    },
+    "existingStreamRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["streamId", "permissions"],
+      "properties": {
+        "streamId":    { "type": "string" },
+        "permissions": { "type": "array", "items": { "enum": ["read", "manage", "contribute"] }, "minItems": 1 },
+        "purpose":     { "type": "string" },
+        "label":       { "$ref": "#/definitions/localizableText" }
+      }
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "publisher", "url"],
+      "properties": {
+        "id":         { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$" },
+        "name":       { "$ref": "#/definitions/localizableText" },
+        "publisher":  { "type": "string", "pattern": "\\S" },
+        "url":        { "type": "string", "format": "uri" },
+        "contact":    { "type": "string" },
+        "appVersion": { "type": "string" }
+      }
+    },
+    "dataModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "publicationDate": { "type": "string" }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "notice"],
+      "properties": {
+        "name":   { "type": "string" },
+        "url":    { "type": "string", "format": "uri" },
+        "notice": { "$ref": "#/definitions/localizableText" }
+      }
+    }
+  }
+}
