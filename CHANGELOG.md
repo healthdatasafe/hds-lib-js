@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.15.2] - 2026-10-09
+
+### Changed
+- **pryv 3.17.1** (and `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor`, `@pryv/socket.io` 3.17.1) and
+  **`@pryv/cmc` 3.20.0**. pryv: `Connection.api()` no longer posts a trailing empty batch when the call count is a
+  multiple of `chunkSize` (or zero; `api([])` now resolves `[]` without a request), and a `chunkSize` that is not a
+  positive integer is refused instead of looping (no HDS code sets one). cmc: `errorIds` mirror every reason the
+  server's cmc plugin emits (16 added, e.g. `PROTECTED_EVENT_WRITE` from open-pryv.io rc.43+), additive. 707 tests pass
+  unchanged.
+
 ## [2.15.1] - 2026-10-08
 
 ### Fixed
