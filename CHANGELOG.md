@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.16.0] - 2026-10-12
+
+### Added
+- **Data-set templates: `dataModel.version`.** A template can record the data-model version it was written against
+  (`pack.json` carries `version` since data-model 3.18.0), next to `dataModel.publicationDate`. Semver `x.y.z`,
+  validated by the schema; still informational (item keys are resolved against the live model). Until now the schema
+  (`additionalProperties: false`) refused it. Test in `[DSTL6]`; `docs/dataset-templates.md` updated.
+
 ## [2.15.2] - 2026-10-09
 
 ### Changed

@@ -80,8 +80,11 @@ export interface AppTemplate {
   publishedAt?: string;
   /** The publishing app. */
   app?: DatasetTemplateApp;
-  /** Informational: the data-model pack the template was authored against. Compatibility is resolved, not compared. */
-  dataModel?: { publicationDate?: string };
+  /**
+   * Informational: the data-model pack the template was authored against (`pack.json`'s `version`, data-model 3.18.0+,
+   * and `publicationDate`). Compatibility is resolved against the live model, not compared.
+   */
+  dataModel?: { version?: string; publicationDate?: string };
   /** The app's proposed consent text; the data-set owner may edit it. */
   consent?: localizableText;
   /** Bridges the data set expects to be connected (carried to FormSpec.appCustomData.requiredBridges). */

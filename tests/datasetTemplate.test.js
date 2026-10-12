@@ -174,6 +174,9 @@ describe('[DSTP] data-set templates (plan 108)', function () {
       assert.throws(() => loadTemplate(datasetTemplate({ publishedAt: '2026-99-99x' })), /schema validation failed/);
       loadTemplate(datasetTemplate({ publishedAt: '2026-10-05T12:00:00Z' }));
       assert.throws(() => loadTemplate(datasetTemplate({ version: '1.0' })), /schema validation failed/);
+      loadTemplate(datasetTemplate({ dataModel: { version: '3.18.0', publicationDate: '2026-10-12T10:55:05.169Z' } }));
+      assert.throws(() => loadTemplate(datasetTemplate({ dataModel: { version: '3.18' } })), /schema validation failed/);
+      assert.throws(() => loadTemplate(datasetTemplate({ dataModel: { commit: 'abc' } })), /schema validation failed/);
       assert.throws(() => loadTemplate(datasetTemplate({ format: 'other' })), /schema validation failed/);
     });
 
