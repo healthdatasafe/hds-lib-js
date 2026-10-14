@@ -12313,13 +12313,32 @@ class Connection {
    * Streamed get Event.
    * @see https://api.pryv.com/reference/#get-events
    * @param {Object} queryParams See `events.get` parameters
-   * @param {Function} forEachEvent Function taking one event as parameter. Will be called for each event
+   * @param {Function} forEachEvent Function taking one event as parameter. Will be called for each event.
+   *   May be async: the returned promise resolves once every callback's promise has settled, and rejects if one rejects.
    * @returns {Promise<Object>} Promise to result.body transformed with `eventsCount: {count}` replacing `events: [...]`
    */
   async getEventsStreamed (queryParams, forEachEvent) {
-    const myParser = jsonParser(forEachEvent, queryParams.includeDeletions);
+    // An async callback (e.g. one that decrypts each event) returns a promise:
+    // wait until all of them have settled, so every event is handled when this
+    // resolves, then reject with the first failure if any. Only a counter is
+    // kept, not the promises, so a long stream does not retain them.
+    let inFlight = 0;
+    let firstError = null;
+    let onIdle = null;
+    const onEvent = (event) => {
+      const result = forEachEvent(event);
+      if (result != null && typeof result.then === 'function') {
+        inFlight++;
+        Promise.resolve(result)
+          .catch((err) => { if (firstError == null) firstError = err; })
+          .finally(() => { if (--inFlight === 0 && onIdle != null) onIdle(); });
+      }
+    };
+    const myParser = jsonParser(onEvent, queryParams.includeDeletions);
     const res = await libGetEventStreamed(this, queryParams, myParser);
     const now = getTimestamp();
+    if (inFlight > 0) await new Promise((resolve) => { onIdle = resolve; });
+    if (firstError != null) throw firstError;
     this._handleMeta(res.body, now);
     return res.body;
   }
@@ -39810,7 +39829,7 @@ const validate = validate10;/* harmony default export */ const __WEBPACK_DEFAULT
 (module) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.17.1","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.17.2","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
 
 /***/ }
 
