@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.16.2] - 2026-10-14
+
+### Fixed
+- **`Contact.aggregateCmc` matches each data grant to its own accept event** (B-2026-10-14-1). It matched on
+  `(counterparty, appCode)` only, so two data sets from the same doctor both took the first accept's `hdsFormSpec`,
+  `acceptedAt` and `acceptEventId`. It now matches on the grant's `clientData.cmc.acceptEventId` (stamped by the core),
+  then on the accept's `dataGrantAccessId` (base-id equality), and falls back to `(counterparty, appCode)` only for an
+  accept that names no grant (older events), so it never borrows another data set's accept. Tests `[CTM6b-d]`.
+- **`Application` stream creation guard was dead**: an `app` token with `manage` on `baseStreamId` but no master
+  permission was treated as master, so the "Create them upfront" error could never fire. Only a master token now
+  counts.
+
 ## [2.16.1] - 2026-10-14
 
 ### Changed

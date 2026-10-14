@@ -21,6 +21,8 @@ export interface CmcCounterpartyAccess {
     cmc?: {
       role?: string;
       appCode?: string;
+      /** On a data grant: the local `consent/accept-cmc` event that minted it (stamped by the core at build time). */
+      acceptEventId?: string;
       features?: { chat?: boolean; systemMessaging?: boolean; system?: boolean } | null;
       counterparty?: {
         username?: string;
@@ -518,14 +520,23 @@ export class Contact {
             ? `${cp.remoteCollectorStreamId.replace(/:collectors:[^:]+$/, '')}:collectors:${peerSlug}`
             : null);
 
-      // Match accept event by (counterparty, appCode). Same counterparty
-      // can have multiple accept events for multiple data sets; we just
-      // need ANY one of them for acceptedAt enrichment.
-      const matchingAccept = accepts.find(a =>
-        a.counterparty?.username?.toLowerCase() === cp.username!.toLowerCase() &&
-        a.counterparty?.host?.toLowerCase() === cp.host!.toLowerCase() &&
-        (a.appCode || 'unknown') === appCode
-      );
+      // Match THIS access's own accept event: the same counterparty can hold
+      // several data sets (one access + one accept each), and each carries its
+      // own FormSpec and acceptedAt (B-2026-10-14-1). The core stamps the accept
+      // id on the data grant (`clientData.cmc.acceptEventId`) and the accept
+      // names its grant (`dataGrantAccessId`). Only an accept that names no
+      // grant (older events) falls back to (counterparty, appCode), so it can
+      // never borrow another data set's accept.
+      const ownAcceptEventId = cmcData.acceptEventId;
+      const matchingAccept =
+        (ownAcceptEventId ? accepts.find(a => a.acceptEventId === ownAcceptEventId) : undefined) ??
+        accepts.find(a => a.dataGrantAccessId != null && refBase(a.dataGrantAccessId) === refBase(access.id)) ??
+        accepts.find(a =>
+          a.dataGrantAccessId == null &&
+          a.counterparty?.username?.toLowerCase() === cp.username!.toLowerCase() &&
+          a.counterparty?.host?.toLowerCase() === cp.host!.toLowerCase() &&
+          (a.appCode || 'unknown') === appCode
+        );
 
       const f = cmcData.features ?? null;
       const features = {

@@ -272,6 +272,39 @@ describe('[CTCT] Contact class', function () {
       assert.equal(out[0].cmcRelationships.length, 2);
     });
 
+    // B-2026-10-14-1: two data sets from the same doctor each keep their own accept.
+    it('[CTM6b] two data sets from one counterparty match their own accept (clientData.cmc.acceptEventId)', () => {
+      const a1 = counterpartyAccess({ id: 'acc-cp-1', cmcOverrides: { acceptEventId: 'evt-accept-1' } });
+      const a2 = counterpartyAccess({ id: 'acc-cp-2', cmcOverrides: { acceptEventId: 'evt-accept-2' } });
+      const e1 = { ...acceptEvent({ acceptEventId: 'evt-accept-1', acceptedAt: 1716000000 }), dataGrantAccessId: 'acc-cp-1', hdsFormSpec: { title: 'first' } };
+      const e2 = { ...acceptEvent({ acceptEventId: 'evt-accept-2', acceptedAt: 1717000000 }), dataGrantAccessId: 'acc-cp-2', hdsFormSpec: { title: 'second' } };
+      const rels = Contact.aggregateCmc([a1, a2], [e1, e2], SCOPE)[0].cmcRelationships;
+      const byId = Object.fromEntries(rels.map(r => [r.accessId, r]));
+      assert.equal(byId['acc-cp-1'].acceptEventId, 'evt-accept-1');
+      assert.equal(byId['acc-cp-1'].hdsFormSpec.title, 'first');
+      assert.equal(byId['acc-cp-2'].acceptEventId, 'evt-accept-2');
+      assert.equal(byId['acc-cp-2'].hdsFormSpec.title, 'second');
+      assert.equal(byId['acc-cp-2'].acceptedAt, 1717000000);
+    });
+
+    it('[CTM6c] without the access stamp, matches on dataGrantAccessId (Plan 66 composite ids)', () => {
+      const a1 = counterpartyAccess({ id: 'acc-cp-1:2' });
+      const a2 = counterpartyAccess({ id: 'acc-cp-2' });
+      const e1 = { ...acceptEvent({ acceptEventId: 'evt-accept-1' }), dataGrantAccessId: 'acc-cp-1' };
+      const e2 = { ...acceptEvent({ acceptEventId: 'evt-accept-2' }), dataGrantAccessId: 'acc-cp-2' };
+      const rels = Contact.aggregateCmc([a1, a2], [e2, e1], SCOPE)[0].cmcRelationships;
+      assert.equal(rels.find(r => r.accessId === 'acc-cp-1:2').acceptEventId, 'evt-accept-1');
+      assert.equal(rels.find(r => r.accessId === 'acc-cp-2').acceptEventId, 'evt-accept-2');
+    });
+
+    it('[CTM6d] the (counterparty, appCode) fallback never borrows an accept that names another grant', () => {
+      const legacy = counterpartyAccess({ id: 'acc-cp-legacy' });
+      const named = { ...acceptEvent({ acceptEventId: 'evt-other' }), dataGrantAccessId: 'acc-cp-other' };
+      assert.equal(Contact.aggregateCmc([legacy], [named], SCOPE)[0].cmcRelationships[0].acceptEventId, null);
+      const old = acceptEvent({ acceptEventId: 'evt-old' }); // older accept: no dataGrantAccessId
+      assert.equal(Contact.aggregateCmc([legacy], [named, old], SCOPE)[0].cmcRelationships[0].acceptEventId, 'evt-old');
+    });
+
     it('[CTM7] aggregateCmc puts different counterparties into different Contacts', () => {
       const a1 = counterpartyAccess({ id: 'acc-cp-1' });
       const a2 = counterpartyAccess({
