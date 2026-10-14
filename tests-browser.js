@@ -19638,7 +19638,9 @@ async function createAppStreams(app) {
         if (infos.type !== 'app')
             throw new Error(`Application requires a ${allowPersonalStr} "app" type of access`);
         const masterFound = infos.permissions.find((p) => (p.streamId === '*' && p.level === 'manage'));
-        isPersonalOrMaster = true;
+        // Only a master token may create the app streams below; one with manage on
+        // baseStreamId alone gets the explicit error there (B-2026-10-14-1).
+        isPersonalOrMaster = !!masterFound;
         if (app.appSettings.mustBeMaster && !masterFound) {
             throw new Error('Application with "app" type of access requires "master" token (streamId = "*", level = "manage")');
         }
@@ -20693,12 +20695,20 @@ class Contact {
                 : (cp.remoteCollectorStreamId
                     ? `${cp.remoteCollectorStreamId.replace(/:collectors:[^:]+$/, '')}:collectors:${peerSlug}`
                     : null);
-            // Match accept event by (counterparty, appCode). Same counterparty
-            // can have multiple accept events for multiple data sets; we just
-            // need ANY one of them for acceptedAt enrichment.
-            const matchingAccept = accepts.find(a => a.counterparty?.username?.toLowerCase() === cp.username.toLowerCase() &&
-                a.counterparty?.host?.toLowerCase() === cp.host.toLowerCase() &&
-                (a.appCode || 'unknown') === appCode);
+            // Match THIS access's own accept event: the same counterparty can hold
+            // several data sets (one access + one accept each), and each carries its
+            // own FormSpec and acceptedAt (B-2026-10-14-1). The core stamps the accept
+            // id on the data grant (`clientData.cmc.acceptEventId`) and the accept
+            // names its grant (`dataGrantAccessId`). Only an accept that names no
+            // grant (older events) falls back to (counterparty, appCode), so it can
+            // never borrow another data set's accept.
+            const ownAcceptEventId = cmcData.acceptEventId;
+            const matchingAccept = (ownAcceptEventId ? accepts.find(a => a.acceptEventId === ownAcceptEventId) : undefined) ??
+                accepts.find(a => a.dataGrantAccessId != null && refBase(a.dataGrantAccessId) === refBase(access.id)) ??
+                accepts.find(a => a.dataGrantAccessId == null &&
+                    a.counterparty?.username?.toLowerCase() === cp.username.toLowerCase() &&
+                    a.counterparty?.host?.toLowerCase() === cp.host.toLowerCase() &&
+                    (a.appCode || 'unknown') === appCode);
             const f = cmcData.features ?? null;
             const features = {
                 chat: !!f?.chat,
