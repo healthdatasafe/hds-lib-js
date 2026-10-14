@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.16.1] - 2026-10-14
+
+### Changed
+- **pryv 3.17.2** (and `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor`, `@pryv/socket.io` 3.17.2; `@pryv/cmc`
+  unchanged at 3.20.0). `Connection.getEventsStreamed` now waits for an async `forEachEvent` callback (e.g.
+  `EventsCipher.wrapForEachEvent`) and rejects if one rejects; it used to resolve with decryptions still pending. Types:
+  `StreamedEventsResult.eventDeletionsCount` (was misspelt; runtime key unchanged), `Permission.feature` gains
+  `selfRevoke` / `secretSharing` / `webhooks` and `setting: 'allowed'`. No HDS code uses the renamed field, and every
+  `getEventsStreamed` caller in the workspace passes a synchronous callback. 707 tests pass unchanged.
+
 ## [2.16.0] - 2026-10-12
 
 ### Added
