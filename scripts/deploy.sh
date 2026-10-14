@@ -27,6 +27,13 @@ COMMIT_SHORT="$(git rev-parse --short HEAD)"
 COMMIT_FULL="$(git rev-parse HEAD)"
 echo "Deploying commit $COMMIT_SHORT ..."
 
+# Reset dist/ to remote gh-pages HEAD: another workspace may have deployed since
+# this checkout last synced, and a commit built on a stale base is refused on push.
+echo "Resetting dist/ to origin/gh-pages..."
+git -C dist fetch origin gh-pages
+git -C dist reset --hard origin/gh-pages
+git -C dist clean -fdx -e .git
+
 # Refuse to build against a node_modules that does not match package-lock.json.
 # A dependency bump pulled from git but never `npm install`ed produces a bundle
 # linked against the OLD library while the source expects the new one - lint,
