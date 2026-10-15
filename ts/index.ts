@@ -9,6 +9,7 @@ import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton.t
 import * as toolkit from './toolkit/index.ts';
 import { durationToSeconds, durationToLabel } from './utils/duration.ts';
 import { cycleDayAt } from './utils/calendarDay.ts';
+import { cyclePhaseAt } from './utils/cyclePhase.ts';
 import { computeReminders } from './HDSModel/reminders.ts';
 import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText.ts';
 import { MonitorScope } from './MonitorScope.ts';
@@ -29,6 +30,7 @@ import * as cmcDataExport from './cmc/dataExport.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
+export type { CyclePhase, CycleBasis, CyclePhaseResult, CycleEventLike } from './utils/cyclePhase.ts';
 export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from './settings/HDSSettings.ts';
 export type { ProfileKey, ProfileValues } from './settings/HDSProfile.ts';
 export type { AccountPreferenceKey } from './settings/accountPreferences.ts';
@@ -40,7 +42,7 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport };
+export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, cyclePhaseAt, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport };
 export type { FormSpec, FormSpecRecord, FormSpecItemKeyIssue, FormSpecItemKeyIssueReason, FormSpecSource, FormSpecOpenLink } from './cmc/formSpec.ts';
 export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './appTemplates/datasetTemplate.ts';
 export type { LoadTemplateFromUrlOptions } from './appTemplates/loader.ts';
@@ -93,6 +95,7 @@ const HDSLib = {
   durationToSeconds,
   durationToLabel,
   cycleDayAt,
+  cyclePhaseAt,
   computeReminders,
   eventToShortText,
   formatEventDate,

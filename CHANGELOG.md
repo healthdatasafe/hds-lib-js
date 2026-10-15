@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.18.0] - 2026-10-15
+
+### Added
+- **`cyclePhaseAt(time, events, timeZone?)`**: the menstrual-cycle phase on the calendar day of `time`, derived from
+  the `fertility-cycles-*` boundary items (data-model 3.18.1, `documentation/MENSTRUAL-CYCLE.md`). Returns
+  `{ phase: 'menstrual' | 'follicular' | 'fertile' | 'luteal' | null, basis: 'confirmed' | 'predicted' | 'unknown',
+  cycleDay, cycleStart, cycleEnd }`. A cycle runs from a start day to the day before the next start (its `duration`
+  never bounds a phase; an open cycle stops after 90 days); a day the recorded boundaries do not decide (no period end,
+  no ovulation) has `phase: null`, never a guess. `basis` reads `clientData.hdsBasis` on the boundaries used: any
+  predicted → `predicted`, all confirmed → `confirmed`, else `unknown`. Types `CyclePhase`, `CycleBasis`,
+  `CyclePhaseResult`, `CycleEventLike`. Tests `[CPH1-9]`, `[CPHA-B]`. Fable-reviewed.
+
 ## [2.17.0] - 2026-10-15
 
 ### Added
