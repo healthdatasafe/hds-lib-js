@@ -8,6 +8,7 @@ import { HDSService } from './HDSService.ts';
 import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton.ts';
 import * as toolkit from './toolkit/index.ts';
 import { durationToSeconds, durationToLabel } from './utils/duration.ts';
+import { cycleDayAt } from './utils/calendarDay.ts';
 import { computeReminders } from './HDSModel/reminders.ts';
 import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText.ts';
 import { MonitorScope } from './MonitorScope.ts';
@@ -39,7 +40,7 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport };
+export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport };
 export type { FormSpec, FormSpecRecord, FormSpecItemKeyIssue, FormSpecItemKeyIssueReason, FormSpecSource, FormSpecOpenLink } from './cmc/formSpec.ts';
 export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './appTemplates/datasetTemplate.ts';
 export type { LoadTemplateFromUrlOptions } from './appTemplates/loader.ts';
@@ -91,6 +92,7 @@ const HDSLib = {
   logger,
   durationToSeconds,
   durationToLabel,
+  cycleDayAt,
   computeReminders,
   eventToShortText,
   formatEventDate,

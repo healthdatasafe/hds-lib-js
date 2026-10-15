@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.17.0] - 2026-10-15
+
+### Added
+- **`cycleDayAt(time, cycleStart, timeZone?)`**: the cycle day of `time` in calendar days of `timeZone` (IANA name,
+  default the runtime's): 1 on the calendar day of the cycle start, 2 on the next one. For any view that shows a cycle
+  day, so it counts as reminders do.
+
+### Fixed
+- **`computeReminders` counts `relativeDays` in calendar days, not 24-hour steps** (B-2026-10-15-3). The cycle day was
+  `floor((now - start) / 86400) + 1`, so a cycle start logged at 21:00 left the next morning on day 1 all cycle long,
+  and a DST change shifted it again. It now uses the calendar days of an optional new 5th argument `timeZone` (default
+  the runtime's, which is the patient's browser in the webapp). "Already entered today" means the same calendar day
+  (it was "less than 24 h ago"), and `dueDate` is the start of the due calendar day. Tests `[CDA1-6]`.
+
 ## [2.16.2] - 2026-10-14
 
 ### Fixed

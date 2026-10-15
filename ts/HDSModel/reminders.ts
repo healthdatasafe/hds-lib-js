@@ -1,4 +1,5 @@
 import { durationToSeconds } from '../utils/duration.ts';
+import { localDayNumber, startOfLocalDay } from '../utils/calendarDay.ts';
 import type { ReminderConfig } from './HDSItemDef.ts';
 
 export interface ReminderSource {
@@ -91,12 +92,14 @@ function findLastEvent (itemDef: ItemDefLike, events: EventLike[]): EventLike | 
  * @param events - all events to search for last entries
  * @param overrides - optional collector/user overrides (matched by itemKey in the ReminderSource)
  * @param now - current time in unix seconds (defaults to Date.now()/1000)
+ * @param timeZone - IANA time zone whose calendar days `relativeDays` count (defaults to the runtime's)
  */
 export function computeReminders (
   itemDefs: ItemDefLike[],
   events: EventLike[],
   overrides?: Record<string, ReminderSource[]>,
-  now?: number
+  now?: number,
+  timeZone?: string
 ): ReminderStatus[] {
   const nowSec = now ?? Math.floor(Date.now() / 1000);
   const results: ReminderStatus[] = [];
@@ -136,24 +139,26 @@ export function computeReminders (
         // No reference event → can't compute relative timing
         status = 'ok';
       } else {
-        // Compute cycle day (day 1 = day of reference event)
-        const daysSinceRef = Math.floor((nowSec - refEvent.time) / 86400);
-        const cycleDay = daysSinceRef + 1;
+        // Cycle day in calendar days (day 1 = the calendar day of the reference event), not
+        // 24-hour steps from its time (B-2026-10-15-3)
+        const refDay = localDayNumber(refEvent.time, timeZone);
+        const today = localDayNumber(nowSec, timeZone);
+        const cycleDay = today - refDay + 1;
         const days = config.relativeDays;
         const minDay = Math.min(...days);
         const maxDay = Math.max(...days);
 
         if (days.includes(cycleDay)) {
           // Check cooldown: if already entered today, suppress
-          if (lastEntry != null && timeSinceLast < 86400) {
+          if (lastEntry != null && localDayNumber(lastEntry, timeZone) === today) {
             status = 'cooldown';
           } else {
             status = 'due';
-            dueDate = refEvent.time + (cycleDay - 1) * 86400;
+            dueDate = startOfLocalDay(today, timeZone);
           }
         } else if (cycleDay === minDay - 1) {
           status = 'upcoming';
-          dueDate = refEvent.time + (minDay - 1) * 86400;
+          dueDate = startOfLocalDay(refDay + minDay - 1, timeZone);
         } else if (cycleDay > maxDay) {
           // Past the target window — if never entered this cycle, overdue
           if (!lastEntry || lastEntry < refEvent.time) {

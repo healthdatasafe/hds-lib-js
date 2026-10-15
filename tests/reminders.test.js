@@ -1,5 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
-import { durationToSeconds, durationToLabel, computeReminders } from '../ts/index.ts';
+import { durationToSeconds, durationToLabel, computeReminders, cycleDayAt } from '../ts/index.ts';
+import { localDayNumber, startOfLocalDay } from '../ts/utils/calendarDay.ts';
 
 describe('[REMX] Reminders', () => {
   // ============ Duration parser ============
@@ -299,6 +300,64 @@ describe('[REMX] Reminders', () => {
       const result = computeReminders([cycleItem, lhItem], events, {}, NOW);
       const lhResult = result.find(r => r.itemKey === 'lh');
       assert.equal(lhResult.status, 'cooldown');
+    });
+  });
+
+  // Cycle days are calendar days in the patient's time zone, not 24-hour steps (B-2026-10-15-3)
+  describe('[CDAX] calendar cycle days', () => {
+    const at = (iso) => Date.parse(iso) / 1000;
+    const ZRH = 'Europe/Zurich';
+
+    it('[CDA1] a start logged in the evening makes the next morning day 2', () => {
+      // 21:00 and 08:00 Zurich (CET, UTC+1): 11 hours apart, but two calendar days
+      assert.equal(cycleDayAt(at('2026-01-06T07:00:00Z'), at('2026-01-05T20:00:00Z'), ZRH), 2);
+    });
+
+    it('[CDA2] a DST change does not move the count', () => {
+      // 2026-03-28 00:30 CET → 2026-04-02 00:15 CEST: 4 d 22 h 45 min, five calendar days later
+      assert.equal(cycleDayAt(at('2026-04-01T22:15:00Z'), at('2026-03-27T23:30:00Z'), ZRH), 6);
+    });
+
+    it('[CDA3] the same instants count in the given time zone', () => {
+      const start = at('2026-01-10T23:30:00Z');
+      const now = at('2026-01-11T00:30:00Z');
+      assert.equal(cycleDayAt(now, start, 'UTC'), 2);
+      assert.equal(cycleDayAt(now, start, 'America/New_York'), 1);
+    });
+
+    it('[CDA4] startOfLocalDay is local midnight, also on a DST day', () => {
+      assert.equal(startOfLocalDay(localDayNumber(at('2026-01-06T07:00:00Z'), ZRH), ZRH), at('2026-01-05T23:00:00Z'));
+      assert.equal(startOfLocalDay(localDayNumber(at('2026-03-29T12:00:00Z'), ZRH), ZRH), at('2026-03-28T23:00:00Z'));
+      assert.equal(startOfLocalDay(localDayNumber(at('2026-03-30T12:00:00Z'), ZRH), ZRH), at('2026-03-29T22:00:00Z'));
+    });
+
+    function lhSetup () {
+      const cycleItem = { key: 'cycle-start', eventTypes: ['activity/plain'], reminder: null, data: { streamId: 's' } };
+      const lhItem = {
+        key: 'lh',
+        eventTypes: ['concentration/mg-l'],
+        reminder: { relativeTo: 'cycle-start', relativeDays: [3, 4], importance: 'must' },
+        data: { streamId: 'lh' }
+      };
+      return [cycleItem, lhItem];
+    }
+
+    it('[CDA5] computeReminders: due on calendar day 3 after an evening start', () => {
+      // Start 2026-01-05 21:00 Zurich; now 2026-01-07 08:00 is day 3 (only 35 h later)
+      const events = [{ streamId: 's', type: 'activity/plain', time: at('2026-01-05T20:00:00Z') }];
+      const lh = computeReminders(lhSetup(), events, {}, at('2026-01-07T07:00:00Z'), ZRH).find(r => r.itemKey === 'lh');
+      assert.equal(lh.status, 'due');
+      assert.equal(lh.dueDate, at('2026-01-06T23:00:00Z'));
+    });
+
+    it('[CDA6] computeReminders: an entry late yesterday does not count as today', () => {
+      // Day 3 and 4 are targets; LH entered at 23:00 on day 3, now 08:00 on day 4 (9 h later)
+      const events = [
+        { streamId: 's', type: 'activity/plain', time: at('2026-01-05T08:00:00Z') },
+        { streamId: 'lh', type: 'concentration/mg-l', time: at('2026-01-07T22:00:00Z') }
+      ];
+      const lh = computeReminders(lhSetup(), events, {}, at('2026-01-08T07:00:00Z'), ZRH).find(r => r.itemKey === 'lh');
+      assert.equal(lh.status, 'due');
     });
   });
 });
