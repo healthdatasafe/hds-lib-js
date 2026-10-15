@@ -18849,6 +18849,7 @@ function formatString(s) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.computeReminders = computeReminders;
 const duration_ts_1 = __webpack_require__(/*! ../utils/duration.js */ "./ts/utils/duration.ts");
+const calendarDay_ts_1 = __webpack_require__(/*! ../utils/calendarDay.js */ "./ts/utils/calendarDay.ts");
 const IMPORTANCE_ORDER = { may: 0, should: 1, must: 2 };
 function maxImportance(a, b) {
     const va = IMPORTANCE_ORDER[a || 'may'] || 0;
@@ -18907,8 +18908,9 @@ function findLastEvent(itemDef, events) {
  * @param events - all events to search for last entries
  * @param overrides - optional collector/user overrides (matched by itemKey in the ReminderSource)
  * @param now - current time in unix seconds (defaults to Date.now()/1000)
+ * @param timeZone - IANA time zone whose calendar days `relativeDays` count (defaults to the runtime's)
  */
-function computeReminders(itemDefs, events, overrides, now) {
+function computeReminders(itemDefs, events, overrides, now, timeZone) {
     const nowSec = now ?? Math.floor(Date.now() / 1000);
     const results = [];
     // Pre-compute last events for relative lookups
@@ -18943,25 +18945,27 @@ function computeReminders(itemDefs, events, overrides, now) {
                 status = 'ok';
             }
             else {
-                // Compute cycle day (day 1 = day of reference event)
-                const daysSinceRef = Math.floor((nowSec - refEvent.time) / 86400);
-                const cycleDay = daysSinceRef + 1;
+                // Cycle day in calendar days (day 1 = the calendar day of the reference event), not
+                // 24-hour steps from its time (B-2026-10-15-3)
+                const refDay = (0, calendarDay_ts_1.localDayNumber)(refEvent.time, timeZone);
+                const today = (0, calendarDay_ts_1.localDayNumber)(nowSec, timeZone);
+                const cycleDay = today - refDay + 1;
                 const days = config.relativeDays;
                 const minDay = Math.min(...days);
                 const maxDay = Math.max(...days);
                 if (days.includes(cycleDay)) {
                     // Check cooldown: if already entered today, suppress
-                    if (lastEntry != null && timeSinceLast < 86400) {
+                    if (lastEntry != null && (0, calendarDay_ts_1.localDayNumber)(lastEntry, timeZone) === today) {
                         status = 'cooldown';
                     }
                     else {
                         status = 'due';
-                        dueDate = refEvent.time + (cycleDay - 1) * 86400;
+                        dueDate = (0, calendarDay_ts_1.startOfLocalDay)(today, timeZone);
                     }
                 }
                 else if (cycleDay === minDay - 1) {
                     status = 'upcoming';
-                    dueDate = refEvent.time + (minDay - 1) * 86400;
+                    dueDate = (0, calendarDay_ts_1.startOfLocalDay)(refDay + minDay - 1, timeZone);
                 }
                 else if (cycleDay > maxDay) {
                     // Past the target window — if never entered this cycle, overdue
@@ -24239,7 +24243,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -24264,6 +24268,8 @@ exports.toolkit = toolkit;
 const duration_ts_1 = __webpack_require__(/*! ./utils/duration.js */ "./ts/utils/duration.ts");
 Object.defineProperty(exports, "durationToSeconds", ({ enumerable: true, get: function () { return duration_ts_1.durationToSeconds; } }));
 Object.defineProperty(exports, "durationToLabel", ({ enumerable: true, get: function () { return duration_ts_1.durationToLabel; } }));
+const calendarDay_ts_1 = __webpack_require__(/*! ./utils/calendarDay.js */ "./ts/utils/calendarDay.ts");
+Object.defineProperty(exports, "cycleDayAt", ({ enumerable: true, get: function () { return calendarDay_ts_1.cycleDayAt; } }));
 const reminders_ts_1 = __webpack_require__(/*! ./HDSModel/reminders.js */ "./ts/HDSModel/reminders.ts");
 Object.defineProperty(exports, "computeReminders", ({ enumerable: true, get: function () { return reminders_ts_1.computeReminders; } }));
 const eventToShortText_ts_1 = __webpack_require__(/*! ./HDSModel/eventToShortText.js */ "./ts/HDSModel/eventToShortText.ts");
@@ -24324,6 +24330,7 @@ const HDSLib = {
     logger,
     durationToSeconds: duration_ts_1.durationToSeconds,
     durationToLabel: duration_ts_1.durationToLabel,
+    cycleDayAt: calendarDay_ts_1.cycleDayAt,
     computeReminders: reminders_ts_1.computeReminders,
     eventToShortText: eventToShortText_ts_1.eventToShortText,
     formatEventDate: eventToShortText_ts_1.formatEventDate,
@@ -25676,6 +25683,75 @@ function deepFreeze(object) {
         }
     }
     return Object.freeze(object);
+}
+
+
+/***/ },
+
+/***/ "./ts/utils/calendarDay.ts"
+/*!*********************************!*\
+  !*** ./ts/utils/calendarDay.ts ***!
+  \*********************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * Calendar days in a time zone (B-2026-10-15-3).
+ *
+ * A cycle day is a calendar concept in the patient's time zone, not a count of 24-hour steps from
+ * the cycle-start event: a period start logged at 21:00 makes the next morning day 2, and a DST
+ * change must not move a day boundary. Times are unix seconds; `timeZone` is an IANA name and
+ * defaults to the runtime's own (the patient's browser in the webapp).
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.localDayNumber = localDayNumber;
+exports.startOfLocalDay = startOfLocalDay;
+exports.cycleDayAt = cycleDayAt;
+const SECONDS_PER_DAY = 86400;
+const formatters = new Map();
+function formatter(timeZone) {
+    const key = timeZone ?? '';
+    let f = formatters.get(key);
+    if (f == null) {
+        f = new Intl.DateTimeFormat('en-US', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hourCycle: 'h23'
+        });
+        formatters.set(key, f);
+    }
+    return f;
+}
+/** Wall-clock time of `time` in `timeZone`, read as if it were UTC (unix seconds). */
+function wallClockAsUtc(time, timeZone) {
+    const parts = formatter(timeZone).formatToParts(new Date(time * 1000));
+    const get = (type) => Number(parts.find(p => p.type === type)?.value);
+    return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second')) / 1000;
+}
+/** The calendar date of `time` in `timeZone`, as a day number (days since 1970-01-01). */
+function localDayNumber(time, timeZone) {
+    return Math.floor(wallClockAsUtc(time, timeZone) / SECONDS_PER_DAY);
+}
+/** Unix time of the first second of calendar day `dayNumber` in `timeZone`. */
+function startOfLocalDay(dayNumber, timeZone) {
+    const midnightUtc = dayNumber * SECONDS_PER_DAY;
+    // Two passes: the offset at a first guess, then at the corrected time (DST).
+    let start = midnightUtc - (wallClockAsUtc(midnightUtc, timeZone) - midnightUtc);
+    start = midnightUtc - (wallClockAsUtc(start, timeZone) - start);
+    return start;
+}
+/**
+ * Cycle day of `time` for a cycle that started at `cycleStart`: 1 on the calendar day of the start,
+ * 2 on the next calendar day, and so on, in `timeZone`.
+ */
+function cycleDayAt(time, cycleStart, timeZone) {
+    return localDayNumber(time, timeZone) - localDayNumber(cycleStart, timeZone) + 1;
 }
 
 
@@ -38983,6 +39059,8 @@ describe('[LOGX] Logger', function () {
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/utils/calendarDay.ts */ "./ts/utils/calendarDay.ts");
+
 
 
 
@@ -39284,6 +39362,64 @@ describe('[REMX] Reminders', () => {
       const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)([cycleItem, lhItem], events, {}, NOW);
       const lhResult = result.find(r => r.itemKey === 'lh');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lhResult.status, 'cooldown');
+    });
+  });
+
+  // Cycle days are calendar days in the patient's time zone, not 24-hour steps (B-2026-10-15-3)
+  describe('[CDAX] calendar cycle days', () => {
+    const at = (iso) => Date.parse(iso) / 1000;
+    const ZRH = 'Europe/Zurich';
+
+    it('[CDA1] a start logged in the evening makes the next morning day 2', () => {
+      // 21:00 and 08:00 Zurich (CET, UTC+1): 11 hours apart, but two calendar days
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cycleDayAt)(at('2026-01-06T07:00:00Z'), at('2026-01-05T20:00:00Z'), ZRH), 2);
+    });
+
+    it('[CDA2] a DST change does not move the count', () => {
+      // 2026-03-28 00:30 CET → 2026-04-02 00:15 CEST: 4 d 22 h 45 min, five calendar days later
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cycleDayAt)(at('2026-04-01T22:15:00Z'), at('2026-03-27T23:30:00Z'), ZRH), 6);
+    });
+
+    it('[CDA3] the same instants count in the given time zone', () => {
+      const start = at('2026-01-10T23:30:00Z');
+      const now = at('2026-01-11T00:30:00Z');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cycleDayAt)(now, start, 'UTC'), 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cycleDayAt)(now, start, 'America/New_York'), 1);
+    });
+
+    it('[CDA4] startOfLocalDay is local midnight, also on a DST day', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.startOfLocalDay)((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.localDayNumber)(at('2026-01-06T07:00:00Z'), ZRH), ZRH), at('2026-01-05T23:00:00Z'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.startOfLocalDay)((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.localDayNumber)(at('2026-03-29T12:00:00Z'), ZRH), ZRH), at('2026-03-28T23:00:00Z'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.startOfLocalDay)((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.localDayNumber)(at('2026-03-30T12:00:00Z'), ZRH), ZRH), at('2026-03-29T22:00:00Z'));
+    });
+
+    function lhSetup () {
+      const cycleItem = { key: 'cycle-start', eventTypes: ['activity/plain'], reminder: null, data: { streamId: 's' } };
+      const lhItem = {
+        key: 'lh',
+        eventTypes: ['concentration/mg-l'],
+        reminder: { relativeTo: 'cycle-start', relativeDays: [3, 4], importance: 'must' },
+        data: { streamId: 'lh' }
+      };
+      return [cycleItem, lhItem];
+    }
+
+    it('[CDA5] computeReminders: due on calendar day 3 after an evening start', () => {
+      // Start 2026-01-05 21:00 Zurich; now 2026-01-07 08:00 is day 3 (only 35 h later)
+      const events = [{ streamId: 's', type: 'activity/plain', time: at('2026-01-05T20:00:00Z') }];
+      const lh = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(lhSetup(), events, {}, at('2026-01-07T07:00:00Z'), ZRH).find(r => r.itemKey === 'lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lh.status, 'due');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lh.dueDate, at('2026-01-06T23:00:00Z'));
+    });
+
+    it('[CDA6] computeReminders: an entry late yesterday does not count as today', () => {
+      // Day 3 and 4 are targets; LH entered at 23:00 on day 3, now 08:00 on day 4 (9 h later)
+      const events = [
+        { streamId: 's', type: 'activity/plain', time: at('2026-01-05T08:00:00Z') },
+        { streamId: 'lh', type: 'concentration/mg-l', time: at('2026-01-07T22:00:00Z') }
+      ];
+      const lh = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(lhSetup(), events, {}, at('2026-01-08T07:00:00Z'), ZRH).find(r => r.itemKey === 'lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lh.status, 'due');
     });
   });
 });
