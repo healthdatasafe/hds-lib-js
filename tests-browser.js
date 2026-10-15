@@ -24243,7 +24243,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -24270,6 +24270,8 @@ Object.defineProperty(exports, "durationToSeconds", ({ enumerable: true, get: fu
 Object.defineProperty(exports, "durationToLabel", ({ enumerable: true, get: function () { return duration_ts_1.durationToLabel; } }));
 const calendarDay_ts_1 = __webpack_require__(/*! ./utils/calendarDay.js */ "./ts/utils/calendarDay.ts");
 Object.defineProperty(exports, "cycleDayAt", ({ enumerable: true, get: function () { return calendarDay_ts_1.cycleDayAt; } }));
+const cyclePhase_ts_1 = __webpack_require__(/*! ./utils/cyclePhase.js */ "./ts/utils/cyclePhase.ts");
+Object.defineProperty(exports, "cyclePhaseAt", ({ enumerable: true, get: function () { return cyclePhase_ts_1.cyclePhaseAt; } }));
 const reminders_ts_1 = __webpack_require__(/*! ./HDSModel/reminders.js */ "./ts/HDSModel/reminders.ts");
 Object.defineProperty(exports, "computeReminders", ({ enumerable: true, get: function () { return reminders_ts_1.computeReminders; } }));
 const eventToShortText_ts_1 = __webpack_require__(/*! ./HDSModel/eventToShortText.js */ "./ts/HDSModel/eventToShortText.ts");
@@ -24331,6 +24333,7 @@ const HDSLib = {
     durationToSeconds: duration_ts_1.durationToSeconds,
     durationToLabel: duration_ts_1.durationToLabel,
     cycleDayAt: calendarDay_ts_1.cycleDayAt,
+    cyclePhaseAt: cyclePhase_ts_1.cyclePhaseAt,
     computeReminders: reminders_ts_1.computeReminders,
     eventToShortText: eventToShortText_ts_1.eventToShortText,
     formatEventDate: eventToShortText_ts_1.formatEventDate,
@@ -25752,6 +25755,125 @@ function startOfLocalDay(dayNumber, timeZone) {
  */
 function cycleDayAt(time, cycleStart, timeZone) {
     return localDayNumber(time, timeZone) - localDayNumber(cycleStart, timeZone) + 1;
+}
+
+
+/***/ },
+
+/***/ "./ts/utils/cyclePhase.ts"
+/*!********************************!*\
+  !*** ./ts/utils/cyclePhase.ts ***!
+  \********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.cyclePhaseAt = cyclePhaseAt;
+/**
+ * Menstrual cycle phase, derived from the `fertility-cycles-*` boundary items, never stored (data-model
+ * `documentation/MENSTRUAL-CYCLE.md`, "Why no cycle-day or cycle-phase item?"). Everything is counted in calendar
+ * days of `timeZone` (the patient's), and a day the recorded boundaries do not decide has no phase: this never
+ * guesses.
+ */
+const calendarDay_ts_1 = __webpack_require__(/*! ./calendarDay.js */ "./ts/utils/calendarDay.ts");
+const STREAM = {
+    start: 'fertility-cycles-start',
+    periodEnd: 'fertility-cycles-period',
+    fertileWindow: 'fertility-cycles-fertile-window',
+    ovulation: 'fertility-cycles-ovulation'
+};
+const EVENT_TYPE = 'activity/plain';
+/** `fertility-cycles-start` duration limit (amenorrhea threshold): an open cycle stops after this many days. */
+const OPEN_CYCLE_MAX_DAYS = 90;
+const NO_PHASE = { phase: null, basis: 'unknown', cycleDay: null, cycleStart: null, cycleEnd: null };
+/** In the stream, wherever it sits in `streamIds` (an event may carry several). */
+function inStream(e, stream) {
+    return e.streamId === stream || (e.streamIds?.includes(stream) ?? false);
+}
+/** One event per day: the longest duration, then the latest modified. Sorted by day. */
+function byDay(events, timeZone) {
+    const days = new Map();
+    for (const event of events) {
+        const day = (0, calendarDay_ts_1.localDayNumber)(event.time, timeZone);
+        const kept = days.get(day);
+        if (kept == null ||
+            (event.duration ?? 0) > (kept.duration ?? 0) ||
+            ((event.duration ?? 0) === (kept.duration ?? 0) && (event.modified ?? 0) > (kept.modified ?? 0))) {
+            days.set(day, event);
+        }
+    }
+    return [...days.entries()].sort((a, b) => a[0] - b[0]).map(([day, event]) => ({ day, event }));
+}
+function basisOf(used) {
+    const values = used.map(e => e.clientData?.hdsBasis);
+    if (values.includes('predicted'))
+        return 'predicted';
+    if (values.length > 0 && values.every(v => v === 'confirmed'))
+        return 'confirmed';
+    return 'unknown';
+}
+/**
+ * The cycle phase on the calendar day of `time`.
+ *
+ * A cycle runs from a `fertility-cycles-start` day to the day before the next one (its `duration` never bounds a
+ * phase); an open cycle stops after 90 days. A boundary belongs to the cycle containing its own day, the earliest
+ * when there are several. Phases: `menstrual` on the start day and through the period-end day; `fertile` on the
+ * fertile-window days (first and last inclusive) and the ovulation day; `follicular` after the period end and before
+ * the first fertile day; `luteal` after the ovulation day. Any other day has `phase: null`.
+ *
+ * @param time - unix seconds
+ * @param events - the patient's `fertility-cycles-*` events, any order (others are ignored)
+ * @param timeZone - IANA time zone of the patient (defaults to the runtime's)
+ */
+function cyclePhaseAt(time, events, timeZone) {
+    const live = events.filter(e => e != null && !e.trashed && e.type === EVENT_TYPE);
+    const of = (stream) => live.filter(e => inStream(e, stream));
+    const today = (0, calendarDay_ts_1.localDayNumber)(time, timeZone);
+    const starts = byDay(of(STREAM.start), timeZone);
+    let startIdx = -1;
+    while (startIdx + 1 < starts.length && starts[startIdx + 1].day <= today)
+        startIdx++;
+    if (startIdx < 0)
+        return { ...NO_PHASE };
+    const start = starts[startIdx];
+    const next = starts[startIdx + 1];
+    const lastDay = next != null ? next.day - 1 : start.day + OPEN_CYCLE_MAX_DAYS - 1;
+    if (today > lastDay)
+        return { ...NO_PHASE };
+    const result = (phase, used) => ({
+        phase,
+        basis: phase == null ? 'unknown' : basisOf(used),
+        cycleDay: today - start.day + 1,
+        cycleStart: (0, calendarDay_ts_1.startOfLocalDay)(start.day, timeZone),
+        cycleEnd: next != null ? (0, calendarDay_ts_1.startOfLocalDay)(next.day, timeZone) : null
+    });
+    const inCycle = (stream) => byDay(of(stream), timeZone).find(d => d.day >= start.day && d.day <= lastDay);
+    const window = inCycle(STREAM.fertileWindow);
+    const ovulation = inCycle(STREAM.ovulation);
+    const windowEnd = window != null
+        ? Math.min((0, calendarDay_ts_1.localDayNumber)(window.event.time + (window.event.duration ?? 0), timeZone), lastDay)
+        : null;
+    // The first fertile day: the window's start or the ovulation day, whichever comes first
+    const firstFertile = window != null && ovulation != null ? (ovulation.day < window.day ? ovulation : window) : (window ?? ovulation);
+    let periodEnd = inCycle(STREAM.periodEnd);
+    if (periodEnd != null && firstFertile != null && periodEnd.day >= firstFertile.day)
+        periodEnd = undefined;
+    if (today === start.day)
+        return result('menstrual', [start.event]);
+    if (periodEnd != null && today <= periodEnd.day)
+        return result('menstrual', [start.event, periodEnd.event]);
+    if (window != null && windowEnd != null && today >= window.day && today <= windowEnd)
+        return result('fertile', [window.event]);
+    if (ovulation != null && today === ovulation.day)
+        return result('fertile', [ovulation.event]);
+    // Luteal only once the fertile days are over: an ovulation recorded before a window decides nothing in between
+    if (ovulation != null && today > ovulation.day && (windowEnd == null || today > windowEnd))
+        return result('luteal', [ovulation.event]);
+    if (periodEnd != null && firstFertile != null && today > periodEnd.day && today < firstFertile.day) {
+        return result('follicular', [periodEnd.event, firstFertile.event]);
+    }
+    return result(null, []);
 }
 
 
@@ -36670,6 +36792,142 @@ describe('[CONV] HDSModel Conversions', function () {
 
 /***/ },
 
+/***/ "./tests/cyclePhase.test.js"
+/*!**********************************!*\
+  !*** ./tests/cyclePhase.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+// Phase derivation from the fertility-cycles-* boundary items (data-model MENSTRUAL-CYCLE.md)
+describe('[CPHX] cyclePhaseAt', () => {
+  const ZRH = 'Europe/Zurich';
+  const DAY = 86400;
+  // 2026-01-05 10:00 Zurich (CET, UTC+1) = day 1 of the cycle below
+  const D1 = Date.parse('2026-01-05T09:00:00Z') / 1000;
+  const day = (n, hour = 10) => D1 + (n - 1) * DAY + (hour - 10) * 3600;
+
+  const ev = (streamId, time, extra = {}) => ({ streamId, type: 'activity/plain', time, ...extra });
+  const start = (n, extra) => ev('fertility-cycles-start', day(n), extra);
+  const periodEnd = (n, extra) => ev('fertility-cycles-period', day(n), extra);
+  const window = (n, days, extra) => ev('fertility-cycles-fertile-window', day(n), { duration: days * DAY, ...extra });
+  const ovulation = (n, extra) => ev('fertility-cycles-ovulation', day(n), extra);
+  const phaseOn = (n, events) => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cyclePhaseAt)(day(n), events, ZRH);
+
+  // A full cycle: start day 1, period end day 5, window days 10-16, ovulation day 15, next start day 29
+  const full = [start(1), periodEnd(5), window(10, 6), ovulation(15), start(29)];
+
+  it('[CPH1] each phase over a full cycle', () => {
+    const phases = [1, 5, 6, 9, 10, 16, 17, 28].map(n => phaseOn(n, full).phase);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases, ['menstrual', 'menstrual', 'follicular', 'follicular', 'fertile', 'fertile', 'luteal', 'luteal']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(29, full).cycleDay, 1);
+    const r = phaseOn(12, full);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.cycleDay, 12);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.cycleStart, Date.parse('2026-01-04T23:00:00Z') / 1000);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.cycleEnd, Date.parse('2026-02-01T23:00:00Z') / 1000);
+  });
+
+  it('[CPH2] never guesses: no period end, no ovulation', () => {
+    const events = [start(1), window(10, 6)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, events).phase, null); // menstrual or follicular: unknown
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, events).basis, 'unknown');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(12, events).phase, 'fertile');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(20, events).phase, null); // no luteal without ovulation
+  });
+
+  it('[CPH3] the ovulation day is fertile without a window; days after it are luteal', () => {
+    const events = [start(1), periodEnd(5), ovulation(14)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(10, events).phase, 'follicular');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(14, events).phase, 'fertile');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(15, events).phase, 'luteal');
+  });
+
+  it('[CPH4] days between a window and a later ovulation have no phase', () => {
+    const events = [start(1), periodEnd(5), window(8, 3), ovulation(14)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(12, events).phase, null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(14, events).phase, 'fertile');
+  });
+
+  it('[CPH5] calendar days: an evening start makes the next morning day 2', () => {
+    const events = [ev('fertility-cycles-start', day(1, 21))];
+    const r = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cyclePhaseAt)(day(2, 8), events, ZRH);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.cycleDay, 2);
+  });
+
+  it('[CPH6] only the next start ends a cycle; an open cycle stops after 90 days', () => {
+    const open = [start(1, { duration: 20 * DAY }), periodEnd(5), ovulation(15)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(40, open).phase, 'luteal'); // duration does not end the cycle
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(90, open).cycleDay, 90);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(91, open).phase, null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(91, open).cycleDay, null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(1, open).cycleEnd, null);
+  });
+
+  it('[CPH7] no start before the time: no cycle', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(5, [start(10)]), { phase: null, basis: 'unknown', cycleDay: null, cycleStart: null, cycleEnd: null });
+  });
+
+  it('[CPH8] basis: predicted wins, confirmed only when all are confirmed, absent is unknown', () => {
+    const c = { clientData: { hdsBasis: 'confirmed' } };
+    const p = { clientData: { hdsBasis: 'predicted' } };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, [start(1), ovulation(15, c)]).basis, 'confirmed');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, [start(1), ovulation(15, p)]).basis, 'predicted');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, [start(1), ovulation(15)]).basis, 'unknown');
+    // follicular rests on the period end and the first fertile day
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(7, [start(1), periodEnd(5, c), window(10, 6, p)]).basis, 'predicted');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(7, [start(1), periodEnd(5, c), window(10, 6, c)]).basis, 'confirmed');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(7, [start(1), periodEnd(5), window(10, 6, c)]).basis, 'unknown');
+  });
+
+  it('[CPH9] boundaries: own cycle only, earliest kept, a period end at or after the first fertile day ignored', () => {
+    // An ovulation in the previous cycle does not make this one luteal
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(29, [start(1), ovulation(15), start(29)]).phase, 'menstrual');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(31, [start(1), ovulation(15), start(29)]).phase, null);
+    // Two ovulations in one cycle: the earliest counts
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, [start(1), ovulation(15), ovulation(18)]).phase, 'luteal');
+    // A window spilling past the next start is clipped there
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(29, [start(1), window(25, 6), start(29)]).phase, 'menstrual');
+    // A period end on the first fertile day is ignored: days before the window have no phase
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(4, [start(1), periodEnd(10), window(10, 6)]).phase, null);
+  });
+
+  it('[CPHA] ignores other streams, other types and trashed events', () => {
+    const events = [start(1), periodEnd(5), ovulation(15, { trashed: true }), ev('fertility-cycles-ovulation', day(14), { type: 'note/txt' }), ev('other', day(14))];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, events).phase, null);
+  });
+
+  it('[CPHB] the same instants count in the given time zone', () => {
+    // 2026-01-05 23:30Z: 6 Jan in Zurich, 5 Jan in New York
+    const events = [ev('fertility-cycles-start', Date.parse('2026-01-05T23:30:00Z') / 1000)];
+    const t = Date.parse('2026-01-06T12:00:00Z') / 1000;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cyclePhaseAt)(t, events, ZRH).cycleDay, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cyclePhaseAt)(t, events, 'America/New_York').cycleDay, 2);
+  });
+
+  it('[CPHC] a boundary event counts in any of its streams', () => {
+    const events = [start(1), periodEnd(5), { streamIds: ['other', 'fertility-cycles-ovulation'], type: 'activity/plain', time: day(15) }];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, events).phase, 'luteal');
+  });
+
+  it('[CPHD] an ovulation before the window: the days in between have no phase', () => {
+    const events = [start(1), periodEnd(5), ovulation(12), window(14, 5)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(10, events).phase, 'follicular');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(12, events).phase, 'fertile');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(13, events).phase, null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, events).phase, 'fertile');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(20, events).phase, 'luteal');
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/datasetTemplate.test.js"
 /*!***************************************!*\
   !*** ./tests/datasetTemplate.test.js ***!
@@ -40108,12 +40366,14 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
 /* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
 /* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
+
 
 
 
