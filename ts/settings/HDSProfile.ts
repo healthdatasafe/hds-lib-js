@@ -115,6 +115,11 @@ let _hooked = false;
 /** @internal — tracks which streams have been verified/created */
 let _ensuredStreams: Set<string> = new Set();
 
+/** @internal The connection HDSProfile is hooked to, or null (used by `saveLanguage`). */
+export function getHookedProfileConnection (): Connection | null {
+  return _connection;
+}
+
 /**
  * Check if event type matches a field's eventType (supports `picture/*` wildcard).
  */

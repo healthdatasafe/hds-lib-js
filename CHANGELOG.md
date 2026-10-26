@@ -16,6 +16,11 @@
   `preferred-input-{itemKey}` shape, the settings event's `content.itemKey`, and the display twin apps already write);
   `getPreferredInput` now falls back to the converter-model key (`preferred-input-<converter-engine.models>`, any
   convertible item) when the item key is not set. Display (`preferred-display-*`) has no fallback. Tests `[PREF-K1-5]`.
+- **`saveLanguage(locale, { connection? })`** (accountPreferences): writes the account-level `preferredLocales`
+  (`HDSProfile`, `[locale]`) and, best effort, the core `account.language` (platform mail), the dual write the account
+  app's Preferences page does, so any app with a language switch keeps both in step. Resolves `{ profileSaved: true,
+  coreLanguageSaved, coreError? }`; a refused or failed core update never fails the save. Type `SaveLanguageResult`.
+  Documented in `docs/settings.md`. Tests `[ACCL1-5]`, `[ACCLL1]` (dev API).
 - **`formatEventDate(timeSec, { year?, weekday?, locale? })`**: `year: false` leaves the year out (`15.01.`,
   `15/01`, `01/15`, `01-15`; ISO fallback `01-15`), `weekday: true` puts the short weekday name first in the first
   preferred locale (`Mon 15.01.2024`, `lun. 15.01.`). Without options the output is unchanged; the format is still
