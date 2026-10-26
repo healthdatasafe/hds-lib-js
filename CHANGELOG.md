@@ -21,6 +21,21 @@
   app's Preferences page does, so any app with a language switch keeps both in step. Resolves `{ profileSaved: true,
   coreLanguageSaved, coreError? }`; a refused or failed core update never fails the save. Type `SaveLanguageResult`.
   Documented in `docs/settings.md`. Tests `[ACCL1-5]`, `[ACCLL1]` (dev API).
+- **`cmcScope`**: sharing one type of data at a time with a connection, over `consent/scope-update-cmc` on the
+  relationship's collectors stream. `stopSharingStream(conn, rel, streamId, { message })` and
+  `shareStreamsAgain(conn, rel, streamIds, { message, level })` write the new permission set with the extra fields
+  in the HDS sub-envelope `content.hds = { removed | added, message }` (never as top-level fields, no new event type)
+  and resolve once the platform applied the change (`peerNotified` false when the connection was not told yet; a
+  change not applied throws). `planStopSharing` refuses a stream shared through a parent or `*` and the last shared
+  stream (revoke instead); `scopeDiff` compares a request with the current grant; `listSharingNotes` /
+  `parseSharingNotes` read stops, re-shares and the connection's requests with their answer. Answers to a request
+  stay on `cmc.acceptScopeUpdate` / `refuseScopeUpdate`. Tests `[CSCP1-22]`; verified end to end on demo (grant
+  changed, `content.hds` delivered to the connection).
+- **`appTemplates.dataName` / `appTemplates.permissionView`** (`appTemplates/permissionLabels.ts`): the data-model
+  name of a shared stream, and a permission read for a person (`kind`, `name`, `label` with "and everything under it"
+  for a parent stream, `level`, `beyondRead`, `inModel`, `hasChildren`, `requesterLabel`), so invitation and sharing
+  screens across apps show the same names and warnings. Types `PermissionView`, `PermissionLabelOptions`. Tests
+  `[PLBL1-7]`.
 - **`formatEventDate(timeSec, { year?, weekday?, locale? })`**: `year: false` leaves the year out (`15.01.`,
   `15/01`, `01/15`, `01-15`; ISO fallback `01-15`), `weekday: true` puts the short weekday name first in the first
   preferred locale (`Mon 15.01.2024`, `lun. 15.01.`). Without options the output is unchanged; the format is still

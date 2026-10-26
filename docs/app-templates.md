@@ -487,6 +487,47 @@ await cmcDataExport.fulfillDataExportRequest(doctorConnection, { collectorStream
 
 `buildDataExportRequestContent` and `parseDataExportEvents` are the pure parts of the same helpers.
 
+### Sharing one type of data at a time
+
+`cmcScope` lets the person stop sharing one stream with a connection, share it again, and read those changes back,
+over the CMC scope-update path. Personal token only (the platform refuses scope updates from app tokens; apps holding
+one hand off to the account app with `cmc.requestScopeUpdate`). Each helper writes a `consent/scope-update-cmc` on
+the relationship's `localCollectorStreamId`; the platform applies the new permission set to the grant (keeping its
+own `:_cmc:*` channel permissions) and delivers the content to the connection.
+
+What the connection is told rides in the HDS sub-envelope `content.hds`, never in new top-level fields:
+`{ removed?: string[], added?: string[], asked?: string[], message?: { en, fr, … } }`.
+
+```javascript
+import { cmc, cmcScope, appTemplates } from 'hds-lib';
+const rel = contact.cmcRelationships[0];     // { accessId, localCollectorStreamId, grantedPermissions }
+
+// Can this stream be stopped on its own? ('not-shared' | 'shared-through-parent' | 'nothing-left' otherwise)
+const plan = cmcScope.planStopSharing(rel.grantedPermissions, 'body-weight');
+
+// Stop / share again: resolve once the grant changed; peerNotified false = changed, connection not told yet
+await cmcScope.stopSharingStream(connection, rel, 'body-weight', { message: { en: '…', fr: '…' } });
+await cmcScope.shareStreamsAgain(connection, rel, ['body-weight'], { message: { en: '…' } });
+
+// The conversation's notes: 'stopped' | 'shared' | 'request' (with its answer), oldest first
+const notes = await cmcScope.listSharingNotes(connection, rel.localCollectorStreamId);
+
+// A connection's request: compare, then answer through cmc
+const diff = cmcScope.scopeDiff(rel.grantedPermissions, request.permissions); // { added, removed, changed }
+await cmc.acceptScopeUpdate(connection, request.id);   // or cmc.refuseScopeUpdate(connection, request.id)
+```
+
+Requests are answered with `cmc.acceptScopeUpdate` / `refuseScopeUpdate`, which write a fixed content: `hds.asked`
+is read by `listSharingNotes` when an answer carries it, but these calls cannot record it.
+
+### Permission labels
+
+`appTemplates.dataName(streamId, { locale?, fallback? })` names the data a stream holds from the data model (the item
+filed there). `appTemplates.permissionView(permission, { locale? })` reads a requested or granted permission for a
+person: `{ kind, name, label, level, beyondRead, inModel, hasChildren, requesterLabel }`. The name always comes from
+the model; a requester's own label (`defaultName`) is only shown quoted when the model does not know the stream
+(`inModel: false`), so a wide grant cannot pose as a narrow one. `beyondRead` flags a level above `read` and `*`.
+
 ---
 
 ## Contact
