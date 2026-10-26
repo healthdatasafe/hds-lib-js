@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- **`formatEventDate(timeSec, { year?, weekday?, locale? })`**: `year: false` leaves the year out (`15.01.`,
+  `15/01`, `01/15`, `01-15`; ISO fallback `01-15`), `weekday: true` puts the short weekday name first in the first
+  preferred locale (`Mon 15.01.2024`, `lun. 15.01.`). Without options the output is unchanged; the format is still
+  resolved through `resolveAccountPreference('dateFormat')`. Type `FormatEventDateOptions`. Tests `[FEDO1-4]`.
+
 ### Changed
 - **`localizeText` takes a `Localizable`** (new exported type, with `localizableText`): `localizableText` or any
   per-locale map (`Record<string, string | undefined>`), so data-model texts, CMC titles and app dictionaries need no

@@ -1,4 +1,4 @@
-import { localizeText } from '../localizeText.ts';
+import { localizeText, getPreferredLocales } from '../localizeText.ts';
 import { getModel } from './HDSModelInitAndSingleton.ts';
 // HDSSettings is still the right source for per-app settings (the dynamic
 // `preferred-display-*` keys). Account-level preferences go through the resolver.
@@ -6,27 +6,64 @@ import HDSSettings from '../settings/HDSSettings.ts';
 import { resolveAccountPreference, hasAccountPreference } from '../settings/accountPreferences.ts';
 import type { DateFormat } from '../settings/HDSSettings.ts';
 
-const DATE_SEPARATORS: Record<DateFormat, (d: Date) => string> = {
-  'DD.MM.YYYY': (d) => pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
-  'DD/MM/YYYY': (d) => pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(),
-  'MM/DD/YYYY': (d) => pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear(),
-  'YYYY-MM-DD': (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()),
+/** A calendar day: year, month (1-12), day of month. */
+interface DayParts { y: number; m: number; d: number }
+
+const DATE_SEPARATORS: Record<DateFormat, (p: DayParts, year: boolean) => string> = {
+  'DD.MM.YYYY': (p, year) => pad(p.d) + '.' + pad(p.m) + '.' + (year ? p.y : ''),
+  'DD/MM/YYYY': (p, year) => pad(p.d) + '/' + pad(p.m) + (year ? '/' + p.y : ''),
+  'MM/DD/YYYY': (p, year) => pad(p.m) + '/' + pad(p.d) + (year ? '/' + p.y : ''),
+  'YYYY-MM-DD': isoDay,
 };
+
+function isoDay (p: DayParts, year: boolean): string {
+  return (year ? p.y + '-' : '') + pad(p.m) + '-' + pad(p.d);
+}
 
 function pad (n: number): string { return n < 10 ? '0' + n : String(n); }
 
+export interface FormatEventDateOptions {
+  /** Include the year (default `true`). Without it: `15.01.`, `15/01`, `01/15`, `01-15`. */
+  year?: boolean;
+  /** Put the short weekday name first, in `locale` (default `false`): `Mon 15.01.2024`. */
+  weekday?: boolean;
+  /** Locale of the weekday name; defaults to the first preferred locale. */
+  locale?: string;
+}
+
+/** The format to apply, or null when none is resolved (ISO date then). */
+function resolvedDateFormat (): DateFormat | null {
+  if (!hasAccountPreference('dateFormat')) return null;
+  const fmt = resolveAccountPreference('dateFormat');
+  return DATE_SEPARATORS[fmt] ? fmt : null;
+}
+
+/** A calendar day in the resolved format (ISO date when none), with the options applied. */
+function formatDayParts (p: DayParts, fmt: DateFormat | null, opts: FormatEventDateOptions): string {
+  const year = opts.year !== false;
+  const text = fmt ? DATE_SEPARATORS[fmt](p, year) : isoDay(p, year);
+  if (!opts.weekday) return text;
+  const locale = opts.locale ?? getPreferredLocales()[0] ?? 'en';
+  let name = '';
+  try {
+    // Noon UTC of that calendar day, read in UTC: the weekday of the day itself, whatever the host time zone.
+    name = new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(Date.UTC(p.y, p.m - 1, p.d, 12));
+  } catch { /* unknown locale: no weekday rather than a throw */ }
+  return name ? name + ' ' + text : text;
+}
+
 /**
  * Format a Unix timestamp (seconds) as a date string.
- * Uses the resolved account/app dateFormat when available, otherwise ISO date.
+ * Uses the resolved account/app dateFormat when available (local calendar day), otherwise the ISO date (UTC).
+ * `opts.year: false` leaves the year out, `opts.weekday: true` puts the short weekday name first.
  */
-export function formatEventDate (timeSec: number): string {
+export function formatEventDate (timeSec: number, opts: FormatEventDateOptions = {}): string {
   const d = new Date(timeSec * 1000);
-  if (hasAccountPreference('dateFormat')) {
-    const fmt = resolveAccountPreference('dateFormat');
-    const formatter = DATE_SEPARATORS[fmt];
-    if (formatter) return formatter(d);
-  }
-  return d.toISOString().split('T')[0];
+  const fmt = resolvedDateFormat();
+  const parts: DayParts = fmt
+    ? { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() }
+    : { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+  return formatDayParts(parts, fmt, opts);
 }
 
 /**
