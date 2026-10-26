@@ -8,6 +8,13 @@
   preferred locale (`Mon 15.01.2024`, `lun. 15.01.`). Without options the output is unchanged; the format is still
   resolved through `resolveAccountPreference('dateFormat')`. Type `FormatEventDateOptions`. Tests `[FEDO1-4]`.
 
+### Fixed
+- **`eventToShortText` shows a `date/iso-8601` value as the stored date** (B-2026-10-26-6): a date item whose
+  content is a `YYYY-MM-DD` string (the date of birth) rendered the event's entry time. The stored day is now read as
+  written (no time-zone shift) and formatted with the resolved date format; with no stored date, or an unparseable
+  one, the event time is used as before. Also applies without an itemDef (eventType `date/iso-8601`). Tests
+  `[EST7D1-5]`.
+
 ### Changed
 - **`localizeText` takes a `Localizable`** (new exported type, with `localizableText`): `localizableText` or any
   per-locale map (`Record<string, string | undefined>`), so data-model texts, CMC titles and app dictionaries need no

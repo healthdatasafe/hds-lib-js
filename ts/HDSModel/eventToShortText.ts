@@ -67,6 +67,20 @@ export function formatEventDate (timeSec: number, opts: FormatEventDateOptions =
 }
 
 /**
+ * Format a calendar date stored as content (`date/iso-8601`, e.g. a date of birth: `"1990-04-12"`) in the
+ * resolved date format. The day is read as written: no time-zone shift. Returns null when the string does not
+ * start with a valid `YYYY-MM-DD`.
+ */
+function formatContentDate (content: unknown): string | null {
+  if (typeof content !== 'string') return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(content);
+  if (!m) return null;
+  const parts: DayParts = { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+  if (parts.m < 1 || parts.m > 12 || parts.d < 1 || parts.d > 31) return null;
+  return formatDayParts(parts, resolvedDateFormat(), {});
+}
+
+/**
  * Format a Unix timestamp (seconds) as a date + time string.
  * Used for checkbox events where the event time IS the data.
  */
@@ -141,8 +155,9 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
   }
 
   if (type === 'date') {
-    // date items store time on the event itself
-    return formatEventDate(event.time);
+    // A date stored as the value (`date/iso-8601`, the date of birth) is the data; otherwise the
+    // event's own time is (B-2026-10-26-6: the entry time was shown instead of the stored date).
+    return formatContentDate(content) ?? formatEventDate(event.time);
   }
 
   if (type === 'datasource-search') {
@@ -180,6 +195,10 @@ function formatFallback (event: any, content: any, model: any): string | null {
   }
 
   if (typeof content === 'string') {
+    if (event.type === 'date/iso-8601') {
+      const date = formatContentDate(content);
+      if (date) return date;
+    }
     return content.length > 60 ? content.slice(0, 60) + '...' : content;
   }
 

@@ -102,6 +102,42 @@ describe('[ESTX] eventToShortText', () => {
     assert.equal(result, '2024-01-15');
   });
 
+  describe('[EST7D] date/iso-8601 content is the date shown (B-2026-10-26-6)', () => {
+    afterEach(() => {
+      HDSSettings.unhook();
+    });
+
+    const dobEvent = () => {
+      const itemDef = model.itemsDefs.forKey('profile-date-of-birth');
+      // entered on 2024-01-15, born on 1990-04-12
+      return { content: '1990-04-12', streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0], time: 1705320000 };
+    };
+
+    it('[EST7D1] the stored date, not the entry time', () => {
+      assert.equal(eventToShortText(dobEvent()), '1990-04-12');
+    });
+
+    it('[EST7D2] the stored date in the resolved date format, without a time-zone shift', () => {
+      HDSSettings._testInject('dateFormat', 'DD.MM.YYYY');
+      assert.equal(eventToShortText(dobEvent()), '12.04.1990');
+      HDSSettings._testInject('dateFormat', 'MM/DD/YYYY');
+      assert.equal(eventToShortText({ ...dobEvent(), content: '1990-04-12T23:30:00Z' }), '04/12/1990');
+    });
+
+    it('[EST7D3] no stored date: the event time, as before', () => {
+      assert.equal(eventToShortText({ ...dobEvent(), content: null }), '2024-01-15');
+    });
+
+    it('[EST7D4] an unparseable value falls back to the event time', () => {
+      assert.equal(eventToShortText({ ...dobEvent(), content: 'unknown' }), '2024-01-15');
+    });
+
+    it('[EST7D5] without an itemDef, a date/iso-8601 string is formatted too', () => {
+      HDSSettings._testInject('dateFormat', 'DD/MM/YYYY');
+      assert.equal(eventToShortText({ content: '2001-02-03', streamIds: ['not-a-model-stream'], type: 'date/iso-8601', time: 1705320000 }), '03/02/2001');
+    });
+  });
+
   it('[EST8] datasource-search (medication) returns drug label + intake', () => {
     const event = {
       content: {
