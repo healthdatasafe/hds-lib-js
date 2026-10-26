@@ -9,6 +9,13 @@
   target and match null when shown as recorded). Consumers no longer parse `(X <- Y n%)` out of the text.
   `eventToShortText` is unchanged (it returns `.text`). Types `ShortTextOrigin`, `ShortTextResult`. Tests
   `[EST26a-f]`. Event formatters documented in `docs/toolkit.md`.
+- **`CERVICAL_FLUID_METHOD_KEY`** (`preferred-input-body-vulva-mucus-inspect`) and
+  **`CERVICAL_FLUID_METHOD_LEGACY_KEY`** (`preferred-input-cervical-fluid`) (B-2026-10-26-16): hds-lib read the
+  person's charting method under the item key, hds-forms-js `Convertible` under the converter-model key, so a method
+  was honoured in one place and not the other. The item-key form is canonical (it is the documented
+  `preferred-input-{itemKey}` shape, the settings event's `content.itemKey`, and the display twin apps already write);
+  `getPreferredInput` now falls back to the converter-model key (`preferred-input-<converter-engine.models>`, any
+  convertible item) when the item key is not set. Display (`preferred-display-*`) has no fallback. Tests `[PREF-K1-5]`.
 - **`formatEventDate(timeSec, { year?, weekday?, locale? })`**: `year: false` leaves the year out (`15.01.`,
   `15/01`, `01/15`, `01-15`; ISO fallback `01-15`), `weekday: true` puts the short weekday name first in the first
   preferred locale (`Mon 15.01.2024`, `lun. 15.01.`). Without options the output is unchanged; the format is still
