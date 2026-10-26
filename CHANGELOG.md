@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.19.0] - 2026-10-26
+
+### Changed
+- **`@pryv/cmc` 3.21.1** (from 3.20.0; its peer `pryv ^3.3.0` is unchanged, so `pryv` and the other `@pryv/*`
+  packages stay at 3.17.2). Adds group membership (`requestMembership`, `acceptMembership`, `listMembers`,
+  `revokeMembership`, `requestMemberAccess`, `listSweeps`, `getSweepStatus`, ...) and its `errorIds`. Changes to
+  existing calls: `createInvite` now sends `allowUserChoice` when given (it was typed but dropped), `readOffer` also
+  returns `allowUserChoice`, `accessType` and `membership`, `acceptInvite` takes `grantedPermissions`, and
+  `revocationMatches` returns false for a revocation the server marked `superseded`. hds-lib uses none of these.
+
+### Added
+- **Type re-exports `MemberRecord` and `SweepRecord`** from `@pryv/cmc`, so consumers type group membership screens
+  through hds-lib (`import type { MemberRecord, SweepRecord } from 'hds-lib'`).
+
 ## [2.18.0] - 2026-10-15
 
 ### Added

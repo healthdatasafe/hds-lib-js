@@ -52,6 +52,8 @@ export type {
   RelationshipStatus, DelegationError, DelegationErrorId, TokenResult,
   CreateAccountParams, CreateAccountResult
 } from '@pryv/delegation';
+// Group membership (@pryv/cmc 3.21): a group account's members and its offboarding sweeps.
+export type { MemberRecord, SweepRecord } from '@pryv/cmc';
 
 // Plan 45 — top-level type re-exports so consumers can `import type { CustomFieldDeclaration } from 'hds-lib'`.
 export type {

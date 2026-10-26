@@ -1,6 +1,6 @@
 {
   "name": "hds-lib",
-  "version": "2.18.0",
+  "version": "2.19.0",
   "description": "Health Data Safe - Library",
   "type": "module",
   "engines": {
@@ -63,7 +63,7 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
-    "@pryv/cmc": "3.20.0",
+    "@pryv/cmc": "3.21.1",
     "@pryv/delegation": "3.17.2",
     "@pryv/encryption": "3.17.2",
     "@pryv/monitor": "3.17.2",
