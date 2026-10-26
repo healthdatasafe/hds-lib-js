@@ -325,6 +325,34 @@ describe('[ESTX] eventToShortText', () => {
     }
   });
 
+  describe('[EST25] ratio/proportion: a select between hooks, a number as %', () => {
+    const bleeding = (content) => {
+      const itemDef = model.itemsDefs.forKey('body-vulva-bleeding');
+      return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
+    };
+
+    it('[EST25a] a bare select value between hooks reads as the nearest hook label (bleeding)', () => {
+      assert.equal(eventToShortText(bleeding(0.5)), 'Moderate');
+      assert.equal(eventToShortText(bleeding(0.62)), 'Moderate');
+      assert.equal(eventToShortText(bleeding(0.7)), 'Heavy');
+      assert.equal(eventToShortText(bleeding(0.1)), 'Spotting');
+    });
+
+    it('[EST25b] an exact hook is unchanged, and test-result/scale keeps its percentage', () => {
+      assert.equal(eventToShortText(bleeding(0.55)), 'Moderate');
+      assert.equal(eventToShortText({ content: 0.56, streamIds: ['fertility-test-opk'], type: 'test-result/scale' }), 'Positive 56%');
+    });
+
+    it('[EST25c] a ratio/proportion number reads as a percentage', () => {
+      assert.equal(eventToShortText({ content: 0.057, streamIds: ['body-blood-hba1c'], type: 'ratio/proportion' }), '5.7 %');
+      assert.equal(eventToShortText({ content: 1, streamIds: ['body-blood-hba1c'], type: 'ratio/proportion' }), '100 %');
+    });
+
+    it('[EST25d] without an itemDef, a ratio/proportion number reads as a percentage too', () => {
+      assert.equal(eventToShortText({ content: 0.5, streamIds: ['not-a-model-stream'], type: 'ratio/proportion' }), '50 %');
+    });
+  });
+
   it('[EST17a] test-result/scale positive (1)', () => {
     const event = { content: 1, streamIds: ['fertility-test-opk'], type: 'test-result/scale' };
     assert.equal(eventToShortText(event), 'Positive');

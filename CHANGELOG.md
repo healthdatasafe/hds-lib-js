@@ -14,6 +14,12 @@
   written (no time-zone shift) and formatted with the resolved date format; with no stored date, or an unparseable
   one, the event time is used as before. Also applies without an itemDef (eventType `date/iso-8601`). Tests
   `[EST7D1-5]`.
+- **`eventToShortText`: a `ratio/proportion` select value between hooks reads as the nearest hook's label**
+  (bleeding `0.5` → "Moderate", it read `0.5`), as composite fields already did. Scoped to `ratio/proportion`
+  (a 0-1 scale whose options are hooks); `ratio/generic` category selects and `test-result/scale` are unchanged.
+  Test `[EST25a-b]`.
+- **`eventToShortText`: a `ratio/proportion` number reads as a percentage** (HbA1c `0.057` → "5.7 %", it read
+  `0.057`), with or without an itemDef. Test `[EST25c-d]`.
 
 ### Changed
 - **`localizeText` takes a `Localizable`** (new exported type, with `localizableText`): `localizableText` or any

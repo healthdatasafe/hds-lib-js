@@ -234,6 +234,10 @@ function formatNumber (eventType: string, content: number, model: any): string {
   if (eventType === 'test-result/scale') {
     return formatTestResult(content);
   }
+  if (eventType === 'ratio/proportion') {
+    // A proportion (0-1) reads as a percentage: 0.057 → "5.7 %" (rounding drops float noise, e.g. 5.700000000000001).
+    return `${Math.round(content * 100 * 1e6) / 1e6} %`;
+  }
   if (hasAccountPreference('unitSystem')) {
     const system = resolveAccountPreference('unitSystem');
     const result = model.conversions.convert(eventType, content, system);
@@ -309,14 +313,7 @@ function formatComposite (content: any, itemDef: any): string | null {
     // tooltip shows a meaningful label instead of a raw number.
     let opt = fieldDef.options.find((o: any) => o.value === value);
     if (!opt && typeof value === 'number') {
-      let nearest: any = null;
-      let bestDist = Infinity;
-      for (const o of fieldDef.options) {
-        if (typeof o.value !== 'number') continue;
-        const d = Math.abs(o.value - value);
-        if (d < bestDist) { bestDist = d; nearest = o; }
-      }
-      opt = nearest;
+      opt = nearestNumericOption(fieldDef.options, value);
     }
     let valueText: string;
     if (opt?.label) {
@@ -366,7 +363,12 @@ function formatSelect (event: any, content: any, itemDef: any, model?: any): str
 
   const options = itemDef.data.options;
   if (options) {
-    const selected = options.find((o: any) => o.value === valueForSelect);
+    let selected = options.find((o: any) => o.value === valueForSelect);
+    // A `ratio/proportion` select is a 0-1 scale whose options are hooks on it (bleeding: 0.08 … 0.95). A value
+    // imported between hooks (a device's continuous reading) reads as the nearest hook's label, as composites do.
+    if (!selected && prefix === '' && event.type === 'ratio/proportion' && typeof valueForSelect === 'number') {
+      selected = nearestNumericOption(options, valueForSelect);
+    }
     if (selected?.label) {
       const text = typeof selected.label === 'string' ? selected.label : (localizeText(selected.label) || String(valueForSelect));
       const truncated = text.length > 50 ? text.slice(0, 50) + '...' : text;
@@ -377,6 +379,18 @@ function formatSelect (event: any, content: any, itemDef: any, model?: any): str
     return formatNumber(event.type, valueForSelect, model);
   }
   return prefix + String(valueForSelect);
+}
+
+/** The option whose numeric value is closest to `value` (first one on a tie), or null when none is numeric. */
+function nearestNumericOption (options: any[], value: number): any {
+  let nearest: any = null;
+  let bestDist = Infinity;
+  for (const o of options) {
+    if (typeof o.value !== 'number') continue;
+    const d = Math.abs(o.value - value);
+    if (d < bestDist) { bestDist = d; nearest = o; }
+  }
+  return nearest;
 }
 
 /**
