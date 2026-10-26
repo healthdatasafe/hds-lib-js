@@ -33,6 +33,11 @@ HDSLib.localizeText(text); // => "Weight" (falls back to en)
 
 **Alias:** `HDSLib.l(text)` is equivalent to `HDSLib.localizeText(text)`.
 
+**Input type:** `localizeText` takes a `Localizable` (exported type): `localizableText` or any per-locale map
+(`Record<string, string | undefined>`), so data-model texts, CMC titles and app dictionaries need no cast. The `en`
+entry stays required and is checked at run time. A non-null input is typed to return `string`; `null` or
+`undefined` returns `null`.
+
 ## Locale management functions
 
 | Function | Description |

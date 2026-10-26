@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **`localizeText` takes a `Localizable`** (new exported type, with `localizableText`): `localizableText` or any
+  per-locale map (`Record<string, string | undefined>`), so data-model texts, CMC titles and app dictionaries need no
+  cast. Overloaded: a non-null input returns `string`, `null`/`undefined` returns `null`. `en` is still required at
+  run time. Types only, no behaviour change. Test `[LOLZ]`.
+
 ## [2.19.0] - 2026-10-26
 
 ### Changed

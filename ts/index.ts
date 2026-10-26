@@ -27,6 +27,7 @@ import * as cmcFormSpec from './cmc/formSpec.ts';
 import * as cmcAppScope from './cmc/appScope.ts';
 import * as cmcConstants from './cmc/constants.ts';
 import * as cmcDataExport from './cmc/dataExport.ts';
+export type { Localizable, localizableText } from './localizeText.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';

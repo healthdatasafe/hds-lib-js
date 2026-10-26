@@ -134,6 +134,13 @@ describe('[LOCX] Localization', () => {
       assert.equal(localizeText({ en: 'Hello', fr: null }), 'Hello');
       assert.equal(localizeText({ en: 'Hello', fr: undefined }), 'Hello');
     });
+
+    it('[LOLZ] accepts any per-locale map (Localizable): extra locales are ignored, undefined input is null', () => {
+      setPreferredLocales(['fr']);
+      assert.equal(localizeText({ en: 'Hello', de: 'Hallo', fr: 'Bonjour' }), 'Bonjour');
+      assert.equal(localizeText({ en: 'Hello', de: 'Hallo' }), 'Hello');
+      assert.equal(localizeText(undefined), null);
+    });
   });
 
   describe('[LOCN] onPreferredLocalesChange (B-2026-07-10-1)', () => {

@@ -10,6 +10,13 @@ export type localizableText = {
   es?: string;
 };
 
+/**
+ * What `localizeText` accepts: any per-locale text map. Wider than `localizableText` on purpose:
+ * data-model texts, CMC titles (`Record<string, string>`) and app dictionaries all fit without a
+ * cast. The `en` entry is still required, checked at runtime (`localizeText` throws without it).
+ */
+export type Localizable = localizableText | Readonly<Record<string, string | undefined>>;
+
 const supportedLocales = ['en', 'fr', 'es'] as const;
 Object.freeze(supportedLocales);
 let preferredLocales: string[] = [...supportedLocales];
@@ -63,14 +70,18 @@ export function resetPreferredLocales (): void {
  * when a translation is genuinely `null`/`undefined`. Only a missing `en` key
  * throws.
  */
-export function localizeText (textItem: localizableText | null): string | null {
+export function localizeText (textItem: Localizable): string;
+export function localizeText (textItem: Localizable | null | undefined): string | null;
+export function localizeText (textItem: Localizable | null | undefined): string | null {
   if (textItem == null) return null;
-  if (textItem.en == null) throw new HDSLibError('textItems must have an english translation', { textItem });
+  const en = textItem.en;
+  if (en == null) throw new HDSLibError('textItems must have an english translation', { textItem });
+  const texts = textItem as Readonly<Record<string, string | undefined>>;
   for (const l of preferredLocales) {
-    const v = textItem[l as keyof localizableText];
+    const v = texts[l];
     if (v != null) return v;
   }
-  return textItem.en;
+  return en;
 }
 
 /**
