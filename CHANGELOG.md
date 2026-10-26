@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- **`eventToShortTextWithOrigin(event)` → `{ text, origin }`** (B-2026-10-26-17): the same text as
+  `eventToShortText`, plus, for a convertible item, `origin: { sourceKey, sourceName, sourceLabel, targetKey,
+  targetName, match }` (the method the value was recorded in, the method it is shown in, the conversion match 0-100;
+  target and match null when shown as recorded). Consumers no longer parse `(X <- Y n%)` out of the text.
+  `eventToShortText` is unchanged (it returns `.text`). Types `ShortTextOrigin`, `ShortTextResult`. Tests
+  `[EST26a-f]`. Event formatters documented in `docs/toolkit.md`.
 - **`formatEventDate(timeSec, { year?, weekday?, locale? })`**: `year: false` leaves the year out (`15.01.`,
   `15/01`, `01/15`, `01-15`; ISO fallback `01-15`), `weekday: true` puts the short weekday name first in the first
   preferred locale (`Mon 15.01.2024`, `lun. 15.01.`). Without options the output is unchanged; the format is still

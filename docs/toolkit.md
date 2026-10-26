@@ -77,3 +77,40 @@ Returns an array containing the stream's ID and all its descendants' IDs.
 const ids = HDSLib.toolkit.StreamTools.getStreamIdAndChildrenIds(bodyStream);
 // ['body', 'body-weight', 'body-height', ...]
 ```
+
+## Event formatters
+
+Exported at the top level (`import { eventToShortText, eventToShortTextWithOrigin, formatEventDate } from 'hds-lib'`).
+
+### eventToShortText(event)
+
+One short text for an event's value, driven by its itemDef (`getHDSModel().itemsDefs.forEvent`): a select's option
+label (a `ratio/proportion` value between options reads as the nearest one), a number with its unit symbol (a
+`ratio/proportion` number as a percentage, `0.057` → `5.7 %`), a `date/iso-8601` value as the stored date in the
+person's date format, a medication's drug and intake, a convertible observation in the method set by
+`preferred-display-<itemKey>` followed by its origin (`Creamy (Apple Health <- Mira)`).
+
+### eventToShortTextWithOrigin(event)
+
+The same text, plus where a convertible value came from, as fields. Read these instead of parsing the text:
+
+```javascript
+const { text, origin } = eventToShortTextWithOrigin(event);
+// with preferred-display-body-vulva-mucus-inspect = 'appleHealth', a Mira "Creamy" observation:
+// text:   'Creamy (Apple Health <- Mira)'
+// origin: { sourceKey: 'mira', sourceName: 'Mira', sourceLabel: 'Creamy',
+//           targetKey: 'appleHealth', targetName: 'Apple Health', match: 100 }
+```
+
+`origin` is null for non-convertible items. `targetKey` / `targetName` / `match` are null when the value is shown as
+recorded; `match` is 0-100 (the text leaves it out at 100).
+
+### formatEventDate(timeSec, options?)
+
+A day in the resolved date format (`resolveAccountPreference('dateFormat')`), else the ISO date.
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `year` | `true` | `false` leaves the year out: `15.01.`, `15/01`, `01/15`, `01-15` |
+| `weekday` | `false` | `true` puts the short weekday name first: `Mon 15.01.2024`, `lun. 15.01.` |
+| `locale` | first preferred locale | language of the weekday name |

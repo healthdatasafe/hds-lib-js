@@ -103,9 +103,51 @@ export function formatEventDateTime (timeSec: number): string {
  *
  * Without itemDef (fallback): derives unit from eventType symbol if available,
  * for object content produces short textual representation.
+ *
+ * For a convertible item (cervical fluid, mood) the text ends with where the value came from,
+ * e.g. `"Creamy (Apple Health <- Mira)"`; read that as fields with `eventToShortTextWithOrigin`
+ * rather than parsing the text.
  */
 export function eventToShortText (event: any): string | null {
-  if (event == null) return null;
+  return eventToShortTextWithOrigin(event).text;
+}
+
+/**
+ * Where a convertible value shown by `eventToShortText` came from, as fields
+ * (B-2026-10-26-17: consumers parsed it back out of the `(X <- Y n%)` text).
+ */
+export interface ShortTextOrigin {
+  /** Method the value was recorded in (`content.source.key`, e.g. `mira`); null for a raw vector. */
+  sourceKey: string | null;
+  /** That method's localized name (`Mira`); null when there is no source. */
+  sourceName: string | null;
+  /** The recorded observation, localized from the method (`Creamy`); null when there is no source. */
+  sourceLabel: string | null;
+  /** Method the text is shown in when it was converted (`appleHealth`, `_raw`); null when shown as recorded. */
+  targetKey: string | null;
+  /** That method's localized name; null when shown as recorded. */
+  targetName: string | null;
+  /**
+   * How close the conversion is, 0-100 (`round((1 - matchDistance) * 100)`; the text omits it at 100).
+   * Null when the value is shown as recorded (no conversion).
+   */
+  match: number | null;
+}
+
+export interface ShortTextResult {
+  /** Exactly what `eventToShortText` returns. */
+  text: string | null;
+  /** Set for convertible items when a source or a conversion is known; null otherwise. */
+  origin: ShortTextOrigin | null;
+}
+
+/**
+ * `eventToShortText` plus the structured origin of a convertible value: the method it was
+ * recorded in, the method it is shown in, and the match of the conversion. The text is the
+ * same string `eventToShortText` returns.
+ */
+export function eventToShortTextWithOrigin (event: any): ShortTextResult {
+  if (event == null) return { text: null, origin: null };
 
   const model = getModel();
   const itemDef = model.itemsDefs.forEvent(event, false);
@@ -117,30 +159,29 @@ export function eventToShortText (event: any): string | null {
   // composite/object formatters would otherwise reduce to a single bare value).
   if (event.type === 'blood-pressure/mmhg-bpm' && content != null && typeof content === 'object') {
     const bp = formatBloodPressure(content);
-    if (bp) return bp;
+    if (bp) return { text: bp, origin: null };
   }
 
   if (itemDef) {
     // For checkbox/date items, content may be null — the event time IS the data
     if (content == null && itemDef.data.type === 'checkbox') {
-      return formatEventDateTime(event.time);
+      return { text: formatEventDateTime(event.time), origin: null };
     }
     if (content == null && itemDef.data.type === 'date') {
-      return formatEventDate(event.time);
+      return { text: formatEventDate(event.time), origin: null };
     }
-    if (content == null) return null;
-    return formatWithItemDef(event, content, itemDef, model);
+    if (content == null) return { text: null, origin: null };
+    if (itemDef.data.type === 'convertible') {
+      return formatConvertible(content, itemDef, model);
+    }
+    return { text: formatWithItemDef(event, content, itemDef, model), origin: null };
   }
-  if (content == null) return null;
-  return formatFallback(event, content, model);
+  if (content == null) return { text: null, origin: null };
+  return { text: formatFallback(event, content, model), origin: null };
 }
 
 function formatWithItemDef (event: any, content: any, itemDef: any, model: any): string | null {
   const type = itemDef.data.type;
-
-  if (type === 'convertible') {
-    return formatConvertible(event, content, itemDef, model);
-  }
 
   if (type === 'checkbox') {
     return event.type === 'activity/plain' ? 'Yes' : String(content);
@@ -515,10 +556,13 @@ function formatObject (content: any): string | null {
  *   "targetResult (sourceData) 85%" — confidence = round((1 - matchDistance) * 100)
  *   When 100%, omit the percentage.
  * No source: show dimension summary using localized stop labels from converter config.
+ *
+ * Returns the text with its structured origin (`ShortTextOrigin`), null when neither a source
+ * nor a conversion is known.
  */
-function formatConvertible (_event: any, content: any, itemDef: any, model: any): string | null {
+function formatConvertible (content: any, itemDef: any, model: any): ShortTextResult {
   const ce = itemDef.data['converter-engine'];
-  if (!ce) return formatObject(content);
+  if (!ce) return { text: formatObject(content), origin: null };
 
   const itemKey = ce.models;
   const source = content?.source;
@@ -529,6 +573,16 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
     ? resolveObservationLabel(engine, source.key, source.sourceData)
     : formatSourceLabel(source);
   const sourceMethodName = getMethodName(engine, source?.key);
+  const sourceKey: string | null = typeof source?.key === 'string' ? source.key : null;
+  /** The origin of a value shown as recorded (no conversion), or converted into `target`. */
+  const origin = (target: { key: string; name: string; match: number } | null): ShortTextOrigin => ({
+    sourceKey,
+    sourceName: sourceKey ? sourceMethodName : null,
+    sourceLabel: sourceLabel ?? null,
+    targetKey: target?.key ?? null,
+    targetName: target?.name ?? null,
+    match: target?.match ?? null
+  });
   // A conversion needs every dimension: on a partial vector (e.g. mood with only `valence`)
   // the engine invents the missing ones and the confidence comes out NaN (B-2026-10-06-2).
   const vectorComplete = isCompleteVector(engine, vectors);
@@ -541,7 +595,7 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
       if (targetMethod && typeof targetMethod === 'string') {
         // Skip conversion if target method equals source method
         if (source?.key === targetMethod && sourceLabel) {
-          return `${sourceLabel} (${sourceMethodName})`;
+          return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
         }
         if (engine) {
           const result = engine.fromVector(targetMethod, vectors);
@@ -549,10 +603,11 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
           const targetMethodName = getMethodName(engine, targetMethod);
           const confidence = Math.round((1 - result.matchDistance) * 100);
           const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
+          const converted = origin({ key: targetMethod, name: targetMethodName, match: confidence });
           if (sourceMethodName && sourceLabel) {
-            return `${resultLabel} (${targetMethodName} <- ${sourceMethodName}${confStr})`;
+            return { text: `${resultLabel} (${targetMethodName} <- ${sourceMethodName}${confStr})`, origin: converted };
           }
-          return `${resultLabel} (${targetMethodName}${confStr})`;
+          return { text: `${resultLabel} (${targetMethodName}${confStr})`, origin: converted };
         }
       }
     } catch { /* setting not found or engine not loaded, fall through */ }
@@ -560,7 +615,7 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
 
   // No autoConvert: show source observation + method name
   if (sourceLabel) {
-    return `${sourceLabel} (${sourceMethodName})`;
+    return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
   }
 
   // No source — RAW vector input, convert via _raw virtual method
@@ -570,21 +625,24 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
       const resultLabel = resolveObservationLabel(engine, '_raw', result.data);
       const confidence = Math.round((1 - result.matchDistance) * 100);
       const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
-      return `${resultLabel}${confStr}`;
+      return {
+        text: `${resultLabel}${confStr}`,
+        origin: origin({ key: '_raw', name: getMethodName(engine, '_raw'), match: confidence })
+      };
     } catch { /* fall through */ }
   }
   // Partial vector, or no engine loaded: label the dimensions present from the item's own
   // composite options ("Valence: Unpleasant"), never the raw "valence:0.3".
   if (vectors && typeof vectors === 'object' && itemDef.data.composite) {
     const text = formatComposite(vectors, itemDef);
-    if (text) return text;
+    if (text) return { text, origin: null };
   }
   // Fallback: raw dimension summary
   if (vectors && typeof vectors === 'object') {
-    return formatVectorSummary(vectors, itemKey, model);
+    return { text: formatVectorSummary(vectors, itemKey, model), origin: null };
   }
 
-  return formatObject(content);
+  return { text: formatObject(content), origin: null };
 }
 
 /** True when the vector carries a number for every dimension the engine knows. */

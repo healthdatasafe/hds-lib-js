@@ -2,7 +2,7 @@ import { assert } from './test-utils/deps-node.js';
 // Import via the package entry point, like every other test file: a default import
 // straight from the .ts resolves to the module namespace under webpack (no .unhook),
 // which failed the browser suite while Node passed.
-import { eventToShortText, HDSSettings } from '../ts/index.ts';
+import { eventToShortText, eventToShortTextWithOrigin, HDSSettings } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
@@ -670,6 +670,75 @@ describe('[ESTX] eventToShortText', () => {
       // creighton "10KL" has a label in its method definition
       // (method label shortened to bare family name in data-model v1.10.3)
       assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
+    });
+  });
+
+  describe('[EST26] eventToShortTextWithOrigin: the conversion origin as fields (B-2026-10-26-17)', () => {
+    before(async () => {
+      await model.converters.ensureEngine('mood');
+      await model.converters.ensureEngine('cervical-fluid');
+    });
+
+    afterEach(() => {
+      HDSSettings.unhook();
+    });
+
+    it('[EST26a] shown as recorded: source fields, no target, no match; same text as eventToShortText', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+      const { text, origin } = eventToShortTextWithOrigin(event);
+      assert.equal(text, eventToShortText(event));
+      assert.equal(text, 'Creamy (Mira)');
+      assert.deepEqual(origin, { sourceKey: 'mira', sourceName: 'Mira', sourceLabel: 'Creamy', targetKey: null, targetName: null, match: null });
+    });
+
+    it('[EST26b] converted with a perfect match: target fields and match 100 (the text omits it)', async () => {
+      HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+      const { text, origin } = eventToShortTextWithOrigin(event);
+      assert.equal(text, 'Creamy (Apple Health <- Mira)');
+      assert.equal(text, eventToShortText(event));
+      assert.equal(origin.sourceKey, 'mira');
+      assert.equal(origin.sourceName, 'Mira');
+      assert.equal(origin.targetKey, 'appleHealth');
+      assert.equal(origin.targetName, 'Apple Health');
+      assert.equal(origin.match, 100);
+    });
+
+    it('[EST26c] converted with a partial match: the match is the percentage in the text', async () => {
+      HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'billings');
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Watery');
+      const { text, origin } = eventToShortTextWithOrigin(event);
+      assert.equal(origin.targetKey, 'billings');
+      assert.ok(origin.match < 100, `expected a partial match, got ${origin.match}`);
+      assert.ok(text.endsWith(`<- Mira ${origin.match}%)`), `text and match disagree: ${text} / ${origin.match}`);
+    });
+
+    it('[EST26d] same method as the display setting: shown as recorded', async () => {
+      HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
+      const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
+      const { origin } = eventToShortTextWithOrigin(event);
+      assert.equal(origin.sourceKey, 'mira');
+      assert.equal(origin.targetKey, null);
+      assert.equal(origin.match, null);
+    });
+
+    it('[EST26e] a raw vector: no source, shown through _raw with its match', () => {
+      const event = {
+        content: { vectors: { valence: 0.9, arousal: 0.3, dominance: 0.6, socialOrientation: 0, temporalFocus: 0 } },
+        streamIds: ['wellbeing-mood'],
+        type: 'mood/5d-vectors'
+      };
+      const { text, origin } = eventToShortTextWithOrigin(event);
+      assert.equal(text, eventToShortText(event));
+      assert.equal(origin.sourceKey, null);
+      assert.equal(origin.sourceName, null);
+      assert.equal(origin.targetKey, '_raw');
+      assert.equal(typeof origin.match, 'number');
+    });
+
+    it('[EST26f] a non-convertible event has no origin', () => {
+      assert.deepEqual(eventToShortTextWithOrigin({ content: 60, streamIds: ['body-weight'], type: 'mass/kg' }), { text: '60 Kg', origin: null });
+      assert.deepEqual(eventToShortTextWithOrigin(null), { text: null, origin: null });
     });
   });
 
