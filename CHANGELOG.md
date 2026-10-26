@@ -15,6 +15,11 @@
   resolved through `resolveAccountPreference('dateFormat')`. Type `FormatEventDateOptions`. Tests `[FEDO1-4]`.
 
 ### Fixed
+- **`HDSSettings.setDynamic(key, null)` deletes the setting for good** (B-2026-10-26-7): it called `events.delete`
+  once, which only trashes a live event, then expected `eventDeletion` and threw "eventDeletion missing" with the
+  setting left in place. It now trashes then deletes (one call when the event was already trashed meanwhile); a
+  failing delete throws and keeps the setting. Clearing a preference (e.g. "I don't chart") no longer needs a sentinel
+  value such as `_raw`. Tests `[HDSD8]`, `[HDSD8b-d]`, `[HDSDL1]` (dev API).
 - **`eventToShortText` shows a `date/iso-8601` value as the stored date** (B-2026-10-26-6): a date item whose
   content is a `YYYY-MM-DD` string (the date of birth) rendered the event's entry time. The stored day is now read as
   written (no time-zone shift) and formatted with the resolved date format; with no stored date, or an unparseable
