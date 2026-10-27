@@ -215,6 +215,8 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
 
   // number, text, composite, etc.
   if (typeof content === 'number') {
+    const display = itemDef.data?.number?.display;
+    if (display) return formatNumberDisplay(event.type, content, display, model);
     return formatNumber(event.type, content, model);
   }
 
@@ -289,6 +291,27 @@ function formatNumber (eventType: string, content: number, model: any): string {
   }
   const symbol = getSymbol(eventType, model);
   return symbol ? `${content} ${symbol}` : String(content);
+}
+
+/** Significant digits that strip binary-float noise (`0.42 * 100` → 42), far beyond any assay's precision. */
+const FLOAT_NOISE_PRECISION = 12;
+
+/**
+ * Format a number item that declares `number.display` (B-2026-10-26-22), as hds-forms-js
+ * `NumberInput` shows it on entry (`toDisplayText`): the raw value times `multiplier` (default 1),
+ * `precision` decimals when set, else float noise stripped without truncating real decimals; then
+ * `suffix` in place of the eventType symbol (AMH `ng/mL` over `µg/L`, sperm concentration `10⁶/mL`
+ * over `G/L`, HbA1c `0.057` → `5.7 %`). No unit-system conversion: the item states how it reads.
+ */
+function formatNumberDisplay (eventType: string, content: number, display: any, model: any): string {
+  const multiplier: number = typeof display.multiplier === 'number' ? display.multiplier : 1;
+  const scaled = content * multiplier;
+  const text = typeof display.precision === 'number'
+    ? scaled.toFixed(display.precision)
+    : String(Number(scaled.toPrecision(FLOAT_NOISE_PRECISION)));
+  const suffix = display.suffix ? localizeText(display.suffix) : null;
+  const unit = suffix || (multiplier === 1 ? getSymbol(eventType, model) : null);
+  return unit ? `${text} ${unit}` : text;
 }
 
 /**

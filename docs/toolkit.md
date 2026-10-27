@@ -85,8 +85,9 @@ Exported at the top level (`import { eventToShortText, eventToShortTextWithOrigi
 ### eventToShortText(event)
 
 One short text for an event's value, driven by its itemDef (`getHDSModel().itemsDefs.forEvent`): a select's option
-label (a `ratio/proportion` value between options reads as the nearest one), a number with its unit symbol (a
-`ratio/proportion` number as a percentage, `0.057` → `5.7 %`), a `date/iso-8601` value as the stored date in the
+label (a `ratio/proportion` value between options reads as the nearest one), a number with its unit symbol, or as
+its item's `number.display` declares (`multiplier`, `precision`, `suffix`: AMH `2.1 ng/mL`, sperm concentration
+`15 10⁶/mL`; a `ratio/proportion` number without display as a percentage, `0.057` → `5.7 %`), a `date/iso-8601` value as the stored date in the
 person's date format, a medication's drug and intake, a convertible observation in the method set by
 `preferred-display-<itemKey>` followed by its origin (`Creamy (Apple Health <- Mira)`).
 

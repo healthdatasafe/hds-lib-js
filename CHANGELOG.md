@@ -42,6 +42,12 @@
   resolved through `resolveAccountPreference('dateFormat')`. Type `FormatEventDateOptions`. Tests `[FEDO1-4]`.
 
 ### Fixed
+- **`eventToShortText` honours an item's `number.display`** (B-2026-10-26-22), as hds-forms-js `NumberInput` shows
+  it on entry: the raw value times `multiplier`, `precision` decimals when set (float noise stripped otherwise), and
+  `suffix` in place of the eventType symbol. AMH / vitamin D read `2.1 ng/mL` (was `µg/L`), sperm concentration
+  `15 10⁶/mL` (was `G/L` since data-model 3.20.0), HbA1c `5.7 %`. A display item is not converted to another unit
+  system; items without `number.display` are unchanged. Only `slider.display` was honoured before. Tests
+  `[EST27a-g]` against the published 3.20.0 pack.
 - **`HDSSettings.setDynamic(key, null)` deletes the setting for good** (B-2026-10-26-7): it called `events.delete`
   once, which only trashes a live event, then expected `eventDeletion` and threw "eventDeletion missing" with the
   setting left in place. It now trashes then deletes (one call when the event was already trashed meanwhile); a

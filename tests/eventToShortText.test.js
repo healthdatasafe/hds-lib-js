@@ -4,6 +4,7 @@ import { assert } from './test-utils/deps-node.js';
 // which failed the browser suite while Node passed.
 import { eventToShortText, eventToShortTextWithOrigin, HDSSettings } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
+import { setPreferredLocales, resetPreferredLocales } from '../ts/localizeText.ts';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
@@ -26,7 +27,57 @@ describe('[ESTX] eventToShortText', () => {
   it('[EST3] number with unit symbol (mass/kg)', () => {
     const event = { content: 60, streamIds: ['body-weight'], type: 'mass/kg' };
     const result = eventToShortText(event);
+    // 'Kg' is the mass/kg symbol of the published model (it should read 'kg', upstream data-model fix pending);
+    // update this assertion when the pack ships the corrected symbol.
     assert.equal(result, '60 Kg');
+  });
+
+  describe('[EST27] number.display: multiplier and suffix as on entry (B-2026-10-26-22)', () => {
+    afterEach(() => {
+      HDSSettings.unhook();
+      resetPreferredLocales();
+    });
+
+    const ev = (key, content) => {
+      const itemDef = model.itemsDefs.forKey(key);
+      assert.ok(itemDef?.data?.number?.display, `${key} should declare number.display in the published pack`);
+      return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
+    };
+
+    it('[EST27a] a suffix replaces the eventType symbol (AMH, vitamin D: ng/mL over µg/L)', () => {
+      assert.equal(eventToShortText(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
+      assert.equal(eventToShortText(ev('body-blood-serum-vitamin-d-25oh', 30)), '30 ng/mL');
+    });
+
+    it('[EST27b] sperm concentration reads 10⁶/mL, not the G/L symbol of concentration/megacount-ml', () => {
+      assert.equal(eventToShortText(ev('body-semen-concentration', 15)), '15 10⁶/mL');
+    });
+
+    it('[EST27c] a multiplier scales the value without float noise (HbA1c, hematocrit)', () => {
+      assert.equal(eventToShortText(ev('body-blood-hba1c', 0.057)), '5.7 %');
+      assert.equal(eventToShortText(ev('body-blood-cbc-hematocrit', 0.42)), '42 %');
+      assert.equal(eventToShortText(ev('body-blood-cbc-hematocrit', 0.29)), '29 %');
+    });
+
+    it('[EST27d] the suffix is localized', () => {
+      setPreferredLocales(['fr']);
+      assert.equal(eventToShortText(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
+    });
+
+    it('[EST27e] a display item is not converted to another unit system (it states how it reads)', () => {
+      HDSSettings._testInject('unitSystem', 'imperial');
+      assert.equal(eventToShortText(ev('lifestyle-alcohol-typical-quantity', 14)), '14 g');
+    });
+
+    it('[EST27f] items without display are unchanged', () => {
+      assert.equal(eventToShortText({ content: 12.5, streamIds: ['fertility-hormone-lh'], type: 'concentration/iu-l' }), '12.5 IU/L');
+      assert.equal(eventToShortText({ content: 60, streamIds: ['body-weight'], type: 'mass/kg' }), '60 Kg');
+    });
+
+    it('[EST27g] eventToShortTextWithOrigin gives the same text, no origin', () => {
+      const event = ev('body-semen-concentration', 15);
+      assert.deepEqual(eventToShortTextWithOrigin(event), { text: '15 10⁶/mL', origin: null });
+    });
   });
 
   it('[EST4] number with unit symbol (concentration/iu-l)', () => {
