@@ -18125,13 +18125,29 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelPreferred = void 0;
+exports.HDSModelPreferred = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = void 0;
 exports.getPreferredInput = getPreferredInput;
 exports.getPreferredDisplay = getPreferredDisplay;
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ../settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
 const accountPreferences_ts_1 = __webpack_require__(/*! ../settings/accountPreferences.js */ "./ts/settings/accountPreferences.ts");
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+/**
+ * The setting that holds the cervical-fluid charting method a person enters observations in
+ * (an HDSSettings dynamic key, value: a converter method id such as `creighton`).
+ *
+ * Canonical form `preferred-input-<itemKey>`, as every dynamic setting (the settings event's
+ * `content.itemKey` is an item key; documented since hds-lib 0.3.0, read by `getPreferredInput`,
+ * and the display twin `preferred-display-body-vulva-mucus-inspect` is what apps already write).
+ * Write this key; import it rather than spelling it (B-2026-10-26-16).
+ */
+exports.CERVICAL_FLUID_METHOD_KEY = 'preferred-input-body-vulva-mucus-inspect';
+/**
+ * Read-only fallback: the converter-model form `preferred-input-cervical-fluid` that hds-forms-js
+ * `Convertible` read (and some accounts hold). `getPreferredInput` reads it when the canonical key
+ * is not set; never write it.
+ */
+exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = 'preferred-input-cervical-fluid';
 /**
  * HDSModel-Preferred — Unified API for preferred representations.
  *
@@ -18202,12 +18218,19 @@ class HDSModelPreferred {
             const ce = data['converter-engine'];
             const converterItemKey = ce.models;
             const engine = this.#model.converters.getEngine(converterItemKey);
-            if (perItemSetting && typeof perItemSetting === 'string') {
-                const methodDef = engine?.getMethodDef(perItemSetting);
+            // Input only: fall back to the converter-model form (`preferred-input-cervical-fluid`) that
+            // hds-forms-js `Convertible` read, so a method saved under it is still honoured (B-2026-10-26-16).
+            let setting = perItemSetting;
+            const hasPerItem = typeof setting === 'string' && setting !== '';
+            if (!hasPerItem && settingPrefix === 'preferred-input-' && HDSSettings_ts_1.default.isHooked) {
+                setting = HDSSettings_ts_1.default.get(`preferred-input-${converterItemKey}`);
+            }
+            if (setting && typeof setting === 'string') {
+                const methodDef = engine?.getMethodDef(setting);
                 return {
                     type: 'converter',
-                    method: perItemSetting,
-                    methodName: methodDef?.name ? ((0, localizeText_ts_1.localizeText)(methodDef.name) || perItemSetting) : perItemSetting,
+                    method: setting,
+                    methodName: methodDef?.name ? ((0, localizeText_ts_1.localizeText)(methodDef.name) || setting) : setting,
                     engine,
                 };
             }
@@ -18642,6 +18665,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.formatEventDate = formatEventDate;
 exports.formatEventDateTime = formatEventDateTime;
 exports.eventToShortText = eventToShortText;
+exports.eventToShortTextWithOrigin = eventToShortTextWithOrigin;
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 // HDSSettings is still the right source for per-app settings (the dynamic
@@ -18649,25 +18673,65 @@ const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndS
 const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ../settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
 const accountPreferences_ts_1 = __webpack_require__(/*! ../settings/accountPreferences.js */ "./ts/settings/accountPreferences.ts");
 const DATE_SEPARATORS = {
-    'DD.MM.YYYY': (d) => pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
-    'DD/MM/YYYY': (d) => pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(),
-    'MM/DD/YYYY': (d) => pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear(),
-    'YYYY-MM-DD': (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()),
+    'DD.MM.YYYY': (p, year) => pad(p.d) + '.' + pad(p.m) + '.' + (year ? p.y : ''),
+    'DD/MM/YYYY': (p, year) => pad(p.d) + '/' + pad(p.m) + (year ? '/' + p.y : ''),
+    'MM/DD/YYYY': (p, year) => pad(p.m) + '/' + pad(p.d) + (year ? '/' + p.y : ''),
+    'YYYY-MM-DD': isoDay,
 };
+function isoDay(p, year) {
+    return (year ? p.y + '-' : '') + pad(p.m) + '-' + pad(p.d);
+}
 function pad(n) { return n < 10 ? '0' + n : String(n); }
+/** The format to apply, or null when none is resolved (ISO date then). */
+function resolvedDateFormat() {
+    if (!(0, accountPreferences_ts_1.hasAccountPreference)('dateFormat'))
+        return null;
+    const fmt = (0, accountPreferences_ts_1.resolveAccountPreference)('dateFormat');
+    return DATE_SEPARATORS[fmt] ? fmt : null;
+}
+/** A calendar day in the resolved format (ISO date when none), with the options applied. */
+function formatDayParts(p, fmt, opts) {
+    const year = opts.year !== false;
+    const text = fmt ? DATE_SEPARATORS[fmt](p, year) : isoDay(p, year);
+    if (!opts.weekday)
+        return text;
+    const locale = opts.locale ?? (0, localizeText_ts_1.getPreferredLocales)()[0] ?? 'en';
+    let name = '';
+    try {
+        // Noon UTC of that calendar day, read in UTC: the weekday of the day itself, whatever the host time zone.
+        name = new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(Date.UTC(p.y, p.m - 1, p.d, 12));
+    }
+    catch { /* unknown locale: no weekday rather than a throw */ }
+    return name ? name + ' ' + text : text;
+}
 /**
  * Format a Unix timestamp (seconds) as a date string.
- * Uses the resolved account/app dateFormat when available, otherwise ISO date.
+ * Uses the resolved account/app dateFormat when available (local calendar day), otherwise the ISO date (UTC).
+ * `opts.year: false` leaves the year out, `opts.weekday: true` puts the short weekday name first.
  */
-function formatEventDate(timeSec) {
+function formatEventDate(timeSec, opts = {}) {
     const d = new Date(timeSec * 1000);
-    if ((0, accountPreferences_ts_1.hasAccountPreference)('dateFormat')) {
-        const fmt = (0, accountPreferences_ts_1.resolveAccountPreference)('dateFormat');
-        const formatter = DATE_SEPARATORS[fmt];
-        if (formatter)
-            return formatter(d);
-    }
-    return d.toISOString().split('T')[0];
+    const fmt = resolvedDateFormat();
+    const parts = fmt
+        ? { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() }
+        : { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+    return formatDayParts(parts, fmt, opts);
+}
+/**
+ * Format a calendar date stored as content (`date/iso-8601`, e.g. a date of birth: `"1990-04-12"`) in the
+ * resolved date format. The day is read as written: no time-zone shift. Returns null when the string does not
+ * start with a valid `YYYY-MM-DD`.
+ */
+function formatContentDate(content) {
+    if (typeof content !== 'string')
+        return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(content);
+    if (!m)
+        return null;
+    const parts = { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+    if (parts.m < 1 || parts.m > 12 || parts.d < 1 || parts.d > 31)
+        return null;
+    return formatDayParts(parts, resolvedDateFormat(), {});
 }
 /**
  * Format a Unix timestamp (seconds) as a date + time string.
@@ -18692,10 +18756,22 @@ function formatEventDateTime(timeSec) {
  *
  * Without itemDef (fallback): derives unit from eventType symbol if available,
  * for object content produces short textual representation.
+ *
+ * For a convertible item (cervical fluid, mood) the text ends with where the value came from,
+ * e.g. `"Creamy (Apple Health <- Mira)"`; read that as fields with `eventToShortTextWithOrigin`
+ * rather than parsing the text.
  */
 function eventToShortText(event) {
+    return eventToShortTextWithOrigin(event).text;
+}
+/**
+ * `eventToShortText` plus the structured origin of a convertible value: the method it was
+ * recorded in, the method it is shown in, and the match of the conversion. The text is the
+ * same string `eventToShortText` returns.
+ */
+function eventToShortTextWithOrigin(event) {
     if (event == null)
-        return null;
+        return { text: null, origin: null };
     const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
     const itemDef = model.itemsDefs.forEvent(event, false);
     const content = event.content;
@@ -18706,29 +18782,29 @@ function eventToShortText(event) {
     if (event.type === 'blood-pressure/mmhg-bpm' && content != null && typeof content === 'object') {
         const bp = formatBloodPressure(content);
         if (bp)
-            return bp;
+            return { text: bp, origin: null };
     }
     if (itemDef) {
         // For checkbox/date items, content may be null — the event time IS the data
         if (content == null && itemDef.data.type === 'checkbox') {
-            return formatEventDateTime(event.time);
+            return { text: formatEventDateTime(event.time), origin: null };
         }
         if (content == null && itemDef.data.type === 'date') {
-            return formatEventDate(event.time);
+            return { text: formatEventDate(event.time), origin: null };
         }
         if (content == null)
-            return null;
-        return formatWithItemDef(event, content, itemDef, model);
+            return { text: null, origin: null };
+        if (itemDef.data.type === 'convertible') {
+            return formatConvertible(content, itemDef, model);
+        }
+        return { text: formatWithItemDef(event, content, itemDef, model), origin: null };
     }
     if (content == null)
-        return null;
-    return formatFallback(event, content, model);
+        return { text: null, origin: null };
+    return { text: formatFallback(event, content, model), origin: null };
 }
 function formatWithItemDef(event, content, itemDef, model) {
     const type = itemDef.data.type;
-    if (type === 'convertible') {
-        return formatConvertible(event, content, itemDef, model);
-    }
     if (type === 'checkbox') {
         return event.type === 'activity/plain' ? 'Yes' : String(content);
     }
@@ -18739,8 +18815,9 @@ function formatWithItemDef(event, content, itemDef, model) {
         return formatMultiSelect(content, itemDef);
     }
     if (type === 'date') {
-        // date items store time on the event itself
-        return formatEventDate(event.time);
+        // A date stored as the value (`date/iso-8601`, the date of birth) is the data; otherwise the
+        // event's own time is (B-2026-10-26-6: the entry time was shown instead of the stored date).
+        return formatContentDate(content) ?? formatEventDate(event.time);
     }
     if (type === 'datasource-search') {
         return formatDatasource(content);
@@ -18753,6 +18830,9 @@ function formatWithItemDef(event, content, itemDef, model) {
     }
     // number, text, composite, etc.
     if (typeof content === 'number') {
+        const display = itemDef.data?.number?.display;
+        if (display)
+            return formatNumberDisplay(event.type, content, display, model);
         return formatNumber(event.type, content, model);
     }
     if (typeof content === 'string') {
@@ -18769,6 +18849,11 @@ function formatFallback(event, content, model) {
         return formatNumber(event.type, content, model);
     }
     if (typeof content === 'string') {
+        if (event.type === 'date/iso-8601') {
+            const date = formatContentDate(content);
+            if (date)
+                return date;
+        }
         return content.length > 60 ? content.slice(0, 60) + '...' : content;
     }
     if (typeof content === 'boolean') {
@@ -18800,6 +18885,10 @@ function formatNumber(eventType, content, model) {
     if (eventType === 'test-result/scale') {
         return formatTestResult(content);
     }
+    if (eventType === 'ratio/proportion') {
+        // A proportion (0-1) reads as a percentage: 0.057 → "5.7 %" (rounding drops float noise, e.g. 5.700000000000001).
+        return `${Math.round(content * 100 * 1e6) / 1e6} %`;
+    }
     if ((0, accountPreferences_ts_1.hasAccountPreference)('unitSystem')) {
         const system = (0, accountPreferences_ts_1.resolveAccountPreference)('unitSystem');
         const result = model.conversions.convert(eventType, content, system);
@@ -18810,6 +18899,25 @@ function formatNumber(eventType, content, model) {
     }
     const symbol = getSymbol(eventType, model);
     return symbol ? `${content} ${symbol}` : String(content);
+}
+/** Significant digits that strip binary-float noise (`0.42 * 100` → 42), far beyond any assay's precision. */
+const FLOAT_NOISE_PRECISION = 12;
+/**
+ * Format a number item that declares `number.display` (B-2026-10-26-22), as hds-forms-js
+ * `NumberInput` shows it on entry (`toDisplayText`): the raw value times `multiplier` (default 1),
+ * `precision` decimals when set, else float noise stripped without truncating real decimals; then
+ * `suffix` in place of the eventType symbol (AMH `ng/mL` over `µg/L`, sperm concentration `10⁶/mL`
+ * over `G/L`, HbA1c `0.057` → `5.7 %`). No unit-system conversion: the item states how it reads.
+ */
+function formatNumberDisplay(eventType, content, display, model) {
+    const multiplier = typeof display.multiplier === 'number' ? display.multiplier : 1;
+    const scaled = content * multiplier;
+    const text = typeof display.precision === 'number'
+        ? scaled.toFixed(display.precision)
+        : String(Number(scaled.toPrecision(FLOAT_NOISE_PRECISION)));
+    const suffix = display.suffix ? (0, localizeText_ts_1.localizeText)(display.suffix) : null;
+    const unit = suffix || (multiplier === 1 ? getSymbol(eventType, model) : null);
+    return unit ? `${text} ${unit}` : text;
 }
 /**
  * Format a slider event: applies the item-def's slider.display block
@@ -18878,18 +18986,7 @@ function formatComposite(content, itemDef) {
         // tooltip shows a meaningful label instead of a raw number.
         let opt = fieldDef.options.find((o) => o.value === value);
         if (!opt && typeof value === 'number') {
-            let nearest = null;
-            let bestDist = Infinity;
-            for (const o of fieldDef.options) {
-                if (typeof o.value !== 'number')
-                    continue;
-                const d = Math.abs(o.value - value);
-                if (d < bestDist) {
-                    bestDist = d;
-                    nearest = o;
-                }
-            }
-            opt = nearest;
+            opt = nearestNumericOption(fieldDef.options, value);
         }
         let valueText;
         if (opt?.label) {
@@ -18938,7 +19035,12 @@ function formatSelect(event, content, itemDef, model) {
     }
     const options = itemDef.data.options;
     if (options) {
-        const selected = options.find((o) => o.value === valueForSelect);
+        let selected = options.find((o) => o.value === valueForSelect);
+        // A `ratio/proportion` select is a 0-1 scale whose options are hooks on it (bleeding: 0.08 … 0.95). A value
+        // imported between hooks (a device's continuous reading) reads as the nearest hook's label, as composites do.
+        if (!selected && prefix === '' && event.type === 'ratio/proportion' && typeof valueForSelect === 'number') {
+            selected = nearestNumericOption(options, valueForSelect);
+        }
         if (selected?.label) {
             const text = typeof selected.label === 'string' ? selected.label : ((0, localizeText_ts_1.localizeText)(selected.label) || String(valueForSelect));
             const truncated = text.length > 50 ? text.slice(0, 50) + '...' : text;
@@ -18949,6 +19051,21 @@ function formatSelect(event, content, itemDef, model) {
         return formatNumber(event.type, valueForSelect, model);
     }
     return prefix + String(valueForSelect);
+}
+/** The option whose numeric value is closest to `value` (first one on a tie), or null when none is numeric. */
+function nearestNumericOption(options, value) {
+    let nearest = null;
+    let bestDist = Infinity;
+    for (const o of options) {
+        if (typeof o.value !== 'number')
+            continue;
+        const d = Math.abs(o.value - value);
+        if (d < bestDist) {
+            bestDist = d;
+            nearest = o;
+        }
+    }
+    return nearest;
 }
 /**
  * `multi-select` content is an array of option values — render the localized labels
@@ -19079,11 +19196,14 @@ function formatObject(content) {
  *   "targetResult (sourceData) 85%" — confidence = round((1 - matchDistance) * 100)
  *   When 100%, omit the percentage.
  * No source: show dimension summary using localized stop labels from converter config.
+ *
+ * Returns the text with its structured origin (`ShortTextOrigin`), null when neither a source
+ * nor a conversion is known.
  */
-function formatConvertible(_event, content, itemDef, model) {
+function formatConvertible(content, itemDef, model) {
     const ce = itemDef.data['converter-engine'];
     if (!ce)
-        return formatObject(content);
+        return { text: formatObject(content), origin: null };
     const itemKey = ce.models;
     const source = content?.source;
     const vectors = content?.vectors;
@@ -19092,6 +19212,16 @@ function formatConvertible(_event, content, itemDef, model) {
         ? resolveObservationLabel(engine, source.key, source.sourceData)
         : formatSourceLabel(source);
     const sourceMethodName = getMethodName(engine, source?.key);
+    const sourceKey = typeof source?.key === 'string' ? source.key : null;
+    /** The origin of a value shown as recorded (no conversion), or converted into `target`. */
+    const origin = (target) => ({
+        sourceKey,
+        sourceName: sourceKey ? sourceMethodName : null,
+        sourceLabel: sourceLabel ?? null,
+        targetKey: target?.key ?? null,
+        targetName: target?.name ?? null,
+        match: target?.match ?? null
+    });
     // A conversion needs every dimension: on a partial vector (e.g. mood with only `valence`)
     // the engine invents the missing ones and the confidence comes out NaN (B-2026-10-06-2).
     const vectorComplete = isCompleteVector(engine, vectors);
@@ -19103,7 +19233,7 @@ function formatConvertible(_event, content, itemDef, model) {
             if (targetMethod && typeof targetMethod === 'string') {
                 // Skip conversion if target method equals source method
                 if (source?.key === targetMethod && sourceLabel) {
-                    return `${sourceLabel} (${sourceMethodName})`;
+                    return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
                 }
                 if (engine) {
                     const result = engine.fromVector(targetMethod, vectors);
@@ -19111,10 +19241,11 @@ function formatConvertible(_event, content, itemDef, model) {
                     const targetMethodName = getMethodName(engine, targetMethod);
                     const confidence = Math.round((1 - result.matchDistance) * 100);
                     const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
+                    const converted = origin({ key: targetMethod, name: targetMethodName, match: confidence });
                     if (sourceMethodName && sourceLabel) {
-                        return `${resultLabel} (${targetMethodName} <- ${sourceMethodName}${confStr})`;
+                        return { text: `${resultLabel} (${targetMethodName} <- ${sourceMethodName}${confStr})`, origin: converted };
                     }
-                    return `${resultLabel} (${targetMethodName}${confStr})`;
+                    return { text: `${resultLabel} (${targetMethodName}${confStr})`, origin: converted };
                 }
             }
         }
@@ -19122,7 +19253,7 @@ function formatConvertible(_event, content, itemDef, model) {
     }
     // No autoConvert: show source observation + method name
     if (sourceLabel) {
-        return `${sourceLabel} (${sourceMethodName})`;
+        return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
     }
     // No source — RAW vector input, convert via _raw virtual method
     if (vectors && typeof vectors === 'object' && engine && vectorComplete) {
@@ -19131,7 +19262,10 @@ function formatConvertible(_event, content, itemDef, model) {
             const resultLabel = resolveObservationLabel(engine, '_raw', result.data);
             const confidence = Math.round((1 - result.matchDistance) * 100);
             const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
-            return `${resultLabel}${confStr}`;
+            return {
+                text: `${resultLabel}${confStr}`,
+                origin: origin({ key: '_raw', name: getMethodName(engine, '_raw'), match: confidence })
+            };
         }
         catch { /* fall through */ }
     }
@@ -19140,13 +19274,13 @@ function formatConvertible(_event, content, itemDef, model) {
     if (vectors && typeof vectors === 'object' && itemDef.data.composite) {
         const text = formatComposite(vectors, itemDef);
         if (text)
-            return text;
+            return { text, origin: null };
     }
     // Fallback: raw dimension summary
     if (vectors && typeof vectors === 'object') {
-        return formatVectorSummary(vectors, itemKey, model);
+        return { text: formatVectorSummary(vectors, itemKey, model), origin: null };
     }
-    return formatObject(content);
+    return { text: formatObject(content), origin: null };
 }
 /** True when the vector carries a number for every dimension the engine knows. */
 function isCompleteVector(engine, vectors) {
@@ -21711,7 +21845,8 @@ exports.Questionnaire = Questionnaire;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = exports.diffFormSpecWithTemplate = exports.diffTemplateScope = exports.scopeHashMatches = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
+exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = exports.diffFormSpecWithTemplate = exports.diffTemplateScope = exports.scopeHashMatches = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.permissionView = exports.dataName = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
+exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = void 0;
 const AppManagingAccount_ts_1 = __webpack_require__(/*! ./AppManagingAccount.js */ "./ts/appTemplates/AppManagingAccount.ts");
 Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_ts_1.AppManagingAccount; } }));
 const AppClientAccount_ts_1 = __webpack_require__(/*! ./AppClientAccount.js */ "./ts/appTemplates/AppClientAccount.ts");
@@ -21752,6 +21887,9 @@ var itemLabels_ts_1 = __webpack_require__(/*! ./itemLabels.js */ "./ts/appTempla
 Object.defineProperty(exports, "getSectionItemLabels", ({ enumerable: true, get: function () { return itemLabels_ts_1.getSectionItemLabels; } }));
 Object.defineProperty(exports, "collectItemLabelsFromSections", ({ enumerable: true, get: function () { return itemLabels_ts_1.collectItemLabelsFromSections; } }));
 Object.defineProperty(exports, "collectItemLabels", ({ enumerable: true, get: function () { return itemLabels_ts_1.collectItemLabels; } }));
+var permissionLabels_ts_1 = __webpack_require__(/*! ./permissionLabels.js */ "./ts/appTemplates/permissionLabels.ts");
+Object.defineProperty(exports, "dataName", ({ enumerable: true, get: function () { return permissionLabels_ts_1.dataName; } }));
+Object.defineProperty(exports, "permissionView", ({ enumerable: true, get: function () { return permissionLabels_ts_1.permissionView; } }));
 // Plan 71 — Questionnaire coverage check against a CollectorRequest's permissions.
 var questionnaireCoverage_ts_1 = __webpack_require__(/*! ./questionnaireCoverage.js */ "./ts/appTemplates/questionnaireCoverage.ts");
 Object.defineProperty(exports, "checkQuestionnaireCoverage", ({ enumerable: true, get: function () { return questionnaireCoverage_ts_1.checkQuestionnaireCoverage; } }));
@@ -23372,6 +23510,106 @@ function offerStreamsToApiCalls(streams) {
 
 /***/ },
 
+/***/ "./ts/appTemplates/permissionLabels.ts"
+/*!*********************************************!*\
+  !*** ./ts/appTemplates/permissionLabels.ts ***!
+  \*********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Names for shared data and for requested permissions, from the data model.
+ *
+ * An invitation or a sharing screen must name what a connection reads by the data model's own
+ * words, never by the requester's label alone: any account can label a wide grant "Cycle
+ * length". These helpers give every HDS app (patient app, account app, doctor dashboard) the
+ * same names and the same warnings.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.dataName = dataName;
+exports.permissionView = permissionView;
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const TEXTS = {
+    allData: { en: 'All your data', fr: 'Toutes vos données', es: 'Todos sus datos' },
+    email: { en: 'Your e-mail address', fr: 'Votre adresse e-mail', es: 'Su dirección de correo electrónico' },
+    under: { en: '{name} and everything under it', fr: '{name} et tout ce qui en dépend', es: '{name} y todo lo que contiene' }
+};
+function pick(text, locale) {
+    if (text == null)
+        return null;
+    if (locale) {
+        const v = text[locale];
+        if (v != null)
+            return v;
+    }
+    return (0, localizeText_ts_1.localizeText)(text);
+}
+/**
+ * The name of the data a stream holds, in the person's language: the label of the item filed
+ * there (the item named as the stream when it holds several; deprecated items only when nothing
+ * else is there), else `opts.fallback`, else the model stream's name, else the stream id.
+ */
+function dataName(streamId, opts = {}) {
+    let model;
+    try {
+        model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
+        const defs = model.itemsDefs.forStreamId(streamId);
+        const current = defs.filter(d => !d.isDeprecated);
+        const def = current.find(d => d.key === streamId) ??
+            (current.length === 1 ? current[0] : (current.length === 0 && defs.length === 1 ? defs[0] : undefined));
+        const label = pick(def?.data?.label, opts.locale);
+        if (label)
+            return label;
+    }
+    catch { /* model not loaded */ }
+    if (opts.fallback)
+        return opts.fallback;
+    try {
+        const stream = model?.streams.getDataById(streamId, false);
+        if (stream?.name)
+            return stream.name;
+    }
+    catch { /* model not loaded */ }
+    return streamId;
+}
+/**
+ * A permission as a person reads it: named from the data model (the requester's label only
+ * quoted and flagged when the model does not know the stream), its level, and whether it
+ * deserves a warning. Works before the model is loaded (then `inModel: false`).
+ */
+function permissionView(perm, opts = {}) {
+    const streamId = perm.streamId ?? '';
+    const level = perm.level ?? 'read';
+    const requesterLabel = perm.defaultName ?? null;
+    const base = { streamId, level, requesterLabel };
+    if (streamId === '*') {
+        const name = pick(TEXTS.allData, opts.locale);
+        return { ...base, kind: 'all-data', name, label: name, beyondRead: true, inModel: true, hasChildren: true };
+    }
+    if (streamId === ':system:email') {
+        const name = pick(TEXTS.email, opts.locale);
+        return { ...base, kind: 'account-email', name, label: name, beyondRead: level !== 'read', inModel: true, hasChildren: false };
+    }
+    const quoted = requesterLabel ? `“${requesterLabel}”` : streamId;
+    let inModel = false;
+    let hasChildren = false;
+    try {
+        const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
+        const stream = model.streams.getDataById(streamId, false);
+        inModel = stream != null || model.itemsDefs.forStreamId(streamId).length > 0;
+        hasChildren = (stream?.children?.length ?? 0) > 0;
+    }
+    catch { /* model not loaded: the requester's label, flagged */ }
+    const name = inModel ? dataName(streamId, opts) : quoted;
+    const label = hasChildren ? pick(TEXTS.under, opts.locale).replace('{name}', name) : name;
+    return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren };
+}
+
+
+/***/ },
+
 /***/ "./ts/appTemplates/questionnaireCoverage.ts"
 /*!**************************************************!*\
   !*** ./ts/appTemplates/questionnaireCoverage.ts ***!
@@ -24454,6 +24692,282 @@ function isChatOnlyFormSpec(formSpec) {
 
 /***/ },
 
+/***/ "./ts/cmc/scope.ts"
+/*!*************************!*\
+  !*** ./ts/cmc/scope.ts ***!
+  \*************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Sharing one type of data at a time with a connection, over the CMC scope-update path.
+ *
+ * The person (patient side, personal token) changes what a relationship's data grant shares by
+ * writing a `consent/scope-update-cmc` trigger on the relationship's own collectors stream
+ * (`CmcRelationship.localCollectorStreamId`). The platform's CMC plugin applies the new
+ * permission set to the grant (keeping its own `:_cmc:*` channel permissions), records the
+ * outcome on the trigger (`accessId`, `newPermissions`, `applied`, `status`) and delivers the
+ * content to the connection. What the connection already read stays with it: only what comes
+ * next is stopped.
+ *
+ * HDS adds what the connection should be told, inside the HDS-owned sub-envelope
+ * `content.hds` (the same convention as the data-export alerts, data-model
+ * `documentation/CUSTOM-FIELDS-AND-SYSTEM.md`), never as new top-level content fields:
+ *
+ *   content.hds = { removed?: string[], added?: string[], asked?: string[], message?: localizable text }
+ *
+ * - `removed`: the streams the person stopped sharing (`stopSharingStream`);
+ * - `added`: the streams the person shared again (`shareStreamsAgain`);
+ * - `asked`: on an answer to a connection's request, the streams it asked for that were not
+ *   shared (read only here: `cmc.acceptScopeUpdate` / `refuseScopeUpdate` write a fixed content);
+ * - `message`: the notice for the connection, per language.
+ *
+ * A connection asking for data again sends a `consent/scope-request-cmc` (`cmc.proposeScopeUpdate`);
+ * the person answers it with `cmc.acceptScopeUpdate` / `cmc.refuseScopeUpdate`, not with these
+ * helpers. `listSharingNotes` reads all of it back as one list for the conversation.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ET_SCOPE_REQUEST = exports.ET_SCOPE_UPDATE = void 0;
+exports.personPermissions = personPermissions;
+exports.planStopSharing = planStopSharing;
+exports.scopeDiff = scopeDiff;
+exports.stopSharingStream = stopSharingStream;
+exports.shareStreamsAgain = shareStreamsAgain;
+exports.listSharingNotes = listSharingNotes;
+exports.parseSharingNotes = parseSharingNotes;
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+exports.ET_SCOPE_UPDATE = 'consent/scope-update-cmc';
+exports.ET_SCOPE_REQUEST = 'consent/scope-request-cmc';
+/** A data stream the person would recognise as shared data (not a platform stream, not the chat-only placeholder). */
+function isDataStream(streamId) {
+    return streamId != null && !streamId.startsWith(':_') && streamId !== 'hds-noop';
+}
+/** The stream ids above `streamId` in the data model, plus `*`. Empty set of parents for a stream outside the model. */
+function streamsAbove(streamId) {
+    const above = new Set(['*']);
+    try {
+        for (const id of (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getParentsIds(streamId, false)) {
+            if (id !== streamId)
+                above.add(id);
+        }
+    }
+    catch { /* model not loaded or stream unknown: only `*` */ }
+    return above;
+}
+/**
+ * The permissions the person decides on: every permission but the platform's own `:_cmc:*`
+ * channel ones, in the shape `consent/scope-update-cmc` takes (`{ streamId, level }` or
+ * `{ feature, setting }`).
+ */
+function personPermissions(perms) {
+    return (perms ?? [])
+        .filter(p => !(typeof p.streamId === 'string' && p.streamId.startsWith(':_cmc:')))
+        .map(p => p.streamId != null
+        ? { streamId: p.streamId, level: p.level ?? 'read' }
+        : { feature: p.feature, setting: p.setting });
+}
+/**
+ * Whether one stream can stop being shared on its own, and the permission set that would
+ * remain. Pure: the model is only read to find the stream's parents.
+ */
+function planStopSharing(perms, streamId) {
+    const own = personPermissions(perms);
+    const above = streamsAbove(streamId);
+    if (own.some(p => p.streamId != null && above.has(p.streamId)))
+        return { ok: false, reason: 'shared-through-parent' };
+    if (!own.some(p => p.streamId === streamId))
+        return { ok: false, reason: 'not-shared' };
+    const kept = own.filter(p => p.streamId !== streamId);
+    if (!kept.some(p => isDataStream(p.streamId)))
+        return { ok: false, reason: 'nothing-left' };
+    return { ok: true, newPermissions: kept };
+}
+/**
+ * What a requested permission set adds, takes away and changes the level of, compared with what
+ * is shared now (the relationship's own channel and platform streams left out). For the request
+ * card: a request for data already shared but at a higher level is a `changed` entry, not nothing.
+ */
+function scopeDiff(current, requested) {
+    const levels = (perms) => new Map((perms ?? []).filter(p => isDataStream(p.streamId)).map(p => [p.streamId, p.level ?? 'read']));
+    const now = levels(current);
+    const asked = levels(requested);
+    return {
+        added: [...asked.keys()].filter(s => !now.has(s)),
+        removed: [...now.keys()].filter(s => !asked.has(s)),
+        changed: [...asked]
+            .filter(([s, level]) => now.has(s) && now.get(s) !== level)
+            .map(([s, level]) => ({ streamId: s, from: now.get(s) ?? 'read', to: level }))
+    };
+}
+/**
+ * Stop sharing one stream with a connection. Writes the scope update with
+ * `content.hds = { removed: [streamId], message? }` and, by default, resolves once the grant
+ * changed. Throws `HDSLibError` (`innerObject.reason`) when the stream cannot be stopped on its
+ * own (`StopSharingRefusal`), when the relationship has no collectors stream, or when the
+ * platform did not apply the change.
+ */
+async function stopSharingStream(connection, rel, streamId, opts = {}) {
+    const collectorStreamId = requireCollectorStream(rel, 'stopSharingStream');
+    const plan = planStopSharing(rel.grantedPermissions, streamId);
+    if ('reason' in plan) {
+        throw new errors_ts_1.HDSLibError(`stopSharingStream: cannot stop sharing "${streamId}" on its own (${plan.reason})`, { reason: plan.reason, streamId });
+    }
+    const hds = { removed: [streamId], ...(opts.message ? { message: opts.message } : {}) };
+    return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions: plan.newPermissions, hds }, opts);
+}
+/**
+ * Share streams with a connection again (the person's own decision). Adds each stream not
+ * shared now, at `opts.level` (default `read`), and writes `content.hds = { added, message? }`.
+ * Throws `HDSLibError` when every stream is already shared, when the relationship has no
+ * collectors stream, or when the platform did not apply the change.
+ */
+async function shareStreamsAgain(connection, rel, streamIds, opts = {}) {
+    const collectorStreamId = requireCollectorStream(rel, 'shareStreamsAgain');
+    const now = personPermissions(rel.grantedPermissions);
+    const back = [...new Set(streamIds)].filter(id => isDataStream(id) && !now.some(p => p.streamId === id));
+    if (back.length === 0) {
+        throw new errors_ts_1.HDSLibError('shareStreamsAgain: every stream is already shared', { reason: 'already-shared', streamIds });
+    }
+    const level = opts.level ?? 'read';
+    const newPermissions = [...now, ...back.map(streamId => ({ streamId, level }))];
+    const hds = { added: back, ...(opts.message ? { message: opts.message } : {}) };
+    return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
+}
+/**
+ * The relationship's sharing changes, oldest first: what the person stopped or shared again
+ * (applied scope updates carrying `hds.removed` / `hds.added`) and what the connection asked
+ * for (scope requests, with their answer). Read from the person's collectors stream.
+ */
+async function listSharingNotes(connection, collectorStreamId, opts = {}) {
+    const events = await connection.apiOne('events.get', {
+        streams: [collectorStreamId],
+        types: [exports.ET_SCOPE_UPDATE, exports.ET_SCOPE_REQUEST],
+        limit: opts.limit ?? 200
+    }, 'events');
+    return parseSharingNotes(events);
+}
+/** Pure part of `listSharingNotes` (exported for tests). `nowSec` decides expiry. */
+function parseSharingNotes(events, nowSec = Date.now() / 1000) {
+    const answers = new Map();
+    for (const e of events ?? []) {
+        const c = e.content ?? {};
+        if (e.type !== exports.ET_SCOPE_UPDATE || typeof c.scopeRequestEventId !== 'string')
+            continue;
+        if (typeof c.applied !== 'boolean')
+            continue;
+        answers.set(c.scopeRequestEventId, { accepted: c.applied, id: e.id, asked: stringList(c.hds?.asked) });
+    }
+    const out = [];
+    for (const e of events ?? []) {
+        const c = e.content ?? {};
+        const time = e.time ?? 0;
+        if (e.type === exports.ET_SCOPE_UPDATE) {
+            // answers are shown on their request; a change that was not applied is not a change
+            if (typeof c.scopeRequestEventId === 'string' || c.applied !== true)
+                continue;
+            const removed = stringList(c.hds?.removed);
+            const added = stringList(c.hds?.added);
+            const base = { id: e.id, time, message: messageOf(c.hds?.message), peerNotified: c.status === 'completed' };
+            if (removed && removed.length > 0)
+                out.push({ kind: 'stopped', streamIds: removed, ...base });
+            else if (added && added.length > 0)
+                out.push({ kind: 'shared', streamIds: added, ...base });
+        }
+        else if (e.type === exports.ET_SCOPE_REQUEST && Array.isArray(c.newPermissions)) {
+            const answered = answers.get(e.id);
+            const expires = typeof c.expires === 'number' ? c.expires : null;
+            let answer = null;
+            if (answered)
+                answer = answered.accepted ? 'accepted' : 'refused';
+            else if (c.status === 'accepted' || c.status === 'refused')
+                answer = c.status;
+            else if (expires != null && expires < nowSec)
+                answer = 'expired';
+            out.push({
+                kind: 'request',
+                id: e.id,
+                time,
+                permissions: c.newPermissions,
+                message: messageOf(c.message),
+                expires,
+                answer,
+                answerEventId: answered?.id ?? null,
+                asked: answered?.asked ?? null
+            });
+        }
+    }
+    return out.sort((a, b) => a.time - b.time);
+}
+// ---- internals ---- //
+function requireCollectorStream(rel, fn) {
+    if (!rel?.accessId)
+        throw new errors_ts_1.HDSLibError(`${fn}: the relationship's accessId is required`);
+    if (!rel.localCollectorStreamId) {
+        throw new errors_ts_1.HDSLibError(`${fn}: the relationship has no collectors stream (no system channel)`, { reason: 'no-collector-stream', accessId: rel.accessId });
+    }
+    return rel.localCollectorStreamId;
+}
+function stringList(v) {
+    return Array.isArray(v) ? v.filter((s) => typeof s === 'string') : null;
+}
+function messageOf(v) {
+    if (v == null || typeof v !== 'object' || Array.isArray(v))
+        return null;
+    return v;
+}
+async function writeScopeUpdate(connection, collectorStreamId, content, opts) {
+    const event = await connection.apiOne('events.create', {
+        streamIds: [collectorStreamId],
+        type: exports.ET_SCOPE_UPDATE,
+        content
+    }, 'event');
+    if (opts.waitForCompletion === false) {
+        return { updateEventId: event.id, status: 'pending', applied: false, newPermissions: content.newPermissions, peerNotified: false };
+    }
+    const outcome = await waitForOutcome(connection, event.id, opts);
+    if (outcome.applied !== true) {
+        const reason = outcome.failure?.reason ?? 'not-applied';
+        throw new errors_ts_1.HDSLibError(`scope update not applied: ${reason}`, { reason, updateEventId: event.id, failure: outcome.failure });
+    }
+    const result = {
+        updateEventId: event.id,
+        status: outcome.status ?? 'unknown',
+        applied: true,
+        newPermissions: Array.isArray(outcome.newPermissions) ? outcome.newPermissions : content.newPermissions,
+        peerNotified: outcome.status === 'completed'
+    };
+    if (outcome.status === 'failed')
+        result.deliveryFailure = outcome.failure;
+    return result;
+}
+/**
+ * Poll the trigger until the platform settled it (`completed` / `failed`). On timeout, an outcome
+ * already recorded (`applied` true or false) is returned as is; otherwise throw: the change may
+ * still happen, so it is not reported as failed.
+ */
+async function waitForOutcome(connection, eventId, opts) {
+    const until = Date.now() + (opts.completionTimeoutMs ?? 20000);
+    const interval = opts.completionPollIntervalMs ?? 400;
+    let content = {};
+    for (;;) {
+        const ev = await connection.apiOne('events.getOne', { id: eventId }, 'event');
+        content = ev?.content ?? {};
+        if (content.status === 'completed' || content.status === 'failed')
+            return content;
+        if (Date.now() >= until)
+            break;
+        await new Promise(resolve => setTimeout(resolve, interval));
+    }
+    if (typeof content.applied === 'boolean')
+        return content;
+    throw new errors_ts_1.HDSLibError('scope update outcome not known yet', { reason: 'outcome-unknown', updateEventId: eventId, lastStatus: content.status });
+}
+
+
+/***/ },
+
 /***/ "./ts/converters/EuclidianDistanceEngine.ts"
 /*!**************************************************!*\
   !*** ./ts/converters/EuclidianDistanceEngine.ts ***!
@@ -24867,7 +25381,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortText = exports.computeReminders = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -24900,6 +25414,7 @@ const reminders_ts_1 = __webpack_require__(/*! ./HDSModel/reminders.js */ "./ts/
 Object.defineProperty(exports, "computeReminders", ({ enumerable: true, get: function () { return reminders_ts_1.computeReminders; } }));
 const eventToShortText_ts_1 = __webpack_require__(/*! ./HDSModel/eventToShortText.js */ "./ts/HDSModel/eventToShortText.ts");
 Object.defineProperty(exports, "eventToShortText", ({ enumerable: true, get: function () { return eventToShortText_ts_1.eventToShortText; } }));
+Object.defineProperty(exports, "eventToShortTextWithOrigin", ({ enumerable: true, get: function () { return eventToShortText_ts_1.eventToShortTextWithOrigin; } }));
 Object.defineProperty(exports, "formatEventDate", ({ enumerable: true, get: function () { return eventToShortText_ts_1.formatEventDate; } }));
 const MonitorScope_ts_1 = __webpack_require__(/*! ./MonitorScope.js */ "./ts/MonitorScope.ts");
 Object.defineProperty(exports, "MonitorScope", ({ enumerable: true, get: function () { return MonitorScope_ts_1.MonitorScope; } }));
@@ -24912,6 +25427,7 @@ Object.defineProperty(exports, "PROFILE_FIELDS", ({ enumerable: true, get: funct
 const accountPreferences_ts_1 = __webpack_require__(/*! ./settings/accountPreferences.js */ "./ts/settings/accountPreferences.ts");
 Object.defineProperty(exports, "resolveAccountPreference", ({ enumerable: true, get: function () { return accountPreferences_ts_1.resolveAccountPreference; } }));
 Object.defineProperty(exports, "hasAccountPreference", ({ enumerable: true, get: function () { return accountPreferences_ts_1.hasAccountPreference; } }));
+Object.defineProperty(exports, "saveLanguage", ({ enumerable: true, get: function () { return accountPreferences_ts_1.saveLanguage; } }));
 const HDSModel_Conversions_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Conversions.js */ "./ts/HDSModel/HDSModel-Conversions.ts");
 Object.defineProperty(exports, "HDSModelConversions", ({ enumerable: true, get: function () { return HDSModel_Conversions_ts_1.HDSModelConversions; } }));
 const HDSModel_Converters_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Converters.js */ "./ts/HDSModel/HDSModel-Converters.ts");
@@ -24920,6 +25436,8 @@ const HDSModel_Preferred_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-Pref
 Object.defineProperty(exports, "HDSModelPreferred", ({ enumerable: true, get: function () { return HDSModel_Preferred_ts_1.HDSModelPreferred; } }));
 Object.defineProperty(exports, "getPreferredInput", ({ enumerable: true, get: function () { return HDSModel_Preferred_ts_1.getPreferredInput; } }));
 Object.defineProperty(exports, "getPreferredDisplay", ({ enumerable: true, get: function () { return HDSModel_Preferred_ts_1.getPreferredDisplay; } }));
+Object.defineProperty(exports, "CERVICAL_FLUID_METHOD_KEY", ({ enumerable: true, get: function () { return HDSModel_Preferred_ts_1.CERVICAL_FLUID_METHOD_KEY; } }));
+Object.defineProperty(exports, "CERVICAL_FLUID_METHOD_LEGACY_KEY", ({ enumerable: true, get: function () { return HDSModel_Preferred_ts_1.CERVICAL_FLUID_METHOD_LEGACY_KEY; } }));
 const HDSModel_AppStreams_ts_1 = __webpack_require__(/*! ./HDSModel/HDSModel-AppStreams.js */ "./ts/HDSModel/HDSModel-AppStreams.ts");
 Object.defineProperty(exports, "HDSModelAppStreams", ({ enumerable: true, get: function () { return HDSModel_AppStreams_ts_1.HDSModelAppStreams; } }));
 const EuclidianDistanceEngine_ts_1 = __webpack_require__(/*! ./converters/EuclidianDistanceEngine.js */ "./ts/converters/EuclidianDistanceEngine.ts");
@@ -24936,6 +25454,8 @@ const cmcConstants = __importStar(__webpack_require__(/*! ./cmc/constants.js */ 
 exports.cmcConstants = cmcConstants;
 const cmcDataExport = __importStar(__webpack_require__(/*! ./cmc/dataExport.js */ "./ts/cmc/dataExport.ts"));
 exports.cmcDataExport = cmcDataExport;
+const cmcScope = __importStar(__webpack_require__(/*! ./cmc/scope.js */ "./ts/cmc/scope.ts"));
+exports.cmcScope = cmcScope;
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
 exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
@@ -24960,6 +25480,7 @@ const HDSLib = {
     cyclePhaseAt: cyclePhase_ts_1.cyclePhaseAt,
     computeReminders: reminders_ts_1.computeReminders,
     eventToShortText: eventToShortText_ts_1.eventToShortText,
+    eventToShortTextWithOrigin: eventToShortText_ts_1.eventToShortTextWithOrigin,
     formatEventDate: eventToShortText_ts_1.formatEventDate,
     MonitorScope: MonitorScope_ts_1.MonitorScope,
     HDSSettings: HDSSettings_ts_1.HDSSettings,
@@ -24968,6 +25489,7 @@ const HDSLib = {
     PROFILE_FIELDS: HDSProfile_ts_1.PROFILE_FIELDS,
     resolveAccountPreference: accountPreferences_ts_1.resolveAccountPreference,
     hasAccountPreference: accountPreferences_ts_1.hasAccountPreference,
+    saveLanguage: accountPreferences_ts_1.saveLanguage,
     HDSModelConversions: HDSModel_Conversions_ts_1.HDSModelConversions,
     HDSModelConverters: HDSModel_Converters_ts_1.HDSModelConverters,
     EuclidianDistanceEngine: EuclidianDistanceEngine_ts_1.EuclidianDistanceEngine,
@@ -24975,7 +25497,8 @@ const HDSLib = {
     cmcFormSpec,
     cmcAppScope,
     cmcConstants,
-    cmcDataExport
+    cmcDataExport,
+    cmcScope
 };
 exports["default"] = HDSLib;
 
@@ -25040,25 +25563,19 @@ function getSupportedLocales() {
 function resetPreferredLocales() {
     setPreferredLocales([...supportedLocales]);
 }
-/**
- * return the translation of this item considering the setting of preffered language
- *
- * Empty strings `""` are valid translations (the author chose "no text"); the
- * function returns them as-is and falls through to less-preferred locales only
- * when a translation is genuinely `null`/`undefined`. Only a missing `en` key
- * throws.
- */
 function localizeText(textItem) {
     if (textItem == null)
         return null;
-    if (textItem.en == null)
+    const en = textItem.en;
+    if (en == null)
         throw new errors_ts_1.HDSLibError('textItems must have an english translation', { textItem });
+    const texts = textItem;
     for (const l of preferredLocales) {
-        const v = textItem[l];
+        const v = texts[l];
         if (v != null)
             return v;
     }
-    return textItem.en;
+    return en;
 }
 /**
  * Change prefferedLocal order
@@ -25275,6 +25792,7 @@ function getServiceInfoURL() {
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HDSProfile = exports.PROFILE_FIELDS = void 0;
+exports.getHookedProfileConnection = getHookedProfileConnection;
 const getAttachmentUrl_ts_1 = __webpack_require__(/*! ../toolkit/getAttachmentUrl.js */ "./ts/toolkit/getAttachmentUrl.ts");
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 /**
@@ -25369,6 +25887,10 @@ let _values = { ...DEFAULTS };
 let _hooked = false;
 /** @internal — tracks which streams have been verified/created */
 let _ensuredStreams = new Set();
+/** @internal The connection HDSProfile is hooked to, or null (used by `saveLanguage`). */
+function getHookedProfileConnection() {
+    return _connection;
+}
 /**
  * Check if event type matches a field's eventType (supports `picture/*` wildcard).
  */
@@ -25778,6 +26300,19 @@ function findDynamicPrefix(key) {
     }
     return null;
 }
+/**
+ * Delete an event for good. Pryv's `events.delete` on a live event only trashes it (the result
+ * carries `event`); a second call on the trashed event deletes it (`eventDeletion`). An event
+ * already trashed elsewhere is deleted by the first call. B-2026-10-26-7: a single call
+ * expecting `eventDeletion` threw "eventDeletion missing" and left the setting in place.
+ */
+async function deleteForGood(connection, id) {
+    const first = await connection.apiOne('events.delete', { id });
+    if (first?.eventDeletion != null)
+        return;
+    // pryv's typings know only the trashing answer (`event`) of events.delete, hence the cast
+    await connection.apiOne('events.delete', { id }, 'eventDeletion');
+}
 /** @internal */
 let _connection = null;
 /** @internal */
@@ -25934,9 +26469,8 @@ const HDSSettings = {
         }
         const existing = _dynamicCache[key];
         if (value === null || value === undefined) {
-            // Delete
             if (existing) {
-                await _connection.apiOne('events.delete', { id: existing.id }, 'eventDeletion');
+                await deleteForGood(_connection, existing.id);
                 delete _dynamicCache[key];
                 delete _dynamicValues[key];
             }
@@ -26016,14 +26550,49 @@ exports["default"] = HDSSettings;
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.resolveAccountPreference = resolveAccountPreference;
 exports.hasAccountPreference = hasAccountPreference;
-const HDSProfile_ts_1 = __importDefault(__webpack_require__(/*! ./HDSProfile.js */ "./ts/settings/HDSProfile.ts"));
+exports.saveLanguage = saveLanguage;
+const HDSProfile_ts_1 = __importStar(__webpack_require__(/*! ./HDSProfile.js */ "./ts/settings/HDSProfile.ts"));
 const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ./HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 /**
  * Resolution order for a preference that moved from per-app HDSSettings to account-level
  * HDSProfile (plan 78 §C 7.1b):
@@ -26052,6 +26621,44 @@ function resolveAccountPreference(key) {
  */
 function hasAccountPreference(key) {
     return (HDSProfile_ts_1.default.isHooked && HDSProfile_ts_1.default.isStored(key)) || HDSSettings_ts_1.default.isHooked;
+}
+/**
+ * Save the person's language for every HDS app, and for the platform's own mail.
+ *
+ * Writes two places, as the account app's Preferences page does (decision 2026-07-15): the
+ * account-level `preferredLocales` (HDSProfile, read by every HDS app; the language becomes the
+ * first and only entry, and the localizer switches to it) and the Pryv core `account.language`
+ * (password-reset and other platform mail). They are different systems but a person has one
+ * language; writing only the first leaves platform mail in the old language.
+ *
+ * The core write is best effort: it needs a personal token and must not fail the save, so a
+ * refusal resolves with `coreLanguageSaved: false` and `coreError` (show a notice, not an
+ * error). The profile write is not: it rejects when HDSProfile is not hooked or the write fails.
+ *
+ * @param locale     language code, e.g. `fr`.
+ * @param opts.connection  connection for `account.update`; defaults to the one HDSProfile is hooked to.
+ */
+async function saveLanguage(locale, opts = {}) {
+    if (typeof locale !== 'string' || locale.trim() === '') {
+        throw new errors_ts_1.HDSLibError('saveLanguage: a language code is required', { locale });
+    }
+    await HDSProfile_ts_1.default.set('preferredLocales', [locale]);
+    const connection = opts.connection ?? (0, HDSProfile_ts_1.getHookedProfileConnection)();
+    if (connection == null) {
+        return { profileSaved: true, coreLanguageSaved: false, coreError: new errors_ts_1.HDSLibError('saveLanguage: no connection for account.update') };
+    }
+    try {
+        const [result] = await connection.api([
+            { method: 'account.update', params: { update: { language: locale } } }
+        ]);
+        if (result == null || result.error) {
+            return { profileSaved: true, coreLanguageSaved: false, coreError: result?.error ?? new errors_ts_1.HDSLibError('saveLanguage: no answer to account.update') };
+        }
+        return { profileSaved: true, coreLanguageSaved: true };
+    }
+    catch (e) {
+        return { profileSaved: true, coreLanguageSaved: false, coreError: e };
+    }
 }
 
 
@@ -35735,6 +36342,8 @@ describe('[HDSP] HDSProfile (dev API)', function () {
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
+
 
 
 
@@ -36023,22 +36632,77 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(updateCall.params.update.content.value, 'mira');
   });
 
-  it('[HDSD8] setDynamic with null deletes setting', async () => {
-    const conn = createMockConnection({
-      'events.get': () => ({
-        events: [
-          { id: 'ev-ac-mood', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } }
-        ]
-      })
+  /** events.delete as Pryv answers it: a live event is trashed first, a trashed one is deleted. */
+  function deletingConnection (events) {
+    const trashed = new Set(events.filter(e => e.trashed).map(e => e.id));
+    const deleted = new Set();
+    return createMockConnection({
+      'events.get': () => ({ events: events.filter(e => !trashed.has(e.id) && !deleted.has(e.id)) }),
+      'events.delete': ({ id }) => {
+        if (trashed.has(id)) {
+          trashed.delete(id);
+          deleted.add(id);
+          return { eventDeletion: { id } };
+        }
+        trashed.add(id);
+        return { event: { ...events.find(e => e.id === id), trashed: true } };
+      }
     });
+  }
+
+  it('[HDSD8] setDynamic with null deletes the setting for good: trash, then delete (B-2026-10-26-7)', async () => {
+    const conn = deletingConnection([
+      { id: 'ev-ac-mood', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } }
+    ]);
     await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
 
     await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', null);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), undefined);
 
-    const deleteCall = conn.apiCalls.find(c => c.method === 'events.delete');
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(deleteCall, 'Should have called events.delete');
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(deleteCall.params.id, 'ev-ac-mood');
+    const deleteCalls = conn.apiCalls.filter(c => c.method === 'events.delete');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(deleteCalls.map(c => c.params.id), ['ev-ac-mood', 'ev-ac-mood'], 'trash, then delete');
+
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.reload();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-display-wellbeing-mood'), undefined, 'gone after a reload');
+  });
+
+  it('[HDSD8b] setDynamic with null on an event trashed meanwhile deletes it in one call', async () => {
+    // loaded while live, trashed by another client since: the first events.delete already deletes it
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [{ id: 'ev-w', type: 'settings/preferred-input', content: { itemKey: 'body-weight', value: 'mass/lb' } }]
+      }),
+      'events.delete': ({ id }) => ({ eventDeletion: { id } })
+    });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-input-body-weight', null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.apiCalls.filter(c => c.method === 'events.delete').length, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-input-body-weight'), undefined);
+  });
+
+  it('[HDSD8d] a failing delete is reported and the setting is kept', async () => {
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [{ id: 'ev-w', type: 'settings/preferred-input', content: { itemKey: 'body-weight', value: 'mass/lb' } }]
+      }),
+      'events.delete': () => ({ error: { id: 'forbidden', message: 'no' } })
+    });
+    // throw on an error answer, as pryv's apiOne does
+    conn.apiOne = async (method, params, key) => {
+      const [result] = await conn.api([{ method, params }]);
+      if (result.error) throw new Error(result.error.id);
+      return key ? result[key] : result;
+    };
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-input-body-weight', null), /forbidden/);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-input-body-weight'), 'mass/lb');
+  });
+
+  it('[HDSD8c] setDynamic with null when nothing is stored makes no call', async () => {
+    const conn = deletingConnection([]);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.apiCalls.filter(c => c.method === 'events.delete').length, 0);
   });
 
   it('[HDSD9] setDynamic throws for unknown prefix', async () => {
@@ -36059,6 +36723,40 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
       () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('not-a-known-prefix', 'foo'),
       /Unknown dynamic setting prefix/
     );
+  });
+});
+
+describe('[HDSDL] HDSSettings dynamic settings (dev API)', function () {
+  this.timeout(20000);
+
+  let connection;
+  const streamId = 'hdsd-settings-test';
+
+  before(async () => {
+    await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.init)();
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUser)();
+    connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.apiEndpoint);
+    await connection.apiOne('streams.create', { id: streamId, name: 'Settings test' }, 'stream');
+  });
+
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+  });
+
+  it('[HDSDL1] setDynamic(key, null) deletes the event for good (B-2026-10-26-7)', async () => {
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(connection, streamId);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-input-body-vulva-mucus-inspect', 'creighton');
+    const [stored] = await connection.apiOne('events.get', { streams: [streamId], types: ['settings/preferred-input'] }, 'events');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(stored.content.value, 'creighton');
+
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-input-body-vulva-mucus-inspect', null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-input-body-vulva-mucus-inspect'), undefined);
+
+    // neither live nor in the trash
+    const all = await connection.apiOne('events.get', { streams: [streamId], state: 'all' }, 'events');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.find(e => e.id === stored.id), undefined, 'the event must not survive, trashed or not');
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.reload();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-input-body-vulva-mucus-inspect'), undefined);
   });
 });
 
@@ -36396,6 +37094,10 @@ describe('[MSC] MonitorScope', () => {
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+/* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
+
+
 
 
 
@@ -36444,6 +37146,108 @@ describe('[ACCP] resolveAccountPreference', () => {
     _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile._testHook({ unitSystem: 'imperial' });
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.hasAccountPreference)('unitSystem'), true);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.resolveAccountPreference)('unitSystem'), 'imperial');
+  });
+});
+
+/** A connection that answers the calls HDSProfile and saveLanguage make, and records them. */
+function profileConnection ({ accountUpdate } = {}) {
+  return {
+    calls: [],
+    async api (calls) {
+      this.calls.push(...calls);
+      return calls.map(({ method, params }) => {
+        if (method === 'events.get') return { events: [] };
+        if (method === 'streams.create') return { stream: { id: params.id } };
+        if (method === 'events.create') return { event: { id: 'ev-' + this.calls.length, ...params } };
+        if (method === 'events.update') return { event: { id: params.id, ...params.update } };
+        if (method === 'account.update') return accountUpdate ? accountUpdate(params) : { account: { language: params.update.language } };
+        return {};
+      });
+    },
+    async apiOne (method, params, key) {
+      const [result] = await this.api([{ method, params }]);
+      if (result.error) throw new Error(result.error.id);
+      return key ? result[key] : result;
+    }
+  };
+}
+
+describe('[ACCL] saveLanguage', () => {
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+  });
+
+  it('[ACCL1] writes preferredLocales on the profile and the core account.language', async () => {
+    const conn = profileConnection();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(conn);
+    const result = await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.saveLanguage)('fr');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(result, { profileSaved: true, coreLanguageSaved: true });
+    const created = conn.calls.find(c => c.method === 'events.create');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(created.params.type, 'settings/preferred-locales');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(created.params.streamIds, ['profile-preferences']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(created.params.content, ['fr']);
+    const update = conn.calls.find(c => c.method === 'account.update');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(update.params, { update: { language: 'fr' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('preferredLocales'), ['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.getPreferredLocales)()[0], 'fr', 'the localizer follows');
+  });
+
+  it('[ACCL2] a refused core update does not fail the save', async () => {
+    const conn = profileConnection({ accountUpdate: () => ({ error: { id: 'forbidden', message: 'personal token required' } }) });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(conn);
+    const result = await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.saveLanguage)('es');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.profileSaved, true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.coreLanguageSaved, false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.coreError.id, 'forbidden');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('preferredLocales'), ['es']);
+  });
+
+  it('[ACCL3] a thrown core update does not fail the save either', async () => {
+    const conn = profileConnection({ accountUpdate: () => { throw new Error('network'); } });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(conn);
+    const result = await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.saveLanguage)('fr');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.coreLanguageSaved, false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(result.coreError.message, /network/);
+  });
+
+  it('[ACCL4] the core update goes through opts.connection when given', async () => {
+    const profileConn = profileConnection();
+    const other = profileConnection();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(profileConn);
+    await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.saveLanguage)('fr', { connection: other });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profileConn.calls.filter(c => c.method === 'account.update').length, 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(other.calls.filter(c => c.method === 'account.update').length, 1);
+  });
+
+  it('[ACCL5] rejects without a hooked profile, or without a language', async () => {
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.saveLanguage)('fr'), /hookToConnection/);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(profileConnection());
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.saveLanguage)(''), /language code is required/);
+  });
+});
+
+describe('[ACCLL] saveLanguage (dev API)', function () {
+  this.timeout(20000);
+
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+  });
+
+  it('[ACCLL1] the profile and the core account both read the new language', async () => {
+    await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_3__.init)();
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_3__.createUser)();
+    const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.apiEndpoint);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+    const result = await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.saveLanguage)('fr');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.coreLanguageSaved, true, 'core update: ' + JSON.stringify(result.coreError));
+    const account = await connection.apiOne('account.get', {}, 'account');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(account.language, 'fr');
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('preferredLocales'), ['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('preferredLocales'), true);
   });
 });
 
@@ -37212,6 +38016,207 @@ describe('[APRX] appTemplates Requests', function () {
       const report = checkQuestionnaireCoverage(q.toRequestEventContent(), { permissions: [] });
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.ok, false);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(report.perQuestion[0].missing, true);
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcScope.test.js"
+/*!********************************!*\
+  !*** ./tests/cmcScope.test.js ***!
+  \********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+const COLLECTORS = ':_cmc:apps:hds-patient:collectors:dr--api-x';
+
+/** A grant as the platform lists it: the person's data plus the plugin's own channel permissions. */
+const grant = [
+  { streamId: 'body-weight', level: 'read' },
+  { streamId: 'body-height', level: 'read' },
+  { streamId: ':_cmc:inbox', level: 'create-only' },
+  { streamId: COLLECTORS, level: 'contribute' }
+];
+const rel = { accessId: 'acc-1', localCollectorStreamId: COLLECTORS, grantedPermissions: grant };
+
+/**
+ * A connection where the platform settles a scope update: `outcome(content)` returns what the
+ * plugin records on the trigger (default: applied and delivered).
+ */
+function scopeConnection (outcome = (c) => ({ ...c, applied: true, status: 'completed' })) {
+  const calls = [];
+  const events = new Map();
+  return {
+    calls,
+    async apiOne (method, params, key) {
+      calls.push({ method, params });
+      if (method === 'events.create') {
+        const event = { id: 'ev-' + calls.length, ...params };
+        events.set(event.id, event);
+        return key ? event : { event };
+      }
+      if (method === 'events.getOne') {
+        const event = events.get(params.id);
+        const settled = { ...event, content: outcome(event.content) };
+        return key ? settled : { event: settled };
+      }
+      throw new Error('unexpected ' + method);
+    }
+  };
+}
+
+describe('[CSCP] cmcScope', function () {
+  before(async () => {
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+  });
+
+  describe('[CSCP-P] pure helpers', () => {
+    it('[CSCP1] personPermissions drops the platform channel permissions', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.personPermissions(grant), [
+        { streamId: 'body-weight', level: 'read' },
+        { streamId: 'body-height', level: 'read' }
+      ]);
+    });
+
+    it('[CSCP2] planStopSharing keeps every other stream', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing(grant, 'body-weight'), { ok: true, newPermissions: [{ streamId: 'body-height', level: 'read' }] });
+    });
+
+    it('[CSCP3] planStopSharing refuses: not shared, shared through a parent or *, nothing left', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing(grant, 'body-vulva-bleeding'), { ok: false, reason: 'not-shared' });
+      const viaParent = [{ streamId: 'body', level: 'read' }, { streamId: 'body-weight', level: 'read' }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing(viaParent, 'body-weight'), { ok: false, reason: 'shared-through-parent' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing([{ streamId: '*', level: 'read' }], 'body-weight'), { ok: false, reason: 'shared-through-parent' });
+      const single = [{ streamId: 'body-weight', level: 'read' }, { streamId: COLLECTORS, level: 'contribute' }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing(single, 'body-weight'), { ok: false, reason: 'nothing-left' });
+    });
+
+    it('[CSCP4] scopeDiff reports added, removed and level changes, platform streams left out', () => {
+      const diff = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.scopeDiff(grant, [
+        { streamId: 'body-weight', level: 'contribute' },
+        { streamId: 'body-vulva-bleeding', level: 'read' },
+        { streamId: ':_cmc:inbox', level: 'create-only' }
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(diff, {
+        added: ['body-vulva-bleeding'],
+        removed: ['body-height'],
+        changed: [{ streamId: 'body-weight', from: 'read', to: 'contribute' }]
+      });
+    });
+  });
+
+  describe('[CSCP-W] stopSharingStream / shareStreamsAgain', () => {
+    it('[CSCP10] stopSharingStream writes the scope update with the extra fields in content.hds only', async () => {
+      const conn = scopeConnection();
+      const message = { en: 'Ana stopped sharing Weight', fr: 'Ana a arrêté de partager Poids' };
+      const result = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.stopSharingStream(conn, rel, 'body-weight', { message, completionPollIntervalMs: 1 });
+      const create = conn.calls.find(c => c.method === 'events.create');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(create.params.streamIds, [COLLECTORS]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(create.params.type, 'consent/scope-update-cmc');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(create.params.content).sort(), ['accessId', 'hds', 'newPermissions'], 'no new top-level field');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(create.params.content.accessId, 'acc-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(create.params.content.newPermissions, [{ streamId: 'body-height', level: 'read' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(create.params.content.hds, { removed: ['body-weight'], message });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.applied, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.peerNotified, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.updateEventId, create.params.id ?? 'ev-1');
+    });
+
+    it('[CSCP11] stopSharingStream refuses before writing when the stream cannot be stopped alone', async () => {
+      const conn = scopeConnection();
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.stopSharingStream(conn, rel, 'body-vulva-bleeding'), /not-shared/);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.stopSharingStream(conn, { ...rel, localCollectorStreamId: null }, 'body-weight'), /no collectors stream/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.calls.length, 0);
+    });
+
+    it('[CSCP12] a change the platform did not apply throws with its reason', async () => {
+      const conn = scopeConnection((c) => ({ ...c, applied: false, status: 'failed', failure: { reason: 'cmc-scope-update-target-not-counterparty' } }));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.stopSharingStream(conn, rel, 'body-weight', { completionPollIntervalMs: 1 }), /target-not-counterparty/);
+    });
+
+    it('[CSCP13] applied but not delivered: resolves with peerNotified false and the failure', async () => {
+      const conn = scopeConnection((c) => ({ ...c, applied: true, status: 'failed', failure: { reason: 'cmc-handler-delivery-failed' } }));
+      const result = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.stopSharingStream(conn, rel, 'body-weight', { completionPollIntervalMs: 1 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.applied, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.peerNotified, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(result.deliveryFailure, { reason: 'cmc-handler-delivery-failed' });
+    });
+
+    it('[CSCP14] shareStreamsAgain adds only what is not shared, at read by default, in content.hds.added', async () => {
+      const conn = scopeConnection();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.shareStreamsAgain(conn, rel, ['body-vulva-bleeding', 'body-weight'], { completionPollIntervalMs: 1 });
+      const content = conn.calls.find(c => c.method === 'events.create').params.content;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(content).sort(), ['accessId', 'hds', 'newPermissions']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(content.newPermissions, [
+        { streamId: 'body-weight', level: 'read' },
+        { streamId: 'body-height', level: 'read' },
+        { streamId: 'body-vulva-bleeding', level: 'read' }
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(content.hds, { added: ['body-vulva-bleeding'] });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.shareStreamsAgain(conn, rel, ['body-weight']), /already shared/);
+    });
+
+    it('[CSCP15] waitForCompletion false returns right after the write', async () => {
+      const conn = scopeConnection();
+      const result = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.shareStreamsAgain(conn, rel, ['body-vulva-bleeding'], { waitForCompletion: false });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.status, 'pending');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.calls.filter(c => c.method === 'events.getOne').length, 0);
+    });
+  });
+
+  describe('[CSCP-N] parseSharingNotes / listSharingNotes', () => {
+    const events = [
+      { id: 'u1', type: 'consent/scope-update-cmc', time: 10, content: { accessId: 'acc-1', newPermissions: [], applied: true, status: 'completed', hds: { removed: ['body-weight'], message: { en: 'stopped' } } } },
+      { id: 'r1', type: 'consent/scope-request-cmc', time: 20, content: { newPermissions: [{ streamId: 'body-weight', level: 'read' }], message: { en: 'please' }, expires: 1000 } },
+      { id: 'a1', type: 'consent/scope-update-cmc', time: 25, content: { scopeRequestEventId: 'r1', accept: true, applied: true, status: 'completed' } },
+      { id: 'r2', type: 'consent/scope-request-cmc', time: 30, content: { newPermissions: [{ streamId: 'body-height', level: 'contribute' }], expires: 50 } },
+      { id: 'r3', type: 'consent/scope-request-cmc', time: 40, content: { newPermissions: [], status: 'refused' } },
+      { id: 'u2', type: 'consent/scope-update-cmc', time: 50, content: { accessId: 'acc-1', newPermissions: [], applied: true, status: 'delivered', hds: { added: ['body-weight'] } } },
+      { id: 'u3', type: 'consent/scope-update-cmc', time: 60, content: { accessId: 'acc-1', newPermissions: [], applied: false, status: 'failed', hds: { removed: ['body-height'] } } },
+      { id: 'u4', type: 'consent/scope-update-cmc', time: 70, content: { accessId: 'acc-1', newPermissions: [], applied: true, status: 'completed', removed: ['body-height'] } }
+    ];
+
+    it('[CSCP20] stops, shares again and requests with their answers, oldest first', () => {
+      const notes = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.parseSharingNotes([...events].reverse(), 100);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(notes.map(n => [n.kind, n.id]), [
+        ['stopped', 'u1'], ['request', 'r1'], ['request', 'r2'], ['request', 'r3'], ['shared', 'u2']
+      ]);
+      const [stopped, r1, r2, r3, shared] = notes;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(stopped.streamIds, ['body-weight']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(stopped.message, { en: 'stopped' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(stopped.peerNotified, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(r1.answer, 'accepted');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(r1.answerEventId, 'a1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(r2.answer, 'expired');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(r3.answer, 'refused', 'from the status the platform stamps on the request');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(shared.peerNotified, false);
+    });
+
+    it('[CSCP21] a change not applied, or with its fields outside content.hds, is not a note', () => {
+      const ids = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.parseSharingNotes(events, 100).map(n => n.id);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!ids.includes('u3'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!ids.includes('u4'));
+    });
+
+    it('[CSCP22] listSharingNotes reads both types from the collectors stream', async () => {
+      const calls = [];
+      const conn = { async apiOne (method, params, key) { calls.push({ method, params, key }); return events; } };
+      const notes = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.listSharingNotes(conn, COLLECTORS);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(calls[0].method, 'events.get');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(calls[0].params.streams, [COLLECTORS]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(calls[0].params.types.sort(), ['consent/scope-request-cmc', 'consent/scope-update-cmc']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(notes.length, 5);
     });
   });
 });
@@ -38175,10 +39180,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
 /* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
 
 // Import via the package entry point, like every other test file: a default import
 // straight from the .ts resolves to the module namespace under webpack (no .unhook),
 // which failed the browser suite while Node passed.
+
 
 
 
@@ -38203,7 +39210,57 @@ describe('[ESTX] eventToShortText', () => {
   it('[EST3] number with unit symbol (mass/kg)', () => {
     const event = { content: 60, streamIds: ['body-weight'], type: 'mass/kg' };
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+    // 'Kg' is the mass/kg symbol of the published model (it should read 'kg', upstream data-model fix pending);
+    // update this assertion when the pack ships the corrected symbol.
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, '60 Kg');
+  });
+
+  describe('[EST27] number.display: multiplier and suffix as on entry (B-2026-10-26-22)', () => {
+    afterEach(() => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)();
+    });
+
+    const ev = (key, content) => {
+      const itemDef = model.itemsDefs.forKey(key);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef?.data?.number?.display, `${key} should declare number.display in the published pack`);
+      return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
+    };
+
+    it('[EST27a] a suffix replaces the eventType symbol (AMH, vitamin D: ng/mL over µg/L)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-vitamin-d-25oh', 30)), '30 ng/mL');
+    });
+
+    it('[EST27b] sperm concentration reads 10⁶/mL, not the G/L symbol of concentration/megacount-ml', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-semen-concentration', 15)), '15 10⁶/mL');
+    });
+
+    it('[EST27c] a multiplier scales the value without float noise (HbA1c, hematocrit)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-hba1c', 0.057)), '5.7 %');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-cbc-hematocrit', 0.42)), '42 %');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-cbc-hematocrit', 0.29)), '29 %');
+    });
+
+    it('[EST27d] the suffix is localized', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
+    });
+
+    it('[EST27e] a display item is not converted to another unit system (it states how it reads)', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('unitSystem', 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('lifestyle-alcohol-typical-quantity', 14)), '14 g');
+    });
+
+    it('[EST27f] items without display are unchanged', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 12.5, streamIds: ['fertility-hormone-lh'], type: 'concentration/iu-l' }), '12.5 IU/L');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 60, streamIds: ['body-weight'], type: 'mass/kg' }), '60 Kg');
+    });
+
+    it('[EST27g] eventToShortTextWithOrigin gives the same text, no origin', () => {
+      const event = ev('body-semen-concentration', 15);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(event), { text: '15 10⁶/mL', origin: null });
+    });
   });
 
   it('[EST4] number with unit symbol (concentration/iu-l)', () => {
@@ -38277,6 +39334,42 @@ describe('[ESTX] eventToShortText', () => {
     };
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, '2024-01-15');
+  });
+
+  describe('[EST7D] date/iso-8601 content is the date shown (B-2026-10-26-6)', () => {
+    afterEach(() => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+    });
+
+    const dobEvent = () => {
+      const itemDef = model.itemsDefs.forKey('profile-date-of-birth');
+      // entered on 2024-01-15, born on 1990-04-12
+      return { content: '1990-04-12', streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0], time: 1705320000 };
+    };
+
+    it('[EST7D1] the stored date, not the entry time', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(dobEvent()), '1990-04-12');
+    });
+
+    it('[EST7D2] the stored date in the resolved date format, without a time-zone shift', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('dateFormat', 'DD.MM.YYYY');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(dobEvent()), '12.04.1990');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('dateFormat', 'MM/DD/YYYY');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...dobEvent(), content: '1990-04-12T23:30:00Z' }), '04/12/1990');
+    });
+
+    it('[EST7D3] no stored date: the event time, as before', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...dobEvent(), content: null }), '2024-01-15');
+    });
+
+    it('[EST7D4] an unparseable value falls back to the event time', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...dobEvent(), content: 'unknown' }), '2024-01-15');
+    });
+
+    it('[EST7D5] without an itemDef, a date/iso-8601 string is formatted too', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('dateFormat', 'DD/MM/YYYY');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: '2001-02-03', streamIds: ['not-a-model-stream'], type: 'date/iso-8601', time: 1705320000 }), '03/02/2001');
+    });
   });
 
   it('[EST8] datasource-search (medication) returns drug label + intake', () => {
@@ -38464,6 +39557,34 @@ describe('[ESTX] eventToShortText', () => {
     if (opt) {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('1/3'), `Expected ratio prefix in: ${result}`);
     }
+  });
+
+  describe('[EST25] ratio/proportion: a select between hooks, a number as %', () => {
+    const bleeding = (content) => {
+      const itemDef = model.itemsDefs.forKey('body-vulva-bleeding');
+      return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
+    };
+
+    it('[EST25a] a bare select value between hooks reads as the nearest hook label (bleeding)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.5)), 'Moderate');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.62)), 'Moderate');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.7)), 'Heavy');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.1)), 'Spotting');
+    });
+
+    it('[EST25b] an exact hook is unchanged, and test-result/scale keeps its percentage', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.55)), 'Moderate');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 0.56, streamIds: ['fertility-test-opk'], type: 'test-result/scale' }), 'Positive 56%');
+    });
+
+    it('[EST25c] a ratio/proportion number reads as a percentage', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 0.057, streamIds: ['body-blood-hba1c'], type: 'ratio/proportion' }), '5.7 %');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 1, streamIds: ['body-blood-hba1c'], type: 'ratio/proportion' }), '100 %');
+    });
+
+    it('[EST25d] without an itemDef, a ratio/proportion number reads as a percentage too', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 0.5, streamIds: ['not-a-model-stream'], type: 'ratio/proportion' }), '50 %');
+    });
   });
 
   it('[EST17a] test-result/scale positive (1)', () => {
@@ -38786,6 +39907,75 @@ describe('[ESTX] eventToShortText', () => {
     });
   });
 
+  describe('[EST26] eventToShortTextWithOrigin: the conversion origin as fields (B-2026-10-26-17)', () => {
+    before(async () => {
+      await model.converters.ensureEngine('mood');
+      await model.converters.ensureEngine('cervical-fluid');
+    });
+
+    afterEach(() => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+    });
+
+    it('[EST26a] shown as recorded: source fields, no target, no match; same text as eventToShortText', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+      const { text, origin } = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text, (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text, 'Creamy (Mira)');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(origin, { sourceKey: 'mira', sourceName: 'Mira', sourceLabel: 'Creamy', targetKey: null, targetName: null, match: null });
+    });
+
+    it('[EST26b] converted with a perfect match: target fields and match 100 (the text omits it)', async () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+      const { text, origin } = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text, 'Creamy (Apple Health <- Mira)');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text, (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.sourceKey, 'mira');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.sourceName, 'Mira');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.targetKey, 'appleHealth');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.targetName, 'Apple Health');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.match, 100);
+    });
+
+    it('[EST26c] converted with a partial match: the match is the percentage in the text', async () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'billings');
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Watery');
+      const { text, origin } = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.targetKey, 'billings');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(origin.match < 100, `expected a partial match, got ${origin.match}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(text.endsWith(`<- Mira ${origin.match}%)`), `text and match disagree: ${text} / ${origin.match}`);
+    });
+
+    it('[EST26d] same method as the display setting: shown as recorded', async () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
+      const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
+      const { origin } = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.sourceKey, 'mira');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.targetKey, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.match, null);
+    });
+
+    it('[EST26e] a raw vector: no source, shown through _raw with its match', () => {
+      const event = {
+        content: { vectors: { valence: 0.9, arousal: 0.3, dominance: 0.6, socialOrientation: 0, temporalFocus: 0 } },
+        streamIds: ['wellbeing-mood'],
+        type: 'mood/5d-vectors'
+      };
+      const { text, origin } = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text, (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.sourceKey, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.sourceName, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(origin.targetKey, '_raw');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof origin.match, 'number');
+    });
+
+    it('[EST26f] a non-convertible event has no origin', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)({ content: 60, streamIds: ['body-weight'], type: 'mass/kg' }), { text: '60 Kg', origin: null });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(null), { text: null, origin: null });
+    });
+  });
+
   describe('[EST24] multi-select (data-model 3.0.0, site-agents#9/#10)', () => {
     it('[EST24a] joins the localized labels of every selected value', () => {
       const event = {
@@ -38851,6 +40041,8 @@ describe('[ESTX] eventToShortText', () => {
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
 
 
 
@@ -38922,6 +40114,51 @@ describe('[FED] formatEventDate', function () {
     await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, '2024-01-15');
+  });
+
+  describe('[FEDO] options { year, weekday }', () => {
+    afterEach(() => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+    });
+
+    const expectedWithoutYear = {
+      'DD.MM.YYYY': '15.01.',
+      'DD/MM/YYYY': '15/01',
+      'MM/DD/YYYY': '01/15',
+      'YYYY-MM-DD': '01-15'
+    };
+    for (const [format, expected] of Object.entries(expectedWithoutYear)) {
+      it(`[FEDO1] year: false with ${format} → ${expected}`, async () => {
+        await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(createMockConnection([
+          { id: 'ev1', type: 'settings/date-format', content: format }
+        ]), 'test-stream');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, { year: false }), expected);
+      });
+    }
+
+    it('[FEDO2] year: false without a date format → MM-DD (the ISO date without its year)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, { year: false }), '01-15');
+    });
+
+    it('[FEDO3] weekday: true puts the short day name first, in the preferred locale', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(createMockConnection([
+        { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }
+      ]), 'test-stream');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, { weekday: true }), 'Mon 15.01.2024');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, { weekday: true, year: false }), 'lun. 15.01.');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, { weekday: true, locale: 'en' }), 'Mon 15.01.2024');
+    });
+
+    it('[FEDO4] no options (and an empty object) keep the existing output', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(createMockConnection([
+        { id: 'ev1', type: 'settings/date-format', content: 'DD/MM/YYYY' }
+      ]), 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp), '15/01/2024');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, {}), '15/01/2024');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, { year: true, weekday: false }), '15/01/2024');
+    });
   });
 });
 
@@ -39798,6 +41035,13 @@ describe('[LOCX] Localization', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: 'Hello', fr: null }), 'Hello');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: 'Hello', fr: undefined }), 'Hello');
     });
+
+    it('[LOLZ] accepts any per-locale map (Localizable): extra locales are ignored, undefined input is null', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: 'Hello', de: 'Hallo', fr: 'Bonjour' }), 'Bonjour');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: 'Hello', de: 'Hallo' }), 'Hello');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(undefined), null);
+    });
   });
 
   describe('[LOCN] onPreferredLocalesChange (B-2026-07-10-1)', () => {
@@ -39925,6 +41169,92 @@ describe('[LOGX] Logger', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(logs[1], ['error', 'msg2']);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(logs[2], ['info', 'msg3']); // warn uses info
     });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/permissionLabels.test.js"
+/*!****************************************!*\
+  !*** ./tests/permissionLabels.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+
+const { dataName, permissionView } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.appTemplates;
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+describe('[PLBL] permission labels', function () {
+  let model;
+  before(async () => {
+    model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)();
+    await model.load(modelURL);
+  });
+
+  afterEach(() => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)();
+  });
+
+  it('[PLBL1] dataName names a stream by the item filed there, in the asked or preferred language', () => {
+    const def = model.itemsDefs.forKey('body-weight');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('body-weight', { locale: 'en' }), def.data.label.en);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('body-weight', { locale: 'fr' }), def.data.label.fr);
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('body-weight'), def.data.label.fr);
+  });
+
+  it('[PLBL2] dataName falls back to the given name, then the stream id', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('not-a-model-stream', { fallback: 'Their label' }), 'Their label');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('not-a-model-stream'), 'not-a-model-stream');
+  });
+
+  it('[PLBL3] permissionView names a model stream from the model, never from the requester label', () => {
+    const view = permissionView({ streamId: 'body-weight', level: 'read', defaultName: 'Cycle length' }, { locale: 'en' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.kind, 'data');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.name, model.itemsDefs.forKey('body-weight').data.label.en);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.requesterLabel, 'Cycle length');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.inModel, true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.beyondRead, false);
+  });
+
+  it('[PLBL4] a stream the model does not know: the requester label quoted, flagged', () => {
+    const view = permissionView({ streamId: 'custom-x', level: 'contribute', defaultName: 'My notes' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.name, '“My notes”');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.inModel, false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.beyondRead, true);
+  });
+
+  it('[PLBL5] a parent stream says it covers what is under it', () => {
+    const view = permissionView({ streamId: 'body', level: 'read' }, { locale: 'en' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.hasChildren, true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(view.label.endsWith('and everything under it'), view.label);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(view.label.startsWith(view.name));
+  });
+
+  it('[PLBL6] all data and the account e-mail have their own names; all data always warns', () => {
+    const all = permissionView({ streamId: '*', level: 'read' }, { locale: 'fr' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.kind, 'all-data');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.name, 'Toutes vos données');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.beyondRead, true);
+    const email = permissionView({ streamId: ':system:email', level: 'read' }, { locale: 'en' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(email.kind, 'account-email');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(email.name, 'Your e-mail address');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(email.beyondRead, false);
+  });
+
+  it('[PLBL7] no level means read', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'body-weight' }).level, 'read');
   });
 });
 
@@ -40991,12 +42321,16 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
 /* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
 /* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
+
+
 
 
 
