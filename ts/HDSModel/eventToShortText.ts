@@ -1,4 +1,4 @@
-import { localizeText } from '../localizeText.ts';
+import { localizeText, getPreferredLocales } from '../localizeText.ts';
 import { getModel } from './HDSModelInitAndSingleton.ts';
 // HDSSettings is still the right source for per-app settings (the dynamic
 // `preferred-display-*` keys). Account-level preferences go through the resolver.
@@ -6,27 +6,78 @@ import HDSSettings from '../settings/HDSSettings.ts';
 import { resolveAccountPreference, hasAccountPreference } from '../settings/accountPreferences.ts';
 import type { DateFormat } from '../settings/HDSSettings.ts';
 
-const DATE_SEPARATORS: Record<DateFormat, (d: Date) => string> = {
-  'DD.MM.YYYY': (d) => pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
-  'DD/MM/YYYY': (d) => pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(),
-  'MM/DD/YYYY': (d) => pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + '/' + d.getFullYear(),
-  'YYYY-MM-DD': (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()),
+/** A calendar day: year, month (1-12), day of month. */
+interface DayParts { y: number; m: number; d: number }
+
+const DATE_SEPARATORS: Record<DateFormat, (p: DayParts, year: boolean) => string> = {
+  'DD.MM.YYYY': (p, year) => pad(p.d) + '.' + pad(p.m) + '.' + (year ? p.y : ''),
+  'DD/MM/YYYY': (p, year) => pad(p.d) + '/' + pad(p.m) + (year ? '/' + p.y : ''),
+  'MM/DD/YYYY': (p, year) => pad(p.m) + '/' + pad(p.d) + (year ? '/' + p.y : ''),
+  'YYYY-MM-DD': isoDay,
 };
+
+function isoDay (p: DayParts, year: boolean): string {
+  return (year ? p.y + '-' : '') + pad(p.m) + '-' + pad(p.d);
+}
 
 function pad (n: number): string { return n < 10 ? '0' + n : String(n); }
 
+export interface FormatEventDateOptions {
+  /** Include the year (default `true`). Without it: `15.01.`, `15/01`, `01/15`, `01-15`. */
+  year?: boolean;
+  /** Put the short weekday name first, in `locale` (default `false`): `Mon 15.01.2024`. */
+  weekday?: boolean;
+  /** Locale of the weekday name; defaults to the first preferred locale. */
+  locale?: string;
+}
+
+/** The format to apply, or null when none is resolved (ISO date then). */
+function resolvedDateFormat (): DateFormat | null {
+  if (!hasAccountPreference('dateFormat')) return null;
+  const fmt = resolveAccountPreference('dateFormat');
+  return DATE_SEPARATORS[fmt] ? fmt : null;
+}
+
+/** A calendar day in the resolved format (ISO date when none), with the options applied. */
+function formatDayParts (p: DayParts, fmt: DateFormat | null, opts: FormatEventDateOptions): string {
+  const year = opts.year !== false;
+  const text = fmt ? DATE_SEPARATORS[fmt](p, year) : isoDay(p, year);
+  if (!opts.weekday) return text;
+  const locale = opts.locale ?? getPreferredLocales()[0] ?? 'en';
+  let name = '';
+  try {
+    // Noon UTC of that calendar day, read in UTC: the weekday of the day itself, whatever the host time zone.
+    name = new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(Date.UTC(p.y, p.m - 1, p.d, 12));
+  } catch { /* unknown locale: no weekday rather than a throw */ }
+  return name ? name + ' ' + text : text;
+}
+
 /**
  * Format a Unix timestamp (seconds) as a date string.
- * Uses the resolved account/app dateFormat when available, otherwise ISO date.
+ * Uses the resolved account/app dateFormat when available (local calendar day), otherwise the ISO date (UTC).
+ * `opts.year: false` leaves the year out, `opts.weekday: true` puts the short weekday name first.
  */
-export function formatEventDate (timeSec: number): string {
+export function formatEventDate (timeSec: number, opts: FormatEventDateOptions = {}): string {
   const d = new Date(timeSec * 1000);
-  if (hasAccountPreference('dateFormat')) {
-    const fmt = resolveAccountPreference('dateFormat');
-    const formatter = DATE_SEPARATORS[fmt];
-    if (formatter) return formatter(d);
-  }
-  return d.toISOString().split('T')[0];
+  const fmt = resolvedDateFormat();
+  const parts: DayParts = fmt
+    ? { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() }
+    : { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+  return formatDayParts(parts, fmt, opts);
+}
+
+/**
+ * Format a calendar date stored as content (`date/iso-8601`, e.g. a date of birth: `"1990-04-12"`) in the
+ * resolved date format. The day is read as written: no time-zone shift. Returns null when the string does not
+ * start with a valid `YYYY-MM-DD`.
+ */
+function formatContentDate (content: unknown): string | null {
+  if (typeof content !== 'string') return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(content);
+  if (!m) return null;
+  const parts: DayParts = { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+  if (parts.m < 1 || parts.m > 12 || parts.d < 1 || parts.d > 31) return null;
+  return formatDayParts(parts, resolvedDateFormat(), {});
 }
 
 /**
@@ -52,9 +103,51 @@ export function formatEventDateTime (timeSec: number): string {
  *
  * Without itemDef (fallback): derives unit from eventType symbol if available,
  * for object content produces short textual representation.
+ *
+ * For a convertible item (cervical fluid, mood) the text ends with where the value came from,
+ * e.g. `"Creamy (Apple Health <- Mira)"`; read that as fields with `eventToShortTextWithOrigin`
+ * rather than parsing the text.
  */
 export function eventToShortText (event: any): string | null {
-  if (event == null) return null;
+  return eventToShortTextWithOrigin(event).text;
+}
+
+/**
+ * Where a convertible value shown by `eventToShortText` came from, as fields
+ * (B-2026-10-26-17: consumers parsed it back out of the `(X <- Y n%)` text).
+ */
+export interface ShortTextOrigin {
+  /** Method the value was recorded in (`content.source.key`, e.g. `mira`); null for a raw vector. */
+  sourceKey: string | null;
+  /** That method's localized name (`Mira`); null when there is no source. */
+  sourceName: string | null;
+  /** The recorded observation, localized from the method (`Creamy`); null when there is no source. */
+  sourceLabel: string | null;
+  /** Method the text is shown in when it was converted (`appleHealth`, `_raw`); null when shown as recorded. */
+  targetKey: string | null;
+  /** That method's localized name; null when shown as recorded. */
+  targetName: string | null;
+  /**
+   * How close the conversion is, 0-100 (`round((1 - matchDistance) * 100)`; the text omits it at 100).
+   * Null when the value is shown as recorded (no conversion).
+   */
+  match: number | null;
+}
+
+export interface ShortTextResult {
+  /** Exactly what `eventToShortText` returns. */
+  text: string | null;
+  /** Set for convertible items when a source or a conversion is known; null otherwise. */
+  origin: ShortTextOrigin | null;
+}
+
+/**
+ * `eventToShortText` plus the structured origin of a convertible value: the method it was
+ * recorded in, the method it is shown in, and the match of the conversion. The text is the
+ * same string `eventToShortText` returns.
+ */
+export function eventToShortTextWithOrigin (event: any): ShortTextResult {
+  if (event == null) return { text: null, origin: null };
 
   const model = getModel();
   const itemDef = model.itemsDefs.forEvent(event, false);
@@ -66,30 +159,29 @@ export function eventToShortText (event: any): string | null {
   // composite/object formatters would otherwise reduce to a single bare value).
   if (event.type === 'blood-pressure/mmhg-bpm' && content != null && typeof content === 'object') {
     const bp = formatBloodPressure(content);
-    if (bp) return bp;
+    if (bp) return { text: bp, origin: null };
   }
 
   if (itemDef) {
     // For checkbox/date items, content may be null — the event time IS the data
     if (content == null && itemDef.data.type === 'checkbox') {
-      return formatEventDateTime(event.time);
+      return { text: formatEventDateTime(event.time), origin: null };
     }
     if (content == null && itemDef.data.type === 'date') {
-      return formatEventDate(event.time);
+      return { text: formatEventDate(event.time), origin: null };
     }
-    if (content == null) return null;
-    return formatWithItemDef(event, content, itemDef, model);
+    if (content == null) return { text: null, origin: null };
+    if (itemDef.data.type === 'convertible') {
+      return formatConvertible(content, itemDef, model);
+    }
+    return { text: formatWithItemDef(event, content, itemDef, model), origin: null };
   }
-  if (content == null) return null;
-  return formatFallback(event, content, model);
+  if (content == null) return { text: null, origin: null };
+  return { text: formatFallback(event, content, model), origin: null };
 }
 
 function formatWithItemDef (event: any, content: any, itemDef: any, model: any): string | null {
   const type = itemDef.data.type;
-
-  if (type === 'convertible') {
-    return formatConvertible(event, content, itemDef, model);
-  }
 
   if (type === 'checkbox') {
     return event.type === 'activity/plain' ? 'Yes' : String(content);
@@ -104,8 +196,9 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
   }
 
   if (type === 'date') {
-    // date items store time on the event itself
-    return formatEventDate(event.time);
+    // A date stored as the value (`date/iso-8601`, the date of birth) is the data; otherwise the
+    // event's own time is (B-2026-10-26-6: the entry time was shown instead of the stored date).
+    return formatContentDate(content) ?? formatEventDate(event.time);
   }
 
   if (type === 'datasource-search') {
@@ -122,6 +215,8 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
 
   // number, text, composite, etc.
   if (typeof content === 'number') {
+    const display = itemDef.data?.number?.display;
+    if (display) return formatNumberDisplay(event.type, content, display, model);
     return formatNumber(event.type, content, model);
   }
 
@@ -143,6 +238,10 @@ function formatFallback (event: any, content: any, model: any): string | null {
   }
 
   if (typeof content === 'string') {
+    if (event.type === 'date/iso-8601') {
+      const date = formatContentDate(content);
+      if (date) return date;
+    }
     return content.length > 60 ? content.slice(0, 60) + '...' : content;
   }
 
@@ -178,6 +277,10 @@ function formatNumber (eventType: string, content: number, model: any): string {
   if (eventType === 'test-result/scale') {
     return formatTestResult(content);
   }
+  if (eventType === 'ratio/proportion') {
+    // A proportion (0-1) reads as a percentage: 0.057 → "5.7 %" (rounding drops float noise, e.g. 5.700000000000001).
+    return `${Math.round(content * 100 * 1e6) / 1e6} %`;
+  }
   if (hasAccountPreference('unitSystem')) {
     const system = resolveAccountPreference('unitSystem');
     const result = model.conversions.convert(eventType, content, system);
@@ -188,6 +291,27 @@ function formatNumber (eventType: string, content: number, model: any): string {
   }
   const symbol = getSymbol(eventType, model);
   return symbol ? `${content} ${symbol}` : String(content);
+}
+
+/** Significant digits that strip binary-float noise (`0.42 * 100` → 42), far beyond any assay's precision. */
+const FLOAT_NOISE_PRECISION = 12;
+
+/**
+ * Format a number item that declares `number.display` (B-2026-10-26-22), as hds-forms-js
+ * `NumberInput` shows it on entry (`toDisplayText`): the raw value times `multiplier` (default 1),
+ * `precision` decimals when set, else float noise stripped without truncating real decimals; then
+ * `suffix` in place of the eventType symbol (AMH `ng/mL` over `µg/L`, sperm concentration `10⁶/mL`
+ * over `G/L`, HbA1c `0.057` → `5.7 %`). No unit-system conversion: the item states how it reads.
+ */
+function formatNumberDisplay (eventType: string, content: number, display: any, model: any): string {
+  const multiplier: number = typeof display.multiplier === 'number' ? display.multiplier : 1;
+  const scaled = content * multiplier;
+  const text = typeof display.precision === 'number'
+    ? scaled.toFixed(display.precision)
+    : String(Number(scaled.toPrecision(FLOAT_NOISE_PRECISION)));
+  const suffix = display.suffix ? localizeText(display.suffix) : null;
+  const unit = suffix || (multiplier === 1 ? getSymbol(eventType, model) : null);
+  return unit ? `${text} ${unit}` : text;
 }
 
 /**
@@ -253,14 +377,7 @@ function formatComposite (content: any, itemDef: any): string | null {
     // tooltip shows a meaningful label instead of a raw number.
     let opt = fieldDef.options.find((o: any) => o.value === value);
     if (!opt && typeof value === 'number') {
-      let nearest: any = null;
-      let bestDist = Infinity;
-      for (const o of fieldDef.options) {
-        if (typeof o.value !== 'number') continue;
-        const d = Math.abs(o.value - value);
-        if (d < bestDist) { bestDist = d; nearest = o; }
-      }
-      opt = nearest;
+      opt = nearestNumericOption(fieldDef.options, value);
     }
     let valueText: string;
     if (opt?.label) {
@@ -310,7 +427,12 @@ function formatSelect (event: any, content: any, itemDef: any, model?: any): str
 
   const options = itemDef.data.options;
   if (options) {
-    const selected = options.find((o: any) => o.value === valueForSelect);
+    let selected = options.find((o: any) => o.value === valueForSelect);
+    // A `ratio/proportion` select is a 0-1 scale whose options are hooks on it (bleeding: 0.08 … 0.95). A value
+    // imported between hooks (a device's continuous reading) reads as the nearest hook's label, as composites do.
+    if (!selected && prefix === '' && event.type === 'ratio/proportion' && typeof valueForSelect === 'number') {
+      selected = nearestNumericOption(options, valueForSelect);
+    }
     if (selected?.label) {
       const text = typeof selected.label === 'string' ? selected.label : (localizeText(selected.label) || String(valueForSelect));
       const truncated = text.length > 50 ? text.slice(0, 50) + '...' : text;
@@ -321,6 +443,18 @@ function formatSelect (event: any, content: any, itemDef: any, model?: any): str
     return formatNumber(event.type, valueForSelect, model);
   }
   return prefix + String(valueForSelect);
+}
+
+/** The option whose numeric value is closest to `value` (first one on a tie), or null when none is numeric. */
+function nearestNumericOption (options: any[], value: number): any {
+  let nearest: any = null;
+  let bestDist = Infinity;
+  for (const o of options) {
+    if (typeof o.value !== 'number') continue;
+    const d = Math.abs(o.value - value);
+    if (d < bestDist) { bestDist = d; nearest = o; }
+  }
+  return nearest;
 }
 
 /**
@@ -445,10 +579,13 @@ function formatObject (content: any): string | null {
  *   "targetResult (sourceData) 85%" — confidence = round((1 - matchDistance) * 100)
  *   When 100%, omit the percentage.
  * No source: show dimension summary using localized stop labels from converter config.
+ *
+ * Returns the text with its structured origin (`ShortTextOrigin`), null when neither a source
+ * nor a conversion is known.
  */
-function formatConvertible (_event: any, content: any, itemDef: any, model: any): string | null {
+function formatConvertible (content: any, itemDef: any, model: any): ShortTextResult {
   const ce = itemDef.data['converter-engine'];
-  if (!ce) return formatObject(content);
+  if (!ce) return { text: formatObject(content), origin: null };
 
   const itemKey = ce.models;
   const source = content?.source;
@@ -459,6 +596,16 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
     ? resolveObservationLabel(engine, source.key, source.sourceData)
     : formatSourceLabel(source);
   const sourceMethodName = getMethodName(engine, source?.key);
+  const sourceKey: string | null = typeof source?.key === 'string' ? source.key : null;
+  /** The origin of a value shown as recorded (no conversion), or converted into `target`. */
+  const origin = (target: { key: string; name: string; match: number } | null): ShortTextOrigin => ({
+    sourceKey,
+    sourceName: sourceKey ? sourceMethodName : null,
+    sourceLabel: sourceLabel ?? null,
+    targetKey: target?.key ?? null,
+    targetName: target?.name ?? null,
+    match: target?.match ?? null
+  });
   // A conversion needs every dimension: on a partial vector (e.g. mood with only `valence`)
   // the engine invents the missing ones and the confidence comes out NaN (B-2026-10-06-2).
   const vectorComplete = isCompleteVector(engine, vectors);
@@ -471,7 +618,7 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
       if (targetMethod && typeof targetMethod === 'string') {
         // Skip conversion if target method equals source method
         if (source?.key === targetMethod && sourceLabel) {
-          return `${sourceLabel} (${sourceMethodName})`;
+          return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
         }
         if (engine) {
           const result = engine.fromVector(targetMethod, vectors);
@@ -479,10 +626,11 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
           const targetMethodName = getMethodName(engine, targetMethod);
           const confidence = Math.round((1 - result.matchDistance) * 100);
           const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
+          const converted = origin({ key: targetMethod, name: targetMethodName, match: confidence });
           if (sourceMethodName && sourceLabel) {
-            return `${resultLabel} (${targetMethodName} <- ${sourceMethodName}${confStr})`;
+            return { text: `${resultLabel} (${targetMethodName} <- ${sourceMethodName}${confStr})`, origin: converted };
           }
-          return `${resultLabel} (${targetMethodName}${confStr})`;
+          return { text: `${resultLabel} (${targetMethodName}${confStr})`, origin: converted };
         }
       }
     } catch { /* setting not found or engine not loaded, fall through */ }
@@ -490,7 +638,7 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
 
   // No autoConvert: show source observation + method name
   if (sourceLabel) {
-    return `${sourceLabel} (${sourceMethodName})`;
+    return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
   }
 
   // No source — RAW vector input, convert via _raw virtual method
@@ -500,21 +648,24 @@ function formatConvertible (_event: any, content: any, itemDef: any, model: any)
       const resultLabel = resolveObservationLabel(engine, '_raw', result.data);
       const confidence = Math.round((1 - result.matchDistance) * 100);
       const confStr = confidence >= 100 ? '' : ` ${confidence}%`;
-      return `${resultLabel}${confStr}`;
+      return {
+        text: `${resultLabel}${confStr}`,
+        origin: origin({ key: '_raw', name: getMethodName(engine, '_raw'), match: confidence })
+      };
     } catch { /* fall through */ }
   }
   // Partial vector, or no engine loaded: label the dimensions present from the item's own
   // composite options ("Valence: Unpleasant"), never the raw "valence:0.3".
   if (vectors && typeof vectors === 'object' && itemDef.data.composite) {
     const text = formatComposite(vectors, itemDef);
-    if (text) return text;
+    if (text) return { text, origin: null };
   }
   // Fallback: raw dimension summary
   if (vectors && typeof vectors === 'object') {
-    return formatVectorSummary(vectors, itemKey, model);
+    return { text: formatVectorSummary(vectors, itemKey, model), origin: null };
   }
 
-  return formatObject(content);
+  return { text: formatObject(content), origin: null };
 }
 
 /** True when the vector carries a number for every dimension the engine knows. */

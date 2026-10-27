@@ -11,14 +11,14 @@ import { durationToSeconds, durationToLabel } from './utils/duration.ts';
 import { cycleDayAt } from './utils/calendarDay.ts';
 import { cyclePhaseAt } from './utils/cyclePhase.ts';
 import { computeReminders } from './HDSModel/reminders.ts';
-import { eventToShortText, formatEventDate } from './HDSModel/eventToShortText.ts';
+import { eventToShortText, eventToShortTextWithOrigin, formatEventDate } from './HDSModel/eventToShortText.ts';
 import { MonitorScope } from './MonitorScope.ts';
 import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings.ts';
 import { HDSProfile, PROFILE_FIELDS } from './settings/HDSProfile.ts';
-import { resolveAccountPreference, hasAccountPreference } from './settings/accountPreferences.ts';
+import { resolveAccountPreference, hasAccountPreference, saveLanguage } from './settings/accountPreferences.ts';
 import { HDSModelConversions } from './HDSModel/HDSModel-Conversions.ts';
 import { HDSModelConverters } from './HDSModel/HDSModel-Converters.ts';
-import { HDSModelPreferred, getPreferredInput, getPreferredDisplay } from './HDSModel/HDSModel-Preferred.ts';
+import { HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY } from './HDSModel/HDSModel-Preferred.ts';
 import { HDSModelAppStreams } from './HDSModel/HDSModel-AppStreams.ts';
 import { EuclidianDistanceEngine } from './converters/EuclidianDistanceEngine.ts';
 import { HDSLibError } from './errors.ts';
@@ -27,13 +27,16 @@ import * as cmcFormSpec from './cmc/formSpec.ts';
 import * as cmcAppScope from './cmc/appScope.ts';
 import * as cmcConstants from './cmc/constants.ts';
 import * as cmcDataExport from './cmc/dataExport.ts';
+import * as cmcScope from './cmc/scope.ts';
+export type { Localizable, localizableText } from './localizeText.ts';
+export type { FormatEventDateOptions, ShortTextOrigin, ShortTextResult } from './HDSModel/eventToShortText.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
 export type { CyclePhase, CycleBasis, CyclePhaseResult, CycleEventLike } from './utils/cyclePhase.ts';
 export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from './settings/HDSSettings.ts';
 export type { ProfileKey, ProfileValues } from './settings/HDSProfile.ts';
-export type { AccountPreferenceKey } from './settings/accountPreferences.ts';
+export type { AccountPreferenceKey, SaveLanguageResult } from './settings/accountPreferences.ts';
 export type { ConverterPack, ConversionResult as ConverterConversionResult, ObservationVector, SourceBlock } from './converters/types.ts';
 export type { PreferredConfig } from './HDSModel/HDSModel-Preferred.ts';
 export type { AppStreamDef } from './HDSModel/HDSModel-AppStreams.ts';
@@ -42,11 +45,13 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, cyclePhaseAt, computeReminders, eventToShortText, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport };
+export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, cyclePhaseAt, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope };
 export type { FormSpec, FormSpecRecord, FormSpecItemKeyIssue, FormSpecItemKeyIssueReason, FormSpecSource, FormSpecOpenLink } from './cmc/formSpec.ts';
 export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './appTemplates/datasetTemplate.ts';
 export type { LoadTemplateFromUrlOptions } from './appTemplates/loader.ts';
 export type { DataExportRequest, DataExportRequestParams } from './cmc/dataExport.ts';
+export type { ScopePermission, ScopeMessage, ScopeRelationship, ScopeUpdateHds, ScopeChangeOptions, ScopeChangeResult, StopSharingRefusal, StopSharingPlan, SharingNote } from './cmc/scope.ts';
+export type { PermissionView, PermissionLabelOptions } from './appTemplates/permissionLabels.ts';
 export type {
   Delegation, DelegateRecord, ControlledRecord, DelegationRecord, DelegateIdentity,
   RelationshipStatus, DelegationError, DelegationErrorId, TokenResult,
@@ -100,6 +105,7 @@ const HDSLib = {
   cyclePhaseAt,
   computeReminders,
   eventToShortText,
+  eventToShortTextWithOrigin,
   formatEventDate,
   MonitorScope,
   HDSSettings,
@@ -108,6 +114,7 @@ const HDSLib = {
   PROFILE_FIELDS,
   resolveAccountPreference,
   hasAccountPreference,
+  saveLanguage,
   HDSModelConversions,
   HDSModelConverters,
   EuclidianDistanceEngine,
@@ -115,6 +122,7 @@ const HDSLib = {
   cmcFormSpec,
   cmcAppScope,
   cmcConstants,
-  cmcDataExport
+  cmcDataExport,
+  cmcScope
 };
 export default HDSLib;

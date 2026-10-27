@@ -1,5 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
 import { formatEventDate, HDSSettings } from '../ts/index.ts';
+import { setPreferredLocales, resetPreferredLocales } from '../ts/localizeText.ts';
 
 // Mock connection
 function createMockConnection (settingsEvents = []) {
@@ -69,5 +70,50 @@ describe('[FED] formatEventDate', function () {
     await HDSSettings.hookToConnection(conn, 'test-stream');
     const result = formatEventDate(timestamp);
     assert.strictEqual(result, '2024-01-15');
+  });
+
+  describe('[FEDO] options { year, weekday }', () => {
+    afterEach(() => {
+      resetPreferredLocales();
+    });
+
+    const expectedWithoutYear = {
+      'DD.MM.YYYY': '15.01.',
+      'DD/MM/YYYY': '15/01',
+      'MM/DD/YYYY': '01/15',
+      'YYYY-MM-DD': '01-15'
+    };
+    for (const [format, expected] of Object.entries(expectedWithoutYear)) {
+      it(`[FEDO1] year: false with ${format} → ${expected}`, async () => {
+        await HDSSettings.hookToConnection(createMockConnection([
+          { id: 'ev1', type: 'settings/date-format', content: format }
+        ]), 'test-stream');
+        assert.strictEqual(formatEventDate(timestamp, { year: false }), expected);
+      });
+    }
+
+    it('[FEDO2] year: false without a date format → MM-DD (the ISO date without its year)', () => {
+      assert.strictEqual(formatEventDate(timestamp, { year: false }), '01-15');
+    });
+
+    it('[FEDO3] weekday: true puts the short day name first, in the preferred locale', async () => {
+      await HDSSettings.hookToConnection(createMockConnection([
+        { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }
+      ]), 'test-stream');
+      setPreferredLocales(['en']);
+      assert.strictEqual(formatEventDate(timestamp, { weekday: true }), 'Mon 15.01.2024');
+      setPreferredLocales(['fr']);
+      assert.strictEqual(formatEventDate(timestamp, { weekday: true, year: false }), 'lun. 15.01.');
+      assert.strictEqual(formatEventDate(timestamp, { weekday: true, locale: 'en' }), 'Mon 15.01.2024');
+    });
+
+    it('[FEDO4] no options (and an empty object) keep the existing output', async () => {
+      await HDSSettings.hookToConnection(createMockConnection([
+        { id: 'ev1', type: 'settings/date-format', content: 'DD/MM/YYYY' }
+      ]), 'test-stream');
+      assert.strictEqual(formatEventDate(timestamp), '15/01/2024');
+      assert.strictEqual(formatEventDate(timestamp, {}), '15/01/2024');
+      assert.strictEqual(formatEventDate(timestamp, { year: true, weekday: false }), '15/01/2024');
+    });
   });
 });

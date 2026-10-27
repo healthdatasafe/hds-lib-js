@@ -89,6 +89,19 @@ function findDynamicPrefix (key: string): { prefix: string; eventType: string; c
   return null;
 }
 
+/**
+ * Delete an event for good. Pryv's `events.delete` on a live event only trashes it (the result
+ * carries `event`); a second call on the trashed event deletes it (`eventDeletion`). An event
+ * already trashed elsewhere is deleted by the first call. B-2026-10-26-7: a single call
+ * expecting `eventDeletion` threw "eventDeletion missing" and left the setting in place.
+ */
+async function deleteForGood (connection: pryv.Connection, id: string): Promise<void> {
+  const first = await connection.apiOne('events.delete', { id }) as { event?: unknown; eventDeletion?: unknown };
+  if (first?.eventDeletion != null) return;
+  // pryv's typings know only the trashing answer (`event`) of events.delete, hence the cast
+  await (connection as any).apiOne('events.delete', { id }, 'eventDeletion');
+}
+
 /** @internal */
 let _connection: pryv.Connection | null = null;
 /** @internal */
@@ -273,9 +286,8 @@ const HDSSettings = {
     const existing = _dynamicCache[key];
 
     if (value === null || value === undefined) {
-      // Delete
       if (existing) {
-        await (_connection as any).apiOne('events.delete', { id: existing.id }, 'eventDeletion');
+        await deleteForGood(_connection, existing.id);
         delete _dynamicCache[key];
         delete _dynamicValues[key];
       }

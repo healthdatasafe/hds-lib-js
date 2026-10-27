@@ -1,5 +1,76 @@
 # Changelog
 
+## [2.20.0] - 2026-10-27
+
+### Added
+- **`eventToShortTextWithOrigin(event)` → `{ text, origin }`** (B-2026-10-26-17): the same text as
+  `eventToShortText`, plus, for a convertible item, `origin: { sourceKey, sourceName, sourceLabel, targetKey,
+  targetName, match }` (the method the value was recorded in, the method it is shown in, the conversion match 0-100;
+  target and match null when shown as recorded). Consumers no longer parse `(X <- Y n%)` out of the text.
+  `eventToShortText` is unchanged (it returns `.text`). Types `ShortTextOrigin`, `ShortTextResult`. Tests
+  `[EST26a-f]`. Event formatters documented in `docs/toolkit.md`.
+- **`CERVICAL_FLUID_METHOD_KEY`** (`preferred-input-body-vulva-mucus-inspect`) and
+  **`CERVICAL_FLUID_METHOD_LEGACY_KEY`** (`preferred-input-cervical-fluid`) (B-2026-10-26-16): hds-lib read the
+  person's charting method under the item key, hds-forms-js `Convertible` under the converter-model key, so a method
+  was honoured in one place and not the other. The item-key form is canonical (it is the documented
+  `preferred-input-{itemKey}` shape, the settings event's `content.itemKey`, and the display twin apps already write);
+  `getPreferredInput` now falls back to the converter-model key (`preferred-input-<converter-engine.models>`, any
+  convertible item) when the item key is not set. Display (`preferred-display-*`) has no fallback. Tests `[PREF-K1-5]`.
+- **`saveLanguage(locale, { connection? })`** (accountPreferences): writes the account-level `preferredLocales`
+  (`HDSProfile`, `[locale]`) and, best effort, the core `account.language` (platform mail), the dual write the account
+  app's Preferences page does, so any app with a language switch keeps both in step. Resolves `{ profileSaved: true,
+  coreLanguageSaved, coreError? }`; a refused or failed core update never fails the save. Type `SaveLanguageResult`.
+  Documented in `docs/settings.md`. Tests `[ACCL1-5]`, `[ACCLL1]` (dev API).
+- **`cmcScope`**: sharing one type of data at a time with a connection, over `consent/scope-update-cmc` on the
+  relationship's collectors stream. `stopSharingStream(conn, rel, streamId, { message })` and
+  `shareStreamsAgain(conn, rel, streamIds, { message, level })` write the new permission set with the extra fields
+  in the HDS sub-envelope `content.hds = { removed | added, message }` (never as top-level fields, no new event type)
+  and resolve once the platform applied the change (`peerNotified` false when the connection was not told yet; a
+  change not applied throws). `planStopSharing` refuses a stream shared through a parent or `*` and the last shared
+  stream (revoke instead); `scopeDiff` compares a request with the current grant; `listSharingNotes` /
+  `parseSharingNotes` read stops, re-shares and the connection's requests with their answer. Answers to a request
+  stay on `cmc.acceptScopeUpdate` / `refuseScopeUpdate`. Tests `[CSCP1-22]`; verified end to end on demo (grant
+  changed, `content.hds` delivered to the connection).
+- **`appTemplates.dataName` / `appTemplates.permissionView`** (`appTemplates/permissionLabels.ts`): the data-model
+  name of a shared stream, and a permission read for a person (`kind`, `name`, `label` with "and everything under it"
+  for a parent stream, `level`, `beyondRead`, `inModel`, `hasChildren`, `requesterLabel`), so invitation and sharing
+  screens across apps show the same names and warnings. Types `PermissionView`, `PermissionLabelOptions`. Tests
+  `[PLBL1-7]`.
+- **`formatEventDate(timeSec, { year?, weekday?, locale? })`**: `year: false` leaves the year out (`15.01.`,
+  `15/01`, `01/15`, `01-15`; ISO fallback `01-15`), `weekday: true` puts the short weekday name first in the first
+  preferred locale (`Mon 15.01.2024`, `lun. 15.01.`). Without options the output is unchanged; the format is still
+  resolved through `resolveAccountPreference('dateFormat')`. Type `FormatEventDateOptions`. Tests `[FEDO1-4]`.
+
+### Fixed
+- **`eventToShortText` honours an item's `number.display`** (B-2026-10-26-22), as hds-forms-js `NumberInput` shows
+  it on entry: the raw value times `multiplier`, `precision` decimals when set (float noise stripped otherwise), and
+  `suffix` in place of the eventType symbol. AMH / vitamin D read `2.1 ng/mL` (was `µg/L`), sperm concentration
+  `15 10⁶/mL` (was `G/L` since data-model 3.20.0), HbA1c `5.7 %`. A display item is not converted to another unit
+  system; items without `number.display` are unchanged. Only `slider.display` was honoured before. Tests
+  `[EST27a-g]` against the published 3.20.0 pack.
+- **`HDSSettings.setDynamic(key, null)` deletes the setting for good** (B-2026-10-26-7): it called `events.delete`
+  once, which only trashes a live event, then expected `eventDeletion` and threw "eventDeletion missing" with the
+  setting left in place. It now trashes then deletes (one call when the event was already trashed meanwhile); a
+  failing delete throws and keeps the setting. Clearing a preference (e.g. "I don't chart") no longer needs a sentinel
+  value such as `_raw`. Tests `[HDSD8]`, `[HDSD8b-d]`, `[HDSDL1]` (dev API).
+- **`eventToShortText` shows a `date/iso-8601` value as the stored date** (B-2026-10-26-6): a date item whose
+  content is a `YYYY-MM-DD` string (the date of birth) rendered the event's entry time. The stored day is now read as
+  written (no time-zone shift) and formatted with the resolved date format; with no stored date, or an unparseable
+  one, the event time is used as before. Also applies without an itemDef (eventType `date/iso-8601`). Tests
+  `[EST7D1-5]`.
+- **`eventToShortText`: a `ratio/proportion` select value between hooks reads as the nearest hook's label**
+  (bleeding `0.5` → "Moderate", it read `0.5`), as composite fields already did. Scoped to `ratio/proportion`
+  (a 0-1 scale whose options are hooks); `ratio/generic` category selects and `test-result/scale` are unchanged.
+  Test `[EST25a-b]`.
+- **`eventToShortText`: a `ratio/proportion` number reads as a percentage** (HbA1c `0.057` → "5.7 %", it read
+  `0.057`), with or without an itemDef. Test `[EST25c-d]`.
+
+### Changed
+- **`localizeText` takes a `Localizable`** (new exported type, with `localizableText`): `localizableText` or any
+  per-locale map (`Record<string, string | undefined>`), so data-model texts, CMC titles and app dictionaries need no
+  cast. Overloaded: a non-null input returns `string`, `null`/`undefined` returns `null`. `en` is still required at
+  run time. Types only, no behaviour change. Test `[LOLZ]`.
+
 ## [2.19.0] - 2026-10-26
 
 ### Changed

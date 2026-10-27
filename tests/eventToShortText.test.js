@@ -2,8 +2,9 @@ import { assert } from './test-utils/deps-node.js';
 // Import via the package entry point, like every other test file: a default import
 // straight from the .ts resolves to the module namespace under webpack (no .unhook),
 // which failed the browser suite while Node passed.
-import { eventToShortText, HDSSettings } from '../ts/index.ts';
+import { eventToShortText, eventToShortTextWithOrigin, HDSSettings } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
+import { setPreferredLocales, resetPreferredLocales } from '../ts/localizeText.ts';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
@@ -26,7 +27,57 @@ describe('[ESTX] eventToShortText', () => {
   it('[EST3] number with unit symbol (mass/kg)', () => {
     const event = { content: 60, streamIds: ['body-weight'], type: 'mass/kg' };
     const result = eventToShortText(event);
+    // 'Kg' is the mass/kg symbol of the published model (it should read 'kg', upstream data-model fix pending);
+    // update this assertion when the pack ships the corrected symbol.
     assert.equal(result, '60 Kg');
+  });
+
+  describe('[EST27] number.display: multiplier and suffix as on entry (B-2026-10-26-22)', () => {
+    afterEach(() => {
+      HDSSettings.unhook();
+      resetPreferredLocales();
+    });
+
+    const ev = (key, content) => {
+      const itemDef = model.itemsDefs.forKey(key);
+      assert.ok(itemDef?.data?.number?.display, `${key} should declare number.display in the published pack`);
+      return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
+    };
+
+    it('[EST27a] a suffix replaces the eventType symbol (AMH, vitamin D: ng/mL over µg/L)', () => {
+      assert.equal(eventToShortText(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
+      assert.equal(eventToShortText(ev('body-blood-serum-vitamin-d-25oh', 30)), '30 ng/mL');
+    });
+
+    it('[EST27b] sperm concentration reads 10⁶/mL, not the G/L symbol of concentration/megacount-ml', () => {
+      assert.equal(eventToShortText(ev('body-semen-concentration', 15)), '15 10⁶/mL');
+    });
+
+    it('[EST27c] a multiplier scales the value without float noise (HbA1c, hematocrit)', () => {
+      assert.equal(eventToShortText(ev('body-blood-hba1c', 0.057)), '5.7 %');
+      assert.equal(eventToShortText(ev('body-blood-cbc-hematocrit', 0.42)), '42 %');
+      assert.equal(eventToShortText(ev('body-blood-cbc-hematocrit', 0.29)), '29 %');
+    });
+
+    it('[EST27d] the suffix is localized', () => {
+      setPreferredLocales(['fr']);
+      assert.equal(eventToShortText(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
+    });
+
+    it('[EST27e] a display item is not converted to another unit system (it states how it reads)', () => {
+      HDSSettings._testInject('unitSystem', 'imperial');
+      assert.equal(eventToShortText(ev('lifestyle-alcohol-typical-quantity', 14)), '14 g');
+    });
+
+    it('[EST27f] items without display are unchanged', () => {
+      assert.equal(eventToShortText({ content: 12.5, streamIds: ['fertility-hormone-lh'], type: 'concentration/iu-l' }), '12.5 IU/L');
+      assert.equal(eventToShortText({ content: 60, streamIds: ['body-weight'], type: 'mass/kg' }), '60 Kg');
+    });
+
+    it('[EST27g] eventToShortTextWithOrigin gives the same text, no origin', () => {
+      const event = ev('body-semen-concentration', 15);
+      assert.deepEqual(eventToShortTextWithOrigin(event), { text: '15 10⁶/mL', origin: null });
+    });
   });
 
   it('[EST4] number with unit symbol (concentration/iu-l)', () => {
@@ -100,6 +151,42 @@ describe('[ESTX] eventToShortText', () => {
     };
     const result = eventToShortText(event);
     assert.equal(result, '2024-01-15');
+  });
+
+  describe('[EST7D] date/iso-8601 content is the date shown (B-2026-10-26-6)', () => {
+    afterEach(() => {
+      HDSSettings.unhook();
+    });
+
+    const dobEvent = () => {
+      const itemDef = model.itemsDefs.forKey('profile-date-of-birth');
+      // entered on 2024-01-15, born on 1990-04-12
+      return { content: '1990-04-12', streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0], time: 1705320000 };
+    };
+
+    it('[EST7D1] the stored date, not the entry time', () => {
+      assert.equal(eventToShortText(dobEvent()), '1990-04-12');
+    });
+
+    it('[EST7D2] the stored date in the resolved date format, without a time-zone shift', () => {
+      HDSSettings._testInject('dateFormat', 'DD.MM.YYYY');
+      assert.equal(eventToShortText(dobEvent()), '12.04.1990');
+      HDSSettings._testInject('dateFormat', 'MM/DD/YYYY');
+      assert.equal(eventToShortText({ ...dobEvent(), content: '1990-04-12T23:30:00Z' }), '04/12/1990');
+    });
+
+    it('[EST7D3] no stored date: the event time, as before', () => {
+      assert.equal(eventToShortText({ ...dobEvent(), content: null }), '2024-01-15');
+    });
+
+    it('[EST7D4] an unparseable value falls back to the event time', () => {
+      assert.equal(eventToShortText({ ...dobEvent(), content: 'unknown' }), '2024-01-15');
+    });
+
+    it('[EST7D5] without an itemDef, a date/iso-8601 string is formatted too', () => {
+      HDSSettings._testInject('dateFormat', 'DD/MM/YYYY');
+      assert.equal(eventToShortText({ content: '2001-02-03', streamIds: ['not-a-model-stream'], type: 'date/iso-8601', time: 1705320000 }), '03/02/2001');
+    });
   });
 
   it('[EST8] datasource-search (medication) returns drug label + intake', () => {
@@ -287,6 +374,34 @@ describe('[ESTX] eventToShortText', () => {
     if (opt) {
       assert.ok(result.includes('1/3'), `Expected ratio prefix in: ${result}`);
     }
+  });
+
+  describe('[EST25] ratio/proportion: a select between hooks, a number as %', () => {
+    const bleeding = (content) => {
+      const itemDef = model.itemsDefs.forKey('body-vulva-bleeding');
+      return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
+    };
+
+    it('[EST25a] a bare select value between hooks reads as the nearest hook label (bleeding)', () => {
+      assert.equal(eventToShortText(bleeding(0.5)), 'Moderate');
+      assert.equal(eventToShortText(bleeding(0.62)), 'Moderate');
+      assert.equal(eventToShortText(bleeding(0.7)), 'Heavy');
+      assert.equal(eventToShortText(bleeding(0.1)), 'Spotting');
+    });
+
+    it('[EST25b] an exact hook is unchanged, and test-result/scale keeps its percentage', () => {
+      assert.equal(eventToShortText(bleeding(0.55)), 'Moderate');
+      assert.equal(eventToShortText({ content: 0.56, streamIds: ['fertility-test-opk'], type: 'test-result/scale' }), 'Positive 56%');
+    });
+
+    it('[EST25c] a ratio/proportion number reads as a percentage', () => {
+      assert.equal(eventToShortText({ content: 0.057, streamIds: ['body-blood-hba1c'], type: 'ratio/proportion' }), '5.7 %');
+      assert.equal(eventToShortText({ content: 1, streamIds: ['body-blood-hba1c'], type: 'ratio/proportion' }), '100 %');
+    });
+
+    it('[EST25d] without an itemDef, a ratio/proportion number reads as a percentage too', () => {
+      assert.equal(eventToShortText({ content: 0.5, streamIds: ['not-a-model-stream'], type: 'ratio/proportion' }), '50 %');
+    });
   });
 
   it('[EST17a] test-result/scale positive (1)', () => {
@@ -606,6 +721,75 @@ describe('[ESTX] eventToShortText', () => {
       // creighton "10KL" has a label in its method definition
       // (method label shortened to bare family name in data-model v1.10.3)
       assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
+    });
+  });
+
+  describe('[EST26] eventToShortTextWithOrigin: the conversion origin as fields (B-2026-10-26-17)', () => {
+    before(async () => {
+      await model.converters.ensureEngine('mood');
+      await model.converters.ensureEngine('cervical-fluid');
+    });
+
+    afterEach(() => {
+      HDSSettings.unhook();
+    });
+
+    it('[EST26a] shown as recorded: source fields, no target, no match; same text as eventToShortText', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+      const { text, origin } = eventToShortTextWithOrigin(event);
+      assert.equal(text, eventToShortText(event));
+      assert.equal(text, 'Creamy (Mira)');
+      assert.deepEqual(origin, { sourceKey: 'mira', sourceName: 'Mira', sourceLabel: 'Creamy', targetKey: null, targetName: null, match: null });
+    });
+
+    it('[EST26b] converted with a perfect match: target fields and match 100 (the text omits it)', async () => {
+      HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+      const { text, origin } = eventToShortTextWithOrigin(event);
+      assert.equal(text, 'Creamy (Apple Health <- Mira)');
+      assert.equal(text, eventToShortText(event));
+      assert.equal(origin.sourceKey, 'mira');
+      assert.equal(origin.sourceName, 'Mira');
+      assert.equal(origin.targetKey, 'appleHealth');
+      assert.equal(origin.targetName, 'Apple Health');
+      assert.equal(origin.match, 100);
+    });
+
+    it('[EST26c] converted with a partial match: the match is the percentage in the text', async () => {
+      HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'billings');
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'mira', 'Watery');
+      const { text, origin } = eventToShortTextWithOrigin(event);
+      assert.equal(origin.targetKey, 'billings');
+      assert.ok(origin.match < 100, `expected a partial match, got ${origin.match}`);
+      assert.ok(text.endsWith(`<- Mira ${origin.match}%)`), `text and match disagree: ${text} / ${origin.match}`);
+    });
+
+    it('[EST26d] same method as the display setting: shown as recorded', async () => {
+      HDSSettings._testInject('preferred-display-wellbeing-mood', 'mira');
+      const event = await model.converters.convertMethodToEvent('mood', 'mira', 'Happy');
+      const { origin } = eventToShortTextWithOrigin(event);
+      assert.equal(origin.sourceKey, 'mira');
+      assert.equal(origin.targetKey, null);
+      assert.equal(origin.match, null);
+    });
+
+    it('[EST26e] a raw vector: no source, shown through _raw with its match', () => {
+      const event = {
+        content: { vectors: { valence: 0.9, arousal: 0.3, dominance: 0.6, socialOrientation: 0, temporalFocus: 0 } },
+        streamIds: ['wellbeing-mood'],
+        type: 'mood/5d-vectors'
+      };
+      const { text, origin } = eventToShortTextWithOrigin(event);
+      assert.equal(text, eventToShortText(event));
+      assert.equal(origin.sourceKey, null);
+      assert.equal(origin.sourceName, null);
+      assert.equal(origin.targetKey, '_raw');
+      assert.equal(typeof origin.match, 'number');
+    });
+
+    it('[EST26f] a non-convertible event has no origin', () => {
+      assert.deepEqual(eventToShortTextWithOrigin({ content: 60, streamIds: ['body-weight'], type: 'mass/kg' }), { text: '60 Kg', origin: null });
+      assert.deepEqual(eventToShortTextWithOrigin(null), { text: null, origin: null });
     });
   });
 

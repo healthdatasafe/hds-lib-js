@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { HDSSettings } from '../ts/index.ts';
+import { HDSSettings, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
@@ -101,6 +101,41 @@ describe('[PREF] HDSModel.preferred', function () {
       const display = model.preferred.getPreferredDisplay('body-vulva-mucus-inspect');
       assert.equal(input.method, 'chartneo');
       assert.equal(display.method, 'billings');
+    });
+  });
+
+  // ─── The cervical-fluid method key (B-2026-10-26-16) ─────────
+
+  describe('[PREF-K] cervical-fluid method key', () => {
+    it('[PREF-K1] the canonical key is the item-key form, the legacy one the converter-model form', () => {
+      assert.equal(CERVICAL_FLUID_METHOD_KEY, 'preferred-input-body-vulva-mucus-inspect');
+      assert.equal(CERVICAL_FLUID_METHOD_LEGACY_KEY, 'preferred-input-cervical-fluid');
+      const itemDef = model.itemsDefs.forKey('body-vulva-mucus-inspect');
+      assert.equal(CERVICAL_FLUID_METHOD_KEY, 'preferred-input-' + itemDef.key);
+      assert.equal(CERVICAL_FLUID_METHOD_LEGACY_KEY, 'preferred-input-' + itemDef.data['converter-engine'].models);
+    });
+
+    it('[PREF-K2] the canonical key drives getPreferredInput', () => {
+      HDSSettings._testInject(CERVICAL_FLUID_METHOD_KEY, 'creighton');
+      assert.equal(model.preferred.getPreferredInput('body-vulva-mucus-inspect').method, 'creighton');
+    });
+
+    it('[PREF-K3] the legacy key is read when the canonical one is not set', () => {
+      HDSSettings._testInject(CERVICAL_FLUID_METHOD_LEGACY_KEY, 'billings');
+      const pref = model.preferred.getPreferredInput('body-vulva-mucus-inspect');
+      assert.equal(pref.method, 'billings');
+      assert.equal(pref.methodName, 'Billings');
+    });
+
+    it('[PREF-K4] the canonical key wins over the legacy one', () => {
+      HDSSettings._testInject(CERVICAL_FLUID_METHOD_LEGACY_KEY, 'billings');
+      HDSSettings._testInject(CERVICAL_FLUID_METHOD_KEY, 'creighton');
+      assert.equal(model.preferred.getPreferredInput('body-vulva-mucus-inspect').method, 'creighton');
+    });
+
+    it('[PREF-K5] the legacy fallback is for input only: display keeps its own key', () => {
+      HDSSettings._testInject(CERVICAL_FLUID_METHOD_LEGACY_KEY, 'billings');
+      assert.equal(model.preferred.getPreferredDisplay('body-vulva-mucus-inspect').method, null);
     });
   });
 

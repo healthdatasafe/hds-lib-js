@@ -50,6 +50,8 @@ export type {
   ItemLabelsWithSource,
   CollectItemLabelsOptions
 } from './itemLabels.ts';
+export { dataName, permissionView } from './permissionLabels.ts';
+export type { PermissionView, PermissionLabelOptions } from './permissionLabels.ts';
 export { AppManagingAccount, AppClientAccount, Application, CollectorRequest, Contact, Questionnaire };
 
 // Plan 71 — questionnaire shapes (used by hds-forms-js renderer + dashboards)

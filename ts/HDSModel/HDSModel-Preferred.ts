@@ -27,6 +27,24 @@ export interface PreferredConfig {
 }
 
 /**
+ * The setting that holds the cervical-fluid charting method a person enters observations in
+ * (an HDSSettings dynamic key, value: a converter method id such as `creighton`).
+ *
+ * Canonical form `preferred-input-<itemKey>`, as every dynamic setting (the settings event's
+ * `content.itemKey` is an item key; documented since hds-lib 0.3.0, read by `getPreferredInput`,
+ * and the display twin `preferred-display-body-vulva-mucus-inspect` is what apps already write).
+ * Write this key; import it rather than spelling it (B-2026-10-26-16).
+ */
+export const CERVICAL_FLUID_METHOD_KEY = 'preferred-input-body-vulva-mucus-inspect';
+
+/**
+ * Read-only fallback: the converter-model form `preferred-input-cervical-fluid` that hds-forms-js
+ * `Convertible` read (and some accounts hold). `getPreferredInput` reads it when the canonical key
+ * is not set; never write it.
+ */
+export const CERVICAL_FLUID_METHOD_LEGACY_KEY = 'preferred-input-cervical-fluid';
+
+/**
  * HDSModel-Preferred — Unified API for preferred representations.
  *
  * Resolves per-item settings (preferred-input-*, preferred-display-*)
@@ -107,12 +125,20 @@ export class HDSModelPreferred {
       const converterItemKey = ce.models;
       const engine = this.#model.converters.getEngine(converterItemKey);
 
-      if (perItemSetting && typeof perItemSetting === 'string') {
-        const methodDef = engine?.getMethodDef(perItemSetting);
+      // Input only: fall back to the converter-model form (`preferred-input-cervical-fluid`) that
+      // hds-forms-js `Convertible` read, so a method saved under it is still honoured (B-2026-10-26-16).
+      let setting = perItemSetting;
+      const hasPerItem = typeof setting === 'string' && setting !== '';
+      if (!hasPerItem && settingPrefix === 'preferred-input-' && HDSSettings.isHooked) {
+        setting = HDSSettings.get(`preferred-input-${converterItemKey}`);
+      }
+
+      if (setting && typeof setting === 'string') {
+        const methodDef = engine?.getMethodDef(setting);
         return {
           type: 'converter',
-          method: perItemSetting,
-          methodName: methodDef?.name ? (localizeText(methodDef.name) || perItemSetting) : perItemSetting,
+          method: setting,
+          methodName: methodDef?.name ? (localizeText(methodDef.name) || setting) : setting,
           engine,
         };
       }

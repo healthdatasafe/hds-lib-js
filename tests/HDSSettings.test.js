@@ -1,5 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
-import { HDSSettings, SETTING_TYPES } from '../ts/index.ts';
+import { HDSSettings, SETTING_TYPES, pryv } from '../ts/index.ts';
+import { createUser, init as initPryvService } from './test-utils/pryvService.js';
 
 // Mock connection that captures API calls
 function createMockConnection (responses = {}) {
@@ -286,22 +287,77 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
     assert.strictEqual(updateCall.params.update.content.value, 'mira');
   });
 
-  it('[HDSD8] setDynamic with null deletes setting', async () => {
-    const conn = createMockConnection({
-      'events.get': () => ({
-        events: [
-          { id: 'ev-ac-mood', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } }
-        ]
-      })
+  /** events.delete as Pryv answers it: a live event is trashed first, a trashed one is deleted. */
+  function deletingConnection (events) {
+    const trashed = new Set(events.filter(e => e.trashed).map(e => e.id));
+    const deleted = new Set();
+    return createMockConnection({
+      'events.get': () => ({ events: events.filter(e => !trashed.has(e.id) && !deleted.has(e.id)) }),
+      'events.delete': ({ id }) => {
+        if (trashed.has(id)) {
+          trashed.delete(id);
+          deleted.add(id);
+          return { eventDeletion: { id } };
+        }
+        trashed.add(id);
+        return { event: { ...events.find(e => e.id === id), trashed: true } };
+      }
     });
+  }
+
+  it('[HDSD8] setDynamic with null deletes the setting for good: trash, then delete (B-2026-10-26-7)', async () => {
+    const conn = deletingConnection([
+      { id: 'ev-ac-mood', type: 'settings/preferred-display', content: { itemKey: 'wellbeing-mood', value: 'billings' } }
+    ]);
     await HDSSettings.hookToConnection(conn, 'test-stream');
 
     await HDSSettings.setDynamic('preferred-display-wellbeing-mood', null);
     assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), undefined);
 
-    const deleteCall = conn.apiCalls.find(c => c.method === 'events.delete');
-    assert.ok(deleteCall, 'Should have called events.delete');
-    assert.strictEqual(deleteCall.params.id, 'ev-ac-mood');
+    const deleteCalls = conn.apiCalls.filter(c => c.method === 'events.delete');
+    assert.deepStrictEqual(deleteCalls.map(c => c.params.id), ['ev-ac-mood', 'ev-ac-mood'], 'trash, then delete');
+
+    await HDSSettings.reload();
+    assert.strictEqual(HDSSettings.get('preferred-display-wellbeing-mood'), undefined, 'gone after a reload');
+  });
+
+  it('[HDSD8b] setDynamic with null on an event trashed meanwhile deletes it in one call', async () => {
+    // loaded while live, trashed by another client since: the first events.delete already deletes it
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [{ id: 'ev-w', type: 'settings/preferred-input', content: { itemKey: 'body-weight', value: 'mass/lb' } }]
+      }),
+      'events.delete': ({ id }) => ({ eventDeletion: { id } })
+    });
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+    await HDSSettings.setDynamic('preferred-input-body-weight', null);
+    assert.strictEqual(conn.apiCalls.filter(c => c.method === 'events.delete').length, 1);
+    assert.strictEqual(HDSSettings.get('preferred-input-body-weight'), undefined);
+  });
+
+  it('[HDSD8d] a failing delete is reported and the setting is kept', async () => {
+    const conn = createMockConnection({
+      'events.get': () => ({
+        events: [{ id: 'ev-w', type: 'settings/preferred-input', content: { itemKey: 'body-weight', value: 'mass/lb' } }]
+      }),
+      'events.delete': () => ({ error: { id: 'forbidden', message: 'no' } })
+    });
+    // throw on an error answer, as pryv's apiOne does
+    conn.apiOne = async (method, params, key) => {
+      const [result] = await conn.api([{ method, params }]);
+      if (result.error) throw new Error(result.error.id);
+      return key ? result[key] : result;
+    };
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+    await assert.rejects(() => HDSSettings.setDynamic('preferred-input-body-weight', null), /forbidden/);
+    assert.strictEqual(HDSSettings.get('preferred-input-body-weight'), 'mass/lb');
+  });
+
+  it('[HDSD8c] setDynamic with null when nothing is stored makes no call', async () => {
+    const conn = deletingConnection([]);
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+    await HDSSettings.setDynamic('preferred-display-wellbeing-mood', null);
+    assert.strictEqual(conn.apiCalls.filter(c => c.method === 'events.delete').length, 0);
   });
 
   it('[HDSD9] setDynamic throws for unknown prefix', async () => {
@@ -322,5 +378,39 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
       () => HDSSettings.setDynamic('not-a-known-prefix', 'foo'),
       /Unknown dynamic setting prefix/
     );
+  });
+});
+
+describe('[HDSDL] HDSSettings dynamic settings (dev API)', function () {
+  this.timeout(20000);
+
+  let connection;
+  const streamId = 'hdsd-settings-test';
+
+  before(async () => {
+    await initPryvService();
+    const user = await createUser();
+    connection = new pryv.Connection(user.apiEndpoint);
+    await connection.apiOne('streams.create', { id: streamId, name: 'Settings test' }, 'stream');
+  });
+
+  afterEach(() => {
+    HDSSettings.unhook();
+  });
+
+  it('[HDSDL1] setDynamic(key, null) deletes the event for good (B-2026-10-26-7)', async () => {
+    await HDSSettings.hookToConnection(connection, streamId);
+    await HDSSettings.setDynamic('preferred-input-body-vulva-mucus-inspect', 'creighton');
+    const [stored] = await connection.apiOne('events.get', { streams: [streamId], types: ['settings/preferred-input'] }, 'events');
+    assert.strictEqual(stored.content.value, 'creighton');
+
+    await HDSSettings.setDynamic('preferred-input-body-vulva-mucus-inspect', null);
+    assert.strictEqual(HDSSettings.get('preferred-input-body-vulva-mucus-inspect'), undefined);
+
+    // neither live nor in the trash
+    const all = await connection.apiOne('events.get', { streams: [streamId], state: 'all' }, 'events');
+    assert.strictEqual(all.find(e => e.id === stored.id), undefined, 'the event must not survive, trashed or not');
+    await HDSSettings.reload();
+    assert.strictEqual(HDSSettings.get('preferred-input-body-vulva-mucus-inspect'), undefined);
   });
 });
