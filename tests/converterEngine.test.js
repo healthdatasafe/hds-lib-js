@@ -29,8 +29,13 @@ describe('[EDEX] EuclidianDistanceEngine', function () {
   });
 
   describe('[EDEI] Engine initialization', () => {
-    it('[EDEI1] cervical-fluid engine loads 11 methods', () => {
-      assert.strictEqual(cfEngine.methodIds.length, 11);
+    it('[EDEI1] cervical-fluid engine loads the published methods', () => {
+      // The pack grows (data-model 3.24.0 added Sensiplan): check by id, not by count
+      assert.ok(cfEngine.methodIds.length >= 12, `expected at least 12 methods, got ${cfEngine.methodIds.length}`);
+      for (const id of ['billings', 'creighton', 'sympto-thermal', 'sensiplan']) {
+        assert.ok(cfEngine.methodIds.includes(id), `should include ${id}`);
+      }
+      assert.ok(!cfEngine.methodIds.includes('_raw'), '_raw should not be in methodIds (auto-generated)');
     });
 
     it('[EDEI2] mood engine loads methods from pack (excludes _raw)', () => {
