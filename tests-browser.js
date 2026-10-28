@@ -25413,6 +25413,8 @@ class EuclidianDistanceEngine {
     dimensions;
     weights;
     converterVersion;
+    /** The pack's coverline rules, by id (labels and sources); empty for a pack without them. */
+    temperatureRules;
     _converters = {};
     _methodDefs = {};
     _methodIds = [];
@@ -25422,6 +25424,7 @@ class EuclidianDistanceEngine {
         this.converterVersion = pack.converterVersion;
         this.dimensionNames = pack.dimensionNames;
         this.dimensions = pack.dimensions;
+        this.temperatureRules = pack.temperatureRules ?? {};
         // Build weights from dimensions
         this.weights = {};
         for (const dim of this.dimensionNames) {
@@ -25550,7 +25553,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcScope = exports.cmcDataExport = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -25579,6 +25583,13 @@ const calendarDay_ts_1 = __webpack_require__(/*! ./utils/calendarDay.js */ "./ts
 Object.defineProperty(exports, "cycleDayAt", ({ enumerable: true, get: function () { return calendarDay_ts_1.cycleDayAt; } }));
 const cyclePhase_ts_1 = __webpack_require__(/*! ./utils/cyclePhase.js */ "./ts/utils/cyclePhase.ts");
 Object.defineProperty(exports, "cyclePhaseAt", ({ enumerable: true, get: function () { return cyclePhase_ts_1.cyclePhaseAt; } }));
+const temperatureShift_ts_1 = __webpack_require__(/*! ./utils/temperatureShift.js */ "./ts/utils/temperatureShift.ts");
+Object.defineProperty(exports, "shiftOf", ({ enumerable: true, get: function () { return temperatureShift_ts_1.shiftOf; } }));
+Object.defineProperty(exports, "shiftInCycle", ({ enumerable: true, get: function () { return temperatureShift_ts_1.shiftInCycle; } }));
+Object.defineProperty(exports, "coverlinesOf", ({ enumerable: true, get: function () { return temperatureShift_ts_1.coverlinesOf; } }));
+Object.defineProperty(exports, "temperatureRuleOf", ({ enumerable: true, get: function () { return temperatureShift_ts_1.temperatureRuleOf; } }));
+Object.defineProperty(exports, "isManualTemperatureRule", ({ enumerable: true, get: function () { return temperatureShift_ts_1.isManualTemperatureRule; } }));
+Object.defineProperty(exports, "TEMPERATURE_RULES", ({ enumerable: true, get: function () { return temperatureShift_ts_1.TEMPERATURE_RULES; } }));
 const reminders_ts_1 = __webpack_require__(/*! ./HDSModel/reminders.js */ "./ts/HDSModel/reminders.ts");
 Object.defineProperty(exports, "computeReminders", ({ enumerable: true, get: function () { return reminders_ts_1.computeReminders; } }));
 const eventToShortText_ts_1 = __webpack_require__(/*! ./HDSModel/eventToShortText.js */ "./ts/HDSModel/eventToShortText.ts");
@@ -25647,6 +25658,12 @@ const HDSLib = {
     durationToLabel: duration_ts_1.durationToLabel,
     cycleDayAt: calendarDay_ts_1.cycleDayAt,
     cyclePhaseAt: cyclePhase_ts_1.cyclePhaseAt,
+    shiftOf: temperatureShift_ts_1.shiftOf,
+    shiftInCycle: temperatureShift_ts_1.shiftInCycle,
+    coverlinesOf: temperatureShift_ts_1.coverlinesOf,
+    temperatureRuleOf: temperatureShift_ts_1.temperatureRuleOf,
+    isManualTemperatureRule: temperatureShift_ts_1.isManualTemperatureRule,
+    TEMPERATURE_RULES: temperatureShift_ts_1.TEMPERATURE_RULES,
     computeReminders: reminders_ts_1.computeReminders,
     eventToShortText: eventToShortText_ts_1.eventToShortText,
     eventToShortTextWithOrigin: eventToShortText_ts_1.eventToShortTextWithOrigin,
@@ -27418,6 +27435,210 @@ function durationToLabel(seconds) {
     }
     const n = Math.round(seconds / 60);
     return n === 1 ? '1 minute' : `${n} minutes`;
+}
+
+
+/***/ },
+
+/***/ "./ts/utils/temperatureShift.ts"
+/*!**************************************!*\
+  !*** ./ts/utils/temperatureShift.ts ***!
+  \**************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.TEMPERATURE_RULES = void 0;
+exports.isManualTemperatureRule = isManualTemperatureRule;
+exports.temperatureRuleOf = temperatureRuleOf;
+exports.shiftOf = shiftOf;
+exports.shiftInCycle = shiftInCycle;
+exports.coverlinesOf = coverlinesOf;
+/**
+ * Basal-temperature shift and coverline, by the coverline rule a method charts the temperature by.
+ *
+ * Chart notation only: the line and the high temperatures it counts, as a paper chart shows them. Nothing here says
+ * a day is fertile or infertile (data-model `documentation/MENSTRUAL-CYCLE.md`, "Coverline").
+ *
+ * Which rule a method uses is data-model data: each method of the `cervical-fluid` converter pack carries
+ * `temperatureRule`, a key of the pack's `temperatureRules` or `none` (3.24.0). The parameters of each rule are the
+ * method specification of model-cervical-fluid, `references/rules/coverline-rules.json` (version 2026-10-28), copied
+ * in `TEMPERATURE_RULES` below. Days are calendar days of the patient's time zone, as in `cyclePhaseAt`.
+ */
+const calendarDay_ts_1 = __webpack_require__(/*! ./calendarDay.js */ "./ts/utils/calendarDay.ts");
+/**
+ * The parameters of each rule, from model-cervical-fluid `references/rules/coverline-rules.json` (version
+ * 2026-10-28). Not modelled (as there): TCOYF's slow-rise variant, and the double check with the mucus, which
+ * confirms the phase after ovulation but does not move the line.
+ */
+exports.TEMPERATURE_RULES = Object.freeze({
+    // STM / TCOYF (Weschler, Taking Charge of Your Fertility, 2015, pp. 93-94, 174, 435-439; tcoyf.com Celsius)
+    'sympto-thermal': Object.freeze({ lowCount: 6, offset: 0.05, firstRise: 0.1, highCount: 3, lastMin: 0.15, extraDay: true, dropOne: false }),
+    // Sensiplan, "3 over 6", with its two exceptions (Arbeitsgruppe NFP; Frank-Herrmann et al. 2007)
+    sensiplan: Object.freeze({ lowCount: 6, offset: 0, firstRise: 0, highCount: 3, lastMin: 0.2, extraDay: true, dropOne: true }),
+    // Justisse: no numeric rule published
+    manual: Object.freeze({ manual: true })
+});
+function isManualTemperatureRule(rule) {
+    return rule.manual === true;
+}
+/**
+ * The rule a method charts the temperature by, from its converter-pack definition (`temperatureRule`). Null when the
+ * method draws no coverline (`none`), when the pack predates 3.24.0, or for a rule id this version does not know.
+ */
+function temperatureRuleOf(method) {
+    const id = method?.temperatureRule;
+    if (id == null || !Object.prototype.hasOwnProperty.call(exports.TEMPERATURE_RULES, id))
+        return null;
+    return exports.TEMPERATURE_RULES[id];
+}
+const EPS = 1e-9;
+const round2 = (v) => Math.round(v * 100) / 100;
+/**
+ * The first temperature shift in `values` (one temperature a day, in order, disturbed ones already left out), by
+ * the rule; null before the shift, and always for a manual rule. A temperature on or under the line during the count
+ * starts the count again, unless the rule's `dropOne` exception applies.
+ */
+function shiftOf(values, rule) {
+    if (isManualTemperatureRule(rule))
+        return null;
+    const above = (v, line) => v > line + EPS;
+    const range = (from, n) => Array.from({ length: n }, (_, k) => from + k);
+    for (let i = rule.lowCount; i + rule.highCount <= values.length; i++) {
+        const low = Math.max(...values.slice(i - rule.lowCount, i));
+        const line = low + rule.offset;
+        if (values[i] <= low || values[i] < low + rule.firstRise - EPS)
+            continue;
+        const shift = (confirmed, highs) => ({ low, line: round2(line), first: i, confirmed, highs });
+        const highs = values.slice(i, i + rule.highCount);
+        if (highs.every(v => above(v, line))) {
+            if (highs[highs.length - 1] >= line + rule.lastMin - EPS)
+                return shift(i + rule.highCount - 1, range(i, rule.highCount));
+            const next = values[i + rule.highCount];
+            if (rule.extraDay && next != null && above(next, line))
+                return shift(i + rule.highCount, range(i, rule.highCount + 1));
+            continue;
+        }
+        // One high temperature after the first on or under the line: left out, the next one counts, and must be high enough itself
+        if (!rule.dropOne)
+            continue;
+        const span = values.slice(i, i + rule.highCount + 1);
+        const under = span.map((v, k) => (above(v, line) ? -1 : k)).filter(k => k >= 0);
+        if (span.length <= rule.highCount || under.length !== 1 || under[0] === 0 || under[0] === rule.highCount)
+            continue;
+        if (span[span.length - 1] >= line + rule.lastMin - EPS) {
+            return shift(i + rule.highCount, range(i, rule.highCount + 1).filter(k => k !== i + under[0]));
+        }
+    }
+    return null;
+}
+const STREAM = {
+    start: 'fertility-cycles-start',
+    coverline: 'fertility-cycles-coverline',
+    disturbance: 'body-temperature-basal-disturbance'
+};
+/** `fertility-cycles-start` duration limit, as in `cyclePhaseAt`: an open cycle stops after this many days. */
+const OPEN_CYCLE_MAX_DAYS = 90;
+function inStream(e, stream) {
+    return e.streamId === stream || (e.streamIds?.includes(stream) ?? false);
+}
+function disturbedDays(events, timeZone) {
+    const days = new Set();
+    for (const e of events ?? []) {
+        if (e != null && !e.trashed && inStream(e, STREAM.disturbance))
+            days.add((0, calendarDay_ts_1.localDayNumber)(e.time, timeZone));
+    }
+    return days;
+}
+/** The first reading of each calendar day within [from, to), disturbed days left out, in order. */
+function dailyPoints(points, from, to, disturbed, timeZone) {
+    const days = new Set();
+    const out = [];
+    for (const p of [...points].sort((a, b) => a.time - b.time)) {
+        if (p.time < from || p.time >= to || !Number.isFinite(p.value))
+            continue;
+        const day = (0, calendarDay_ts_1.localDayNumber)(p.time, timeZone);
+        if (days.has(day) || disturbed.has(day))
+            continue;
+        days.add(day);
+        out.push(p);
+    }
+    return out;
+}
+/** The series with the most daily readings within [from, to) (the first one listed on a tie); null without any. */
+function mainSeries(series, from, to, disturbed, timeZone) {
+    let main = null;
+    for (const s of series) {
+        const points = dailyPoints(s.points, from, to, disturbed, timeZone);
+        if (points.length > 0 && (main == null || points.length > main.points.length))
+            main = { source: s.source, points };
+    }
+    return main;
+}
+function inTimes(main, rule) {
+    const shift = shiftOf(main.points.map(p => p.value), rule);
+    if (shift == null)
+        return null;
+    const at = (k) => main.points[k].time;
+    return { source: main.source, low: shift.low, line: shift.line, first: at(shift.first), confirmed: at(shift.confirmed), highs: shift.highs.map(at) };
+}
+/**
+ * The temperature shift in [from, to) (unix seconds; e.g. one cycle), by the rule, from the device with the most
+ * daily temperatures in it: one temperature a day (the first of the calendar day), disturbed days left out. Null
+ * before the shift, and always for a manual rule.
+ */
+function shiftInCycle(series, from, to, rule, options = {}) {
+    const main = mainSeries(series, from, to, disturbedDays(options.events, options.timeZone), options.timeZone);
+    return main == null ? null : inTimes(main, rule);
+}
+function coverlineValue(e) {
+    return typeof e.content === 'number' && Number.isFinite(e.content) ? e.content : null;
+}
+/**
+ * One coverline per cycle that has one.
+ *
+ * Cycles run from a `fertility-cycles-start` day to the day before the next one; an open cycle stops after 90 days
+ * (as in `cyclePhaseAt`). A `fertility-cycles-coverline` event belongs to the cycle holding its calendar day.
+ * Precedence (data-model MENSTRUAL-CYCLE.md, "Coverline"): with a calculated rule, a `'manual'` event
+ * (`clientData.hdsBasis`) wins, otherwise the rule's line; a stored `'auto'` or unstated event is not shown. With
+ * the manual rule (nothing to compute), whichever event exists is shown. Among several eligible events of a cycle,
+ * the latest `modified`. A null rule (the method draws no coverline) gives none.
+ *
+ * @param series - the basal temperatures, one series per device
+ * @param events - the patient's `fertility-cycles-start`, `fertility-cycles-coverline` and
+ *   `body-temperature-basal-disturbance` events, any order (others and trashed ones are ignored)
+ * @param rule - from `temperatureRuleOf(methodDef)`
+ * @param timeZone - IANA time zone of the patient (defaults to the runtime's)
+ */
+function coverlinesOf(series, events, rule, timeZone) {
+    if (rule == null)
+        return [];
+    const live = events.filter(e => e != null && !e.trashed);
+    const startDays = [...new Set(live.filter(e => e.type === 'activity/plain' && inStream(e, STREAM.start)).map(e => (0, calendarDay_ts_1.localDayNumber)(e.time, timeZone)))]
+        .sort((a, b) => a - b);
+    const manual = isManualTemperatureRule(rule);
+    const lines = live.filter(e => e.type === 'temperature/c' && inStream(e, STREAM.coverline) && coverlineValue(e) != null &&
+        (manual || e.clientData?.hdsBasis === 'manual'));
+    const disturbed = disturbedDays(live, timeZone);
+    const out = [];
+    startDays.forEach((startDay, i) => {
+        const nextDay = startDays[i + 1];
+        const lastDay = nextDay != null ? nextDay - 1 : startDay + OPEN_CYCLE_MAX_DAYS - 1;
+        const from = (0, calendarDay_ts_1.startOfLocalDay)(startDay, timeZone);
+        const to = (0, calendarDay_ts_1.startOfLocalDay)(lastDay + 1, timeZone);
+        const main = mainSeries(series, from, to, disturbed, timeZone);
+        const shift = main == null ? null : inTimes(main, rule);
+        const event = lines
+            .filter(e => { const d = (0, calendarDay_ts_1.localDayNumber)(e.time, timeZone); return d >= startDay && d <= lastDay; })
+            .reduce((a, b) => (a == null || (b.modified ?? 0) > (a.modified ?? 0) ? b : a), null);
+        const base = { cycleStart: from, cycleEnd: nextDay != null ? to : null, computed: shift?.line ?? null, shift };
+        if (event != null)
+            out.push({ ...base, value: coverlineValue(event), origin: 'event', event });
+        else if (shift != null)
+            out.push({ ...base, value: shift.line, origin: 'computed', event: null });
+    });
+    return out;
 }
 
 
@@ -42207,6 +42428,278 @@ describe('[REMX] Reminders', () => {
 
 /***/ },
 
+/***/ "./tests/temperatureShift.test.js"
+/*!****************************************!*\
+  !*** ./tests/temperatureShift.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+// Coverline and temperature shift by the method's rule (data-model 3.24.0 temperatureRule; model-cervical-fluid
+// references/rules/coverline-rules.json, version 2026-10-28)
+describe('[TSHX] temperatureShift', () => {
+  const ZRH = 'Europe/Zurich';
+  const DAY = 86400;
+  // 2026-09-01 07:00 Zurich (CEST, UTC+2) = day 1 of the cycle below
+  const D1 = Date.parse('2026-09-01T05:00:00Z') / 1000;
+  const day = (n, hour = 7) => D1 + (n - 1) * DAY + (hour - 7) * 3600;
+  const { sensiplan, manual } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.TEMPERATURE_RULES;
+  const tcoyf = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.TEMPERATURE_RULES['sympto-thermal'];
+  // six low temperatures (highest 36.5), then the rise
+  const lows = [36.4, 36.5, 36.3, 36.4, 36.45, 36.35];
+  const series = (source, values, from = 1) => ({ source, points: values.map((value, i) => ({ time: day(from + i), value })) });
+  const start = (n, extra = {}) => ({ streamIds: ['fertility-cycles-start'], type: 'activity/plain', time: day(n, 10), ...extra });
+  const coverline = (n, value, basis, extra = {}) => {
+    const clientData = basis != null ? { clientData: { hdsBasis: basis } } : {};
+    return { streamIds: ['fertility-cycles-coverline'], type: 'temperature/c', time: day(n, 0), content: value, ...clientData, ...extra };
+  };
+  const disturbance = (n, extra = {}) => ({ streamIds: ['body-temperature-basal-disturbance'], type: 'temperature/disturbance-v1', time: day(n), content: 'illness-fever', ...extra });
+  const RULES = { sensiplan, 'sympto-thermal': tcoyf };
+
+  // coverline-rules.json `examples` (version 2026-10-28), the prototype's coverline.test.ts cases as data
+  const CASES = [
+    { method: 'sensiplan', after: [36.6, 36.65, 36.75], highestLow: 36.5, line: 36.5, note: 'the 3rd 0.2 °C above the line' },
+    { method: 'sensiplan', after: [36.6, 36.62, 36.65], highestLow: null, note: 'the 3rd too low, no 4th yet' },
+    { method: 'sensiplan', after: [36.6, 36.62, 36.65, 36.6], highestLow: 36.5, line: 36.5, note: 'first exception: a 4th above the line' },
+    { method: 'sensiplan', after: [36.6, 36.5, 36.65, 36.75], highestLow: 36.5, line: 36.5, note: 'second exception: the 2nd on the line left out, the next counts' },
+    { method: 'sensiplan', after: [36.6, 36.5, 36.65, 36.6], highestLow: null, note: 'the one counted instead is not 0.2 °C above the line' },
+    { method: 'sensiplan', after: [36.6, 36.5, 36.65, 36.6, 36.7], highestLow: null, note: 'the two exceptions are never combined' },
+    { method: 'sensiplan', after: [36.6, 36.5, 36.45, 36.75], highestLow: null, note: 'two temperatures on or under the line break the series' },
+    { method: 'sensiplan', after: [36.6, 36.5, 36.45, 36.4], highestLow: null, note: 'a temperature on or under the line breaks the series' },
+    { method: 'sympto-thermal', after: [36.6, 36.65, 36.7], highestLow: 36.5, line: 36.55, note: 'first high 0.1 °C above the 6 lows, the 3rd 0.15 °C above the line' },
+    { method: 'sympto-thermal', after: [36.55, 36.65, 36.7], highestLow: null, note: 'a first rise of only 0.05 °C does not start the count' },
+    { method: 'sympto-thermal', after: [36.6, 36.65, 36.65], highestLow: null, note: 'the 3rd under 0.15 °C above the line, no 4th yet' },
+    { method: 'sympto-thermal', after: [36.6, 36.65, 36.65, 36.6], highestLow: 36.5, line: 36.55, note: 'a 4th above the line' },
+    { method: 'sympto-thermal', after: [36.6, 36.5, 36.75, 36.8], highestLow: null, note: 'a temperature on or under the line breaks the series' }
+  ];
+
+  describe('[TSHC] coverline-rules.json examples', () => {
+    CASES.forEach((c, k) => {
+      it(`[TSHC${k + 1}] ${c.method}: ${c.note}`, () => {
+        const shift = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, ...c.after], RULES[c.method]);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(shift?.low ?? null, c.highestLow);
+        if (c.line != null) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(shift.line, c.line);
+      });
+    });
+  });
+
+  describe('[TSHR] one rule at a time', () => {
+    it('[TSHR1] Sensiplan: the line on the highest of 6 lows, 3 highs, the 3rd 0.2 °C above it', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.65, 36.75], sensiplan), { low: 36.5, line: 36.5, first: 6, confirmed: 8, highs: [6, 7, 8] });
+      // any higher temperature starts the count (no minimum first rise)
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.51, 36.6, 36.7], sensiplan)?.first, 6);
+      // a temperature equal to the highest low is not high
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.5, 36.6, 36.7], sensiplan), null);
+    });
+
+    it('[TSHR2] Sensiplan, first exception: the 3rd not 0.2 °C above, a 4th above the line confirms', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.62, 36.65], sensiplan), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.62, 36.65, 36.55], sensiplan), { low: 36.5, line: 36.5, first: 6, confirmed: 9, highs: [6, 7, 8, 9] });
+      // the 4th on the line does not
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.62, 36.65, 36.5], sensiplan), null);
+    });
+
+    it('[TSHR3] Sensiplan, second exception: the 2nd or 3rd on or under the line is left out, the next counts', () => {
+      // the 2nd left out
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.5, 36.65, 36.75], sensiplan), { low: 36.5, line: 36.5, first: 6, confirmed: 9, highs: [6, 8, 9] });
+      // the 3rd left out (under the line)
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.65, 36.4, 36.7], sensiplan), { low: 36.5, line: 36.5, first: 6, confirmed: 9, highs: [6, 7, 9] });
+      // the one counted instead must itself be 0.2 °C above: no 4th day then (never combined with the first)
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.5, 36.65, 36.6], sensiplan), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.5, 36.65, 36.6, 36.7], sensiplan), null);
+      // two on or under the line: no exception
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.5, 36.45, 36.75], sensiplan), null);
+    });
+
+    it('[TSHR4] sympto-thermal (STM / TCOYF): the line 0.05 °C above, first high 0.1 above the lows, 3rd 0.15 above the line', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.65, 36.7], tcoyf), { low: 36.5, line: 36.55, first: 6, confirmed: 8, highs: [6, 7, 8] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.55, 36.65, 36.7], tcoyf), null);
+      // a 4th above the line when the 3rd is not high enough
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.65, 36.65, 36.6], tcoyf)?.highs, [6, 7, 8, 9]);
+      // no second exception: what Sensiplan confirms by leaving the 2nd out, this rule does not
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.5, 36.75, 36.8], tcoyf), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.5, 36.75, 36.8], sensiplan), null);
+    });
+
+    it('[TSHR5] manual (Justisse): no calculation', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isManualTemperatureRule)(manual));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!(0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isManualTemperatureRule)(sensiplan));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.65, 36.75, 36.8], manual), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([series('T', [...lows, 36.6, 36.65, 36.75])], day(1, 0), day(20, 0), manual), null);
+    });
+
+    it('[TSHR6] fewer than 6 lows, or the highs not all there yet: no shift', () => {
+      // five lows before the rise: the 6 before 36.65 hold 36.6, and there are not 3 highs after it
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([36.4, 36.5, 36.3, 36.4, 36.45, 36.6, 36.65, 36.75], sensiplan), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([36.4, 36.5, 36.6, 36.65, 36.75], sensiplan), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([...lows, 36.6, 36.65], sensiplan), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftOf)([], sensiplan), null);
+    });
+  });
+
+  describe('[TSHM] the rule of a method', () => {
+    it('[TSHM1] temperatureRuleOf reads the method definition', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)({ temperatureRule: 'sensiplan' }), sensiplan);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)({ temperatureRule: 'sympto-thermal' }), tcoyf);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)({ temperatureRule: 'manual' }), manual);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)({ temperatureRule: 'none' }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)({}), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)(undefined), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)({ temperatureRule: 'a-future-rule' }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)({ temperatureRule: 'toString' }), null);
+    });
+
+    it('[TSHM2] the parameters are the method specification (coverline-rules.json 2026-10-28)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual({ ...tcoyf }, { lowCount: 6, offset: 0.05, firstRise: 0.1, highCount: 3, lastMin: 0.15, extraDay: true, dropOne: false });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual({ ...sensiplan }, { lowCount: 6, offset: 0, firstRise: 0, highCount: 3, lastMin: 0.2, extraDay: true, dropOne: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual({ ...manual }, { manual: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(Object.isFrozen(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.TEMPERATURE_RULES) && Object.isFrozen(sensiplan));
+    });
+
+    it('[TSHM3] every rule of the published cervical-fluid pack is known, per method', async () => {
+      const res = await fetch('https://model.datasafe.dev/converters/cervical-fluid/pack-latest.json');
+      const pack = await res.json();
+      const engine = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.EuclidianDistanceEngine(pack);
+      for (const id of Object.keys(pack.temperatureRules)) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(id in _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.TEMPERATURE_RULES, `unknown rule ${id}`);
+      for (const m of pack.methods) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(m.temperatureRule === 'none' || m.temperatureRule in pack.temperatureRules, `${m.methodId}: ${m.temperatureRule}`);
+      }
+      const ruleOf = (id) => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.temperatureRuleOf)(engine.getMethodDef(id));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ruleOf('sensiplan'), sensiplan);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ruleOf('chartneo'), sensiplan);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ruleOf('sympto-thermal'), tcoyf);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ruleOf('justisse'), manual);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ruleOf('billings'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ruleOf('marquette'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(engine.temperatureRules.sensiplan.label.en.length > 0);
+    });
+  });
+
+  describe('[TSHI] shiftInCycle', () => {
+    it('[TSHI1] times of the first, confirming and counted high temperatures', () => {
+      const r = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([series('Thermometer', [...lows, 36.6, 36.5, 36.65, 36.75])], day(1, 0), day(20, 0), sensiplan, { timeZone: ZRH });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(r, { source: 'Thermometer', low: 36.5, line: 36.5, first: day(7), confirmed: day(10), highs: [day(7), day(9), day(10)] });
+    });
+
+    it('[TSHI2] one temperature a calendar day, the first; readings outside [from, to) left out', () => {
+      const s = series('T', [...lows, 36.6, 36.65, 36.75]);
+      // a later reading the same day (higher) does not count: the 3rd stays 36.75
+      s.points.push({ time: day(9, 9), value: 36.4 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([s], day(1, 0), day(20, 0), sensiplan, { timeZone: ZRH })?.confirmed, day(9));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([s], day(2, 0), day(20, 0), sensiplan, { timeZone: ZRH }), null);
+    });
+
+    it('[TSHI3] disturbed days are left out, from body-temperature-basal-disturbance events', () => {
+      // a disturbed 39.0 °C among the lows
+      const fever = series('T', [...lows.slice(0, 3), 39, ...lows.slice(3), 36.4, 36.6, 36.65, 36.75]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([fever], day(1, 0), day(20, 0), sensiplan, { timeZone: ZRH }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([fever], day(1, 0), day(20, 0), sensiplan, { timeZone: ZRH, events: [disturbance(4)] })?.line, 36.5);
+      // trashed or another stream: not a disturbance
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([fever], day(1, 0), day(20, 0), sensiplan, { timeZone: ZRH, events: [disturbance(4, { trashed: true })] }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([fever], day(1, 0), day(20, 0), sensiplan, { timeZone: ZRH, events: [{ ...disturbance(4), streamIds: ['body-temperature-basal'] }] }), null);
+    });
+
+    it('[TSHI4] never mixes devices: the one with the most readings', () => {
+      const ring = series('Ring', [36.9, 36.95, 36.8]);
+      const thermometer = series('Thermometer', [...lows, 36.6, 36.65, 36.75]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([ring, thermometer], day(1, 0), day(20, 0), sensiplan, { timeZone: ZRH })?.source, 'Thermometer');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.shiftInCycle)([], day(1, 0), day(20, 0), sensiplan), null);
+    });
+  });
+
+  describe('[TSHL] coverlinesOf', () => {
+    const rise = series('Thermometer', [...lows, 36.6, 36.65, 36.75, 36.8]);
+
+    it('[TSHL1] one line per cycle, by the rule', () => {
+      const [c, ...rest] = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [start(1)], sensiplan, ZRH);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rest.length, 0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.value, 36.5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.origin, 'computed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.computed, 36.5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.event, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.cycleStart, Date.parse('2026-08-31T22:00:00Z') / 1000);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.cycleEnd, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.shift.highs, [day(7), day(8), day(9)]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [start(1)], tcoyf, ZRH)[0].value, 36.55);
+    });
+
+    it('[TSHL2] the cycle bounds the temperatures; a cycle before its rise has no line', () => {
+      const two = series('T', [...lows, 36.6, 36.65, 36.75, ...lows, 36.6]);
+      const lines = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([two], [start(1), start(10)], sensiplan, ZRH);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lines.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lines[0].cycleEnd, Date.parse('2026-09-09T22:00:00Z') / 1000);
+      // without the second start, the same readings are one cycle
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([two], [start(1)], sensiplan, ZRH).length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [], sensiplan, ZRH), []);
+    });
+
+    it('[TSHL3] a manual coverline event wins over the rule', () => {
+      const [c] = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [start(1), coverline(1, 36.6, 'manual')], sensiplan, ZRH);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.value, 36.6);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.origin, 'event');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.computed, 36.5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.event.content, 36.6);
+      // the counted highs stay the rule's
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.shift.highs, [day(7), day(8), day(9)]);
+      // shown before the rise too
+      const early = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([series('T', lows)], [start(1), coverline(1, 36.55, 'manual')], sensiplan, ZRH);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(early[0].value, 36.55);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(early[0].computed, null);
+    });
+
+    it('[TSHL4] a computing reader never shows a stored auto or unstated line', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [start(1), coverline(1, 36.7, 'auto')], sensiplan, ZRH)[0].value, 36.5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [start(1), coverline(1, 36.7)], sensiplan, ZRH)[0].origin, 'computed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([series('T', lows)], [start(1), coverline(1, 36.7, 'auto')], sensiplan, ZRH), []);
+    });
+
+    it('[TSHL5] the latest modified manual event of the cycle; trashed, other cycles and non-numbers ignored', () => {
+      const events = [start(1), start(20),
+        coverline(1, 36.6, 'manual', { modified: 10 }), coverline(2, 36.65, 'manual', { modified: 20 }),
+        coverline(1, 36.9, 'manual', { modified: 30, trashed: true }), coverline(1, 'x', 'manual', { modified: 40 }),
+        coverline(20, 36.3, 'manual')];
+      const lines = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], events, sensiplan, ZRH);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(lines.map(c => c.value), [36.65, 36.3]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lines[1].computed, null);
+    });
+
+    it('[TSHL6] manual rule (Justisse): no line until one is drawn, then whichever event exists', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [start(1)], manual, ZRH), []);
+      for (const basis of ['manual', 'auto', undefined]) {
+        const [c] = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [start(1), coverline(1, 36.55, basis)], manual, ZRH);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.value, 36.55);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.origin, 'event');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.computed, null);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.shift, null);
+      }
+    });
+
+    it('[TSHL7] a method without a coverline rule: none', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([rise], [start(1), coverline(1, 36.55, 'manual')], null, ZRH), []);
+    });
+
+    it('[TSHL8] disturbed days left out, from the same events', () => {
+      const fever = series('T', [...lows.slice(0, 3), 39, ...lows.slice(3), 36.4, 36.6, 36.65, 36.75]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([fever], [start(1), disturbance(4)], sensiplan, ZRH)[0].value, 36.5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([fever], [start(1)], sensiplan, ZRH), []);
+    });
+
+    it('[TSHL9] never mixes devices', () => {
+      const ring = series('Ring', [36.9, 36.95, 36.8]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.coverlinesOf)([ring, rise], [start(1)], sensiplan, ZRH)[0].shift.source, 'Thermometer');
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/test-utils/config.js"
 /*!************************************!*\
   !*** ./tests/test-utils/config.js ***!
@@ -42889,15 +43382,17 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
 /* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
 /* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
+
 
 
 
