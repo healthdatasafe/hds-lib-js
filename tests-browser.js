@@ -16870,6 +16870,15 @@ class HDSItemDef {
     get isSystem() {
         return this.#data.type === 'system';
     }
+    /**
+     * Whether this is a document item (`type: attachments`, data-model 3.25.0): files carried as Pryv attachments,
+     * with metadata as content (`file/xds-v1`). Imported, never entered field by field: readable and requestable
+     * like any item, but not offered in pickers or rendered as an editable form field. See
+     * `data-model/documentation/DOCUMENTS.md`.
+     */
+    get isAttachments() {
+        return this.#data.type === 'attachments';
+    }
     get reminder() {
         return this.#data.reminder || null;
     }
@@ -17663,13 +17672,13 @@ class HDSModelItemsDefs {
         return res;
     }
     /**
-     * get all non-deprecated, non-system itemDefs. Use this for any UI that lets
-     * a user pick an item to create new data points (form builders, item picker
-     * sheets, data-model browser default listing). Deprecated and system items
-     * remain resolvable via `forKey` / `forEvent` so existing events still render.
+     * get all non-deprecated itemDefs a person enters field by field (no system, no document item). Use this for any
+     * UI that lets a user pick an item to create new data points (form builders, item picker sheets, data-model
+     * browser default listing). Deprecated, system and document (`attachments`) items remain resolvable via `forKey`
+     * / `forEvent` so existing events still render.
      */
     getAllActive() {
-        return this.getAll().filter((itemDef) => !itemDef.isDeprecated && !itemDef.isSystem);
+        return this.getAll().filter((itemDef) => !itemDef.isDeprecated && !itemDef.isSystem && !itemDef.isAttachments);
     }
     /**
      * Every itemDef whose `streamId` is `streamId`, deprecated ones included.
@@ -18816,6 +18825,11 @@ function eventToShortTextWithOrigin(event) {
         }
         if (content == null && itemDef.data.type === 'date') {
             return { text: formatEventDate(event.time), origin: null };
+        }
+        // A document: its title (`file/xds-v1`), else the name of its first file (`file/attached` has no content)
+        if (itemDef.data.type === 'attachments') {
+            const title = content != null && typeof content === 'object' && typeof content.title === 'string' ? content.title : null;
+            return { text: title || event.attachments?.[0]?.fileName || null, origin: null };
         }
         if (content == null)
             return { text: null, origin: null };
