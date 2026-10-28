@@ -1,6 +1,10 @@
 import { pryv } from '../patchedPryv.ts';
 import * as logger from '../logger.ts';
+import { HDSLibError } from '../errors.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
+import { allStreamsAndChildren } from '../toolkit/StreamsTools.ts';
+import { offerStreamsToCreate } from './offerStreams.ts';
+import type { ModelStreams } from './offerStreams.ts';
 import type { Permission } from './interfaces.ts';
 
 export interface BridgeAccessOptions {
@@ -133,11 +137,97 @@ async function ensureModelStreamHierarchy (
 }
 
 /**
+ * Create, on the user's own (personal) connection, every stream the permissions
+ * name that the account does not have yet: what `accesses.create` does through
+ * `defaultName`, and `accesses.update` does not.
+ *
+ * Without it, an access updated to a grant on a new stream points at nothing: the
+ * update succeeds (the server does not check the stream exists), then the bridge,
+ * whose scoped access cannot create a root stream, fails to provision its tree.
+ *
+ * - A stream the data model knows is created with its model chain, root-first, with
+ *   the model's names and parents (`offerStreamsToCreate`), never as a flat
+ *   `defaultName` copy. Existing streams, model or not, are left untouched.
+ * - Any other stream is created at root, named by the permission's `defaultName`, as
+ *   `accesses.create` would. Without a `defaultName` it is not created, as
+ *   `accesses.create` would not; nor are `*` and store-prefixed (`:…`) ids.
+ * - Idempotent: `item-already-exists` (for instance a trashed stream, which
+ *   `streams.get` does not list) is fine.
+ *
+ * Throws an `HDSLibError` naming each stream that could not be created, so the
+ * caller does not update an access its bridge cannot use.
+ */
+async function ensurePermissionStreams (
+  connection: pryv.Connection,
+  accessName: string,
+  permissions: Permission[]
+): Promise<void> {
+  const granted = permissions.filter((p: any) =>
+    typeof p?.streamId === 'string' && p.streamId !== '*' && !p.streamId.startsWith(':'));
+  if (granted.length === 0) return;
+
+  const roots: any[] = await (connection as any).apiOne('streams.get', {}, 'streams');
+  const existing = new Set<string>();
+  for (const s of allStreamsAndChildren(roots ?? [])) existing.add(s.id);
+  if (granted.every((p) => existing.has(p.streamId))) return;
+
+  let modelStreams: ModelStreams | null = null;
+  try {
+    modelStreams = getModel().streams;
+  } catch (e: any) {
+    logger.warn(`ensureBridgeAccess: model not loaded, creating every missing stream from defaultName: ${e?.message ?? e}`);
+  }
+  const defaultNames = new Map(granted.map((p) => [p.streamId, p.defaultName]));
+  const missing = granted.filter((p) => !existing.has(p.streamId));
+  const wanted = modelStreams != null
+    ? offerStreamsToCreate(missing, modelStreams)
+    : missing.map((p) => ({ id: p.streamId, name: p.streamId }));
+
+  const toCreate: Array<{ id: string; name: string; parentId?: string }> = [];
+  for (const s of wanted) {
+    if (existing.has(s.id)) continue;
+    if (modelStreams?.getDataById(s.id, false) != null) {
+      toCreate.push(s);
+      continue;
+    }
+    const defaultName = defaultNames.get(s.id);
+    if (defaultName == null) continue;
+    toCreate.push({ id: s.id, name: defaultName });
+  }
+  if (toCreate.length === 0) return;
+
+  let results: any[];
+  try {
+    results = await (connection as any).api(
+      toCreate.map((s) => ({ method: 'streams.create', params: s }))
+    );
+  } catch (e: any) {
+    throw new HDSLibError(`ensureBridgeAccess "${accessName}": could not create the streams ${toCreate.map((s) => s.id).join(', ')}, access not updated`, e);
+  }
+  const failures: Array<{ streamId: string; error: any }> = [];
+  for (let i = 0; i < toCreate.length; i++) {
+    const r = results?.[i];
+    if (r?.stream != null || r?.error?.id === 'item-already-exists') continue;
+    failures.push({ streamId: toCreate[i].id, error: r?.error ?? { id: 'unexpected-error', data: r } });
+  }
+  if (failures.length > 0) {
+    const list = failures.map((f) => `${f.streamId} (${f.error?.id}${f.error?.message != null ? ': ' + f.error.message : ''})`).join(', ');
+    throw new HDSLibError(`ensureBridgeAccess "${accessName}": could not create the stream(s) its permissions need, access not updated: ${list}`, { failures });
+  }
+  logger.info('Bridge access streams created', { name: accessName, streams: toCreate.map((s) => s.id) });
+}
+
+/**
  * Get or create a bridge access, with optional permission update detection.
  *
  * If the access exists and `updateIfDifferent` is set and permissions differ,
  * updates it in place via `accesses.update` (Plan 66). The access id becomes
  * composite (`<base>:<serial>`) but the token and apiEndpoint are preserved.
+ *
+ * With `updateIfDifferent`, the streams the permissions name are created first
+ * when the account lacks them (`accesses.update`, unlike `accesses.create`, does
+ * not create them) — also when the permissions already match, which is the state
+ * an earlier update to a new grant left behind.
  *
  * Server-side `clientData` merge means any pre-existing keys on the access
  * (notably `previousAccessIds` from the legacy delete+create era) are
@@ -156,6 +246,7 @@ export async function ensureBridgeAccess (
   options: BridgeAccessOptions & { updateIfDifferent?: boolean }
 ): Promise<BridgeAccessResult> {
   let attempt = 0;
+  let streamsEnsured = false;
   while (true) {
     const accesses = await (connection as any).apiOne('accesses.get', {}, 'accesses');
     const existing = accesses.find((a: any) => a.name === options.name);
@@ -175,6 +266,11 @@ export async function ensureBridgeAccess (
         created: true,
         updated: false
       };
+    }
+
+    if (options.updateIfDifferent && !streamsEnsured) {
+      await ensurePermissionStreams(connection, options.name, options.permissions);
+      streamsEnsured = true;
     }
 
     if (!options.updateIfDifferent || permissionsMatch(existing.permissions, options.permissions)) {
