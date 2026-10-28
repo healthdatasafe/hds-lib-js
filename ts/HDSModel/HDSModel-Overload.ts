@@ -21,6 +21,9 @@ import { HDSLibError } from '../errors.ts';
  *    composite / datasource / converter-engine / unitConversions) of an existing itemDef
  *  - change `type` or `eventType` of an existing setting
  *  - change `endpoint` / `queryParam` / `resultKey` of an existing datasource
+ *
+ * Restating an immutable field of an existing item or stream with exactly its base value (same JSON, key order
+ * included) is accepted, so an overlay item that later became canonical keeps loading.
  */
 export interface HDSModelOverload {
   items?: { [key: string]: any };
@@ -70,7 +73,10 @@ export function validateOverload (modelData: any, overload: HDSModelOverload): v
       if (!base) continue; // adding a new item is always allowed
       for (const field of Object.keys(overlay)) {
         if (ITEM_IMMUTABLE_FIELDS.has(field)) {
-          errors.push(`item "${key}": cannot override immutable field "${field}"`);
+          // Restating the base value is allowed (an overlay item that became canonical), changing it is not.
+          if (!sameValue(overlay[field], base[field])) {
+            errors.push(`item "${key}": cannot override immutable field "${field}"`);
+          }
         } else if (!ITEM_MUTABLE_FIELDS.has(field) && field !== 'version' && field !== 'key') {
           errors.push(`item "${key}": unknown overlay field "${field}"`);
         }
@@ -298,6 +304,14 @@ function mergeStreamForest (
   }
 }
 
+/**
+ * Equality used for restated immutable fields (items and streams alike): the JSON serializations must match,
+ * so object key order counts and a restatement must carry the base value exactly.
+ */
+function sameValue (a: any, b: any): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /** Build a flat id→node index of an existing (base) stream tree. */
 function indexStreams (streams: any[], out: { [id: string]: any }): void {
   for (const s of streams) {
@@ -334,7 +348,7 @@ function walkOverloadStreams (
       }
       // `role` and `clientData` are immutable: restating the base value is allowed, changing it is not.
       for (const field of STREAM_IMMUTABLE_FIELDS) {
-        if (node[field] !== undefined && JSON.stringify(node[field]) !== JSON.stringify(base[field])) {
+        if (node[field] !== undefined && !sameValue(node[field], base[field])) {
           errors.push(`streams["${node.id}"]: cannot override immutable field "${field}"`);
         }
       }

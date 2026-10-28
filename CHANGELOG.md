@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.24.0] - 2026-10-28
+
+### Fixed
+- **An overload may restate an existing item's immutable fields identically** (B-2026-10-28-4): `validateOverload`
+  refused any overlay that stated `type`, `streamId`, `eventType`, `options` (or another immutable field) of an
+  existing item, even with the canonical value, so an app overlay item that became canonical (Cycle Intelligence's
+  `fertility-monitor-lh-marquette`) made the model load throw. An identical restatement is now accepted, with the
+  rule streams have used for `role` / `clientData` since 2.21.0: equal JSON serializations, key order included. A
+  divergent value still throws `cannot override immutable field "<field>"`. Documented in `docs/hds-model.md`
+  (new "Overload" section). Tests `[OVAJ]`, `[OVAK]`, `[OVBL]`-`[OVBO]`, `[OVDE]`.
+
 ## [2.23.0] - 2026-10-28
 
 ### Added

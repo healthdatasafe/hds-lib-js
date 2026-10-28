@@ -33,6 +33,20 @@ const model = new HDSLib.HDSModel('https://model.datasafe.dev/pack.json');
 await model.load();
 ```
 
+### Overload
+
+`model.load(url, overload)`, `model.loadFromObject(data, overload)` and `initHDSModel({ overload })` take an
+`HDSModelOverload` (`ts/HDSModel/HDSModel-Overload.ts`) that is validated, then merged before the model is frozen.
+An overload may add items, streams, eventTypes, settings, datasources and appStreams, and refine the `label`,
+`description`, `repeatable`, `reminder` and `devNotes` of an existing item. It may not change an existing item's
+`type`, `streamId`, `eventType`, `variations`, `options`, `composite`, `datasource`, `converter-engine` or
+`unitConversions`, nor an existing stream's `parentId`, `role` or `clientData`: the load throws an `HDSLibError`
+listing each one.
+
+Restating one of those fields with exactly the canonical value is accepted, for items as for streams. The comparison
+is on the JSON serialization, so object key order counts: `{ value: 0, label: … }` and `{ label: …, value: 0 }` are
+different. This lets an app keep an item in its overlay after the same definition becomes canonical.
+
 ### Properties
 
 | Property | Type | Description |

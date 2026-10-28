@@ -65,6 +65,64 @@ function makeBaseModel () {
   };
 }
 
+/**
+ * `fertility-monitor-lh-marquette` as data-model ships it once it is canonical (definitions/items/fertility.yaml).
+ * Cycle Intelligence wrote it first as an overlay item; its overlay restates the same key, streamId, eventType,
+ * type and options.
+ */
+function marquetteItem () {
+  return {
+    version: 'v1',
+    label: { en: 'Fertility monitor reading', fr: 'Lecture du moniteur de fertilité' },
+    description: { en: 'Low, High or Peak, as your fertility monitor shows it.' },
+    streamId: 'fertility-monitor-lh-marquette',
+    eventType: 'ratio/generic',
+    type: 'select',
+    options: [
+      { value: 0, label: { en: 'Low', fr: 'Bas' } },
+      { value: 1, label: { en: 'High', fr: 'Haut' } },
+      { value: 2, label: { en: 'Peak', fr: 'Pic' } }
+    ],
+    repeatable: 'P1D'
+  };
+}
+
+/** Base model in which the Marquette item is canonical. */
+function makeBaseModelWithMarquette () {
+  const m = makeBaseModel();
+  m.items['fertility-monitor-lh-marquette'] = marquetteItem();
+  m.streams.push({
+    id: 'fertility',
+    name: 'Fertility',
+    parentId: null,
+    children: [{
+      id: 'fertility-monitor',
+      name: 'Fertility monitor',
+      parentId: 'fertility',
+      children: [{ id: 'fertility-monitor-lh-marquette', name: 'Fertility monitor reading', parentId: 'fertility-monitor' }]
+    }]
+  });
+  m.eventTypes.types['ratio/generic'] = { type: 'object' };
+  return m;
+}
+
+/** The app overlay that still carries the item as its own, restating every field with the canonical values. */
+function marquetteRestatementOverlay () {
+  return {
+    items: {
+      'fertility-monitor-lh-marquette': {
+        ...marquetteItem(),
+        label: { en: 'LH monitor reading', fr: 'Lecture du moniteur LH', es: 'Lectura del monitor LH' },
+        repeatable: 'unlimited'
+      }
+    },
+    streams: [{
+      id: 'fertility',
+      children: [{ id: 'fertility-monitor', children: [{ id: 'fertility-monitor-lh-marquette', name: 'LH monitor reading' }] }]
+    }]
+  };
+}
+
 describe('[OVRX] HDSModel overload', () => {
   // ---------- validateOverload ----------
   describe('[OVRA] validateOverload — allowed', () => {
@@ -105,6 +163,17 @@ describe('[OVRX] HDSModel overload', () => {
       m.streams[0].children[0].role = 'context';
       m.streams[0].children[0].clientData = { a: 1 };
       validateOverload(m, { streams: [{ id: 'body-weight', name: 'Weight', role: 'context', clientData: { a: 1 } }] });
+    });
+    it('[OVAJ] accepts an overlay that restates a canonical item\'s immutable fields identically (B-2026-10-28-4)', () => {
+      const m = makeBaseModelWithMarquette();
+      validateOverload(m, marquetteRestatementOverlay());
+    });
+    it('[OVAK] accepts an identical restatement of each immutable item field on its own', () => {
+      const m = makeBaseModel();
+      m.items['body-weight'].unitConversions = [{ unit: 'lb', factor: 2.20462 }];
+      for (const field of ['type', 'streamId', 'eventType', 'unitConversions']) {
+        validateOverload(m, { items: { 'body-weight': { [field]: structuredClone(m.items['body-weight'][field]) } } });
+      }
     });
   });
 
@@ -164,6 +233,42 @@ describe('[OVRX] HDSModel overload', () => {
         () => validateOverload(m, { streams: [{ id: 'body', children: [{ id: 'body-weight', clientData: { a: 2 } }] }] }),
         /streams\["body-weight"\]: cannot override immutable field "clientData"/
       );
+    });
+    it('[OVBL] rejects a divergent restatement of a canonical item\'s options (B-2026-10-28-4)', () => {
+      const m = makeBaseModelWithMarquette();
+      const overlay = marquetteRestatementOverlay();
+      overlay.items['fertility-monitor-lh-marquette'].options[2].label = { en: 'Peak', fr: 'Pic', es: 'Pico' };
+      assert.throws(
+        () => validateOverload(m, overlay),
+        /item "fertility-monitor-lh-marquette": cannot override immutable field "options"/
+      );
+    });
+    it('[OVBM] rejects a restatement whose only difference is one immutable field, naming that field only', () => {
+      const m = makeBaseModelWithMarquette();
+      const overlay = marquetteRestatementOverlay();
+      overlay.items['fertility-monitor-lh-marquette'].eventType = 'ratio/proportion';
+      try {
+        validateOverload(m, overlay);
+        assert.fail('should have thrown');
+      } catch (err) {
+        assert.ok(err instanceof HDSLibError);
+        assert.deepEqual(err.innerObject.errors, ['item "fertility-monitor-lh-marquette": cannot override immutable field "eventType"']);
+      }
+    });
+    it('[OVBN] a key-order difference counts as divergent, for items as for streams', () => {
+      const m = makeBaseModelWithMarquette();
+      const overlay = marquetteRestatementOverlay();
+      overlay.items['fertility-monitor-lh-marquette'].options[0] = { label: { en: 'Low', fr: 'Bas' }, value: 0 };
+      assert.throws(() => validateOverload(m, overlay), /cannot override immutable field "options"/);
+      m.streams[0].children[0].clientData = { a: 1, b: 2 };
+      assert.throws(
+        () => validateOverload(m, { streams: [{ id: 'body-weight', clientData: { b: 2, a: 1 } }] }),
+        /cannot override immutable field "clientData"/
+      );
+    });
+    it('[OVBO] rejects an immutable item field stated as undefined', () => {
+      const m = makeBaseModel();
+      assert.throws(() => validateOverload(m, { items: { 'body-weight': { type: undefined } } }), /immutable field "type"/);
     });
     it('[OVBH] aggregates multiple errors in one throw', () => {
       const m = makeBaseModel();
@@ -304,6 +409,16 @@ describe('[OVRX] HDSModel overload', () => {
       });
       assert.equal(model.streams.isContext('body-weight-scale'), true);
       assert.equal(model.streams.isContext('body-weight'), false);
+    });
+
+    it('[OVDE] loads a model whose overlay restates a now-canonical item identically (B-2026-10-28-4)', async () => {
+      const model = new HDSModel('http://fake/pack.json');
+      model.loadFromObject(makeBaseModelWithMarquette(), marquetteRestatementOverlay());
+      const item = model.itemsDefs.forKey('fertility-monitor-lh-marquette');
+      assert.deepEqual(item.eventTypes, ['ratio/generic']);
+      assert.deepEqual(model.modelData.items['fertility-monitor-lh-marquette'].options, marquetteItem().options);
+      assert.equal(model.modelData.items['fertility-monitor-lh-marquette'].label.es, 'Lectura del monitor LH');
+      assert.equal(model.modelData.items['fertility-monitor-lh-marquette'].repeatable, 'unlimited');
     });
 
     it('[OVDB] surfaces validation errors before merging', async () => {
