@@ -50,6 +50,8 @@ export type {
   ItemLabelsWithSource,
   CollectItemLabelsOptions
 } from './itemLabels.ts';
+export { LEGACY_CHAT_TYPE, legacyChatStreams, legacyChatSource, legacyChatMessages } from './legacyChat.ts';
+export type { LegacyChatSource, LegacyChatEventLike, LegacyChatMessage } from './legacyChat.ts';
 export { dataName, permissionView } from './permissionLabels.ts';
 export type { PermissionView, PermissionLabelOptions } from './permissionLabels.ts';
 export { AppManagingAccount, AppClientAccount, Application, CollectorRequest, Contact, Questionnaire };

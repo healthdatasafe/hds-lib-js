@@ -1,5 +1,42 @@
 # Changelog
 
+## [2.22.0] - 2026-10-28
+
+### Added
+- **Pre-CMC chat, read-only** (`appTemplates/legacyChat.ts`, B-2026-10-27-30 follow-up): chat written before the
+  June 2026 CMC switch is `message/hds-chat-v1` in `chat-<remoteUsername>` (the person's) and
+  `chat-<remoteUsername>-in` (the contact's), which `chatEventInfos` does not recognise. `appTemplates.legacyChatStreams(username)`,
+  `legacyChatSource(event, username)` (`'me' | 'contact' | 'unknown'`), `legacyChatMessages(username, events)`
+  (`{ id, text, time, fromContact }`, oldest first, trashed / empty / non-text left out) and `LEGACY_CHAT_TYPE`;
+  the same on `Contact` as `legacyChatStreams`, `legacyChatSource(event)`, `legacyChatMessages(events)`. Purely
+  additive: `chatEventInfos` is unchanged, nothing is written. Types `LegacyChatSource`, `LegacyChatEventLike`,
+  `LegacyChatMessage`. Documented in `docs/app-templates.md`. Tests `[LGC1-B]`.
+- **`cyclePhaseAt`: period end from bleeding, `predictedBy`** (for the webapp's cycle card):
+  - when a cycle has no `fertility-cycles-period-end`, its period ends on the last of the consecutive days with
+    period-level `body-vulva-bleeding` (Very light or more; spotting does not count, as for `fertility-cycles-start`;
+    a value between the Spotting and Very light anchors reads as the nearer one) beginning on the start day or the
+    day after; those days are
+    `menstrual`, and `follicular` follows until the first fertile day. Pass the bleeding events with the boundary
+    events. A recorded period end always wins; without bleeding on the start day or the next, nothing changes.
+    Bleeding observations do not enter `basis`;
+  - `predictedBy: string[]` on the result: when `basis` is `'predicted'`, the `createdBy` access ids of the
+    predicted boundaries the phase rests on, so an app can label "predicted by {app}" (else "recorded"); `[]`
+    otherwise. `CycleEventLike` gains optional `content` and `createdBy`;
+  - documented: a day's phase follows from the boundaries whether or not anything was logged that day; still no
+    projected ovulation. `cyclePhaseAt` and `cycleDayAt` are now documented in `docs/utilities.md`.
+  Backward compatible: without bleeding events the phases, `basis` and the other fields are unchanged; the result
+  gains one field. Tests `[CPHP0-11]`, `[CPHQ1-4]`, `[CPHR]`; `[CPH7]` expects the new field.
+
+### Fixed
+- **`eventToShortText` shows a variation's option label as the unit** (B-2026-10-27-4): an item with
+  `variations.eventType` reads in the unit its option names for the event's type, as hds-forms-js shows it beside
+  the field. AMH, progesterone, vitamin D 25-OH and folate on `concentration/ug-l` read `ng/mL` (was `µg/L`),
+  prolactin on `concentration/uiu-ml` `mIU/L` (was `μIU/mL`). Scoped to `concentration/*` options: `body-height` /
+  `body-weight` labels are form words (`Feet`, `Lbs`), so those keep the eventType symbol and the unit-system
+  conversion. Precedence: `number.display.suffix`, then the option label (unscaled values only), then the eventType
+  symbol. Also in `eventToShortTextWithOrigin`. Documented in `docs/toolkit.md`. Tests `[EST28a-h]` against the
+  published 3.22.0 pack.
+
 ## [2.21.0] - 2026-10-28
 
 ### Fixed

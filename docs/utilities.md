@@ -116,6 +116,54 @@ const statuses = HDSLib.computeReminders(itemDefs, events);
 
 Results are sorted: `overdue > due > upcoming > ok > cooldown`, with higher importance first within each status.
 
+## Menstrual cycle
+
+Cycle day and phase are derived from the person's own events, never stored (data-model
+`documentation/MENSTRUAL-CYCLE.md`). Days are calendar days in the patient's `timeZone` (IANA name; default: the
+runtime's), not 24-hour steps.
+
+### cycleDayAt(time, cycleStart, timeZone?)
+
+`1` on the calendar day of `cycleStart`, `2` on the next one, and so on.
+
+### cyclePhaseAt(time, events, timeZone?)
+
+```javascript
+const r = cyclePhaseAt(Date.now() / 1000, events, 'Europe/Zurich');
+// { phase: 'fertile', basis: 'predicted', predictedBy: ['<access id>'], cycleDay: 12, cycleStart, cycleEnd }
+```
+
+`events`: the patient's `fertility-cycles-*` events (`activity/plain`) and `body-vulva-bleeding` events
+(`ratio/proportion`), any order; others are ignored, as are trashed ones.
+
+- A cycle runs from a `fertility-cycles-start` day to the day before the next one; an open cycle stops after 90 days.
+  A boundary belongs to the cycle holding its day (the earliest when several).
+- `menstrual`: the start day through the period end. The period end is the cycle's `fertility-cycles-period-end`;
+  when none is recorded, the last of the consecutive days with period-level bleeding that begin on the start day or
+  the day after. Period-level means Very light (0.2) or more: **spotting (0.08) does not count**, as
+  `fertility-cycles-start` requires full bleeding; a value between the two anchors reads as the nearer one (above
+  0.14 counts). A spotting day ends the run, and spotting alone on day 1 and day 2 gives no period end. No
+  period-level bleeding on either day: no period end. A recorded period end always wins.
+- `fertile`: the fertile-window days (first and last inclusive) and the ovulation day.
+- `follicular`: after the period end, before the first fertile day (window start, else ovulation day).
+- `luteal`: after the ovulation day (and after the window).
+- Any other day: `phase: null`. It never guesses, and it never projects an ovulation. A period end (recorded or from
+  bleeding) on or after the first fertile day is ignored.
+- **The boundaries decide.** A day's phase does not depend on whether anything was logged that day; a "log today"
+  nudge is the app's.
+
+| Field | Meaning |
+|-------|---------|
+| `phase` | `'menstrual' \| 'follicular' \| 'fertile' \| 'luteal' \| null` |
+| `basis` | from `clientData.hdsBasis` of the boundaries the phase rests on: `'predicted'` when any is predicted, `'confirmed'` when all are confirmed, else `'unknown'` (not stated). Bleeding observations do not count. |
+| `predictedBy` | when `basis` is `'predicted'`: the distinct `createdBy` (access ids) of the predicted boundaries; else `[]` |
+| `cycleDay` | 1 on the start day; null outside a cycle |
+| `cycleStart` / `cycleEnd` | first second of the start day / of the next start day (null while open) |
+
+For a label: `basis === 'predicted'` reads "predicted by {app}", the app names coming from `predictedBy` (resolve each
+access id to its app, e.g. through the contact whose `accessIds` hold it); `'confirmed'` and `'unknown'` read
+"recorded".
+
 ## Logger
 
 Configurable logging. Default logger outputs to console.

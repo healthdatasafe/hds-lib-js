@@ -2,6 +2,8 @@ import type { Permission } from './interfaces.ts';
 import { getStreamIdAndChildrenIds } from '../toolkit/StreamsTools.ts';
 import { pryv, cmc } from '../patchedPryv.ts';
 import type { FormSpec } from '../cmc/formSpec.ts';
+import { legacyChatStreams, legacyChatSource, legacyChatMessages } from './legacyChat.ts';
+import type { LegacyChatEventLike, LegacyChatMessage, LegacyChatSource } from './legacyChat.ts';
 
 // ---- Plan 59 Phase 5a — CMC-shaped Contact types ---- //
 
@@ -290,6 +292,23 @@ export class Contact {
       }
     }
     return { source: 'unknown' };
+  }
+
+  // ---- Pre-CMC chat, read-only (legacyChat.ts) ---- //
+
+  /** This contact's pre-CMC chat stream ids (`chat-<remoteUsername>`, `chat-<remoteUsername>-in`), null without account name. */
+  get legacyChatStreams (): { outgoing: string; incoming: string } | null {
+    return legacyChatStreams(this.remoteUsername);
+  }
+
+  /** Who wrote a pre-CMC chat event of this contact ('me', 'contact'), 'unknown' when it is not one. `chatEventInfos` is unchanged. */
+  legacyChatSource (event: LegacyChatEventLike): LegacyChatSource {
+    return legacyChatSource(event, this.remoteUsername);
+  }
+
+  /** This contact's pre-CMC messages among `events`, oldest first, read-only. */
+  legacyChatMessages (events: LegacyChatEventLike[]): LegacyChatMessage[] {
+    return legacyChatMessages(this.remoteUsername, events);
   }
 
   // ---- Derived getters (CMC-only) ---- //
