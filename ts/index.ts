@@ -10,6 +10,7 @@ import * as toolkit from './toolkit/index.ts';
 import { durationToSeconds, durationToLabel } from './utils/duration.ts';
 import { cycleDayAt } from './utils/calendarDay.ts';
 import { cyclePhaseAt } from './utils/cyclePhase.ts';
+import { shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES } from './utils/temperatureShift.ts';
 import { computeReminders } from './HDSModel/reminders.ts';
 import { eventToShortText, eventToShortTextWithOrigin, formatEventDate } from './HDSModel/eventToShortText.ts';
 import { MonitorScope } from './MonitorScope.ts';
@@ -34,10 +35,11 @@ export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.t
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
 export type { CyclePhase, CycleBasis, CyclePhaseResult, CycleEventLike } from './utils/cyclePhase.ts';
+export type { TemperatureRule, TemperatureRuleId, CalculatedTemperatureRule, ManualTemperatureRule, TemperatureShift, TemperaturePoint, TemperatureSeries, TemperatureShiftOptions, TemperatureShiftInCycle, Coverline } from './utils/temperatureShift.ts';
 export type { SettingKey, SettingsValues, DateFormat, UnitSystem, Theme } from './settings/HDSSettings.ts';
 export type { ProfileKey, ProfileValues } from './settings/HDSProfile.ts';
 export type { AccountPreferenceKey, SaveLanguageResult } from './settings/accountPreferences.ts';
-export type { ConverterPack, ConversionResult as ConverterConversionResult, ObservationVector, SourceBlock } from './converters/types.ts';
+export type { ConverterPack, ConversionResult as ConverterConversionResult, ObservationVector, SourceBlock, MethodDef, TemperatureRuleDef } from './converters/types.ts';
 export type { PreferredConfig } from './HDSModel/HDSModel-Preferred.ts';
 export type { AppStreamDef } from './HDSModel/HDSModel-AppStreams.ts';
 export type { HDSModelOverload } from './HDSModel/HDSModel-Overload.ts';
@@ -45,7 +47,7 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, cyclePhaseAt, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope };
+export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, cyclePhaseAt, shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope };
 export type { FormSpec, FormSpecRecord, FormSpecItemKeyIssue, FormSpecItemKeyIssueReason, FormSpecSource, FormSpecOpenLink } from './cmc/formSpec.ts';
 export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './appTemplates/datasetTemplate.ts';
 export type { LoadTemplateFromUrlOptions } from './appTemplates/loader.ts';
@@ -104,6 +106,12 @@ const HDSLib = {
   durationToLabel,
   cycleDayAt,
   cyclePhaseAt,
+  shiftOf,
+  shiftInCycle,
+  coverlinesOf,
+  temperatureRuleOf,
+  isManualTemperatureRule,
+  TEMPERATURE_RULES,
   computeReminders,
   eventToShortText,
   eventToShortTextWithOrigin,
