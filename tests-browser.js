@@ -17861,7 +17861,10 @@ function validateOverload(modelData, overload) {
                 continue; // adding a new item is always allowed
             for (const field of Object.keys(overlay)) {
                 if (ITEM_IMMUTABLE_FIELDS.has(field)) {
-                    errors.push(`item "${key}": cannot override immutable field "${field}"`);
+                    // Restating the base value is allowed (an overlay item that became canonical), changing it is not.
+                    if (!sameValue(overlay[field], base[field])) {
+                        errors.push(`item "${key}": cannot override immutable field "${field}"`);
+                    }
                 }
                 else if (!ITEM_MUTABLE_FIELDS.has(field) && field !== 'version' && field !== 'key') {
                     errors.push(`item "${key}": unknown overlay field "${field}"`);
@@ -18084,6 +18087,13 @@ function mergeStreamForest(overlayNodes, baseRoots, baseById, parentIdFromTreePo
         }
     }
 }
+/**
+ * Equality used for restated immutable fields (items and streams alike): the JSON serializations must match,
+ * so object key order counts and a restatement must carry the base value exactly.
+ */
+function sameValue(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+}
 /** Build a flat id→node index of an existing (base) stream tree. */
 function indexStreams(streams, out) {
     for (const s of streams) {
@@ -18115,7 +18125,7 @@ function walkOverloadStreams(nodes, expectedParentId, baseById, errors) {
             }
             // `role` and `clientData` are immutable: restating the base value is allowed, changing it is not.
             for (const field of STREAM_IMMUTABLE_FIELDS) {
-                if (node[field] !== undefined && JSON.stringify(node[field]) !== JSON.stringify(base[field])) {
+                if (node[field] !== undefined && !sameValue(node[field], base[field])) {
                     errors.push(`streams["${node.id}"]: cannot override immutable field "${field}"`);
                 }
             }
