@@ -47,6 +47,18 @@ export interface MethodDef {
   caseInsensitive?: boolean;
   components: ComponentDef[];
   observations?: ObservationEntry[];
+  /**
+   * The coverline rule the method charts the basal temperature by: a key of the pack's `temperatureRules`, or
+   * `'none'` (data-model 3.24.0, cervical-fluid pack). See `temperatureRuleOf`.
+   */
+  temperatureRule?: string;
+}
+
+/** A coverline rule as the pack declares it (data only; the parameters are hds-lib's `TEMPERATURE_RULES`). */
+export interface TemperatureRuleDef {
+  label: I18nString;
+  /** Where the rule's parameters and their sources are (model-cervical-fluid). */
+  source?: string;
 }
 
 /** Dimension stop for human-readable labels */
@@ -85,6 +97,8 @@ export interface ConverterPack {
   dimensionNames: string[];
   dimensions: Record<string, DimensionDef>;
   colorToRGB?: Record<string, string>;
+  /** The coverline rules the methods refer to by `temperatureRule` (cervical-fluid, data-model 3.24.0). */
+  temperatureRules?: Record<string, TemperatureRuleDef>;
   methods: MethodDef[];
 }
 

@@ -11,7 +11,7 @@
 
 import type {
   ObservationVector, DimensionWeights, DimensionDef, MethodDef, ComponentDef, ComponentOption,
-  MethodConverter, ConverterPack, ConversionResult,
+  MethodConverter, ConverterPack, ConversionResult, TemperatureRuleDef,
 } from './types.ts';
 
 // ─── Vector math ────────────────────────────────────────────────────────────
@@ -247,6 +247,8 @@ export class EuclidianDistanceEngine {
   readonly dimensions: Record<string, DimensionDef>;
   readonly weights: DimensionWeights;
   readonly converterVersion: string;
+  /** The pack's coverline rules, by id (labels and sources); empty for a pack without them. */
+  readonly temperatureRules: Record<string, TemperatureRuleDef>;
 
   private _converters: Record<string, MethodConverter> = {};
   private _methodDefs: Record<string, MethodDef> = {};
@@ -258,6 +260,7 @@ export class EuclidianDistanceEngine {
     this.converterVersion = pack.converterVersion;
     this.dimensionNames = pack.dimensionNames;
     this.dimensions = pack.dimensions;
+    this.temperatureRules = pack.temperatureRules ?? {};
 
     // Build weights from dimensions
     this.weights = {};
