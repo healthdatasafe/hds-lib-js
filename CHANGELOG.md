@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.23.0] - 2026-10-28
+
+### Added
+- **`eventToShortText` shows a medication regimen** (data-model 3.23.0, site-agents#31): on `medication/basic` and
+  `medication/coded-v1`, `intake.frequency` reads "3×/d" or "1×/48 h", `intake.asNeeded` reads "as needed"
+  (localized), and the printed `intake.note` is shown only when there is no structured frequency. An incomplete
+  frequency is not shown. Tests `[EST29a-e]`.
+
 ## [2.22.0] - 2026-10-28
 
 ### Added
