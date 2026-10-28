@@ -17834,8 +17834,11 @@ const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const ITEM_MUTABLE_FIELDS = new Set(['label', 'description', 'repeatable', 'reminder', 'devNotes']);
 /** Fields on an existing itemDef that an overload must NOT change. */
 const ITEM_IMMUTABLE_FIELDS = new Set([
-    'type', 'streamId', 'eventType', 'variations', 'options', 'composite', 'datasource', 'converter-engine'
+    'type', 'streamId', 'eventType', 'variations', 'options', 'composite', 'datasource', 'converter-engine',
+    'unitConversions'
 ]);
+/** Fields on an existing stream that an overload must NOT change (`parentId` is checked on its own). */
+const STREAM_IMMUTABLE_FIELDS = ['role', 'clientData'];
 /** Fields on an existing setting that an overload must NOT change. */
 const SETTING_IMMUTABLE_FIELDS = new Set(['type', 'eventType']);
 /** Fields on an existing datasource that an overload must NOT change. */
@@ -17922,8 +17925,9 @@ function validateOverload(modelData, overload) {
  *  - items: per-key shallow merge with deep-merge of `label` / `description` /
  *    `reminder`. Overload wins for any specific language string.
  *  - streams: tree merge. New nodes are inserted under their parent (which
- *    must already exist in base or earlier in the overlay). Existing nodes
- *    get their `name` overlaid and their `children` recursively merged.
+ *    must already exist in base or earlier in the overlay) and keep their
+ *    `role` and `clientData`. Existing nodes get their `name` overlaid and
+ *    their `children` recursively merged.
  *  - eventTypes.types: additive only (validator already rejected overrides).
  *  - eventTypes.extras: per-key shallow merge (overload wins).
  *  - settings / datasources / appStreams: per-key shallow merge with deep
@@ -18056,6 +18060,11 @@ function mergeStreamForest(overlayNodes, baseRoots, baseById, parentIdFromTreePo
             name: overlayNode.name,
             parentId: parentId ?? null
         };
+        // site-agents#34: an app declares its own context leaves (`role: context`) through an overload.
+        if (overlayNode.role !== undefined)
+            newNode.role = overlayNode.role;
+        if (overlayNode.clientData !== undefined)
+            newNode.clientData = overlayNode.clientData;
         if (parentId == null) {
             baseRoots.push(newNode);
         }
@@ -18103,6 +18112,12 @@ function walkOverloadStreams(nodes, expectedParentId, baseById, errors) {
             // expectedParentId mismatch (overlay places this node under a different parent than the base)
             if (expectedParentId !== null && expectedParentId !== base.parentId) {
                 errors.push(`streams["${node.id}"]: cannot reparent (base parentId="${base.parentId}", overlay places under "${expectedParentId}")`);
+            }
+            // `role` and `clientData` are immutable: restating the base value is allowed, changing it is not.
+            for (const field of STREAM_IMMUTABLE_FIELDS) {
+                if (node[field] !== undefined && JSON.stringify(node[field]) !== JSON.stringify(base[field])) {
+                    errors.push(`streams["${node.id}"]: cannot override immutable field "${field}"`);
+                }
             }
         }
         if (node.children)
@@ -39227,9 +39242,11 @@ describe('[ESTX] eventToShortText', () => {
       return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
     };
 
-    it('[EST27a] a suffix replaces the eventType symbol (AMH, vitamin D: ng/mL over µg/L)', () => {
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-vitamin-d-25oh', 30)), '30 ng/mL');
+    // AMH and vitamin D dropped their suffix in data-model 3.21.0 (unit variations); ferritin and
+    // C-peptide still declare one.
+    it('[EST27a] a suffix replaces the eventType symbol (ferritin, C-peptide: ng/mL over µg/L)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-ferritin', 2.1)), '2.1 ng/mL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-c-peptide', 30)), '30 ng/mL');
     });
 
     it('[EST27b] sperm concentration reads 10⁶/mL, not the G/L symbol of concentration/megacount-ml', () => {
@@ -39244,7 +39261,7 @@ describe('[ESTX] eventToShortText', () => {
 
     it('[EST27d] the suffix is localized', () => {
       (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-ferritin', 2.1)), '2.1 ng/mL');
     });
 
     it('[EST27e] a display item is not converted to another unit system (it states how it reads)', () => {
