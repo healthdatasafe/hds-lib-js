@@ -18738,18 +18738,69 @@ function formatDayParts(p, fmt, opts) {
     catch { /* unknown locale: no weekday rather than a throw */ }
     return name ? name + ' ' + text : text;
 }
+const ABOUT = { en: 'about', fr: 'vers', es: 'hacia' };
+/** Calendar day of `d` in an IANA zone, or null when the zone is unknown. */
+function dayPartsInZone(d, timeZone) {
+    try {
+        const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(d);
+        const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+        return { y: get('year'), m: get('month'), d: get('day') };
+    }
+    catch {
+        return null;
+    }
+}
+function utcDayParts(d) {
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+}
 /**
- * Format a Unix timestamp (seconds) as a date string.
- * Uses the resolved account/app dateFormat when available (local calendar day), otherwise the ISO date (UTC).
+ * Format an event's date, or a Unix timestamp (seconds), as a date string: the local calendar day, in the resolved
+ * account/app dateFormat when available, otherwise as an ISO date.
  * `opts.year: false` leaves the year out, `opts.weekday: true` puts the short weekday name first.
+ *
+ * Given an event, honours its partial date (data-model `PARTIAL-DATES.md`, `clientData.hdsTimePrecision`), read in
+ * UTC: `day` the date, `month` "March 1999", `year` "1997" (`opts.year` ignored), `approx` "about spring 1998" from
+ * `hdsTimeText` (else "about 1998"); `minute` with `hdsTimeZone` takes the day in that zone. Without a precision, or
+ * with an unknown one, the event's date reads as its timestamp's.
  */
-function formatEventDate(timeSec, opts = {}) {
+function formatEventDate(timeOrEvent, opts = {}) {
+    const timeSec = typeof timeOrEvent === 'number' ? timeOrEvent : timeOrEvent.time;
+    const clientData = typeof timeOrEvent === 'number' ? null : timeOrEvent.clientData;
     const d = new Date(timeSec * 1000);
     const fmt = resolvedDateFormat();
-    const parts = fmt
-        ? { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() }
-        : { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+    const locale = opts.locale ?? (0, localizeText_ts_1.getPreferredLocales)()[0] ?? 'en';
+    switch (clientData?.hdsTimePrecision) {
+        case 'day':
+            return formatDayParts(utcDayParts(d), fmt, opts);
+        case 'month':
+            return formatMonth(d, locale, opts.year !== false);
+        case 'year':
+            return String(d.getUTCFullYear());
+        case 'approx': {
+            const text = typeof clientData.hdsTimeText === 'string' && clientData.hdsTimeText.trim() !== ''
+                ? clientData.hdsTimeText.trim()
+                : String(d.getUTCFullYear());
+            return ((0, localizeText_ts_1.localizeText)(ABOUT) || ABOUT.en) + ' ' + text;
+        }
+        case 'minute': {
+            const zoned = typeof clientData.hdsTimeZone === 'string' ? dayPartsInZone(d, clientData.hdsTimeZone) : null;
+            if (zoned)
+                return formatDayParts(zoned, fmt, opts);
+        }
+    }
+    // The local calendar day, with or without a date format: the time shown beside it is local (B-2026-10-28-33).
+    const parts = { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
     return formatDayParts(parts, fmt, opts);
+}
+/** "March 1999" (or "March" without the year) in `locale`, read in UTC; the ISO `1999-03` for an unknown locale. */
+function formatMonth(d, locale, year) {
+    try {
+        return new Intl.DateTimeFormat(locale, { month: 'long', ...(year ? { year: 'numeric' } : {}), timeZone: 'UTC' }).format(d);
+    }
+    catch {
+        const m = pad(d.getUTCMonth() + 1);
+        return year ? d.getUTCFullYear() + '-' + m : m;
+    }
 }
 /**
  * Format a calendar date stored as content (`date/iso-8601`, e.g. a date of birth: `"1990-04-12"`) in the
@@ -18768,17 +18819,22 @@ function formatContentDate(content) {
     return formatDayParts(parts, resolvedDateFormat(), {});
 }
 /**
- * Format a Unix timestamp (seconds) as a date + time string.
- * Used for checkbox events where the event time IS the data.
+ * Format an event's time as a date + time string.
+ * Used for checkbox events where the event time IS the data. A partial date (`hdsTimePrecision` other than
+ * `minute`) has no time of day: its date only.
  */
-function formatEventDateTime(timeSec) {
-    const d = new Date(timeSec * 1000);
+function formatEventDateTime(event) {
+    const precision = event.clientData?.hdsTimePrecision;
+    if (precision === 'day' || precision === 'month' || precision === 'year' || precision === 'approx') {
+        return formatEventDate(event);
+    }
+    const d = new Date(event.time * 1000);
     const hours = d.getHours();
     const minutes = d.getMinutes();
     // If time is midnight (00:00), show date only — likely no meaningful time
     if (hours === 0 && minutes === 0)
-        return formatEventDate(timeSec);
-    return formatEventDate(timeSec) + ' ' + pad(hours) + ':' + pad(minutes);
+        return formatEventDate(event);
+    return formatEventDate(event) + ' ' + pad(hours) + ':' + pad(minutes);
 }
 /**
  * Convert an event's content to a short human-readable string.
@@ -18821,10 +18877,10 @@ function eventToShortTextWithOrigin(event) {
     if (itemDef) {
         // For checkbox/date items, content may be null — the event time IS the data
         if (content == null && itemDef.data.type === 'checkbox') {
-            return { text: formatEventDateTime(event.time), origin: null };
+            return { text: formatEventDateTime(event), origin: null };
         }
         if (content == null && itemDef.data.type === 'date') {
-            return { text: formatEventDate(event.time), origin: null };
+            return { text: formatEventDate(event), origin: null };
         }
         // A document: its title (`file/xds-v1`), else the name of its first file (`file/attached` has no content)
         if (itemDef.data.type === 'attachments') {
@@ -18856,7 +18912,7 @@ function formatWithItemDef(event, content, itemDef, model) {
     if (type === 'date') {
         // A date stored as the value (`date/iso-8601`, the date of birth) is the data; otherwise the
         // event's own time is (B-2026-10-26-6: the entry time was shown instead of the stored date).
-        return formatContentDate(content) ?? formatEventDate(event.time);
+        return formatContentDate(content) ?? formatEventDate(event);
     }
     if (type === 'datasource-search') {
         return formatDatasource(content);
@@ -40393,8 +40449,8 @@ describe('[ESTX] eventToShortText', () => {
 
     const dobEvent = () => {
       const itemDef = model.itemsDefs.forKey('profile-date-of-birth');
-      // entered on 2024-01-15, born on 1990-04-12
-      return { content: '1990-04-12', streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0], time: 1705320000 };
+      // entered on 2024-01-15 (local noon, the 15th in every zone), born on 1990-04-12
+      return { content: '1990-04-12', streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0], time: new Date(2024, 0, 15, 12).getTime() / 1000 };
     };
 
     it('[EST7D1] the stored date, not the entry time', () => {
@@ -40419,6 +40475,12 @@ describe('[ESTX] eventToShortText', () => {
     it('[EST7D5] without an itemDef, a date/iso-8601 string is formatted too', () => {
       _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('dateFormat', 'DD/MM/YYYY');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: '2001-02-03', streamIds: ['not-a-model-stream'], type: 'date/iso-8601', time: 1705320000 }), '03/02/2001');
+    });
+
+    it('[EST7D6] no stored date: the event time honours a partial date (site-agents#26)', () => {
+      // 1999-03-01T12:00:00Z, known to the month
+      const partial = { ...dobEvent(), content: null, time: 920289600, clientData: { hdsTimePrecision: 'month' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(partial), 'March 1999');
     });
   });
 
@@ -40508,6 +40570,12 @@ describe('[ESTX] eventToShortText', () => {
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result, 'Should return a date string');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(result), `Expected date only, got: ${result}`);
+  });
+
+  it('[EST16a3] checkbox with a partial date has no time of day (site-agents#26)', () => {
+    const base = { content: null, streamIds: ['fertility-cycles-start'], type: 'activity/plain', time: 920289600 };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...base, clientData: { hdsTimePrecision: 'year' } }), '1999');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...base, clientData: { hdsTimePrecision: 'day' } }), '1999-03-01');
   });
 
   it('[EST16b] medication with plain string label (not i18n object)', () => {
@@ -41158,12 +41226,25 @@ describe('[FED] formatEventDate', function () {
     _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
   });
 
-  // 2024-01-15T12:00:00Z = 1705320000
-  const timestamp = 1705320000;
+  // 2024-01-15 at local noon: the local calendar day is the 15th in every zone
+  const timestamp = new Date(2024, 0, 15, 12).getTime() / 1000;
+  /** The local calendar day of a timestamp, as an ISO date (the fallback without a date format). */
+  const localIso = (sec) => {
+    const d = new Date(sec * 1000);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
 
   it('[FED1] returns ISO date when not hooked', () => {
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result, '2024-01-15');
+  });
+
+  it('[FED1b] without a date format, the local calendar day, like the time beside it (B-2026-10-28-33)', () => {
+    // 00:30 local: the UTC date is the previous day in any zone east of UTC
+    const justAfterMidnight = new Date(2024, 0, 15, 0, 30).getTime() / 1000;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(justAfterMidnight), '2024-01-15');
+    const justBeforeMidnight = new Date(2024, 0, 15, 23, 30).getTime() / 1000;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(justBeforeMidnight), '2024-01-15');
   });
 
   it('[FED2] uses DD.MM.YYYY format', async () => {
@@ -41244,6 +41325,69 @@ describe('[FED] formatEventDate', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp), '15/01/2024');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, {}), '15/01/2024');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(timestamp, { year: true, weekday: false }), '15/01/2024');
+    });
+  });
+
+  describe('[FEDP] an event with a partial date (data-model PARTIAL-DATES.md)', () => {
+    afterEach(() => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+    });
+
+    // 1999-03-01T12:00:00Z: "March 1999" stored at the start of the period, 12:00 UTC
+    const march1999 = 920289600;
+    const ev = (clientData) => ({ time: march1999, clientData });
+
+    it('[FEDP1] an event without clientData reads as its timestamp', async () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)({ time: timestamp }), '2024-01-15');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(createMockConnection([
+        { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }
+      ]), 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)({ time: timestamp, clientData: null }, { weekday: true, locale: 'en' }), 'Mon 15.01.2024');
+    });
+
+    it('[FEDP2] month: "March 1999" in the preferred locale, or the month alone without the year', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'month' })), 'March 1999');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'month' }), { year: false }), 'March');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'month' })), 'mars 1999');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'month' }), { locale: 'en' }), 'March 1999');
+    });
+
+    it('[FEDP3] year: the year alone, whatever opts.year says', () => {
+      const y1997 = { time: 852120000, clientData: { hdsTimePrecision: 'year' } }; // 1997-01-01T12:00:00Z
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(y1997), '1997');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(y1997, { year: false, weekday: true }), '1997');
+    });
+
+    it('[FEDP4] approx: "about" + hdsTimeText, else "about" + the year', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx', hdsTimeText: 'spring 1998' })), 'about spring 1998');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx', hdsTimeText: '  ' })), 'about 1999');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx' })), 'about 1999');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx', hdsTimeText: 'printemps 1998' })), 'vers printemps 1998');
+    });
+
+    it('[FEDP5] day: the date in the resolved format, read in UTC', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(createMockConnection([
+        { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }
+      ]), 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'day' })), '01.03.1999');
+      // 23:30 UTC on 1 March: local time would be 2 March east of UTC+0:30, the stored day is still the 1st
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)({ time: march1999 + 41400, clientData: { hdsTimePrecision: 'day' } }), '01.03.1999');
+    });
+
+    it('[FEDP6] minute with hdsTimeZone: the day in that zone; an unknown zone falls back', () => {
+      // 2024-01-15T23:30:00Z is 16 January in Tokyo, 15 January in New York
+      const late = 1705361400;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)({ time: late, clientData: { hdsTimePrecision: 'minute', hdsTimeZone: 'Asia/Tokyo' } }), '2024-01-16');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)({ time: late, clientData: { hdsTimePrecision: 'minute', hdsTimeZone: 'America/New_York' } }), '2024-01-15');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)({ time: late, clientData: { hdsTimePrecision: 'minute', hdsTimeZone: 'Not/AZone' } }), localIso(late));
+    });
+
+    it('[FEDP7] an unknown precision reads as absent', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'week' })), localIso(march1999));
     });
   });
 });
