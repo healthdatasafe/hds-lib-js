@@ -96,6 +96,16 @@ describe('[OVRX] HDSModel overload', () => {
       const m = makeBaseModel();
       validateOverload(m, { settings: { theme: { default: 'dark' } } });
     });
+    it('[OVAH] accepts a new stream carrying role and clientData', () => {
+      const m = makeBaseModel();
+      validateOverload(m, { streams: [{ id: 'body-weight-scale', name: 'Scale', parentId: 'body-weight', role: 'context', clientData: { app: 'x' } }] });
+    });
+    it('[OVAI] accepts restating the base role / clientData of an existing stream', () => {
+      const m = makeBaseModel();
+      m.streams[0].children[0].role = 'context';
+      m.streams[0].children[0].clientData = { a: 1 };
+      validateOverload(m, { streams: [{ id: 'body-weight', name: 'Weight', role: 'context', clientData: { a: 1 } }] });
+    });
   });
 
   describe('[OVRB] validateOverload — forbidden', () => {
@@ -132,6 +142,28 @@ describe('[OVRX] HDSModel overload', () => {
     it('[OVBG] rejects changing existing datasource endpoint', () => {
       const m = makeBaseModel();
       assert.throws(() => validateOverload(m, { datasources: { medication: { endpoint: 'http://other' } } }), HDSLibError);
+    });
+    it('[OVBI] rejects changing existing item unitConversions as an immutable field (B-2026-10-27-8)', () => {
+      const m = makeBaseModel();
+      assert.throws(
+        () => validateOverload(m, { items: { 'body-weight': { unitConversions: [] } } }),
+        /cannot override immutable field "unitConversions"/
+      );
+    });
+    it('[OVBJ] rejects setting or changing role on an existing stream (site-agents#34)', () => {
+      const m = makeBaseModel();
+      assert.throws(
+        () => validateOverload(m, { streams: [{ id: 'body-weight', role: 'context' }] }),
+        /streams\["body-weight"\]: cannot override immutable field "role"/
+      );
+    });
+    it('[OVBK] rejects changing clientData on an existing stream', () => {
+      const m = makeBaseModel();
+      m.streams[0].children[0].clientData = { a: 1 };
+      assert.throws(
+        () => validateOverload(m, { streams: [{ id: 'body', children: [{ id: 'body-weight', clientData: { a: 2 } }] }] }),
+        /streams\["body-weight"\]: cannot override immutable field "clientData"/
+      );
     });
     it('[OVBH] aggregates multiple errors in one throw', () => {
       const m = makeBaseModel();
@@ -194,6 +226,21 @@ describe('[OVRX] HDSModel overload', () => {
       assert.ok(mood);
       assert.equal(mood.parentId, null);
     });
+    it('[OVCL] a new stream keeps its role and clientData (site-agents#34)', () => {
+      const m = makeBaseModel();
+      applyOverload(m, {
+        streams: [
+          { id: 'body-weight', children: [{ id: 'body-weight-scale', name: 'Scale', role: 'context', clientData: { app: 'x' } }] },
+          { id: 'plain', name: 'Plain', parentId: null }
+        ]
+      });
+      const scale = m.streams[0].children[0].children.find(s => s.id === 'body-weight-scale');
+      assert.equal(scale.role, 'context');
+      assert.deepEqual(scale.clientData, { app: 'x' });
+      const plain = m.streams.find(s => s.id === 'plain');
+      assert.ok(!('role' in plain));
+      assert.ok(!('clientData' in plain));
+    });
     it('[OVCH] throws when adding a stream under an unknown parent', () => {
       const m = makeBaseModel();
       assert.throws(
@@ -248,6 +295,15 @@ describe('[OVRX] HDSModel overload', () => {
       assert.equal(bmi.parentId, 'body');
       // model is frozen
       assert.throws(() => { model.modelData.items['body-weight'].repeatable = 'unlimited'; }, TypeError);
+    });
+
+    it('[OVDD] a context stream declared in an overload reports isContext() (site-agents#34)', async () => {
+      const model = new HDSModel('http://fake/pack.json');
+      await model.load(null, {
+        streams: [{ id: 'body-weight', children: [{ id: 'body-weight-scale', name: 'Scale', role: 'context' }] }]
+      });
+      assert.equal(model.streams.isContext('body-weight-scale'), true);
+      assert.equal(model.streams.isContext('body-weight'), false);
     });
 
     it('[OVDB] surfaces validation errors before merging', async () => {

@@ -14,10 +14,11 @@ import { HDSLibError } from '../errors.ts';
  *  - extend `eventTypes.extras[k]` (display hints, symbols)
  *
  * What overloads CANNOT do (will throw HDSLibError):
- *  - change the `parentId` of an existing stream (tree structure is frozen)
+ *  - change the `parentId`, `role` or `clientData` of an existing stream
+ *    (tree structure and context markers are frozen)
  *  - change `type` or json-schema of an existing eventType
  *  - change `type`, `streamId`, `eventType` (or variations / options /
- *    composite / datasource / converter-engine) of an existing itemDef
+ *    composite / datasource / converter-engine / unitConversions) of an existing itemDef
  *  - change `type` or `eventType` of an existing setting
  *  - change `endpoint` / `queryParam` / `resultKey` of an existing datasource
  */
@@ -38,8 +39,12 @@ const ITEM_MUTABLE_FIELDS = new Set(['label', 'description', 'repeatable', 'remi
 
 /** Fields on an existing itemDef that an overload must NOT change. */
 const ITEM_IMMUTABLE_FIELDS = new Set([
-  'type', 'streamId', 'eventType', 'variations', 'options', 'composite', 'datasource', 'converter-engine'
+  'type', 'streamId', 'eventType', 'variations', 'options', 'composite', 'datasource', 'converter-engine',
+  'unitConversions'
 ]);
+
+/** Fields on an existing stream that an overload must NOT change (`parentId` is checked on its own). */
+const STREAM_IMMUTABLE_FIELDS = ['role', 'clientData'];
 
 /** Fields on an existing setting that an overload must NOT change. */
 const SETTING_IMMUTABLE_FIELDS = new Set(['type', 'eventType']);
@@ -136,8 +141,9 @@ export function validateOverload (modelData: any, overload: HDSModelOverload): v
  *  - items: per-key shallow merge with deep-merge of `label` / `description` /
  *    `reminder`. Overload wins for any specific language string.
  *  - streams: tree merge. New nodes are inserted under their parent (which
- *    must already exist in base or earlier in the overlay). Existing nodes
- *    get their `name` overlaid and their `children` recursively merged.
+ *    must already exist in base or earlier in the overlay) and keep their
+ *    `role` and `clientData`. Existing nodes get their `name` overlaid and
+ *    their `children` recursively merged.
  *  - eventTypes.types: additive only (validator already rejected overrides).
  *  - eventTypes.extras: per-key shallow merge (overload wins).
  *  - settings / datasources / appStreams: per-key shallow merge with deep
@@ -268,6 +274,9 @@ function mergeStreamForest (
       name: overlayNode.name,
       parentId: parentId ?? null
     };
+    // site-agents#34: an app declares its own context leaves (`role: context`) through an overload.
+    if (overlayNode.role !== undefined) newNode.role = overlayNode.role;
+    if (overlayNode.clientData !== undefined) newNode.clientData = overlayNode.clientData;
     if (parentId == null) {
       baseRoots.push(newNode);
     } else {
@@ -322,6 +331,12 @@ function walkOverloadStreams (
       // expectedParentId mismatch (overlay places this node under a different parent than the base)
       if (expectedParentId !== null && expectedParentId !== base.parentId) {
         errors.push(`streams["${node.id}"]: cannot reparent (base parentId="${base.parentId}", overlay places under "${expectedParentId}")`);
+      }
+      // `role` and `clientData` are immutable: restating the base value is allowed, changing it is not.
+      for (const field of STREAM_IMMUTABLE_FIELDS) {
+        if (node[field] !== undefined && JSON.stringify(node[field]) !== JSON.stringify(base[field])) {
+          errors.push(`streams["${node.id}"]: cannot override immutable field "${field}"`);
+        }
       }
     }
     if (node.children) walkOverloadStreams(node.children, node.id, baseById, errors);
