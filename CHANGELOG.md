@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **`eventToShortText` shows a variation's option label as the unit** (B-2026-10-27-4): an item with
+  `variations.eventType` reads in the unit its option names for the event's type, as hds-forms-js shows it beside
+  the field. AMH, progesterone, vitamin D 25-OH and folate on `concentration/ug-l` read `ng/mL` (was `µg/L`),
+  prolactin on `concentration/uiu-ml` `mIU/L` (was `μIU/mL`). Scoped to `concentration/*` options: `body-height` /
+  `body-weight` labels are form words (`Feet`, `Lbs`), so those keep the eventType symbol and the unit-system
+  conversion. Precedence: `number.display.suffix`, then the option label (unscaled values only), then the eventType
+  symbol. Also in `eventToShortTextWithOrigin`. Documented in `docs/toolkit.md`. Tests `[EST28a-h]` against the
+  published 3.22.0 pack.
+
 ## [2.21.0] - 2026-10-28
 
 ### Fixed

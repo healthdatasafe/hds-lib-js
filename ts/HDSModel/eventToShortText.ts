@@ -216,8 +216,9 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
   // number, text, composite, etc.
   if (typeof content === 'number') {
     const display = itemDef.data?.number?.display;
-    if (display) return formatNumberDisplay(event.type, content, display, model);
-    return formatNumber(event.type, content, model);
+    const optionUnit = variationUnitLabel(event.type, itemDef);
+    if (display) return formatNumberDisplay(event.type, content, display, model, optionUnit);
+    return formatNumber(event.type, content, model, optionUnit);
   }
 
   if (typeof content === 'string') {
@@ -273,7 +274,31 @@ function formatTestResult (content: number): string {
   return `${label} ${pct}%`;
 }
 
-function formatNumber (eventType: string, content: number, model: any): string {
+/**
+ * The unit an item names for the event's type in its `variations.eventType` options (B-2026-10-27-4): AMH on
+ * `concentration/ug-l` reads `ng/mL` (the option label), not `µg/L` (the eventType symbol); prolactin on
+ * `concentration/uiu-ml` reads `mIU/L`. Null when the item has no such option or the option has no label.
+ *
+ * Only `concentration/*` options count: their labels are the clinical unit notation, the one hds-forms-js shows
+ * beside the field. Other variation labels are form words (`body-height` `Feet`, `body-weight` `Lbs`), not
+ * symbols, so those items keep the eventType symbol and the unit-system conversion.
+ */
+function variationUnitLabel (eventType: string, itemDef: any): string | null {
+  if (typeof eventType !== 'string' || !eventType.startsWith('concentration/')) return null;
+  const options = itemDef?.data?.variations?.eventType?.options;
+  if (!Array.isArray(options)) return null;
+  const option = options.find((o: any) => o?.value === eventType);
+  if (option?.label == null) return null;
+  const label = typeof option.label === 'string' ? option.label : localizeText(option.label);
+  return label ? label.trim() || null : null;
+}
+
+/**
+ * A number with its unit. `unitLabel` (the item's variation option label, `variationUnitLabel`) takes the place of
+ * the eventType symbol when the value is shown in its own type; a unit-system conversion shows the target type's
+ * symbol.
+ */
+function formatNumber (eventType: string, content: number, model: any, unitLabel: string | null = null): string {
   if (eventType === 'test-result/scale') {
     return formatTestResult(content);
   }
@@ -289,7 +314,7 @@ function formatNumber (eventType: string, content: number, model: any): string {
       return symbol ? `${result.value} ${symbol}` : String(result.value);
     }
   }
-  const symbol = getSymbol(eventType, model);
+  const symbol = unitLabel ?? getSymbol(eventType, model);
   return symbol ? `${content} ${symbol}` : String(content);
 }
 
@@ -302,15 +327,18 @@ const FLOAT_NOISE_PRECISION = 12;
  * `precision` decimals when set, else float noise stripped without truncating real decimals; then
  * `suffix` in place of the eventType symbol (AMH `ng/mL` over `µg/L`, sperm concentration `10⁶/mL`
  * over `G/L`, HbA1c `0.057` → `5.7 %`). No unit-system conversion: the item states how it reads.
+ *
+ * Unit precedence: `display.suffix`, then (unscaled only) the variation option label `unitLabel`, then the eventType
+ * symbol. A scaled value (`multiplier` ≠ 1) without a suffix shows no unit: neither the label nor the symbol names it.
  */
-function formatNumberDisplay (eventType: string, content: number, display: any, model: any): string {
+function formatNumberDisplay (eventType: string, content: number, display: any, model: any, unitLabel: string | null = null): string {
   const multiplier: number = typeof display.multiplier === 'number' ? display.multiplier : 1;
   const scaled = content * multiplier;
   const text = typeof display.precision === 'number'
     ? scaled.toFixed(display.precision)
     : String(Number(scaled.toPrecision(FLOAT_NOISE_PRECISION)));
   const suffix = display.suffix ? localizeText(display.suffix) : null;
-  const unit = suffix || (multiplier === 1 ? getSymbol(eventType, model) : null);
+  const unit = suffix || (multiplier === 1 ? (unitLabel ?? getSymbol(eventType, model)) : null);
   return unit ? `${text} ${unit}` : text;
 }
 

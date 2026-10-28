@@ -82,6 +82,66 @@ describe('[ESTX] eventToShortText', () => {
     });
   });
 
+  describe('[EST28] variation option label as the unit (B-2026-10-27-4)', () => {
+    afterEach(() => {
+      HDSSettings.unhook();
+      resetPreferredLocales();
+    });
+
+    /** An event of `key` in variation `eventType`, checked against the published pack */
+    const ev = (key, eventType, content) => {
+      const itemDef = model.itemsDefs.forKey(key);
+      const options = itemDef?.data?.variations?.eventType?.options ?? [];
+      assert.ok(options.some(o => o.value === eventType), `${key} should offer ${eventType} as a variation in the published pack`);
+      return { content, streamIds: [itemDef.data.streamId], type: eventType };
+    };
+
+    it('[EST28a] AMH, progesterone on concentration/ug-l read the option label ng/mL, not µg/L', () => {
+      assert.equal(eventToShortText(ev('body-blood-serum-amh', 'concentration/ug-l', 2.1)), '2.1 ng/mL');
+      assert.equal(eventToShortText(ev('body-blood-serum-progesterone', 'concentration/ug-l', 12)), '12 ng/mL');
+      assert.equal(eventToShortText(ev('body-blood-serum-vitamin-d-25oh', 'concentration/ug-l', 30)), '30 ng/mL');
+    });
+
+    it('[EST28b] prolactin on concentration/uiu-ml reads mIU/L (option label), on ug-l ng/mL', () => {
+      assert.equal(eventToShortText(ev('body-blood-serum-prolactin', 'concentration/uiu-ml', 250)), '250 mIU/L');
+      assert.equal(eventToShortText(ev('body-blood-serum-prolactin', 'concentration/ug-l', 12)), '12 ng/mL');
+    });
+
+    it('[EST28c] the other variation of the same item reads its own option label', () => {
+      assert.equal(eventToShortText(ev('body-blood-serum-amh', 'concentration/pmol-l', 15)), '15 pmol/L');
+      assert.equal(eventToShortText(ev('body-blood-serum-progesterone', 'concentration/nmol-l', 38)), '38 nmol/L');
+    });
+
+    it('[EST28d] the label is localized', () => {
+      setPreferredLocales(['fr']);
+      assert.equal(eventToShortText(ev('body-blood-serum-amh', 'concentration/ug-l', 2.1)), '2.1 ng/mL');
+    });
+
+    it('[EST28e] non-concentration variations keep the eventType symbol and the unit-system conversion', () => {
+      // body-weight / body-height option labels are form words (Lbs, Feet), not symbols
+      assert.equal(eventToShortText(ev('body-weight', 'mass/kg', 60)), '60 Kg');
+      assert.equal(eventToShortText(ev('body-weight', 'mass/lb', 130)), '130 lb');
+      assert.equal(eventToShortText(ev('body-height', 'length/ft', 5.5)), '5.5 ft');
+      HDSSettings._testInject('unitSystem', 'imperial');
+      assert.match(eventToShortText(ev('body-weight', 'mass/kg', 60)), / lb$/);
+    });
+
+    it('[EST28f] items without variations are unchanged (LH, ferritin with number.display)', () => {
+      assert.equal(eventToShortText({ content: 12.5, streamIds: ['fertility-hormone-lh'], type: 'concentration/iu-l' }), '12.5 IU/L');
+      const ferritin = model.itemsDefs.forKey('body-blood-serum-ferritin');
+      assert.equal(ferritin.data.variations, undefined, 'ferritin should have no variations in the published pack');
+      assert.equal(eventToShortText({ content: 2.1, streamIds: [ferritin.data.streamId], type: 'concentration/ug-l' }), '2.1 ng/mL');
+    });
+
+    it('[EST28g] without an itemDef the eventType symbol is used', () => {
+      assert.equal(eventToShortText({ content: 2.1, streamIds: ['not-an-item'], type: 'concentration/ug-l' }), '2.1 µg/L');
+    });
+
+    it('[EST28h] eventToShortTextWithOrigin gives the same text, no origin', () => {
+      assert.deepEqual(eventToShortTextWithOrigin(ev('body-blood-serum-amh', 'concentration/ug-l', 2.1)), { text: '2.1 ng/mL', origin: null });
+    });
+  });
+
   it('[EST4] number with unit symbol (concentration/iu-l)', () => {
     const event = { content: 12.5, streamIds: ['fertility-hormone-lh'], type: 'concentration/iu-l' };
     const result = eventToShortText(event);

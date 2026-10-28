@@ -85,11 +85,22 @@ Exported at the top level (`import { eventToShortText, eventToShortTextWithOrigi
 ### eventToShortText(event)
 
 One short text for an event's value, driven by its itemDef (`getHDSModel().itemsDefs.forEvent`): a select's option
-label (a `ratio/proportion` value between options reads as the nearest one), a number with its unit symbol, or as
-its item's `number.display` declares (`multiplier`, `precision`, `suffix`: AMH `2.1 ng/mL`, sperm concentration
+label (a `ratio/proportion` value between options reads as the nearest one), a number with its unit, or as
+its item's `number.display` declares (`multiplier`, `precision`, `suffix`: ferritin `2.1 ng/mL`, sperm concentration
 `15 10⁶/mL`; a `ratio/proportion` number without display as a percentage, `0.057` → `5.7 %`), a `date/iso-8601` value as the stored date in the
 person's date format, a medication's drug and intake, a convertible observation in the method set by
 `preferred-display-<itemKey>` followed by its origin (`Creamy (Apple Health <- Mira)`).
+
+The unit of a number, first match wins:
+
+1. the item's `number.display.suffix`;
+2. for an unscaled value (no `number.display.multiplier`, or 1), the label of the item's `variations.eventType` option
+   for the event's type, **`concentration/*` types only**: AMH on `concentration/ug-l` reads `2.1 ng/mL` (not
+   `µg/L`), prolactin on `concentration/uiu-ml` `250 mIU/L` (not `μIU/mL`). Other variation labels are form words
+   (`body-height` "Feet", `body-weight` "Lbs"), so those items keep step 3 and the unit-system conversion;
+3. the eventType symbol (`60 Kg`), or the target type's symbol when the person's `unitSystem` converts the value.
+
+A value scaled by a `multiplier` with no `suffix` shows no unit. An event with no itemDef uses its eventType symbol.
 
 ### eventToShortTextWithOrigin(event)
 
