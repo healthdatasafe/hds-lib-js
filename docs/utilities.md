@@ -139,8 +139,11 @@ const r = cyclePhaseAt(Date.now() / 1000, events, 'Europe/Zurich');
 - A cycle runs from a `fertility-cycles-start` day to the day before the next one; an open cycle stops after 90 days.
   A boundary belongs to the cycle holding its day (the earliest when several).
 - `menstrual`: the start day through the period end. The period end is the cycle's `fertility-cycles-period-end`;
-  when none is recorded, the last of the consecutive days with bleeding above 0 (spotting included) that begin on the
-  start day or the day after. No bleeding on either day: no period end. A recorded period end always wins.
+  when none is recorded, the last of the consecutive days with period-level bleeding that begin on the start day or
+  the day after. Period-level means Very light (0.2) or more: **spotting (0.08) does not count**, as
+  `fertility-cycles-start` requires full bleeding; a value between the two anchors reads as the nearer one (above
+  0.14 counts). A spotting day ends the run, and spotting alone on day 1 and day 2 gives no period end. No
+  period-level bleeding on either day: no period end. A recorded period end always wins.
 - `fertile`: the fertile-window days (first and last inclusive) and the ovulation day.
 - `follicular`: after the period end, before the first fertile day (window start, else ovulation day).
 - `luteal`: after the ovulation day (and after the window).

@@ -36,7 +36,7 @@ export interface CycleEventLike {
   duration?: number | null;
   modified?: number;
   trashed?: boolean;
-  /** Read on `body-vulva-bleeding` events only (a number, 0 = none). */
+  /** Read on `body-vulva-bleeding` events only (a number on the 0-1 flow scale). */
   content?: unknown;
   /** The access that wrote the event; reported in `predictedBy`. */
   createdBy?: string;
@@ -50,8 +50,19 @@ const STREAM = {
   ovulation: 'fertility-cycles-ovulation'
 } as const;
 const EVENT_TYPE = 'activity/plain';
-/** `body-vulva-bleeding`: a 0-1 flow, 0 = none (spotting 0.08 counts as bleeding). */
+/** `body-vulva-bleeding`: a 0-1 flow whose options are anchors on the scale. */
 const BLEEDING = { stream: 'body-vulva-bleeding', type: 'ratio/proportion' } as const;
+/**
+ * The anchors of the `body-vulva-bleeding` scale (data-model options, MENSTRUAL-CYCLE.md) that set the period
+ * threshold: Spotting is not a period (`fertility-cycles-start` requires full bleeding), Very light is the lowest
+ * period flow. `[CPHP0]` checks them against the published pack.
+ */
+const BLEEDING_ANCHORS = { spotting: 0.08, veryLight: 0.2 } as const;
+/**
+ * A flow counts as period bleeding when it reads as Very light or more: above the midpoint of Spotting and Very
+ * light, so a device's value between the two reads as the nearest anchor (as `eventToShortText` labels it).
+ */
+const PERIOD_FLOW_ABOVE = (BLEEDING_ANCHORS.spotting + BLEEDING_ANCHORS.veryLight) / 2;
 /** `fertility-cycles-start` duration limit (amenorrhea threshold): an open cycle stops after this many days. */
 const OPEN_CYCLE_MAX_DAYS = 90;
 
@@ -96,19 +107,19 @@ function predictedByOf (used: CycleEventLike[]): string[] {
   return ids;
 }
 
-/** The calendar days with a bleeding observation above 0. */
+/** The calendar days with a period-level bleeding observation (Very light or more; spotting does not count). */
 function bleedingDays (events: CycleEventLike[], timeZone?: string): Set<number> {
   const days = new Set<number>();
   for (const e of events) {
     if (e == null || e.trashed || e.type !== BLEEDING.type || !inStream(e, BLEEDING.stream)) continue;
-    if (typeof e.content === 'number' && e.content > 0) days.add(localDayNumber(e.time, timeZone));
+    if (typeof e.content === 'number' && e.content > PERIOD_FLOW_ABOVE) days.add(localDayNumber(e.time, timeZone));
   }
   return days;
 }
 
 /**
  * The last day of the bleeding days in a row that begin on `startDay` or the day after, within the cycle; null when
- * neither day has bleeding.
+ * neither day has period-level bleeding.
  */
 function bleedingRunEnd (bled: Set<number>, startDay: number, lastDay: number): { day: number, event: null } | null {
   if (!bled.has(startDay) && !bled.has(startDay + 1)) return null;
@@ -127,8 +138,9 @@ function bleedingRunEnd (bled: Set<number>, startDay: number, lastDay: number): 
  * the first fertile day; `luteal` after the ovulation day. Any other day has `phase: null`.
  *
  * The period end is the cycle's `fertility-cycles-period-end` day. When the cycle has none, it is the last of the
- * consecutive days with `body-vulva-bleeding` above 0 (spotting included) that begin on the start day or the day
- * after; without bleeding on either, there is no period end (as before). A recorded period end always wins, and
+ * consecutive days with period-level `body-vulva-bleeding` (Very light or more: spotting does not count, as for
+ * `fertility-cycles-start`) that begin on the start day or the day after; without such bleeding on either, there is
+ * no period end (as before). A recorded period end always wins, and
  * either one on or after the first fertile day is ignored. Bleeding observations do not enter `basis`.
  *
  * The phase of a day depends on these events only, not on whether anything was logged that day.

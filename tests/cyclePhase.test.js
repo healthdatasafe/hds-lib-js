@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { cyclePhaseAt } from '../ts/index.ts';
+import { cyclePhaseAt, getHDSModel } from '../ts/index.ts';
 
 // Phase derivation from the fertility-cycles-* boundary items (data-model MENSTRUAL-CYCLE.md)
 describe('[CPHX] cyclePhaseAt', () => {
@@ -123,8 +123,37 @@ describe('[CPHX] cyclePhaseAt', () => {
   });
 
   describe('[CPHP] period end from bleeding when no -period-end is recorded', () => {
+    it('[CPHP0] the threshold anchors (Spotting 0.08, Very light 0.2) are the published bleeding options', async () => {
+      const model = getHDSModel();
+      await model.load('https://model.datasafe.dev/pack.json');
+      const options = model.itemsDefs.forKey('body-vulva-bleeding').data.options;
+      const value = (en) => options.find(o => o.label?.en === en)?.value;
+      assert.equal(value('Spotting'), 0.08);
+      assert.equal(value('Very light'), 0.2);
+      // nothing between the two anchors: the midpoint threshold reads a value as the nearest one
+      assert.equal(options.filter(o => o.value > 0.08 && o.value < 0.2).length, 0);
+    });
+
+    it('[CPHP10] spotting after the last real bleeding day does not extend the period', () => {
+      const events = [start(1), bleeding(1, 0.75), bleeding(2, 0.35), bleeding(3, 0.08), bleeding(4, 0.08), window(10, 6)];
+      assert.deepEqual(phases(1, 5, events), ['menstrual', 'menstrual', 'follicular', 'follicular', 'follicular']);
+      // a device value nearer Spotting than Very light is spotting; nearer Very light counts
+      assert.equal(phaseOn(3, [start(1), bleeding(1), bleeding(2), bleeding(3, 0.13), window(10, 6)]).phase, 'follicular');
+      assert.equal(phaseOn(3, [start(1), bleeding(1), bleeding(2), bleeding(3, 0.16), window(10, 6)]).phase, 'menstrual');
+    });
+
+    it('[CPHP11] a spotting-only day 2 does not start the run either', () => {
+      // no flow entry on day 1, spotting on day 2: no period end, as without bleeding
+      const events = [start(1), bleeding(2, 0.08), bleeding(3, 0.55), window(10, 6)];
+      assert.deepEqual(phases(1, 4, events), ['menstrual', null, null, null]);
+      // spotting on both day 1 and day 2: the same
+      assert.equal(phaseOn(3, [start(1), bleeding(1, 0.08), bleeding(2, 0.08), window(10, 6)]).phase, null);
+      // real flow on day 1 then spotting on day 2: the period is day 1
+      assert.equal(phaseOn(2, [start(1), bleeding(1, 0.55), bleeding(2, 0.08), window(10, 6)]).phase, 'follicular');
+    });
+
     it('[CPHP1] the bleeding days in a row from the start are menstrual; follicular until the first fertile day', () => {
-      const events = [start(1), bleeding(1, 0.75), bleeding(2, 0.55), bleeding(3, 0.35), bleeding(4, 0.08), window(10, 6)];
+      const events = [start(1), bleeding(1, 0.75), bleeding(2, 0.55), bleeding(3, 0.35), bleeding(4, 0.2), window(10, 6)];
       assert.deepEqual(phases(1, 10, events), ['menstrual', 'menstrual', 'menstrual', 'menstrual', 'follicular', 'follicular', 'follicular', 'follicular', 'follicular', 'fertile']);
     });
 
