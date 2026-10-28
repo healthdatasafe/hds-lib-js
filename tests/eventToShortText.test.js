@@ -511,6 +511,42 @@ describe('[ESTX] eventToShortText', () => {
     assert.equal(result, 'Ibuprofen — 400 mg, oral');
   });
 
+  describe('[EST29] medication regimen: intake.frequency, asNeeded, note (data-model 3.23.0)', () => {
+    afterEach(() => { resetPreferredLocales(); });
+
+    it('[EST29a] medication/basic shows the frequency after dose and route', () => {
+      const content = { name: 'Ibuprofen', intake: { doseValue: 400, doseUnit: 'mg', route: 'oral', frequency: { times: 3, period: 1, periodUnit: 'd' } } };
+      assert.equal(eventToShortText({ content, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Ibuprofen — 400 mg, oral, 3×/d');
+    });
+
+    it('[EST29b] a period above one is written out (every 48 h)', () => {
+      const content = { name: 'Fentanyl patch', intake: { frequency: { times: 1, period: 48, periodUnit: 'h' } } };
+      assert.equal(eventToShortText({ content, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Fentanyl patch — 1×/48 h');
+    });
+
+    it('[EST29c] coded intake: frequency and as needed, localized', () => {
+      setPreferredLocales(['fr']);
+      const event = {
+        content: { drug: { label: { en: 'Paracetamol' } }, intake: { doseValue: 1, doseUnit: 'dose/tablet', frequency: { times: 4, period: 1, periodUnit: 'd' }, asNeeded: true } },
+        streamIds: ['medication-intake'],
+        type: 'medication/coded-v1'
+      };
+      assert.equal(eventToShortText(event), 'Paracetamol — 1 tablet, 4×/d, si besoin');
+    });
+
+    it('[EST29d] the printed note shows only when there is no structured frequency', () => {
+      const withNote = { name: 'Levothyroxine', intake: { note: 'one tablet every morning before breakfast' } };
+      assert.equal(eventToShortText({ content: withNote, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Levothyroxine — one tablet every morning befor...');
+      const both = { name: 'Levothyroxine', intake: { note: 'every morning', frequency: { times: 1, period: 1, periodUnit: 'd' } } };
+      assert.equal(eventToShortText({ content: both, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Levothyroxine — 1×/d');
+    });
+
+    it('[EST29e] an incomplete frequency is not shown', () => {
+      const content = { name: 'Ibuprofen', intake: { frequency: { times: 2 } } };
+      assert.equal(eventToShortText({ content, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Ibuprofen');
+    });
+  });
+
   it('[EST19] cervix-position composite labels each field', () => {
     const event = {
       content: { height: 1.0, firmness: 0.0, openness: 0.5 },

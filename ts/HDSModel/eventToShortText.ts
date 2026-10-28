@@ -542,6 +542,7 @@ function formatDatasource (content: any): string | null {
     parts.push(`${intake.doseValue} ${unitLabel}`.trim());
   }
   if (intake?.route) parts.push(intake.route);
+  if (intake) parts.push(...regimenParts(intake));
 
   // Treatment / procedure scalars (sibling fields on the event content)
   if (typeof content.count === 'number' && content.count > 1) {
@@ -564,6 +565,27 @@ function formatDatasource (content: any): string | null {
   return text;
 }
 
+const AS_NEEDED = { en: 'as needed', fr: 'si besoin', es: 'si es necesario' };
+
+/**
+ * The regimen of a medication intake (data-model 3.23.0, the `posology` spelling):
+ * `frequency` as "2×/d" or "1×/48 h", `asNeeded` as "as needed", and the printed `note`
+ * only when there is no structured frequency (it usually says the same thing).
+ */
+function regimenParts (intake: any): string[] {
+  const parts: string[] = [];
+  const f = intake.frequency;
+  if (f && typeof f.times === 'number' && typeof f.period === 'number' && f.periodUnit) {
+    parts.push(`${f.times}×/${f.period === 1 ? '' : f.period + ' '}${f.periodUnit}`);
+  }
+  if (intake.asNeeded === true) parts.push(localizeText(AS_NEEDED));
+  if (!parts.length && typeof intake.note === 'string' && intake.note.trim() !== '') {
+    const n = intake.note.trim();
+    parts.push(n.length > 30 ? n.slice(0, 30) + '...' : n);
+  }
+  return parts;
+}
+
 function formatObject (content: any): string | null {
   if (content == null) return null;
   // Try common patterns
@@ -584,6 +606,7 @@ function formatObject (content: any): string | null {
       parts.push(`${intake.doseValue}${intake.doseUnit ? ' ' + intake.doseUnit : ''}`);
     }
     if (intake.route) parts.push(intake.route);
+    parts.push(...regimenParts(intake));
     return parts.length > 0 ? `${content.name} — ${parts.join(', ')}` : content.name;
   }
   if (content.value != null) return String(content.value);
