@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.26.0] - 2026-10-28
+
+### Added
+- **Document items** (`type: attachments`, data-model 3.25.0: files carried as Pryv attachments, metadata as content
+  on `file/xds-v1`): `HDSItemDef.isAttachments`; `itemsDefs.getAllActive()` leaves them out like system items (they
+  are imported, never entered field by field), while `getAll`, `forKey` and `forEvent` keep resolving them;
+  `eventToShortText` reads a document as its `title`, else its first attachment's file name. Lets the data model
+  publish its `document` item without the pickers and forms of already-deployed apps offering it.
+
 ## [2.25.1] - 2026-10-28
 
 ### Fixed

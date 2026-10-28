@@ -170,6 +170,11 @@ export function eventToShortTextWithOrigin (event: any): ShortTextResult {
     if (content == null && itemDef.data.type === 'date') {
       return { text: formatEventDate(event.time), origin: null };
     }
+    // A document: its title (`file/xds-v1`), else the name of its first file (`file/attached` has no content)
+    if (itemDef.data.type === 'attachments') {
+      const title = content != null && typeof content === 'object' && typeof content.title === 'string' ? content.title : null;
+      return { text: title || event.attachments?.[0]?.fileName || null, origin: null };
+    }
     if (content == null) return { text: null, origin: null };
     if (itemDef.data.type === 'convertible') {
       return formatConvertible(content, itemDef, model);
