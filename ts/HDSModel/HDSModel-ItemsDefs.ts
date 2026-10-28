@@ -42,13 +42,28 @@ export class HDSModelItemsDefs {
   }
 
   /**
-   * get all non-deprecated itemDefs a person enters field by field (no system, no document item). Use this for any
-   * UI that lets a user pick an item to create new data points (form builders, item picker sheets, data-model
-   * browser default listing). Deprecated, system and document (`attachments`) items remain resolvable via `forKey`
-   * / `forEvent` so existing events still render.
+   * get all non-deprecated itemDefs a person enters field by field (`isEnterable`: no system, document or imported
+   * item, nor a type this version does not know). Use this for any UI that lets a user pick an item to create new
+   * data points (form builders, item picker sheets, data-model browser default listing). The others remain
+   * resolvable via `forKey` / `forEvent` so existing events still render.
    */
   getAllActive (): HDSItemDef[] {
-    return this.getAll().filter((itemDef) => !itemDef.isDeprecated && !itemDef.isSystem && !itemDef.isAttachments);
+    return this.getAll().filter((itemDef) => !itemDef.isDeprecated && itemDef.isEnterable);
+  }
+
+  /**
+   * The active item that asserts `code` in its `references.loinc`, or null. An item owns the LOINC codes it asserts
+   * (one owner per code, data-model `[LABC-LOINC-1]`), so a `lab-result/coded-v1` event carrying one belongs on that
+   * item (`checkLabResultCoded`).
+   */
+  forLoinc (code: string): HDSItemDef | null {
+    for (const itemDef of this.getAll()) {
+      if (itemDef.isDeprecated) continue;
+      const loinc = itemDef.data.references?.loinc;
+      const codes = Array.isArray(loinc) ? loinc : (loinc != null ? [loinc] : []);
+      if (codes.includes(code)) return itemDef;
+    }
+    return null;
   }
 
   /**

@@ -5,6 +5,7 @@ import { getModel } from './HDSModelInitAndSingleton.ts';
 import HDSSettings from '../settings/HDSSettings.ts';
 import { resolveAccountPreference, hasAccountPreference } from '../settings/accountPreferences.ts';
 import type { DateFormat } from '../settings/HDSSettings.ts';
+import { LAB_RESULT_CODED, labComparatorOf, labResultCodedText } from './labResults.ts';
 
 /** A calendar day: year, month (1-12), day of month. */
 interface DayParts { y: number; m: number; d: number }
@@ -233,6 +234,13 @@ export function eventToShortTextWithOrigin (event: any): ShortTextResult {
     if (bp) return { text: bp, origin: null };
   }
 
+  // A coded lab result carries its own analyte and unit: eventType-driven, so it reads the same with or without
+  // its `imported` item loaded ("HIV-1 RNA (viral load) < 20 copies/mL", "HBsAg: negative").
+  if (event.type === LAB_RESULT_CODED) {
+    const lab = labResultCodedText(content);
+    if (lab) return { text: lab, origin: null };
+  }
+
   if (itemDef) {
     // For checkbox/date items, content may be null — the event time IS the data
     if (content == null && itemDef.data.type === 'checkbox') {
@@ -293,8 +301,8 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
   if (typeof content === 'number') {
     const display = itemDef.data?.number?.display;
     const optionUnit = variationUnitLabel(event.type, itemDef);
-    if (display) return formatNumberDisplay(event.type, content, display, model, optionUnit);
-    return formatNumber(event.type, content, model, optionUnit);
+    if (display) return withComparator(event, formatNumberDisplay(event.type, content, display, model, optionUnit));
+    return withComparator(event, formatNumber(event.type, content, model, optionUnit));
   }
 
   if (typeof content === 'string') {
@@ -309,9 +317,19 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
   return formatObject(content);
 }
 
+/**
+ * A printed limit reads with its comparator (`< 1.5 ng/mL`, `clientData.hdsComparator`, site-agents#22); an unknown
+ * comparator reads `?`, so the figure never shows as exact.
+ */
+function withComparator (event: any, text: string): string {
+  const comparator = labComparatorOf(event);
+  if (comparator == null) return text;
+  return `${comparator === 'unknown' ? '?' : comparator} ${text}`;
+}
+
 function formatFallback (event: any, content: any, model: any): string | null {
   if (typeof content === 'number') {
-    return formatNumber(event.type, content, model);
+    return withComparator(event, formatNumber(event.type, content, model));
   }
 
   if (typeof content === 'string') {
