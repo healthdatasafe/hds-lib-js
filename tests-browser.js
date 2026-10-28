@@ -18846,9 +18846,10 @@ function formatWithItemDef(event, content, itemDef, model) {
     // number, text, composite, etc.
     if (typeof content === 'number') {
         const display = itemDef.data?.number?.display;
+        const optionUnit = variationUnitLabel(event.type, itemDef);
         if (display)
-            return formatNumberDisplay(event.type, content, display, model);
-        return formatNumber(event.type, content, model);
+            return formatNumberDisplay(event.type, content, display, model, optionUnit);
+        return formatNumber(event.type, content, model, optionUnit);
     }
     if (typeof content === 'string') {
         return content.length > 60 ? content.slice(0, 60) + '...' : content;
@@ -18896,7 +18897,33 @@ function formatTestResult(content) {
     const pct = Math.round(Math.abs(content) * 100);
     return `${label} ${pct}%`;
 }
-function formatNumber(eventType, content, model) {
+/**
+ * The unit an item names for the event's type in its `variations.eventType` options (B-2026-10-27-4): AMH on
+ * `concentration/ug-l` reads `ng/mL` (the option label), not `µg/L` (the eventType symbol); prolactin on
+ * `concentration/uiu-ml` reads `mIU/L`. Null when the item has no such option or the option has no label.
+ *
+ * Only `concentration/*` options count: their labels are the clinical unit notation, the one hds-forms-js shows
+ * beside the field. Other variation labels are form words (`body-height` `Feet`, `body-weight` `Lbs`), not
+ * symbols, so those items keep the eventType symbol and the unit-system conversion.
+ */
+function variationUnitLabel(eventType, itemDef) {
+    if (typeof eventType !== 'string' || !eventType.startsWith('concentration/'))
+        return null;
+    const options = itemDef?.data?.variations?.eventType?.options;
+    if (!Array.isArray(options))
+        return null;
+    const option = options.find((o) => o?.value === eventType);
+    if (option?.label == null)
+        return null;
+    const label = typeof option.label === 'string' ? option.label : (0, localizeText_ts_1.localizeText)(option.label);
+    return label ? label.trim() || null : null;
+}
+/**
+ * A number with its unit. `unitLabel` (the item's variation option label, `variationUnitLabel`) takes the place of
+ * the eventType symbol when the value is shown in its own type; a unit-system conversion shows the target type's
+ * symbol.
+ */
+function formatNumber(eventType, content, model, unitLabel = null) {
     if (eventType === 'test-result/scale') {
         return formatTestResult(content);
     }
@@ -18912,7 +18939,7 @@ function formatNumber(eventType, content, model) {
             return symbol ? `${result.value} ${symbol}` : String(result.value);
         }
     }
-    const symbol = getSymbol(eventType, model);
+    const symbol = unitLabel ?? getSymbol(eventType, model);
     return symbol ? `${content} ${symbol}` : String(content);
 }
 /** Significant digits that strip binary-float noise (`0.42 * 100` → 42), far beyond any assay's precision. */
@@ -18923,15 +18950,18 @@ const FLOAT_NOISE_PRECISION = 12;
  * `precision` decimals when set, else float noise stripped without truncating real decimals; then
  * `suffix` in place of the eventType symbol (AMH `ng/mL` over `µg/L`, sperm concentration `10⁶/mL`
  * over `G/L`, HbA1c `0.057` → `5.7 %`). No unit-system conversion: the item states how it reads.
+ *
+ * Unit precedence: `display.suffix`, then (unscaled only) the variation option label `unitLabel`, then the eventType
+ * symbol. A scaled value (`multiplier` ≠ 1) without a suffix shows no unit: neither the label nor the symbol names it.
  */
-function formatNumberDisplay(eventType, content, display, model) {
+function formatNumberDisplay(eventType, content, display, model, unitLabel = null) {
     const multiplier = typeof display.multiplier === 'number' ? display.multiplier : 1;
     const scaled = content * multiplier;
     const text = typeof display.precision === 'number'
         ? scaled.toFixed(display.precision)
         : String(Number(scaled.toPrecision(FLOAT_NOISE_PRECISION)));
     const suffix = display.suffix ? (0, localizeText_ts_1.localizeText)(display.suffix) : null;
-    const unit = suffix || (multiplier === 1 ? getSymbol(eventType, model) : null);
+    const unit = suffix || (multiplier === 1 ? (unitLabel ?? getSymbol(eventType, model)) : null);
     return unit ? `${text} ${unit}` : text;
 }
 /**
@@ -21057,6 +21087,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Contact = void 0;
 const StreamsTools_ts_1 = __webpack_require__(/*! ../toolkit/StreamsTools.js */ "./ts/toolkit/StreamsTools.ts");
 const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const legacyChat_ts_1 = __webpack_require__(/*! ./legacyChat.js */ "./ts/appTemplates/legacyChat.ts");
 /**
  * Plan 66 composite-id base extractor. Refs serialise as either bare cuid
  * (`"abc123"`) for never-updated accesses or composite (`"abc123:3"`) for
@@ -21262,6 +21293,19 @@ class Contact {
             }
         }
         return { source: 'unknown' };
+    }
+    // ---- Pre-CMC chat, read-only (legacyChat.ts) ---- //
+    /** This contact's pre-CMC chat stream ids (`chat-<remoteUsername>`, `chat-<remoteUsername>-in`), null without account name. */
+    get legacyChatStreams() {
+        return (0, legacyChat_ts_1.legacyChatStreams)(this.remoteUsername);
+    }
+    /** Who wrote a pre-CMC chat event of this contact ('me', 'contact'), 'unknown' when it is not one. `chatEventInfos` is unchanged. */
+    legacyChatSource(event) {
+        return (0, legacyChat_ts_1.legacyChatSource)(event, this.remoteUsername);
+    }
+    /** This contact's pre-CMC messages among `events`, oldest first, read-only. */
+    legacyChatMessages(events) {
+        return (0, legacyChat_ts_1.legacyChatMessages)(this.remoteUsername, events);
     }
     // ---- Derived getters (CMC-only) ---- //
     /** Overall status — derived from cmcRelationships. */
@@ -21860,8 +21904,8 @@ exports.Questionnaire = Questionnaire;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = exports.diffFormSpecWithTemplate = exports.diffTemplateScope = exports.scopeHashMatches = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.permissionView = exports.dataName = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
-exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = void 0;
+exports.diffFormSpecWithTemplate = exports.diffTemplateScope = exports.scopeHashMatches = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.permissionView = exports.dataName = exports.legacyChatMessages = exports.legacyChatSource = exports.legacyChatStreams = exports.LEGACY_CHAT_TYPE = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
+exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = void 0;
 const AppManagingAccount_ts_1 = __webpack_require__(/*! ./AppManagingAccount.js */ "./ts/appTemplates/AppManagingAccount.ts");
 Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_ts_1.AppManagingAccount; } }));
 const AppClientAccount_ts_1 = __webpack_require__(/*! ./AppClientAccount.js */ "./ts/appTemplates/AppClientAccount.ts");
@@ -21902,6 +21946,11 @@ var itemLabels_ts_1 = __webpack_require__(/*! ./itemLabels.js */ "./ts/appTempla
 Object.defineProperty(exports, "getSectionItemLabels", ({ enumerable: true, get: function () { return itemLabels_ts_1.getSectionItemLabels; } }));
 Object.defineProperty(exports, "collectItemLabelsFromSections", ({ enumerable: true, get: function () { return itemLabels_ts_1.collectItemLabelsFromSections; } }));
 Object.defineProperty(exports, "collectItemLabels", ({ enumerable: true, get: function () { return itemLabels_ts_1.collectItemLabels; } }));
+var legacyChat_ts_1 = __webpack_require__(/*! ./legacyChat.js */ "./ts/appTemplates/legacyChat.ts");
+Object.defineProperty(exports, "LEGACY_CHAT_TYPE", ({ enumerable: true, get: function () { return legacyChat_ts_1.LEGACY_CHAT_TYPE; } }));
+Object.defineProperty(exports, "legacyChatStreams", ({ enumerable: true, get: function () { return legacyChat_ts_1.legacyChatStreams; } }));
+Object.defineProperty(exports, "legacyChatSource", ({ enumerable: true, get: function () { return legacyChat_ts_1.legacyChatSource; } }));
+Object.defineProperty(exports, "legacyChatMessages", ({ enumerable: true, get: function () { return legacyChat_ts_1.legacyChatMessages; } }));
 var permissionLabels_ts_1 = __webpack_require__(/*! ./permissionLabels.js */ "./ts/appTemplates/permissionLabels.ts");
 Object.defineProperty(exports, "dataName", ({ enumerable: true, get: function () { return permissionLabels_ts_1.dataName; } }));
 Object.defineProperty(exports, "permissionView", ({ enumerable: true, get: function () { return permissionLabels_ts_1.permissionView; } }));
@@ -23154,6 +23203,78 @@ function collectItemLabels(itemKey, contacts, opts = {}) {
         }
     }
     return collectItemLabelsFromSections(itemKey, sources, opts);
+}
+
+
+/***/ },
+
+/***/ "./ts/appTemplates/legacyChat.ts"
+/*!***************************************!*\
+  !*** ./ts/appTemplates/legacyChat.ts ***!
+  \***************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * Chat written before the June 2026 switch to CMC: `message/hds-chat-v1` events (data-model `appStreams` `chat`) in
+ * a pair of streams named after the contact's account, as the collector client created them:
+ * - `chat-<remoteUsername>`: what the person wrote (outgoing; the contact could read it);
+ * - `chat-<remoteUsername>-in`: what the contact wrote (incoming; a child of the first).
+ *
+ * The CMC migration moved the relationships, not these messages, so they are still in the accounts and
+ * `Contact.chatEventInfos` (CMC streams only) does not recognise them. These helpers only read: nothing is written,
+ * moved or migrated. Apps show the result read-only (e.g. "Earlier messages" above the CMC thread).
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.LEGACY_CHAT_TYPE = void 0;
+exports.legacyChatStreams = legacyChatStreams;
+exports.legacyChatSource = legacyChatSource;
+exports.legacyChatMessages = legacyChatMessages;
+/** eventType of a pre-CMC chat message; its `content` is the text itself. */
+exports.LEGACY_CHAT_TYPE = 'message/hds-chat-v1';
+/**
+ * The contact's two legacy chat stream ids, or null when the contact has no account name (a bridge or service
+ * access never had a legacy chat).
+ */
+function legacyChatStreams(remoteUsername) {
+    if (remoteUsername == null || remoteUsername === '')
+        return null;
+    return { outgoing: `chat-${remoteUsername}`, incoming: `chat-${remoteUsername}-in` };
+}
+/**
+ * Who wrote a legacy chat event of this contact. The stream says the direction (each side could only write its own
+ * stream): `chat-<username>-in` is the contact's, `chat-<username>` the person's. Any other stream or type, or a
+ * contact without account name, is `'unknown'`.
+ */
+function legacyChatSource(event, remoteUsername) {
+    const streams = legacyChatStreams(remoteUsername);
+    if (streams == null || event == null || event.type !== exports.LEGACY_CHAT_TYPE || event.streamIds == null)
+        return 'unknown';
+    if (event.streamIds.includes(streams.incoming))
+        return 'contact';
+    if (event.streamIds.includes(streams.outgoing))
+        return 'me';
+    return 'unknown';
+}
+/**
+ * The contact's legacy messages among `events`, oldest first. Trashed events, empty texts and non-text contents
+ * are left out; the events themselves are not changed.
+ */
+function legacyChatMessages(remoteUsername, events) {
+    const messages = [];
+    for (const event of events) {
+        if (event == null || event.trashed)
+            continue;
+        const source = legacyChatSource(event, remoteUsername);
+        if (source === 'unknown')
+            continue;
+        const text = typeof event.content === 'string' ? event.content.trim() : '';
+        if (text === '')
+            continue;
+        messages.push({ id: event.id, text, time: event.time, fromContact: source === 'contact' });
+    }
+    return messages.sort((a, b) => a.time - b.time);
 }
 
 
@@ -27017,10 +27138,11 @@ function cycleDayAt(time, cycleStart, timeZone) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.cyclePhaseAt = cyclePhaseAt;
 /**
- * Menstrual cycle phase, derived from the `fertility-cycles-*` boundary items, never stored (data-model
+ * Menstrual cycle phase, derived from the `fertility-cycles-*` boundary items (and, for the period's last day when
+ * no `-period-end` is recorded, the `body-vulva-bleeding` observations), never stored (data-model
  * `documentation/MENSTRUAL-CYCLE.md`, "Why no cycle-day or cycle-phase item?"). Everything is counted in calendar
  * days of `timeZone` (the patient's), and a day the recorded boundaries do not decide has no phase: this never
- * guesses.
+ * guesses. The boundaries decide: whether anything was logged on the day itself does not matter.
  */
 const calendarDay_ts_1 = __webpack_require__(/*! ./calendarDay.js */ "./ts/utils/calendarDay.ts");
 const STREAM = {
@@ -27030,6 +27152,19 @@ const STREAM = {
     ovulation: 'fertility-cycles-ovulation'
 };
 const EVENT_TYPE = 'activity/plain';
+/** `body-vulva-bleeding`: a 0-1 flow whose options are anchors on the scale. */
+const BLEEDING = { stream: 'body-vulva-bleeding', type: 'ratio/proportion' };
+/**
+ * The anchors of the `body-vulva-bleeding` scale (data-model options, MENSTRUAL-CYCLE.md) that set the period
+ * threshold: Spotting is not a period (`fertility-cycles-start` requires full bleeding), Very light is the lowest
+ * period flow. `[CPHP0]` checks them against the published pack.
+ */
+const BLEEDING_ANCHORS = { spotting: 0.08, veryLight: 0.2 };
+/**
+ * A flow counts as period bleeding when it reads as Very light or more: above the midpoint of Spotting and Very
+ * light, so a device's value between the two reads as the nearest anchor (as `eventToShortText` labels it).
+ */
+const PERIOD_FLOW_ABOVE = (BLEEDING_ANCHORS.spotting + BLEEDING_ANCHORS.veryLight) / 2;
 /** `fertility-cycles-start` duration limit (amenorrhea threshold): an open cycle stops after this many days. */
 const OPEN_CYCLE_MAX_DAYS = 90;
 const NO_PHASE = { phase: null, basis: 'unknown', cycleDay: null, cycleStart: null, cycleEnd: null };
@@ -27059,6 +27194,40 @@ function basisOf(used) {
         return 'confirmed';
     return 'unknown';
 }
+/** The distinct `createdBy` of the predicted events among `used`. */
+function predictedByOf(used) {
+    const ids = [];
+    for (const e of used) {
+        if (e.clientData?.hdsBasis !== 'predicted' || typeof e.createdBy !== 'string' || e.createdBy === '')
+            continue;
+        if (!ids.includes(e.createdBy))
+            ids.push(e.createdBy);
+    }
+    return ids;
+}
+/** The calendar days with a period-level bleeding observation (Very light or more; spotting does not count). */
+function bleedingDays(events, timeZone) {
+    const days = new Set();
+    for (const e of events) {
+        if (e == null || e.trashed || e.type !== BLEEDING.type || !inStream(e, BLEEDING.stream))
+            continue;
+        if (typeof e.content === 'number' && e.content > PERIOD_FLOW_ABOVE)
+            days.add((0, calendarDay_ts_1.localDayNumber)(e.time, timeZone));
+    }
+    return days;
+}
+/**
+ * The last day of the bleeding days in a row that begin on `startDay` or the day after, within the cycle; null when
+ * neither day has period-level bleeding.
+ */
+function bleedingRunEnd(bled, startDay, lastDay) {
+    if (!bled.has(startDay) && !bled.has(startDay + 1))
+        return null;
+    let day = startDay;
+    while (day + 1 <= lastDay && bled.has(day + 1))
+        day++;
+    return { day, event: null };
+}
 /**
  * The cycle phase on the calendar day of `time`.
  *
@@ -27068,8 +27237,16 @@ function basisOf(used) {
  * fertile-window days (first and last inclusive) and the ovulation day; `follicular` after the period end and before
  * the first fertile day; `luteal` after the ovulation day. Any other day has `phase: null`.
  *
+ * The period end is the cycle's `fertility-cycles-period-end` day. When the cycle has none, it is the last of the
+ * consecutive days with period-level `body-vulva-bleeding` (Very light or more: spotting does not count, as for
+ * `fertility-cycles-start`) that begin on the start day or the day after; without such bleeding on either, there is
+ * no period end (as before). A recorded period end always wins, and
+ * either one on or after the first fertile day is ignored. Bleeding observations do not enter `basis`.
+ *
+ * The phase of a day depends on these events only, not on whether anything was logged that day.
+ *
  * @param time - unix seconds
- * @param events - the patient's `fertility-cycles-*` events, any order (others are ignored)
+ * @param events - the patient's `fertility-cycles-*` and `body-vulva-bleeding` events, any order (others are ignored)
  * @param timeZone - IANA time zone of the patient (defaults to the runtime's)
  */
 function cyclePhaseAt(time, events, timeZone) {
@@ -27081,19 +27258,23 @@ function cyclePhaseAt(time, events, timeZone) {
     while (startIdx + 1 < starts.length && starts[startIdx + 1].day <= today)
         startIdx++;
     if (startIdx < 0)
-        return { ...NO_PHASE };
+        return { ...NO_PHASE, predictedBy: [] };
     const start = starts[startIdx];
     const next = starts[startIdx + 1];
     const lastDay = next != null ? next.day - 1 : start.day + OPEN_CYCLE_MAX_DAYS - 1;
     if (today > lastDay)
-        return { ...NO_PHASE };
-    const result = (phase, used) => ({
-        phase,
-        basis: phase == null ? 'unknown' : basisOf(used),
-        cycleDay: today - start.day + 1,
-        cycleStart: (0, calendarDay_ts_1.startOfLocalDay)(start.day, timeZone),
-        cycleEnd: next != null ? (0, calendarDay_ts_1.startOfLocalDay)(next.day, timeZone) : null
-    });
+        return { ...NO_PHASE, predictedBy: [] };
+    const result = (phase, used) => {
+        const basis = phase == null ? 'unknown' : basisOf(used);
+        return {
+            phase,
+            basis,
+            cycleDay: today - start.day + 1,
+            cycleStart: (0, calendarDay_ts_1.startOfLocalDay)(start.day, timeZone),
+            cycleEnd: next != null ? (0, calendarDay_ts_1.startOfLocalDay)(next.day, timeZone) : null,
+            predictedBy: basis === 'predicted' ? predictedByOf(used) : []
+        };
+    };
     const inCycle = (stream) => byDay(of(stream), timeZone).find(d => d.day >= start.day && d.day <= lastDay);
     const window = inCycle(STREAM.fertileWindow);
     const ovulation = inCycle(STREAM.ovulation);
@@ -27102,13 +27283,18 @@ function cyclePhaseAt(time, events, timeZone) {
         : null;
     // The first fertile day: the window's start or the ovulation day, whichever comes first
     const firstFertile = window != null && ovulation != null ? (ovulation.day < window.day ? ovulation : window) : (window ?? ovulation);
-    let periodEnd = inCycle(STREAM.periodEnd);
+    // The period's last day: the recorded period end, else the run of bleeding days from the start (no boundary event)
+    const recordedEnd = inCycle(STREAM.periodEnd);
+    let periodEnd = recordedEnd != null
+        ? recordedEnd
+        : bleedingRunEnd(bleedingDays(events, timeZone), start.day, lastDay);
     if (periodEnd != null && firstFertile != null && periodEnd.day >= firstFertile.day)
-        periodEnd = undefined;
+        periodEnd = null;
+    const periodUsed = periodEnd?.event != null ? [start.event, periodEnd.event] : [start.event];
     if (today === start.day)
         return result('menstrual', [start.event]);
     if (periodEnd != null && today <= periodEnd.day)
-        return result('menstrual', [start.event, periodEnd.event]);
+        return result('menstrual', periodUsed);
     if (window != null && windowEnd != null && today >= window.day && today <= windowEnd)
         return result('fertile', [window.event]);
     if (ovulation != null && today === ovulation.day)
@@ -27117,7 +27303,7 @@ function cyclePhaseAt(time, events, timeZone) {
     if (ovulation != null && today > ovulation.day && (windowEnd == null || today > windowEnd))
         return result('luteal', [ovulation.event]);
     if (periodEnd != null && firstFertile != null && today > periodEnd.day && today < firstFertile.day) {
-        return result('follicular', [periodEnd.event, firstFertile.event]);
+        return result('follicular', [periodEnd.event ?? start.event, firstFertile.event]);
     }
     return result(null, []);
 }
@@ -38463,6 +38649,8 @@ describe('[CPHX] cyclePhaseAt', () => {
   const window = (n, days, extra) => ev('fertility-cycles-fertile-window', day(n), { duration: days * DAY, ...extra });
   const ovulation = (n, extra) => ev('fertility-cycles-ovulation', day(n), extra);
   const phaseOn = (n, events) => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cyclePhaseAt)(day(n), events, ZRH);
+  const bleeding = (n, flow = 0.55, extra = {}) => ({ streamIds: ['body-vulva-bleeding'], type: 'ratio/proportion', time: day(n, 8), content: flow, ...extra });
+  const phases = (from, to, events) => Array.from({ length: to - from + 1 }, (_, i) => phaseOn(from + i, events).phase);
 
   // A full cycle: start day 1, period end day 5, window days 10-16, ovulation day 15, next start day 29
   const full = [start(1), periodEnd(5), window(10, 6), ovulation(15), start(29)];
@@ -38514,7 +38702,7 @@ describe('[CPHX] cyclePhaseAt', () => {
   });
 
   it('[CPH7] no start before the time: no cycle', () => {
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(5, [start(10)]), { phase: null, basis: 'unknown', cycleDay: null, cycleStart: null, cycleEnd: null });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(5, [start(10)]), { phase: null, basis: 'unknown', cycleDay: null, cycleStart: null, cycleEnd: null, predictedBy: [] });
   });
 
   it('[CPH8] basis: predicted wins, confirmed only when all are confirmed, absent is unknown', () => {
@@ -38566,6 +38754,133 @@ describe('[CPHX] cyclePhaseAt', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(13, events).phase, null);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, events).phase, 'fertile');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(20, events).phase, 'luteal');
+  });
+
+  describe('[CPHP] period end from bleeding when no -period-end is recorded', () => {
+    it('[CPHP0] the threshold anchors (Spotting 0.08, Very light 0.2) are the published bleeding options', async () => {
+      const model = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel)();
+      await model.load('https://model.datasafe.dev/pack.json');
+      const options = model.itemsDefs.forKey('body-vulva-bleeding').data.options;
+      const value = (en) => options.find(o => o.label?.en === en)?.value;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(value('Spotting'), 0.08);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(value('Very light'), 0.2);
+      // nothing between the two anchors: the midpoint threshold reads a value as the nearest one
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(options.filter(o => o.value > 0.08 && o.value < 0.2).length, 0);
+    });
+
+    it('[CPHP10] spotting after the last real bleeding day does not extend the period', () => {
+      const events = [start(1), bleeding(1, 0.75), bleeding(2, 0.35), bleeding(3, 0.08), bleeding(4, 0.08), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(1, 5, events), ['menstrual', 'menstrual', 'follicular', 'follicular', 'follicular']);
+      // a device value nearer Spotting than Very light is spotting; nearer Very light counts
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, [start(1), bleeding(1), bleeding(2), bleeding(3, 0.13), window(10, 6)]).phase, 'follicular');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, [start(1), bleeding(1), bleeding(2), bleeding(3, 0.16), window(10, 6)]).phase, 'menstrual');
+    });
+
+    it('[CPHP11] a spotting-only day 2 does not start the run either', () => {
+      // no flow entry on day 1, spotting on day 2: no period end, as without bleeding
+      const events = [start(1), bleeding(2, 0.08), bleeding(3, 0.55), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(1, 4, events), ['menstrual', null, null, null]);
+      // spotting on both day 1 and day 2: the same
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, [start(1), bleeding(1, 0.08), bleeding(2, 0.08), window(10, 6)]).phase, null);
+      // real flow on day 1 then spotting on day 2: the period is day 1
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(2, [start(1), bleeding(1, 0.55), bleeding(2, 0.08), window(10, 6)]).phase, 'follicular');
+    });
+
+    it('[CPHP1] the bleeding days in a row from the start are menstrual; follicular until the first fertile day', () => {
+      const events = [start(1), bleeding(1, 0.75), bleeding(2, 0.55), bleeding(3, 0.35), bleeding(4, 0.2), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(1, 10, events), ['menstrual', 'menstrual', 'menstrual', 'menstrual', 'follicular', 'follicular', 'follicular', 'follicular', 'follicular', 'fertile']);
+    });
+
+    it('[CPHP2] the run may begin the day after the start (a start logged before the first flow entry)', () => {
+      const events = [start(1), bleeding(2), bleeding(3), ovulation(14)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(1, 5, events), ['menstrual', 'menstrual', 'menstrual', 'follicular', 'follicular']);
+    });
+
+    it('[CPHP3] a day without bleeding ends the run: no entry, or a None (0) entry', () => {
+      const gap = [start(1), bleeding(1), bleeding(2), bleeding(4), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(2, 4, gap), ['menstrual', 'follicular', 'follicular']);
+      const none = [start(1), bleeding(1), bleeding(2), bleeding(3, 0), bleeding(4), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(2, 4, none), ['menstrual', 'follicular', 'follicular']);
+    });
+
+    it('[CPHP4] no bleeding on the start day or the day after: no period end, as before', () => {
+      const events = [start(1), bleeding(3), bleeding(4), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(1, 4, events), ['menstrual', null, null, null]);
+      // the start alone still decides nothing past day 1 (CPH2)
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, [start(1), window(10, 6)]).phase, null);
+    });
+
+    it('[CPHP5] a recorded period end wins over the bleeding days', () => {
+      const events = [start(1), periodEnd(3), bleeding(1), bleeding(2), bleeding(3), bleeding(4), bleeding(5), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(3, 5, events), ['menstrual', 'follicular', 'follicular']);
+    });
+
+    it('[CPHP6] a run reaching the first fertile day is ignored, as a period end there would be', () => {
+      const events = [start(1), ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => bleeding(n)), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(5, events).phase, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(10, events).phase, 'fertile');
+    });
+
+    it('[CPHP7] only this cycle\'s bleeding counts; the run stops at the next start', () => {
+      const prev = [start(1), ...[25, 26, 27, 28, 29, 30, 31].map(n => bleeding(n)), start(29), ovulation(43)];
+      // the bleeding before day 29 is the previous cycle's; from 29 the run is 29-31
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(31, 33, prev), ['menstrual', 'follicular', 'follicular']);
+      // in the first cycle, bleeding late in the cycle is no period: no period end, no phase
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(27, prev).phase, null);
+    });
+
+    it('[CPHP8] trashed bleeding, another stream or type, a non-numeric content do not count', () => {
+      const events = [start(1), bleeding(1), bleeding(2, 0.55, { trashed: true }), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(2, events).phase, 'follicular');
+      const other = [start(1), bleeding(2, 0.55, { streamIds: ['body-vulva-bleeding-clots'] }), bleeding(1, 0.55, { type: 'activity/plain' }), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, other).phase, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, [start(1), bleeding(1, 'heavy'), window(10, 6)]).phase, null);
+    });
+
+    it('[CPHP9] bleeding does not enter the basis: it rests on the start (and the first fertile day)', () => {
+      const c = { clientData: { hdsBasis: 'confirmed' } };
+      const events = [start(1, c), bleeding(1), bleeding(2), bleeding(3), window(10, 6, c)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(3, events).basis, 'confirmed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(6, events).basis, 'confirmed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(6, [start(1), bleeding(1), bleeding(2), window(10, 6, c)]).basis, 'unknown');
+    });
+  });
+
+  describe('[CPHQ] predictedBy: who predicted the boundaries a phase rests on', () => {
+    const p = (createdBy) => ({ createdBy, clientData: { hdsBasis: 'predicted' } });
+    const c = (createdBy) => ({ createdBy, clientData: { hdsBasis: 'confirmed' } });
+
+    it('[CPHQ1] the createdBy of a predicted boundary; empty when not predicted', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(12, [start(1), window(10, 6, p('acc-mira'))]).predictedBy, ['acc-mira']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(12, [start(1), window(10, 6, c('acc-mira'))]).predictedBy, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(12, [start(1), window(10, 6, { createdBy: 'acc-mira' })]).predictedBy, []);
+    });
+
+    it('[CPHQ2] every predicting access, once, only the predicted ones', () => {
+      const events = [start(1), periodEnd(5, p('acc-a')), window(10, 6, p('acc-b')), ovulation(15, p('acc-b'))];
+      const r = phaseOn(7, events);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.basis, 'predicted');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(r.predictedBy, ['acc-a', 'acc-b']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(7, [start(1), periodEnd(5, c('acc-a')), window(10, 6, p('acc-b'))]).predictedBy, ['acc-b']);
+    });
+
+    it('[CPHQ3] a predicted boundary without createdBy: predicted, nobody named', () => {
+      const r = phaseOn(16, [start(1), ovulation(15, { clientData: { hdsBasis: 'predicted' } })]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.basis, 'predicted');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(r.predictedBy, []);
+    });
+
+    it('[CPHQ4] no phase: empty', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(3, [start(1), window(10, 6, p('acc-mira'))]).predictedBy, []);
+    });
+  });
+
+  it('[CPHR] the boundaries decide on a day with no entry; other entries that day change nothing', () => {
+    // nothing is logged on days 6-9 or 17-28 of the full cycle: the phases still follow from the boundaries
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(6, 9, full), ['follicular', 'follicular', 'follicular', 'follicular']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(17, 28, full), Array(12).fill('luteal'));
+    const withEntries = [...full, { streamIds: ['body-vulva-mucus-inspect'], type: 'vulva-mucus-inspect/v1', time: day(20), content: {} }, bleeding(20, 0)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(20, withEntries).phase, 'luteal');
   });
 });
 
@@ -39277,6 +39592,66 @@ describe('[ESTX] eventToShortText', () => {
     it('[EST27g] eventToShortTextWithOrigin gives the same text, no origin', () => {
       const event = ev('body-semen-concentration', 15);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(event), { text: '15 10⁶/mL', origin: null });
+    });
+  });
+
+  describe('[EST28] variation option label as the unit (B-2026-10-27-4)', () => {
+    afterEach(() => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)();
+    });
+
+    /** An event of `key` in variation `eventType`, checked against the published pack */
+    const ev = (key, eventType, content) => {
+      const itemDef = model.itemsDefs.forKey(key);
+      const options = itemDef?.data?.variations?.eventType?.options ?? [];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(options.some(o => o.value === eventType), `${key} should offer ${eventType} as a variation in the published pack`);
+      return { content, streamIds: [itemDef.data.streamId], type: eventType };
+    };
+
+    it('[EST28a] AMH, progesterone on concentration/ug-l read the option label ng/mL, not µg/L', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-amh', 'concentration/ug-l', 2.1)), '2.1 ng/mL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-progesterone', 'concentration/ug-l', 12)), '12 ng/mL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-vitamin-d-25oh', 'concentration/ug-l', 30)), '30 ng/mL');
+    });
+
+    it('[EST28b] prolactin on concentration/uiu-ml reads mIU/L (option label), on ug-l ng/mL', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-prolactin', 'concentration/uiu-ml', 250)), '250 mIU/L');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-prolactin', 'concentration/ug-l', 12)), '12 ng/mL');
+    });
+
+    it('[EST28c] the other variation of the same item reads its own option label', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-amh', 'concentration/pmol-l', 15)), '15 pmol/L');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-progesterone', 'concentration/nmol-l', 38)), '38 nmol/L');
+    });
+
+    it('[EST28d] the label is localized', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-amh', 'concentration/ug-l', 2.1)), '2.1 ng/mL');
+    });
+
+    it('[EST28e] non-concentration variations keep the eventType symbol and the unit-system conversion', () => {
+      // body-weight / body-height option labels are form words (Lbs, Feet), not symbols
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-weight', 'mass/kg', 60)), '60 Kg');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-weight', 'mass/lb', 130)), '130 lb');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-height', 'length/ft', 5.5)), '5.5 ft');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('unitSystem', 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-weight', 'mass/kg', 60)), / lb$/);
+    });
+
+    it('[EST28f] items without variations are unchanged (LH, ferritin with number.display)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 12.5, streamIds: ['fertility-hormone-lh'], type: 'concentration/iu-l' }), '12.5 IU/L');
+      const ferritin = model.itemsDefs.forKey('body-blood-serum-ferritin');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(ferritin.data.variations, undefined, 'ferritin should have no variations in the published pack');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 2.1, streamIds: [ferritin.data.streamId], type: 'concentration/ug-l' }), '2.1 ng/mL');
+    });
+
+    it('[EST28g] without an itemDef the eventType symbol is used', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 2.1, streamIds: ['not-an-item'], type: 'concentration/ug-l' }), '2.1 µg/L');
+    });
+
+    it('[EST28h] eventToShortTextWithOrigin gives the same text, no origin', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortTextWithOrigin)(ev('body-blood-serum-amh', 'concentration/ug-l', 2.1)), { text: '2.1 ng/mL', origin: null });
     });
   });
 
@@ -40872,6 +41247,113 @@ describe('[MODX] Model', () => {
 
 /***/ },
 
+/***/ "./tests/legacyChat.test.js"
+/*!**********************************!*\
+  !*** ./tests/legacyChat.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+const { Contact, LEGACY_CHAT_TYPE, legacyChatStreams, legacyChatSource, legacyChatMessages } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.appTemplates;
+
+// As on demo testuser56 ↔ drandy: what the person wrote in `chat-drandy`, the doctor's reply in `chat-drandy-in`
+// (a child stream of the first); the content is the text itself
+const legacy = (id, time, streamId, content = 'msg ' + id, extra = {}) =>
+  ({ id, time, type: LEGACY_CHAT_TYPE, streamIds: [streamId], content, ...extra });
+
+const events = [
+  legacy('w', 300, 'chat-drandy', 'Wednesday'),
+  legacy('p', 200, 'chat-drandy-in', 'perfect'),
+  legacy('h', 100, 'chat-drandy', 'hello')
+];
+
+describe('[LGCX] pre-CMC chat (legacyChat)', () => {
+  it('[LGC1] the type is message/hds-chat-v1', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(LEGACY_CHAT_TYPE, 'message/hds-chat-v1');
+  });
+
+  it('[LGC2] names the contact\'s two streams after its account name', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(legacyChatStreams('drandy'), { outgoing: 'chat-drandy', incoming: 'chat-drandy-in' });
+  });
+
+  it('[LGC3] no streams without an account name (a bridge or service access)', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatStreams(null), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatStreams(undefined), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatStreams(''), null);
+  });
+
+  it('[LGC4] the stream gives the direction: chat-<x> mine, chat-<x>-in the contact\'s', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatSource(events[2], 'drandy'), 'me');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatSource(events[1], 'drandy'), 'contact');
+  });
+
+  it('[LGC5] another contact\'s streams, another type, no account name: unknown', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatSource(legacy('x', 1, 'chat-drbobby'), 'drandy'), 'unknown');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatSource({ ...legacy('x', 1, 'chat-drandy'), type: 'note/txt' }, 'drandy'), 'unknown');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatSource({ ...legacy('x', 1, 'chat-drandy'), streamIds: undefined }, 'drandy'), 'unknown');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatSource(legacy('x', 1, 'chat-drandy'), null), 'unknown');
+    // a CMC chat event is not a legacy one
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatSource({ id: 'c', time: 1, type: 'message/chat-cmc', streamIds: ['chat-drandy'], content: {} }, 'drandy'), 'unknown');
+  });
+
+  it('[LGC6] an event in both streams is the contact\'s (the incoming stream is a child of the outgoing one)', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(legacyChatSource({ ...legacy('x', 1, 'chat-drandy'), streamIds: ['chat-drandy', 'chat-drandy-in'] }, 'drandy'), 'contact');
+  });
+
+  it('[LGC7] lists the contact\'s messages oldest first, each with its direction', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(legacyChatMessages('drandy', events), [
+      { id: 'h', text: 'hello', time: 100, fromContact: false },
+      { id: 'p', text: 'perfect', time: 200, fromContact: true },
+      { id: 'w', text: 'Wednesday', time: 300, fromContact: false }
+    ]);
+  });
+
+  it('[LGC8] leaves out trashed, empty, non-text and other contacts\' messages; trims the text', () => {
+    const more = [
+      ...events,
+      legacy('t', 400, 'chat-drandy', 'gone', { trashed: true }),
+      legacy('e', 500, 'chat-drandy-in', '   '),
+      legacy('o', 600, 'chat-drandy', { content: 'object' }),
+      legacy('b', 700, 'chat-drbobby', 'not drandy'),
+      legacy('s', 800, 'chat-drandy-in', '  see you  ')
+    ];
+    const messages = legacyChatMessages('drandy', more);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(messages.map(m => m.id), ['h', 'p', 'w', 's']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(messages[3].text, 'see you');
+  });
+
+  it('[LGC9] only reads: the events are left as they are', () => {
+    const before = JSON.stringify(events);
+    legacyChatMessages('drandy', events);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(JSON.stringify(events), before);
+  });
+
+  it('[LGCA] Contact: legacyChatStreams, legacyChatSource, legacyChatMessages use its remoteUsername', () => {
+    const contact = new Contact('drandy', 'Dr Andy');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(contact.legacyChatStreams, { outgoing: 'chat-drandy', incoming: 'chat-drandy-in' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(contact.legacyChatSource(events[1]), 'contact');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(contact.legacyChatMessages(events).map(m => m.id), ['h', 'p', 'w']);
+    // chatEventInfos (CMC streams) is unchanged: a legacy event is not a CMC one
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(contact.chatEventInfos(events[1]), { source: 'unknown' });
+  });
+
+  it('[LGCB] Contact without account name has no legacy chat', () => {
+    const bridge = new Contact(null, 'Mira');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bridge.legacyChatStreams, null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bridge.legacyChatSource(events[1]), 'unknown');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(bridge.legacyChatMessages(events), []);
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/libSettings.test.js"
 /*!***********************************!*\
   !*** ./tests/libSettings.test.js ***!
@@ -42340,12 +42822,14 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
 /* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
 /* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
+
 
 
 
