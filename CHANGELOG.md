@@ -11,6 +11,19 @@
   the same on `Contact` as `legacyChatStreams`, `legacyChatSource(event)`, `legacyChatMessages(events)`. Purely
   additive: `chatEventInfos` is unchanged, nothing is written. Types `LegacyChatSource`, `LegacyChatEventLike`,
   `LegacyChatMessage`. Documented in `docs/app-templates.md`. Tests `[LGC1-B]`.
+- **`cyclePhaseAt`: period end from bleeding, `predictedBy`** (for the webapp's cycle card):
+  - when a cycle has no `fertility-cycles-period-end`, its period ends on the last of the consecutive days with
+    `body-vulva-bleeding` above 0 (spotting included) beginning on the start day or the day after; those days are
+    `menstrual`, and `follicular` follows until the first fertile day. Pass the bleeding events with the boundary
+    events. A recorded period end always wins; without bleeding on the start day or the next, nothing changes.
+    Bleeding observations do not enter `basis`;
+  - `predictedBy: string[]` on the result: when `basis` is `'predicted'`, the `createdBy` access ids of the
+    predicted boundaries the phase rests on, so an app can label "predicted by {app}" (else "recorded"); `[]`
+    otherwise. `CycleEventLike` gains optional `content` and `createdBy`;
+  - documented: a day's phase follows from the boundaries whether or not anything was logged that day; still no
+    projected ovulation. `cyclePhaseAt` and `cycleDayAt` are now documented in `docs/utilities.md`.
+  Backward compatible: without bleeding events the phases, `basis` and the other fields are unchanged; the result
+  gains one field. Tests `[CPHP1-9]`, `[CPHQ1-4]`, `[CPHR]`; `[CPH7]` expects the new field.
 
 ### Fixed
 - **`eventToShortText` shows a variation's option label as the unit** (B-2026-10-27-4): an item with
