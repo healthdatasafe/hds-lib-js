@@ -10,6 +10,12 @@ export interface ReminderConfig {
   importance?: 'may' | 'should' | 'must';
 }
 
+/** Item types a form renders (data-model `entryType` + the structured types). Anything else is never offered. */
+export const ENTERABLE_ITEM_TYPES: readonly string[] = [
+  'number', 'text', 'select', 'checkbox', 'date', 'picture',
+  'composite', 'datasource-search', 'convertible', 'slider', 'multi-select'
+];
+
 export class HDSItemDef {
   #data: any;
   #key: string;
@@ -73,6 +79,24 @@ export class HDSItemDef {
    */
   get isAttachments (): boolean {
     return this.#data.type === 'attachments';
+  }
+
+  /**
+   * Whether this is an imported item (`type: imported`, data-model 3.27.0): an object written by an importer from a
+   * coded source (`lab-result/coded-v1`), never entered in a form. Read, shown and requested like any item (unlike
+   * `system`), but not offered in pickers or rendered as an editable form field.
+   */
+  get isImported (): boolean {
+    return this.#data.type === 'imported';
+  }
+
+  /**
+   * Whether a person enters this item field by field: its `type` is one a form renders. False for `system`,
+   * `attachments`, `imported` and any type this version does not know (a newer pack), so a picker never offers an
+   * item it cannot render.
+   */
+  get isEnterable (): boolean {
+    return ENTERABLE_ITEM_TYPES.includes(this.#data.type);
   }
 
   get reminder (): ReminderConfig | null {

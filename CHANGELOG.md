@@ -1,5 +1,40 @@
 # Changelog
 
+## [2.28.0] - 2026-10-28
+
+### Added
+- **Lab results** (site-agents#22 #28, data-model 3.27.0 `BLOOD-CHEMISTRY.md`), new `HDSModel/labResults.ts`:
+  - `labComparatorOf(event)`: the printed limit of a numeric lab result. It reads `content.comparator` on
+    `lab-result/coded-v1` and `clientData.hdsComparator` otherwise. It returns `null` when the value is exact, and
+    `'unknown'` for a comparator that is not one of `<`, `<=`, `>`, `>=`.
+  - `isExactLabValue(event)`, for charts and statistics.
+  - `labResultCodedText(content)` and `labUnitText(content)`. The unit is `unitText` as printed, else the UCUM code
+    made readable (`umol/L` → `µmol/L`, `{copies}/mL` → `copies/mL`).
+  - `labValueToFhir(event)`: FHIR `Observation.value[x]`. The comparator is set only on a limit, and an unknown
+    comparator gives no value. An item event reads as it displays (`number.display`: HbA1c 0.057 → 5.7 %). UCUM
+    `system` / `code` are set on coded results only; `valueCodes` → `valueCodeableConcept`; a semi-quantitative
+    result's `valueText` comes back as `note`.
+  - `labSeriesKey(event)`: one series per item and unit (`<itemKey>|<eventType>` on an item with several units), or
+    per analyte code + unit on coded results.
+  - `isValidLoincCode(code)`: the mod-10 check digit.
+  - `checkLabResultCoded(event)`: warnings `owned-by-item`, `no-loinc` and `invalid-loinc`.
+  - `LAB_RESULT_CODED` and `LAB_COMPARATORS`.
+- **`eventToShortText`** shows a limit with its comparator (`< 1.5 ng/mL`, `? 1.5 ng/mL` when the comparator is
+  unknown). It shows a coded result as `HIV-1 RNA (viral load) < 20 copies/mL` / `HBsAg: negative`, keyed on the
+  eventType, so the result reads the same before its item is published.
+- **Imported items** (`type: imported`, data-model 3.27.0: objects written by an importer, never entered in a
+  form): `HDSItemDef.isImported`.
+- **`itemsDefs.forLoinc(code)`**: the active item that asserts a LOINC code in `references.loinc`.
+
+### Changed
+- **`itemsDefs.getAllActive()` is a whitelist** (`HDSItemDef.isEnterable`, `ENTERABLE_ITEM_TYPES`): only types a
+  form renders are listed: `number`, `text`, `select`, `checkbox`, `date`, `picture`, `composite`,
+  `datasource-search`, `convertible`, `slider`, `multi-select`. Before, it was a blacklist of `system` and
+  `attachments`. Now `imported`, and any item type a later data model adds, stays out of pickers without a new
+  release.
+
+Tests `[LABR-1]`-`[LABR-6]`.
+
 ## [2.27.0] - 2026-10-28
 
 ### Added
