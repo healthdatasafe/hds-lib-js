@@ -65,6 +65,16 @@ export class HDSItemDef {
     return this.#data.type === 'system';
   }
 
+  /**
+   * Whether this is a document item (`type: attachments`, data-model 3.25.0): files carried as Pryv attachments,
+   * with metadata as content (`file/xds-v1`). Imported, never entered field by field: readable and requestable
+   * like any item, but not offered in pickers or rendered as an editable form field. See
+   * `data-model/documentation/DOCUMENTS.md`.
+   */
+  get isAttachments (): boolean {
+    return this.#data.type === 'attachments';
+  }
+
   get reminder (): ReminderConfig | null {
     return this.#data.reminder || null;
   }
