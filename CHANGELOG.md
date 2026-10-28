@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.24.0] - 2026-10-28
 
 ### Fixed
 - **An overload may restate an existing item's immutable fields identically** (B-2026-10-28-4): `validateOverload`
