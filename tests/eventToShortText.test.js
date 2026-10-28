@@ -44,9 +44,11 @@ describe('[ESTX] eventToShortText', () => {
       return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
     };
 
-    it('[EST27a] a suffix replaces the eventType symbol (AMH, vitamin D: ng/mL over µg/L)', () => {
-      assert.equal(eventToShortText(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
-      assert.equal(eventToShortText(ev('body-blood-serum-vitamin-d-25oh', 30)), '30 ng/mL');
+    // AMH and vitamin D dropped their suffix in data-model 3.21.0 (unit variations); ferritin and
+    // C-peptide still declare one.
+    it('[EST27a] a suffix replaces the eventType symbol (ferritin, C-peptide: ng/mL over µg/L)', () => {
+      assert.equal(eventToShortText(ev('body-blood-serum-ferritin', 2.1)), '2.1 ng/mL');
+      assert.equal(eventToShortText(ev('body-blood-serum-c-peptide', 30)), '30 ng/mL');
     });
 
     it('[EST27b] sperm concentration reads 10⁶/mL, not the G/L symbol of concentration/megacount-ml', () => {
@@ -61,7 +63,7 @@ describe('[ESTX] eventToShortText', () => {
 
     it('[EST27d] the suffix is localized', () => {
       setPreferredLocales(['fr']);
-      assert.equal(eventToShortText(ev('body-blood-serum-amh', 2.1)), '2.1 ng/mL');
+      assert.equal(eventToShortText(ev('body-blood-serum-ferritin', 2.1)), '2.1 ng/mL');
     });
 
     it('[EST27e] a display item is not converted to another unit system (it states how it reads)', () => {

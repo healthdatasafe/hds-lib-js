@@ -1,6 +1,6 @@
 {
   "name": "hds-lib",
-  "version": "2.20.0",
+  "version": "2.21.0",
   "description": "Health Data Safe - Library",
   "type": "module",
   "engines": {

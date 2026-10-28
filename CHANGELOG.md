@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.21.0] - 2026-10-28
+
+### Fixed
+- **Overload streams keep `role` and `clientData`** (site-agents#34, B-2026-10-27-23): a new stream node declared in
+  an `HDSModelOverload` was built from `id`, `name`, `parentId` only, so an app's own context leaf (`role: context`)
+  reported `isContext() === false`. Both fields are now carried onto new nodes; on an existing stream they are
+  immutable (restating the base value is allowed, changing or adding one is refused). Tests `[OVAH]`, `[OVAI]`,
+  `[OVBJ]`, `[OVBK]`, `[OVCL]`, `[OVDD]`.
+- **`unitConversions` is an immutable item field** (B-2026-10-27-8): an overlay touching it on an existing item was
+  already refused, but as an "unknown overlay field"; it is now reported as an immutable field, as the data-model
+  3.21.0 changelog states. Test `[OVBI]`.
+
+### Tests
+- `[EST27a]`, `[EST27d]` read the `number.display` suffix from ferritin and C-peptide: AMH and vitamin D dropped
+  theirs in data-model 3.21.0 (unit variations), which left both tests red against the published pack.
+
 ## [2.20.0] - 2026-10-27
 
 ### Added
