@@ -5,6 +5,7 @@
 import './accountPreferences.test.js';
 import './applicationClass.test.js';
 import './apptemplatesRequest.test.js';
+import './bridgeAccess.test.js';
 import './conversions.test.js';
 import './datasetTemplate.test.js';
 import './errors.test.js';

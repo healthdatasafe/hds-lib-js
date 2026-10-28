@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **`ensureBridgeAccess(updateIfDifferent)` creates the streams an updated grant names** (B-2026-10-26-5): an
+  existing access was brought to new permissions with `accesses.update`, which, unlike `accesses.create`, does not
+  create a permission's stream from `defaultName`, and the server accepts a permission on a stream that does not
+  exist. So an account connected to Cyclefeminin or FEMM before their grants moved to `app-cyclefeminin*` /
+  `app-femm*` had its access updated to streams that did not exist, and the importer, which cannot create a root
+  stream, stopped with `Stream provisioning failed … app-cyclefeminin`. With `updateIfDifferent`, every missing
+  permission stream is now created first on the caller's personal connection: a data-model stream with its model
+  chain, root-first, with the model's names and parents (`offerStreamsToCreate`); any other stream at root, named
+  by its `defaultName`, as `accesses.create` does (none without a `defaultName`, nor `*` or store-prefixed ids).
+  Existing streams are not touched and `item-already-exists` is fine. This also runs when the permissions already
+  match, the state an earlier update left those accounts in. A stream that cannot be created throws an
+  `HDSLibError` naming each stream and its error, before the access is updated. Tests `[BAU01]`-`[BAU08]`;
+  `bridgeAccess.test.js` now also runs in the browser suite.
+
 ## [2.24.0] - 2026-10-28
 
 ### Fixed

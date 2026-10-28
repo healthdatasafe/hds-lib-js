@@ -109,3 +109,177 @@ describe('[BAH] Bridge access — model stream hierarchy', function () {
     assert.equal(conn.streamsCreated.length, 0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// [BAU] ensureBridgeAccess(updateIfDifferent) creates the streams an update grants.
+//
+// `accesses.update`, unlike `accesses.create`, does not create a permission's
+// stream from `defaultName`, and the server accepts a permission on a stream that
+// does not exist. So an access updated to a new grant (Cyclefeminin
+// `cyclefeminin-custom*` -> `app-cyclefeminin*`) pointed at nothing, and the
+// bridge, which cannot create a root stream, failed to provision its tree.
+// ---------------------------------------------------------------------------
+describe('[BAU] Bridge access update — missing permission streams', function () {
+  let HDSLib;
+
+  before(async function () {
+    HDSLib = await import('../ts/index.ts');
+    await HDSLib.initHDSModel();
+  });
+
+  /**
+   * Connection stub: one existing access, a stream tree, no network.
+   * `failIds` maps a stream id to the error its `streams.create` answers.
+   */
+  function fakeConnection ({ accessPermissions, streams, failIds = {} }) {
+    const calls = [];
+    const streamsCreated = [];
+    const updates = [];
+    return {
+      calls,
+      streamsCreated,
+      updates,
+      async apiOne (method) {
+        calls.push(method);
+        if (method === 'accesses.get') {
+          return [{ id: 'acc-1', name: 'bridge-x', apiEndpoint: 'https://tok@user.example.com/', permissions: accessPermissions }];
+        }
+        if (method === 'streams.get') return streams;
+        throw new Error('unexpected apiOne: ' + method);
+      },
+      async api (apiCalls) {
+        calls.push('api');
+        return apiCalls.map((c) => {
+          if (c.method !== 'streams.create') throw new Error('unexpected api: ' + c.method);
+          streamsCreated.push(c.params);
+          const error = failIds[c.params.id];
+          if (error != null) return { error };
+          return { stream: { id: c.params.id } };
+        });
+      },
+      async updateAccess (id, update) {
+        calls.push('updateAccess');
+        updates.push({ id, update });
+        return { id: id + ':1', apiEndpoint: 'https://tok@user.example.com/' };
+      }
+    };
+  }
+
+  const oldGrant = [{ streamId: 'cyclefeminin-custom', level: 'manage' }];
+  const newGrant = [
+    { streamId: 'app-x', defaultName: 'X (imported)', level: 'manage' },
+    { streamId: 'app-x-notes', defaultName: 'notes', level: 'manage' }
+  ];
+
+  it('[BAU01] creates a missing grant stream from defaultName, then updates the access', async () => {
+    const conn = fakeConnection({ accessPermissions: oldGrant, streams: [{ id: 'cyclefeminin-custom', children: [] }] });
+    const res = await ensureBridgeAccess(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true });
+    assert.deepEqual(conn.streamsCreated, [
+      { id: 'app-x', name: 'X (imported)' },
+      { id: 'app-x-notes', name: 'notes' }
+    ]);
+    assert.ok(conn.calls.indexOf('api') < conn.calls.indexOf('updateAccess'), 'streams are created before the update');
+    assert.equal(conn.updates.length, 1);
+    assert.deepEqual(conn.updates[0].update.permissions, [
+      { streamId: 'app-x', level: 'manage' },
+      { streamId: 'app-x-notes', level: 'manage' }
+    ]);
+    assert.equal(res.updated, true);
+  });
+
+  it('[BAU02] also creates them when the permissions already match (left by an earlier update)', async () => {
+    const conn = fakeConnection({ accessPermissions: newGrant.map(({ streamId, level }) => ({ streamId, level })), streams: [] });
+    const res = await ensureBridgeAccess(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true });
+    assert.deepEqual(conn.streamsCreated.map((s) => s.id), ['app-x', 'app-x-notes']);
+    assert.equal(conn.updates.length, 0);
+    assert.equal(res.updated, false);
+  });
+
+  it('[BAU03] no stream is created when all exist', async () => {
+    const conn = fakeConnection({
+      accessPermissions: oldGrant,
+      streams: [{ id: 'app-x', children: [{ id: 'app-x-notes', children: [] }] }]
+    });
+    await ensureBridgeAccess(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true });
+    assert.equal(conn.streamsCreated.length, 0);
+    assert.ok(!conn.calls.includes('api'));
+    assert.equal(conn.updates.length, 1);
+  });
+
+  it('[BAU04] without updateIfDifferent, streams are not even read', async () => {
+    const conn = fakeConnection({ accessPermissions: oldGrant, streams: [] });
+    await ensureBridgeAccess(conn, { name: 'bridge-x', permissions: newGrant });
+    assert.deepEqual(conn.calls, ['accesses.get']);
+  });
+
+  it('[BAU05] data-model streams: existing ones untouched, a missing one gets its model chain, never a flat defaultName copy', async () => {
+    const conn = fakeConnection({
+      accessPermissions: oldGrant,
+      streams: [
+        { id: 'body', children: [{ id: 'body-weight', children: [] }] }
+      ]
+    });
+    await ensureBridgeAccess(conn, {
+      name: 'bridge-x',
+      permissions: [
+        { streamId: 'body-weight', defaultName: 'body-weight', level: 'manage' },
+        { streamId: 'body-temperature-basal', defaultName: 'body-temperature-basal', level: 'manage' }
+      ],
+      updateIfDifferent: true
+    });
+    const model = HDSLib.getHDSModel().streams;
+    assert.ok(model.getDataById('body-weight', false) != null, 'body-weight is a model stream');
+    const ids = conn.streamsCreated.map((s) => s.id);
+    assert.deepEqual(ids, ['body-temperature', 'body-temperature-basal'], 'only the missing part of the model chain, root-first');
+    for (const s of conn.streamsCreated) {
+      assert.equal(s.parentId, model.getDataById(s.id).parentId, `${s.id} keeps its model parent`);
+      assert.notEqual(s.name, s.id, `${s.id} gets the model name, not the defaultName`);
+    }
+  });
+
+  it('[BAU06] skips `*`, store-prefixed ids, feature permissions and non-model streams without defaultName', async () => {
+    const conn = fakeConnection({ accessPermissions: oldGrant, streams: [] });
+    await ensureBridgeAccess(conn, {
+      name: 'bridge-x',
+      permissions: [
+        { streamId: '*', level: 'read' },
+        { streamId: ':_cmc:inbox', level: 'contribute' },
+        { streamId: 'no-default-name', level: 'manage' },
+        { feature: 'selfRevoke', setting: 'forbidden' }
+      ],
+      updateIfDifferent: true
+    });
+    assert.equal(conn.streamsCreated.length, 0);
+    assert.equal(conn.updates.length, 1);
+  });
+
+  it('[BAU07] an already-existing stream (e.g. trashed) is fine', async () => {
+    const conn = fakeConnection({
+      accessPermissions: oldGrant,
+      streams: [],
+      failIds: { 'app-x': { id: 'item-already-exists', message: 'exists' } }
+    });
+    await ensureBridgeAccess(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true });
+    assert.equal(conn.updates.length, 1);
+  });
+
+  it('[BAU08] a stream that cannot be created is reported by id and error, and the access is not updated', async () => {
+    const conn = fakeConnection({
+      accessPermissions: oldGrant,
+      streams: [],
+      failIds: { 'app-x-notes': { id: 'forbidden', message: 'no root streams' } }
+    });
+    await assert.rejects(
+      ensureBridgeAccess(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true }),
+      (err) => {
+        assert.ok(err instanceof HDSLib.HDSLibError, 'HDSLibError');
+        assert.match(err.message, /bridge-x/);
+        assert.match(err.message, /app-x-notes \(forbidden: no root streams\)/);
+        assert.doesNotMatch(err.message, /app-x \(/);
+        assert.deepEqual(err.innerObject.failures.map((f) => f.streamId), ['app-x-notes']);
+        return true;
+      }
+    );
+    assert.equal(conn.updates.length, 0);
+  });
+});
