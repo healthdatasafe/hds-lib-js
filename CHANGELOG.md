@@ -11,8 +11,11 @@
   - `labResultCodedText(content)` and `labUnitText(content)`. The unit is `unitText` as printed, else the UCUM code
     made readable (`umol/L` → `µmol/L`, `{copies}/mL` → `copies/mL`).
   - `labValueToFhir(event)`: FHIR `Observation.value[x]`. The comparator is set only on a limit, and an unknown
-    comparator gives no value. UCUM `system` / `code` are set on coded results only.
-  - `labSeriesKey(event)`: one series per item, or per analyte code + unit on coded results.
+    comparator gives no value. An item event reads as it displays (`number.display`: HbA1c 0.057 → 5.7 %). UCUM
+    `system` / `code` are set on coded results only; `valueCodes` → `valueCodeableConcept`; a semi-quantitative
+    result's `valueText` comes back as `note`.
+  - `labSeriesKey(event)`: one series per item and unit (`<itemKey>|<eventType>` on an item with several units), or
+    per analyte code + unit on coded results.
   - `isValidLoincCode(code)`: the mod-10 check digit.
   - `checkLabResultCoded(event)`: warnings `owned-by-item`, `no-loinc` and `invalid-loinc`.
   - `LAB_RESULT_CODED` and `LAB_COMPARATORS`.

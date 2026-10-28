@@ -18,8 +18,17 @@ function makeModel () {
         description: { en: 'Ferritin in serum.' },
         streamId: 'body-blood-serum-ferritin',
         type: 'number',
-        variations: { eventType: { options: [{ value: 'concentration/ug-l', label: { en: 'ng/mL' } }] } },
+        variations: { eventType: { options: [{ value: 'concentration/ug-l', label: { en: 'ng/mL' } }, { value: 'concentration/pmol-l', label: { en: 'pmol/L' } }] } },
         references: { loinc: ['2276-4', '24373-3'] }
+      },
+      'body-blood-hba1c': {
+        version: 'v1',
+        label: { en: 'HbA1c' },
+        description: { en: 'Glycated hemoglobin.' },
+        streamId: 'body-blood-hba1c',
+        eventType: 'ratio/proportion',
+        type: 'number',
+        number: { display: { multiplier: 100, suffix: { en: '%' } } }
       },
       'body-blood-coded': {
         version: 'v1',
@@ -61,6 +70,7 @@ function makeModel () {
       { id: 'body', name: 'Body', parentId: null },
       { id: 'body-blood', name: 'Blood', parentId: 'body' },
       { id: 'body-blood-serum-ferritin', name: 'Ferritin', parentId: 'body-blood' },
+      { id: 'body-blood-hba1c', name: 'HbA1c', parentId: 'body-blood' },
       { id: 'body-blood-coded', name: 'Other blood results', parentId: 'body-blood' },
       { id: 'sync-status', name: 'Sync', parentId: null },
       { id: 'future-thing', name: 'Future', parentId: null },
@@ -123,6 +133,12 @@ describe('[LABR] lab results', () => {
     assert.equal(labUnitText({ unit: '[IU]/L' }), 'IU/L');
     assert.equal(labUnitText({ unit: '10*9/L' }), '10^9/L');
     assert.equal(labUnitText({ unit: 'U/L' }), 'U/L');
+    assert.equal(labUnitText({ unit: '/uL' }), '/µL');
+    assert.equal(labUnitText({ unit: 'mmol/mol{creat}' }), 'mmol/mol');
+    assert.equal(labUnitText({ unit: '10*3{cells}/uL' }), '10^3/µL');
+    assert.equal(labUnitText({ unit: 'mL/min/{1.73_m2}' }), 'mL/min/1.73 m2');
+    assert.equal(labUnitText({ unit: 'Cel' }), '°C');
+    assert.equal(labUnitText({ unit: '%' }), '%');
     assert.equal(labUnitText({ unit: '1' }), null);
   });
 
@@ -132,15 +148,24 @@ describe('[LABR] lab results', () => {
     assert.equal(labValueToFhir(ferritin(1.5, { hdsComparator: '=' })), null);
     assert.deepEqual(labValueToFhir(coded({ analyte: hiv, value: 20, comparator: '<', unit: '{copies}/mL' })),
       { valueQuantity: { value: 20, comparator: '<', unit: 'copies/mL', system: 'http://unitsofmeasure.org', code: '{copies}/mL' } });
-    const negative = { system: 'http://snomed.info/sct', code: '260385009', display: 'Negative' };
-    assert.deepEqual(labValueToFhir(coded({ analyte: hiv, valueText: 'négatif', valueCoded: negative })),
-      { valueCodeableConcept: { coding: [negative], text: 'négatif' } });
+    const negative = { system: 'http://snomed.info/sct', version: 'http://snomed.info/sct/900000000000207008', code: '260385009', display: 'Negative' };
+    const labCode = { system: 'urn:oid:1.2.3', code: 'NEG' };
+    assert.deepEqual(labValueToFhir(coded({ analyte: hiv, valueText: 'négatif', valueCodes: [negative, labCode] })),
+      { valueCodeableConcept: { coding: [negative, labCode], text: 'négatif' } });
     assert.deepEqual(labValueToFhir(coded({ analyte: hiv, valueText: '1:160' })), { valueString: '1:160' });
+    assert.deepEqual(labValueToFhir(coded({ analyte: hiv, value: 3.2, unit: '{index}', valueText: 'positive' })),
+      { valueQuantity: { value: 3.2, unit: 'index', system: 'http://unitsofmeasure.org', code: '{index}' }, note: 'positive' });
+    // an item event reads as it displays: a fraction stored 0..1 exports as a percentage
+    assert.deepEqual(labValueToFhir({ streamIds: ['body-blood-hba1c'], type: 'ratio/proportion', content: 0.057, clientData: { hdsComparator: '<' } }),
+      { valueQuantity: { value: 5.7, comparator: '<', unit: '%' } });
     assert.equal(labValueToFhir({ streamIds: ['x'], type: 'note/txt', content: 'hello' }), null);
   });
 
   it('[LABR-4] labSeriesKey never merges analytes or units', () => {
-    assert.equal(labSeriesKey(ferritin(30)), 'body-blood-serum-ferritin');
+    // an item with several units: one series per unit
+    assert.equal(labSeriesKey(ferritin(30)), 'body-blood-serum-ferritin|concentration/ug-l');
+    assert.equal(labSeriesKey({ ...ferritin(67), type: 'concentration/pmol-l' }), 'body-blood-serum-ferritin|concentration/pmol-l');
+    assert.equal(labSeriesKey({ streamIds: ['body-blood-hba1c'], type: 'ratio/proportion', content: 0.057 }), 'body-blood-hba1c');
     const a = labSeriesKey(coded({ analyte: hiv, value: 20, unit: '{copies}/mL' }));
     const b = labSeriesKey(coded({ analyte: { label: { en: 'Vancomycin' }, codes: [{ system: 'http://loinc.org', code: '20578-1' }] }, value: 12, unit: 'mg/L' }));
     const c = labSeriesKey(coded({ analyte: hiv, value: 1.3, unit: '{log_copies}/mL' }));
@@ -171,7 +196,7 @@ describe('[LABR] lab results', () => {
     assert.equal(coded.isImported, true);
     assert.equal(coded.isEnterable, false);
     assert.equal(model.itemsDefs.forKey('body-blood-serum-ferritin').isImported, false);
-    assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-blood-serum-ferritin']);
+    assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-blood-serum-ferritin', 'body-blood-hba1c']);
     assert.equal(model.itemsDefs.forEvent({ streamIds: ['body-blood-coded'], type: 'lab-result/coded-v1' }).key, 'body-blood-coded');
     assert.equal(model.itemsDefs.forEvent({ streamIds: ['body-blood'], type: 'lab-result/coded-v1' }, false), null);
     assert.deepEqual(cmcFormSpec.validateFormSpecItemKeys({ sections: [{ key: 's', itemKeys: ['body-blood-coded'] }] }, model), []);

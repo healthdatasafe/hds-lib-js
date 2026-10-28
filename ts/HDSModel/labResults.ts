@@ -38,16 +38,21 @@ export function isExactLabValue (event: LabEventLike): boolean {
 
 /**
  * The unit of a coded result for display: `unitText` (as printed) when present, else the UCUM code made readable
- * (`umol/L` → `µmol/L`, `{copies}/mL` → `copies/mL`, `[IU]/L` → `IU/L`, `10*9/L` → `10^9/L`); null for unitless `1`.
+ * (`umol/L` → `µmol/L`, `{copies}/mL` → `copies/mL`, `[IU]/L` → `IU/L`, `10*9/L` → `10^9/L`, `Cel` → `°C`). An
+ * annotation on a unit is dropped (`mmol/mol{creat}` → `mmol/mol`); one standing alone keeps its text. Null for `1`.
  */
 export function labUnitText (content: any): string | null {
   if (typeof content?.unitText === 'string' && content.unitText.trim() !== '') return content.unitText.trim();
   const unit = content?.unit;
   if (typeof unit !== 'string' || unit === '' || unit === '1') return null;
+  if (unit === 'Cel') return '°C';
   return unit
+    .replace(/([A-Za-z\d\])])\{[^}]*\}/g, '$1')
     .replace(/(^|[/.])u(?=[a-zA-Z[])/g, '$1µ')
-    .replace(/[{}[\]]/g, '')
-    .replace(/10\*/g, '10^');
+    .replace(/\{([^}]*)\}/g, '$1')
+    .replace(/[[\]]/g, '')
+    .replace(/10\*/g, '10^')
+    .replace(/_/g, ' ');
 }
 
 function analyteLabel (analyte: any): string | null {
@@ -81,16 +86,21 @@ export function labResultCodedText (content: any): string | null {
   return label;
 }
 
+interface LabCoding { system: string; code: string; version?: string; display?: string }
+
 export interface LabFhirValue {
   valueQuantity?: { value: number; comparator?: LabComparator; unit?: string; system?: string; code?: string };
   valueString?: string;
-  valueCodeableConcept?: { coding: Array<{ system: string; code: string; display?: string }>; text?: string };
+  valueCodeableConcept?: { coding: LabCoding[]; text?: string };
+  /** The printed text of a semi-quantitative result (a `value` and a `valueText`), for `Observation.note`. */
+  note?: string;
 }
 
 /**
  * FHIR `Observation.value[x]` of a lab event (an item event with a number, or `lab-result/coded-v1`), or null.
  * The comparator is set only when the value is a limit; an unknown comparator gives no value at all (never an exact
- * figure by mistake). UCUM `system` / `code` only on coded results: item eventTypes carry no UCUM code.
+ * figure by mistake). An item event reads as it displays (`number.display`: HbA1c 0.057 → 5.7 %). UCUM `system` /
+ * `code` only on coded results: item eventTypes carry no UCUM code.
  */
 export function labValueToFhir (event: LabEventLike, model: any = getModel()): LabFhirValue | null {
   if (event == null) return null;
@@ -99,34 +109,42 @@ export function labValueToFhir (event: LabEventLike, model: any = getModel()): L
   if (event.type === LAB_RESULT_CODED) {
     const c = event.content;
     if (c == null || typeof c !== 'object') return null;
+    const text = typeof c.valueText === 'string' ? c.valueText : null;
     if (typeof c.value === 'number') {
       const q: LabFhirValue['valueQuantity'] = { value: c.value };
       if (comparator) q.comparator = comparator;
       const unit = labUnitText(c);
       if (unit) q.unit = unit;
       if (typeof c.unit === 'string') { q.system = UCUM_SYSTEM; q.code = c.unit; }
-      return { valueQuantity: q };
+      return text ? { valueQuantity: q, note: text } : { valueQuantity: q };
     }
-    if (c.valueCoded != null) {
-      const coding = { system: c.valueCoded.system, code: c.valueCoded.code, ...(c.valueCoded.display ? { display: c.valueCoded.display } : {}) };
-      return { valueCodeableConcept: { coding: [coding], ...(c.valueText ? { text: c.valueText } : {}) } };
+    if (Array.isArray(c.valueCodes) && c.valueCodes.length > 0) {
+      const coding = c.valueCodes.map(({ system, code, version, display }: LabCoding) =>
+        ({ system, code, ...(version ? { version } : {}), ...(display ? { display } : {}) }));
+      return { valueCodeableConcept: { coding, ...(text ? { text } : {}) } };
     }
-    return typeof c.valueText === 'string' ? { valueString: c.valueText } : null;
+    return text ? { valueString: text } : null;
   }
   if (typeof event.content !== 'number' || typeof event.type !== 'string') return null;
-  const q: LabFhirValue['valueQuantity'] = { value: event.content };
+  const itemDef = model.itemsDefs.forEvent(event, false);
+  const display = itemDef?.data?.number?.display;
+  const multiplier: number = typeof display?.multiplier === 'number' ? display.multiplier : 1;
+  const q: LabFhirValue['valueQuantity'] = { value: Number((event.content * multiplier).toPrecision(12)) };
   if (comparator) q.comparator = comparator;
-  const unit = itemUnitLabel(event, model);
+  const suffix = display?.suffix ? localizeText(display.suffix) : null;
+  const unit = suffix || (multiplier === 1 ? itemUnitLabel(event, itemDef, model) : null);
   if (unit) q.unit = unit;
   return { valueQuantity: q };
 }
 
-/** The unit an item event reads in: its variation option label, else the eventType symbol. */
-function itemUnitLabel (event: LabEventLike, model: any): string | null {
-  const itemDef = model.itemsDefs.forEvent(event, false);
-  const option = itemDef?.data?.variations?.eventType?.options?.find((o: any) => o?.value === event.type);
-  if (option?.label != null) {
-    const label = typeof option.label === 'string' ? option.label : localizeText(option.label);
+/**
+ * The unit an item event reads in: its `concentration/*` variation option label (`ng/mL` on `ug-l`; other option
+ * labels are form words such as `Lbs`), else the eventType symbol.
+ */
+function itemUnitLabel (event: LabEventLike, itemDef: any, model: any): string | null {
+  if (event.type?.startsWith('concentration/')) {
+    const option = itemDef?.data?.variations?.eventType?.options?.find((o: any) => o?.value === event.type);
+    const label = option?.label == null ? null : (typeof option.label === 'string' ? option.label : localizeText(option.label));
     if (label) return label;
   }
   try {
@@ -143,13 +161,17 @@ function primaryCoding (content: any): { system: string; code: string } | null {
 
 /**
  * Series identity, so a chart never merges two analytes of one coded stream nor two units of one analyte:
- * `<itemKey>` for an item event, `<itemKey or streamId>|<system>|<code>|<unit>` for `lab-result/coded-v1`
- * (its LOINC code first, else its first code). Null when the event resolves to nothing.
+ * `<itemKey>` for an item event (`<itemKey>|<eventType>` when the item offers several units: merging them is the
+ * caller's choice, through `unitConversions`), `<itemKey or streamId>|<system>|<code>|<unit>` for
+ * `lab-result/coded-v1` (its LOINC code first, else its first code). Null when the event resolves to nothing.
  */
 export function labSeriesKey (event: LabEventLike, model: any = getModel()): string | null {
   if (event == null) return null;
   const itemDef = model.itemsDefs.forEvent(event, false);
-  if (event.type !== LAB_RESULT_CODED) return itemDef?.key ?? null;
+  if (event.type !== LAB_RESULT_CODED) {
+    if (itemDef == null) return null;
+    return itemDef.eventTypes.length > 1 ? `${itemDef.key}|${event.type}` : itemDef.key;
+  }
   const coding = primaryCoding(event.content);
   if (coding == null) return null;
   const base = itemDef?.key ?? event.streamIds?.[0] ?? '';
