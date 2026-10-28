@@ -19169,6 +19169,8 @@ function formatDatasource(content) {
     }
     if (intake?.route)
         parts.push(intake.route);
+    if (intake)
+        parts.push(...regimenParts(intake));
     // Treatment / procedure scalars (sibling fields on the event content)
     if (typeof content.count === 'number' && content.count > 1) {
         parts.push(`×${content.count}`);
@@ -19191,6 +19193,26 @@ function formatDatasource(content) {
     if (parts.length > 0)
         text += ' — ' + parts.join(', ');
     return text;
+}
+const AS_NEEDED = { en: 'as needed', fr: 'si besoin', es: 'si es necesario' };
+/**
+ * The regimen of a medication intake (data-model 3.23.0, the `posology` spelling):
+ * `frequency` as "2×/d" or "1×/48 h", `asNeeded` as "as needed", and the printed `note`
+ * only when there is no structured frequency (it usually says the same thing).
+ */
+function regimenParts(intake) {
+    const parts = [];
+    const f = intake.frequency;
+    if (f && typeof f.times === 'number' && typeof f.period === 'number' && f.periodUnit) {
+        parts.push(`${f.times}×/${f.period === 1 ? '' : f.period + ' '}${f.periodUnit}`);
+    }
+    if (intake.asNeeded === true)
+        parts.push((0, localizeText_ts_1.localizeText)(AS_NEEDED));
+    if (!parts.length && typeof intake.note === 'string' && intake.note.trim() !== '') {
+        const n = intake.note.trim();
+        parts.push(n.length > 30 ? n.slice(0, 30) + '...' : n);
+    }
+    return parts;
 }
 function formatObject(content) {
     if (content == null)
@@ -19215,6 +19237,7 @@ function formatObject(content) {
         }
         if (intake.route)
             parts.push(intake.route);
+        parts.push(...regimenParts(intake));
         return parts.length > 0 ? `${content.name} — ${parts.join(', ')}` : content.name;
     }
     if (content.value != null)
@@ -40022,6 +40045,42 @@ describe('[ESTX] eventToShortText', () => {
     };
     const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, 'Ibuprofen — 400 mg, oral');
+  });
+
+  describe('[EST29] medication regimen: intake.frequency, asNeeded, note (data-model 3.23.0)', () => {
+    afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)(); });
+
+    it('[EST29a] medication/basic shows the frequency after dose and route', () => {
+      const content = { name: 'Ibuprofen', intake: { doseValue: 400, doseUnit: 'mg', route: 'oral', frequency: { times: 3, period: 1, periodUnit: 'd' } } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Ibuprofen — 400 mg, oral, 3×/d');
+    });
+
+    it('[EST29b] a period above one is written out (every 48 h)', () => {
+      const content = { name: 'Fentanyl patch', intake: { frequency: { times: 1, period: 48, periodUnit: 'h' } } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Fentanyl patch — 1×/48 h');
+    });
+
+    it('[EST29c] coded intake: frequency and as needed, localized', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      const event = {
+        content: { drug: { label: { en: 'Paracetamol' } }, intake: { doseValue: 1, doseUnit: 'dose/tablet', frequency: { times: 4, period: 1, periodUnit: 'd' }, asNeeded: true } },
+        streamIds: ['medication-intake'],
+        type: 'medication/coded-v1'
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Paracetamol — 1 tablet, 4×/d, si besoin');
+    });
+
+    it('[EST29d] the printed note shows only when there is no structured frequency', () => {
+      const withNote = { name: 'Levothyroxine', intake: { note: 'one tablet every morning before breakfast' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: withNote, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Levothyroxine — one tablet every morning befor...');
+      const both = { name: 'Levothyroxine', intake: { note: 'every morning', frequency: { times: 1, period: 1, periodUnit: 'd' } } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: both, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Levothyroxine — 1×/d');
+    });
+
+    it('[EST29e] an incomplete frequency is not shown', () => {
+      const content = { name: 'Ibuprofen', intake: { frequency: { times: 2 } } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content, streamIds: ['medication-intake'], type: 'medication/basic' }), 'Ibuprofen');
+    });
   });
 
   it('[EST19] cervix-position composite labels each field', () => {
