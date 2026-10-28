@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.22.0] - 2026-10-28
 
 ### Added
 - **Pre-CMC chat, read-only** (`appTemplates/legacyChat.ts`, B-2026-10-27-30 follow-up): chat written before the
