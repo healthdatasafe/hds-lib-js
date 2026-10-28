@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.25.0] - 2026-10-28
+
+### Added
+- **Temperature shift and coverline** (`utils/temperatureShift.ts`, data-model 3.24.0): the basal-temperature
+  coverline of each cycle and the high temperatures it counts, by the rule the method charts the temperature by.
+  Chart notation only: no fertile or infertile verdict.
+  - `temperatureRuleOf(methodDef)` reads the method's `temperatureRule` from the cervical-fluid converter pack
+    (`null` for `'none'`, an older pack or an unknown rule id); `TEMPERATURE_RULES` holds the parameters of
+    `sympto-thermal` (STM / TCOYF), `sensiplan` (also Chart Neo; its two exceptions, never combined) and `manual`
+    (Justisse: no calculation), from model-cervical-fluid `references/rules/coverline-rules.json` (2026-10-28);
+    `isManualTemperatureRule(rule)`.
+  - `shiftOf(values, rule)` (indexes), `shiftInCycle(series, from, to, rule, { events, timeZone })` (times) and
+    `coverlinesOf(series, events, rule, timeZone)`: the line, the first and confirming high temperatures and the
+    counted highs; one series per device, the one with the most daily temperatures per cycle; one temperature per
+    calendar day; days with a `body-temperature-basal-disturbance` event left out; cycles as in `cyclePhaseAt`.
+  - Precedence of `fertility-cycles-coverline` (data-model "Coverline"): with a calculated rule a `'manual'` event
+    wins over the computation and a stored `'auto'` is never shown; with the manual rule, whichever event exists.
+  - Types `TemperatureRule`, `TemperatureRuleId`, `CalculatedTemperatureRule`, `ManualTemperatureRule`,
+    `TemperatureShift`, `TemperaturePoint`, `TemperatureSeries`, `TemperatureShiftOptions`,
+    `TemperatureShiftInCycle`, `Coverline`; `MethodDef` (now exported) gains `temperatureRule?`, `ConverterPack`
+    gains `temperatureRules?` (`TemperatureRuleDef`), and `EuclidianDistanceEngine.temperatureRules` keeps the
+    pack's labels and sources. Documented in `docs/utilities.md`. Tests `[TSHX]` (the 13 examples of
+    coverline-rules.json, one block per rule, the pack's rules per method).
+
 ## [2.24.0] - 2026-10-28
 
 ### Fixed

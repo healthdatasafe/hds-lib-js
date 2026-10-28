@@ -20,6 +20,7 @@ import './logger.test.js';
 import './MonitorScope.test.js';
 import './reminders.test.js';
 import './cyclePhase.test.js';
+import './temperatureShift.test.js';
 import './cmcScope.test.js';
 import './permissionLabels.test.js';
 import './legacyChat.test.js';
