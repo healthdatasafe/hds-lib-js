@@ -52,6 +52,7 @@ export type { LoadTemplateFromUrlOptions } from './appTemplates/loader.ts';
 export type { DataExportRequest, DataExportRequestParams } from './cmc/dataExport.ts';
 export type { ScopePermission, ScopeMessage, ScopeRelationship, ScopeUpdateHds, ScopeChangeOptions, ScopeChangeResult, StopSharingRefusal, StopSharingPlan, SharingNote } from './cmc/scope.ts';
 export type { PermissionView, PermissionLabelOptions } from './appTemplates/permissionLabels.ts';
+export type { LegacyChatSource, LegacyChatEventLike, LegacyChatMessage } from './appTemplates/legacyChat.ts';
 export type {
   Delegation, DelegateRecord, ControlledRecord, DelegationRecord, DelegateIdentity,
   RelationshipStatus, DelegationError, DelegationErrorId, TokenResult,

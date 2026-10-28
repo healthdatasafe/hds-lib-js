@@ -22,5 +22,6 @@ import './reminders.test.js';
 import './cyclePhase.test.js';
 import './cmcScope.test.js';
 import './permissionLabels.test.js';
+import './legacyChat.test.js';
 import './toolkitStreamAutoCreate.test.js';
 import './toolkitStreamsTools.test.js';

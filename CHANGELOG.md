@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- **Pre-CMC chat, read-only** (`appTemplates/legacyChat.ts`, B-2026-10-27-30 follow-up): chat written before the
+  June 2026 CMC switch is `message/hds-chat-v1` in `chat-<remoteUsername>` (the person's) and
+  `chat-<remoteUsername>-in` (the contact's), which `chatEventInfos` does not recognise. `appTemplates.legacyChatStreams(username)`,
+  `legacyChatSource(event, username)` (`'me' | 'contact' | 'unknown'`), `legacyChatMessages(username, events)`
+  (`{ id, text, time, fromContact }`, oldest first, trashed / empty / non-text left out) and `LEGACY_CHAT_TYPE`;
+  the same on `Contact` as `legacyChatStreams`, `legacyChatSource(event)`, `legacyChatMessages(events)`. Purely
+  additive: `chatEventInfos` is unchanged, nothing is written. Types `LegacyChatSource`, `LegacyChatEventLike`,
+  `LegacyChatMessage`. Documented in `docs/app-templates.md`. Tests `[LGC1-B]`.
+
 ### Fixed
 - **`eventToShortText` shows a variation's option label as the unit** (B-2026-10-27-4): an item with
   `variations.eventType` reads in the unit its option names for the event's type, as hds-forms-js shows it beside

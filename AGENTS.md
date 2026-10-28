@@ -158,6 +158,7 @@ an export to `ts/index.ts`, add a row here.**
 | `cmc`                                   | Namespace re-export of the `@pryv/cmc` SDK (consent-management contract). The HDS form-spec and scope helpers are `cmcFormSpec` / `cmcAppScope`. | [`docs/app-templates.md`](docs/app-templates.md)       |
 | `cmcFormSpec`, `cmcAppScope`, `cmcConstants` | Direct named re-exports — the most-reached-for CMC primitives without going through `cmc.*`.       | [`docs/app-templates.md`](docs/app-templates.md)       |
 | `cmcScope`                              | Sharing one type of data at a time: `stopSharingStream`, `shareStreamsAgain`, `listSharingNotes`, `planStopSharing`, `scopeDiff`. Extra fields ride in `content.hds` of `consent/scope-update-cmc`; answers to a connection's request go through `cmc.acceptScopeUpdate` / `refuseScopeUpdate`. | [`docs/app-templates.md`](docs/app-templates.md) |
+| `appTemplates.legacyChatStreams`, `legacyChatSource`, `legacyChatMessages`, `LEGACY_CHAT_TYPE` (also on `Contact`) | Read-only access to a contact's pre-CMC chat (`message/hds-chat-v1` in `chat-<remoteUsername>` / `chat-<remoteUsername>-in`), with direction. `chatEventInfos` only knows CMC streams. | [`docs/app-templates.md`](docs/app-templates.md) |
 | `appTemplates.dataName`, `appTemplates.permissionView` | Name shared data / a requested permission from the data model (never from the requester's label alone), with level and warning flags, for invitation and sharing screens. | [`docs/app-templates.md`](docs/app-templates.md) |
 
 **Cross-cutting**

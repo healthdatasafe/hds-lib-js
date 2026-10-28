@@ -584,6 +584,26 @@ appTemplates.Contact.cmcDetectKind(appCode);
 
 Call `initStreamCache` before `eventIsAccessible`; until then a person contact sees nothing.
 
+### Pre-CMC chat (read-only)
+
+Chat written before the June 2026 switch to CMC is still in the accounts as `message/hds-chat-v1` events
+(data-model `appStreams` `chat`; the content is the text) in two streams named after the contact's account:
+`chat-<remoteUsername>` (what the person wrote) and `chat-<remoteUsername>-in` (what the contact wrote). The CMC
+migration did not move them, and `chatEventInfos` only knows the CMC chat streams, so they need their own reader:
+
+```javascript
+contact.legacyChatStreams;              // { outgoing: 'chat-drandy', incoming: 'chat-drandy-in' }, null without remoteUsername
+contact.legacyChatSource(event);        // 'me' | 'contact' | 'unknown'
+contact.legacyChatMessages(events);     // [{ id, text, time, fromContact }], oldest first
+```
+
+The same functions take the username as first argument at `appTemplates.legacyChatStreams(username)`,
+`appTemplates.legacyChatSource(event, username)` and `appTemplates.legacyChatMessages(username, events)`;
+`appTemplates.LEGACY_CHAT_TYPE` is the eventType. The stream gives the direction (each side could only write its own
+stream). Trashed events, empty texts and non-text contents are left out. Nothing is written or migrated: show them
+read-only, e.g. as "Earlier messages" above the CMC thread. Query the events with the two stream ids above and
+`types: [LEGACY_CHAT_TYPE]`.
+
 ---
 
 ## AppTemplate JSON
