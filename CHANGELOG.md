@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.25.0] - 2026-10-28
 
 ### Added
 - **Temperature shift and coverline** (`utils/temperatureShift.ts`, data-model 3.24.0): the basal-temperature
