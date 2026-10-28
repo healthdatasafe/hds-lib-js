@@ -65,6 +65,8 @@ export interface TemperatureRuleDef {
 export interface DimensionStop {
   value: number;
   label: I18nString;
+  /** Display colour of the stop (data-model 3.20.0, mood valence); display only. */
+  color?: string;
 }
 
 /** Dimension definition */

@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.27.0] - 2026-10-28
+
+### Added
+- **`formatEventDate(event, options?)` honours partial dates** (site-agents#26, data-model
+  `documentation/PARTIAL-DATES.md`): given an event instead of a timestamp, it reads `clientData.hdsTimePrecision`
+  in UTC. `day` gives the date, `month` "March 1999" (localized, the month alone with `year: false`), `year` "1997",
+  `approx` "about" + `hdsTimeText` ("about spring 1998", else "about" + the year), and `minute` with a known
+  `hdsTimeZone` the day in that zone. With no precision, or an unknown one, an event reads as its timestamp. The
+  2.20 options `{ year, weekday, locale }` are kept, and a plain timestamp gives the same output as before.
+  `eventToShortText` passes the event for date and checkbox items whose time is the value, so a partial date shows
+  no time of day. New exported type `EventDateSource`. Tests `[FEDP1]`-`[FEDP7]`, `[EST7D6]`, `[EST16a3]`.
+- **`DimensionStop.color?: string`** (B-2026-10-28-34): the colour data-model 3.20.0 added on the mood valence stops,
+  now typed.
+
+### Fixed
+- **`formatEventDate` without a date format shows the local day** (B-2026-10-28-33): the fallback was the ISO date in
+  UTC while the time shown beside it is local, so an entry made shortly after local midnight read the previous day.
+  It now takes the local calendar day, as it already did with a date format. Test `[FED1b]`. The `[FED]` and
+  `[EST7D]` fixtures are anchored at local noon, so the suite passes in every time zone (it failed east of UTC+12).
+
 ## [2.26.0] - 2026-10-28
 
 ### Added
