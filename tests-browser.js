@@ -22068,7 +22068,10 @@ exports.getOrCreateBridgeAccess = getOrCreateBridgeAccess;
 exports.ensureBridgeAccess = ensureBridgeAccess;
 const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const StreamsTools_ts_1 = __webpack_require__(/*! ../toolkit/StreamsTools.js */ "./ts/toolkit/StreamsTools.ts");
+const offerStreams_ts_1 = __webpack_require__(/*! ./offerStreams.js */ "./ts/appTemplates/offerStreams.ts");
 /**
  * Get or create a bridge access on a user's account.
  * Looks up by name; if found, returns existing. If not, creates new.
@@ -22175,11 +22178,94 @@ async function ensureModelStreamHierarchy(connection, permissions) {
     }
 }
 /**
+ * Create, on the user's own (personal) connection, every stream the permissions
+ * name that the account does not have yet: what `accesses.create` does through
+ * `defaultName`, and `accesses.update` does not.
+ *
+ * Without it, an access updated to a grant on a new stream points at nothing: the
+ * update succeeds (the server does not check the stream exists), then the bridge,
+ * whose scoped access cannot create a root stream, fails to provision its tree.
+ *
+ * - A stream the data model knows is created with its model chain, root-first, with
+ *   the model's names and parents (`offerStreamsToCreate`), never as a flat
+ *   `defaultName` copy. Existing streams, model or not, are left untouched.
+ * - Any other stream is created at root, named by the permission's `defaultName`, as
+ *   `accesses.create` would. Without a `defaultName` it is not created, as
+ *   `accesses.create` would not; nor are `*` and store-prefixed (`:…`) ids.
+ * - Idempotent: `item-already-exists` (for instance a trashed stream, which
+ *   `streams.get` does not list) is fine.
+ *
+ * Throws an `HDSLibError` naming each stream that could not be created, so the
+ * caller does not update an access its bridge cannot use.
+ */
+async function ensurePermissionStreams(connection, accessName, permissions) {
+    const granted = permissions.filter((p) => typeof p?.streamId === 'string' && p.streamId !== '*' && !p.streamId.startsWith(':'));
+    if (granted.length === 0)
+        return;
+    const roots = await connection.apiOne('streams.get', {}, 'streams');
+    const existing = new Set();
+    for (const s of (0, StreamsTools_ts_1.allStreamsAndChildren)(roots ?? []))
+        existing.add(s.id);
+    if (granted.every((p) => existing.has(p.streamId)))
+        return;
+    let modelStreams = null;
+    try {
+        modelStreams = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams;
+    }
+    catch (e) {
+        logger.warn(`ensureBridgeAccess: model not loaded, creating every missing stream from defaultName: ${e?.message ?? e}`);
+    }
+    const defaultNames = new Map(granted.map((p) => [p.streamId, p.defaultName]));
+    const missing = granted.filter((p) => !existing.has(p.streamId));
+    const wanted = modelStreams != null
+        ? (0, offerStreams_ts_1.offerStreamsToCreate)(missing, modelStreams)
+        : missing.map((p) => ({ id: p.streamId, name: p.streamId }));
+    const toCreate = [];
+    for (const s of wanted) {
+        if (existing.has(s.id))
+            continue;
+        if (modelStreams?.getDataById(s.id, false) != null) {
+            toCreate.push(s);
+            continue;
+        }
+        const defaultName = defaultNames.get(s.id);
+        if (defaultName == null)
+            continue;
+        toCreate.push({ id: s.id, name: defaultName });
+    }
+    if (toCreate.length === 0)
+        return;
+    let results;
+    try {
+        results = await connection.api(toCreate.map((s) => ({ method: 'streams.create', params: s })));
+    }
+    catch (e) {
+        throw new errors_ts_1.HDSLibError(`ensureBridgeAccess "${accessName}": could not create the streams ${toCreate.map((s) => s.id).join(', ')}, access not updated`, e);
+    }
+    const failures = [];
+    for (let i = 0; i < toCreate.length; i++) {
+        const r = results?.[i];
+        if (r?.stream != null || r?.error?.id === 'item-already-exists')
+            continue;
+        failures.push({ streamId: toCreate[i].id, error: r?.error ?? { id: 'unexpected-error', data: r } });
+    }
+    if (failures.length > 0) {
+        const list = failures.map((f) => `${f.streamId} (${f.error?.id}${f.error?.message != null ? ': ' + f.error.message : ''})`).join(', ');
+        throw new errors_ts_1.HDSLibError(`ensureBridgeAccess "${accessName}": could not create the stream(s) its permissions need, access not updated: ${list}`, { failures });
+    }
+    logger.info('Bridge access streams created', { name: accessName, streams: toCreate.map((s) => s.id) });
+}
+/**
  * Get or create a bridge access, with optional permission update detection.
  *
  * If the access exists and `updateIfDifferent` is set and permissions differ,
  * updates it in place via `accesses.update` (Plan 66). The access id becomes
  * composite (`<base>:<serial>`) but the token and apiEndpoint are preserved.
+ *
+ * With `updateIfDifferent`, the streams the permissions name are created first
+ * when the account lacks them (`accesses.update`, unlike `accesses.create`, does
+ * not create them) — also when the permissions already match, which is the state
+ * an earlier update to a new grant left behind.
  *
  * Server-side `clientData` merge means any pre-existing keys on the access
  * (notably `previousAccessIds` from the legacy delete+create era) are
@@ -22195,6 +22281,7 @@ async function ensureModelStreamHierarchy(connection, permissions) {
  */
 async function ensureBridgeAccess(connection, options) {
     let attempt = 0;
+    let streamsEnsured = false;
     while (true) {
         const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
         const existing = accesses.find((a) => a.name === options.name);
@@ -22213,6 +22300,10 @@ async function ensureBridgeAccess(connection, options) {
                 created: true,
                 updated: false
             };
+        }
+        if (options.updateIfDifferent && !streamsEnsured) {
+            await ensurePermissionStreams(connection, options.name, options.permissions);
+            streamsEnsured = true;
         }
         if (!options.updateIfDifferent || permissionsMatch(existing.permissions, options.permissions)) {
             return {
@@ -38478,6 +38569,305 @@ describe('[APRX] appTemplates Requests', function () {
 
 /***/ },
 
+/***/ "./tests/bridgeAccess.test.js"
+/*!************************************!*\
+  !*** ./tests/bridgeAccess.test.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/appTemplates/bridgeAccess.ts */ "./ts/appTemplates/bridgeAccess.ts");
+
+
+// We can't easily unit-test the API-calling functions without a real connection,
+// but we can test the exported types compile and the permissionsMatch logic indirectly.
+// The main integration test is in the bridge-mira tests.
+
+// Import to verify the module loads correctly
+
+
+describe('[BACC] Bridge Access helpers', function () {
+  it('[BA01] should export both helper functions', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof _ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.getOrCreateBridgeAccess, 'function');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof _ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess, 'function');
+  });
+
+  it('[BA02] should be importable from appTemplates', async () => {
+    const appTemplates = await Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! ../ts/appTemplates/appTemplates.ts */ "./ts/appTemplates/appTemplates.ts", 19));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof appTemplates.getOrCreateBridgeAccess, 'function');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof appTemplates.ensureBridgeAccess, 'function');
+    // recreateBridgeAccess was dropped in Plan 58 Phase 4b — accesses.update replaces delete+create.
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof appTemplates.recreateBridgeAccess, 'undefined');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [BAH] Model stream hierarchy created before the access is minted.
+//
+// Pryv's accesses.create auto-creates a permission's stream from `defaultName`,
+// but FLAT at root — so without this step a permission on `body-temperature-basal`
+// produced a root-level stream instead of body > body-temperature > …, and the
+// bridge could not repair it (its scoped access is `forbidden` on model parents).
+//
+// [BAH02] is the regression that matters: the streams MUST be emitted root-first.
+// `streams.create` calls inside one batch do not see each other, so a child sent
+// before its parent fails with `unknown-referenced-resource`. The first cut of this
+// fix iterated the parent chain backwards and did exactly that — `body` was created
+// while `body-temperature` and `body-temperature-basal` both failed.
+// ---------------------------------------------------------------------------
+describe('[BAH] Bridge access — model stream hierarchy', function () {
+  let HDSLib;
+
+  before(async function () {
+    HDSLib = await Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! ../ts/index.ts */ "./ts/index.ts", 19));
+    await HDSLib.initHDSModel();
+  });
+
+  /** Connection stub recording every API call; no network. */
+  function fakeConnection () {
+    const streamsCreated = [];
+    return {
+      streamsCreated,
+      async apiOne (method, params) {
+        if (method === 'accesses.get') return [];
+        if (method === 'accesses.create') {
+          return { id: 'acc-1', apiEndpoint: 'https://tok@user.example.com/', ...params };
+        }
+        throw new Error('unexpected apiOne: ' + method);
+      },
+      async api (calls) {
+        return calls.map((c) => {
+          streamsCreated.push(c.params);
+          return { stream: { id: c.params.id } };
+        });
+      }
+    };
+  }
+
+  it('[BAH01] creates the model parents for a permission streamId', async () => {
+    const conn = fakeConnection();
+    await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.getOrCreateBridgeAccess)(conn, {
+      name: 'bridge-tempdrop',
+      permissions: [
+        { streamId: 'bridge-tempdrop', defaultName: 'Tempdrop', level: 'manage' },
+        { streamId: 'body-temperature-basal', defaultName: 'Basal body temperature', level: 'manage' }
+      ]
+    });
+    const ids = conn.streamsCreated.map((s) => s.id);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ids.includes('body'), 'model parent `body` must be created');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ids.includes('body-temperature'), 'model parent `body-temperature` must be created');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ids.includes('body-temperature-basal'));
+    // A bridge's own home stream is not a model stream — left to defaultName.
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!ids.includes('bridge-tempdrop'), 'non-model streams are left to defaultName');
+  });
+
+  it('[BAH02] emits them ROOT-FIRST, so no child references a missing parent', async () => {
+    const conn = fakeConnection();
+    await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.getOrCreateBridgeAccess)(conn, {
+      name: 'bridge-tempdrop',
+      permissions: [{ streamId: 'body-temperature-basal', level: 'manage' }]
+    });
+    const ids = conn.streamsCreated.map((s) => s.id);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(ids, ['body', 'body-temperature', 'body-temperature-basal']);
+    // Every non-null parentId must already have been emitted earlier in the batch.
+    const emitted = new Set();
+    for (const s of conn.streamsCreated) {
+      if (s.parentId != null) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(emitted.has(s.parentId), `${s.id} references parent ${s.parentId} before it is created`);
+      }
+      emitted.add(s.id);
+    }
+  });
+
+  it('[BAH03] skips the whole step when no permission names a model stream', async () => {
+    const conn = fakeConnection();
+    await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.getOrCreateBridgeAccess)(conn, {
+      name: 'bridge-x',
+      permissions: [{ streamId: 'not-a-model-stream', defaultName: 'X', level: 'manage' }]
+    });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.streamsCreated.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [BAU] ensureBridgeAccess(updateIfDifferent) creates the streams an update grants.
+//
+// `accesses.update`, unlike `accesses.create`, does not create a permission's
+// stream from `defaultName`, and the server accepts a permission on a stream that
+// does not exist. So an access updated to a new grant (Cyclefeminin
+// `cyclefeminin-custom*` -> `app-cyclefeminin*`) pointed at nothing, and the
+// bridge, which cannot create a root stream, failed to provision its tree.
+// ---------------------------------------------------------------------------
+describe('[BAU] Bridge access update — missing permission streams', function () {
+  let HDSLib;
+
+  before(async function () {
+    HDSLib = await Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! ../ts/index.ts */ "./ts/index.ts", 19));
+    await HDSLib.initHDSModel();
+  });
+
+  /**
+   * Connection stub: one existing access, a stream tree, no network.
+   * `failIds` maps a stream id to the error its `streams.create` answers.
+   */
+  function fakeConnection ({ accessPermissions, streams, failIds = {} }) {
+    const calls = [];
+    const streamsCreated = [];
+    const updates = [];
+    return {
+      calls,
+      streamsCreated,
+      updates,
+      async apiOne (method) {
+        calls.push(method);
+        if (method === 'accesses.get') {
+          return [{ id: 'acc-1', name: 'bridge-x', apiEndpoint: 'https://tok@user.example.com/', permissions: accessPermissions }];
+        }
+        if (method === 'streams.get') return streams;
+        throw new Error('unexpected apiOne: ' + method);
+      },
+      async api (apiCalls) {
+        calls.push('api');
+        return apiCalls.map((c) => {
+          if (c.method !== 'streams.create') throw new Error('unexpected api: ' + c.method);
+          streamsCreated.push(c.params);
+          const error = failIds[c.params.id];
+          if (error != null) return { error };
+          return { stream: { id: c.params.id } };
+        });
+      },
+      async updateAccess (id, update) {
+        calls.push('updateAccess');
+        updates.push({ id, update });
+        return { id: id + ':1', apiEndpoint: 'https://tok@user.example.com/' };
+      }
+    };
+  }
+
+  const oldGrant = [{ streamId: 'cyclefeminin-custom', level: 'manage' }];
+  const newGrant = [
+    { streamId: 'app-x', defaultName: 'X (imported)', level: 'manage' },
+    { streamId: 'app-x-notes', defaultName: 'notes', level: 'manage' }
+  ];
+
+  it('[BAU01] creates a missing grant stream from defaultName, then updates the access', async () => {
+    const conn = fakeConnection({ accessPermissions: oldGrant, streams: [{ id: 'cyclefeminin-custom', children: [] }] });
+    const res = await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess)(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.streamsCreated, [
+      { id: 'app-x', name: 'X (imported)' },
+      { id: 'app-x-notes', name: 'notes' }
+    ]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(conn.calls.indexOf('api') < conn.calls.indexOf('updateAccess'), 'streams are created before the update');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.updates.length, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.updates[0].update.permissions, [
+      { streamId: 'app-x', level: 'manage' },
+      { streamId: 'app-x-notes', level: 'manage' }
+    ]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.updated, true);
+  });
+
+  it('[BAU02] also creates them when the permissions already match (left by an earlier update)', async () => {
+    const conn = fakeConnection({ accessPermissions: newGrant.map(({ streamId, level }) => ({ streamId, level })), streams: [] });
+    const res = await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess)(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.streamsCreated.map((s) => s.id), ['app-x', 'app-x-notes']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.updates.length, 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.updated, false);
+  });
+
+  it('[BAU03] no stream is created when all exist', async () => {
+    const conn = fakeConnection({
+      accessPermissions: oldGrant,
+      streams: [{ id: 'app-x', children: [{ id: 'app-x-notes', children: [] }] }]
+    });
+    await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess)(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.streamsCreated.length, 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.calls.includes('api'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.updates.length, 1);
+  });
+
+  it('[BAU04] without updateIfDifferent, streams are not even read', async () => {
+    const conn = fakeConnection({ accessPermissions: oldGrant, streams: [] });
+    await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess)(conn, { name: 'bridge-x', permissions: newGrant });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls, ['accesses.get']);
+  });
+
+  it('[BAU05] data-model streams: existing ones untouched, a missing one gets its model chain, never a flat defaultName copy', async () => {
+    const conn = fakeConnection({
+      accessPermissions: oldGrant,
+      streams: [
+        { id: 'body', children: [{ id: 'body-weight', children: [] }] }
+      ]
+    });
+    await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess)(conn, {
+      name: 'bridge-x',
+      permissions: [
+        { streamId: 'body-weight', defaultName: 'body-weight', level: 'manage' },
+        { streamId: 'body-temperature-basal', defaultName: 'body-temperature-basal', level: 'manage' }
+      ],
+      updateIfDifferent: true
+    });
+    const model = HDSLib.getHDSModel().streams;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(model.getDataById('body-weight', false) != null, 'body-weight is a model stream');
+    const ids = conn.streamsCreated.map((s) => s.id);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(ids, ['body-temperature', 'body-temperature-basal'], 'only the missing part of the model chain, root-first');
+    for (const s of conn.streamsCreated) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(s.parentId, model.getDataById(s.id).parentId, `${s.id} keeps its model parent`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(s.name, s.id, `${s.id} gets the model name, not the defaultName`);
+    }
+  });
+
+  it('[BAU06] skips `*`, store-prefixed ids, feature permissions and non-model streams without defaultName', async () => {
+    const conn = fakeConnection({ accessPermissions: oldGrant, streams: [] });
+    await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess)(conn, {
+      name: 'bridge-x',
+      permissions: [
+        { streamId: '*', level: 'read' },
+        { streamId: ':_cmc:inbox', level: 'contribute' },
+        { streamId: 'no-default-name', level: 'manage' },
+        { feature: 'selfRevoke', setting: 'forbidden' }
+      ],
+      updateIfDifferent: true
+    });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.streamsCreated.length, 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.updates.length, 1);
+  });
+
+  it('[BAU07] an already-existing stream (e.g. trashed) is fine', async () => {
+    const conn = fakeConnection({
+      accessPermissions: oldGrant,
+      streams: [],
+      failIds: { 'app-x': { id: 'item-already-exists', message: 'exists' } }
+    });
+    await (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess)(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.updates.length, 1);
+  });
+
+  it('[BAU08] a stream that cannot be created is reported by id and error, and the access is not updated', async () => {
+    const conn = fakeConnection({
+      accessPermissions: oldGrant,
+      streams: [],
+      failIds: { 'app-x-notes': { id: 'forbidden', message: 'no root streams' } }
+    });
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+      (0,_ts_appTemplates_bridgeAccess_ts__WEBPACK_IMPORTED_MODULE_1__.ensureBridgeAccess)(conn, { name: 'bridge-x', permissions: newGrant, updateIfDifferent: true }),
+      (err) => {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(err instanceof HDSLib.HDSLibError, 'HDSLibError');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(err.message, /bridge-x/);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(err.message, /app-x-notes \(forbidden: no root streams\)/);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.doesNotMatch(err.message, /app-x \(/);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(err.innerObject.failures.map((f) => f.streamId), ['app-x-notes']);
+        return true;
+      }
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.updates.length, 0);
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/cmcScope.test.js"
 /*!********************************!*\
   !*** ./tests/cmcScope.test.js ***!
@@ -43367,31 +43757,33 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _accountPreferences_test_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./accountPreferences.test.js */ "./tests/accountPreferences.test.js");
 /* harmony import */ var _applicationClass_test_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./applicationClass.test.js */ "./tests/applicationClass.test.js");
 /* harmony import */ var _apptemplatesRequest_test_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./apptemplatesRequest.test.js */ "./tests/apptemplatesRequest.test.js");
-/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
-/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _bridgeAccess_test_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./bridgeAccess.test.js */ "./tests/bridgeAccess.test.js");
+/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
+/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
+
 
 
 
