@@ -16819,9 +16819,14 @@ exports.HDSDatasourceDef = HDSDatasourceDef;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSItemDef = void 0;
+exports.HDSItemDef = exports.ENTERABLE_ITEM_TYPES = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+/** Item types a form renders (data-model `entryType` + the structured types). Anything else is never offered. */
+exports.ENTERABLE_ITEM_TYPES = [
+    'number', 'text', 'select', 'checkbox', 'date', 'picture',
+    'composite', 'datasource-search', 'convertible', 'slider', 'multi-select'
+];
 class HDSItemDef {
     #data;
     #key;
@@ -16878,6 +16883,22 @@ class HDSItemDef {
      */
     get isAttachments() {
         return this.#data.type === 'attachments';
+    }
+    /**
+     * Whether this is an imported item (`type: imported`, data-model 3.27.0): an object written by an importer from a
+     * coded source (`lab-result/coded-v1`), never entered in a form. Read, shown and requested like any item (unlike
+     * `system`), but not offered in pickers or rendered as an editable form field.
+     */
+    get isImported() {
+        return this.#data.type === 'imported';
+    }
+    /**
+     * Whether a person enters this item field by field: its `type` is one a form renders. False for `system`,
+     * `attachments`, `imported` and any type this version does not know (a newer pack), so a picker never offers an
+     * item it cannot render.
+     */
+    get isEnterable() {
+        return exports.ENTERABLE_ITEM_TYPES.includes(this.#data.type);
     }
     get reminder() {
         return this.#data.reminder || null;
@@ -17672,13 +17693,29 @@ class HDSModelItemsDefs {
         return res;
     }
     /**
-     * get all non-deprecated itemDefs a person enters field by field (no system, no document item). Use this for any
-     * UI that lets a user pick an item to create new data points (form builders, item picker sheets, data-model
-     * browser default listing). Deprecated, system and document (`attachments`) items remain resolvable via `forKey`
-     * / `forEvent` so existing events still render.
+     * get all non-deprecated itemDefs a person enters field by field (`isEnterable`: no system, document or imported
+     * item, nor a type this version does not know). Use this for any UI that lets a user pick an item to create new
+     * data points (form builders, item picker sheets, data-model browser default listing). The others remain
+     * resolvable via `forKey` / `forEvent` so existing events still render.
      */
     getAllActive() {
-        return this.getAll().filter((itemDef) => !itemDef.isDeprecated && !itemDef.isSystem && !itemDef.isAttachments);
+        return this.getAll().filter((itemDef) => !itemDef.isDeprecated && itemDef.isEnterable);
+    }
+    /**
+     * The active item that asserts `code` in its `references.loinc`, or null. An item owns the LOINC codes it asserts
+     * (one owner per code, data-model `[LABC-LOINC-1]`), so a `lab-result/coded-v1` event carrying one belongs on that
+     * item (`checkLabResultCoded`).
+     */
+    forLoinc(code) {
+        for (const itemDef of this.getAll()) {
+            if (itemDef.isDeprecated)
+                continue;
+            const loinc = itemDef.data.references?.loinc;
+            const codes = Array.isArray(loinc) ? loinc : (loinc != null ? [loinc] : []);
+            if (codes.includes(code))
+                return itemDef;
+        }
+        return null;
     }
     /**
      * Every itemDef whose `streamId` is `streamId`, deprecated ones included.
@@ -18706,6 +18743,7 @@ const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndS
 // `preferred-display-*` keys). Account-level preferences go through the resolver.
 const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ../settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts"));
 const accountPreferences_ts_1 = __webpack_require__(/*! ../settings/accountPreferences.js */ "./ts/settings/accountPreferences.ts");
+const labResults_ts_1 = __webpack_require__(/*! ./labResults.js */ "./ts/HDSModel/labResults.ts");
 const DATE_SEPARATORS = {
     'DD.MM.YYYY': (p, year) => pad(p.d) + '.' + pad(p.m) + '.' + (year ? p.y : ''),
     'DD/MM/YYYY': (p, year) => pad(p.d) + '/' + pad(p.m) + (year ? '/' + p.y : ''),
@@ -18874,6 +18912,13 @@ function eventToShortTextWithOrigin(event) {
         if (bp)
             return { text: bp, origin: null };
     }
+    // A coded lab result carries its own analyte and unit: eventType-driven, so it reads the same with or without
+    // its `imported` item loaded ("HIV-1 RNA (viral load) < 20 copies/mL", "HBsAg: negative").
+    if (event.type === labResults_ts_1.LAB_RESULT_CODED) {
+        const lab = (0, labResults_ts_1.labResultCodedText)(content);
+        if (lab)
+            return { text: lab, origin: null };
+    }
     if (itemDef) {
         // For checkbox/date items, content may be null — the event time IS the data
         if (content == null && itemDef.data.type === 'checkbox') {
@@ -18928,8 +18973,8 @@ function formatWithItemDef(event, content, itemDef, model) {
         const display = itemDef.data?.number?.display;
         const optionUnit = variationUnitLabel(event.type, itemDef);
         if (display)
-            return formatNumberDisplay(event.type, content, display, model, optionUnit);
-        return formatNumber(event.type, content, model, optionUnit);
+            return withComparator(event, formatNumberDisplay(event.type, content, display, model, optionUnit));
+        return withComparator(event, formatNumber(event.type, content, model, optionUnit));
     }
     if (typeof content === 'string') {
         return content.length > 60 ? content.slice(0, 60) + '...' : content;
@@ -18940,9 +18985,19 @@ function formatWithItemDef(event, content, itemDef, model) {
     // Composite / object — try common fields
     return formatObject(content);
 }
+/**
+ * A printed limit reads with its comparator (`< 1.5 ng/mL`, `clientData.hdsComparator`, site-agents#22); an unknown
+ * comparator reads `?`, so the figure never shows as exact.
+ */
+function withComparator(event, text) {
+    const comparator = (0, labResults_ts_1.labComparatorOf)(event);
+    if (comparator == null)
+        return text;
+    return `${comparator === 'unknown' ? '?' : comparator} ${text}`;
+}
 function formatFallback(event, content, model) {
     if (typeof content === 'number') {
-        return formatNumber(event.type, content, model);
+        return withComparator(event, formatNumber(event.type, content, model));
     }
     if (typeof content === 'string') {
         if (event.type === 'date/iso-8601') {
@@ -19572,6 +19627,249 @@ function itemKeyOrDefToDef(model, keyOrDef) {
     if (keyOrDef instanceof HDSItemDef_ts_1.HDSItemDef)
         return keyOrDef;
     return model.itemsDefs.forKey(keyOrDef);
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/labResults.ts"
+/*!***********************************!*\
+  !*** ./ts/HDSModel/labResults.ts ***!
+  \***********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = void 0;
+exports.labComparatorOf = labComparatorOf;
+exports.isExactLabValue = isExactLabValue;
+exports.labUnitText = labUnitText;
+exports.labResultCodedText = labResultCodedText;
+exports.labValueToFhir = labValueToFhir;
+exports.labSeriesKey = labSeriesKey;
+exports.isValidLoincCode = isValidLoincCode;
+exports.checkLabResultCoded = checkLabResultCoded;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/**
+ * Lab results read the same way everywhere (data-model BLOOD-CHEMISTRY.md, site-agents#22 #28):
+ * - a numeric lab event may be a printed limit (`< 1.5`): `clientData.hdsComparator` on an item event,
+ *   `content.comparator` on `lab-result/coded-v1`. A reader never uses such a value as exact.
+ * - `lab-result/coded-v1` carries results with no item of their own, coded by LOINC in content, stored as printed
+ *   (UCUM `unit`, optional `unitText` as printed), never converted.
+ */
+exports.LAB_RESULT_CODED = 'lab-result/coded-v1';
+exports.LAB_COMPARATORS = ['<', '<=', '>', '>='];
+const LOINC_SYSTEM = 'http://loinc.org';
+const UCUM_SYSTEM = 'http://unitsofmeasure.org';
+/**
+ * The comparator of a numeric lab result: `content.comparator` on `lab-result/coded-v1` (`clientData.hdsComparator`
+ * ignored there), `clientData.hdsComparator` otherwise. `null` = exact; `'unknown'` = a comparator is present but not
+ * one of the four, so the value is not exact either.
+ */
+function labComparatorOf(event) {
+    if (event == null)
+        return null;
+    const raw = event.type === exports.LAB_RESULT_CODED ? event.content?.comparator : event.clientData?.hdsComparator;
+    if (raw == null)
+        return null;
+    return exports.LAB_COMPARATORS.includes(raw) ? raw : 'unknown';
+}
+/** True when the event holds a number that is an exact figure: charts and statistics use only those as exact. */
+function isExactLabValue(event) {
+    if (event == null || labComparatorOf(event) !== null)
+        return false;
+    const value = event.type === exports.LAB_RESULT_CODED ? event.content?.value : event.content;
+    return typeof value === 'number';
+}
+/**
+ * The unit of a coded result for display: `unitText` (as printed) when present, else the UCUM code made readable
+ * (`umol/L` → `µmol/L`, `{copies}/mL` → `copies/mL`, `[IU]/L` → `IU/L`, `10*9/L` → `10^9/L`, `Cel` → `°C`). An
+ * annotation on a unit is dropped (`mmol/mol{creat}` → `mmol/mol`); one standing alone keeps its text. Null for `1`.
+ */
+function labUnitText(content) {
+    if (typeof content?.unitText === 'string' && content.unitText.trim() !== '')
+        return content.unitText.trim();
+    const unit = content?.unit;
+    if (typeof unit !== 'string' || unit === '' || unit === '1')
+        return null;
+    if (unit === 'Cel')
+        return '°C';
+    return unit
+        .replace(/([A-Za-z\d\])])\{[^}]*\}/g, '$1')
+        .replace(/(^|[/.])u(?=[a-zA-Z[])/g, '$1µ')
+        .replace(/\{([^}]*)\}/g, '$1')
+        .replace(/[[\]]/g, '')
+        .replace(/10\*/g, '10^')
+        .replace(/_/g, ' ');
+}
+function analyteLabel(analyte) {
+    try {
+        const label = (0, localizeText_ts_1.localizeText)(analyte?.label);
+        if (label)
+            return label;
+    }
+    catch { /* a label without `en` is invalid content: fall back to the code */ }
+    const coding = Array.isArray(analyte?.codes) ? analyte.codes[0] : null;
+    return coding?.display || coding?.code || null;
+}
+/**
+ * Short text of a `lab-result/coded-v1` content: `HIV-1 RNA (viral load) < 20 copies/mL`, `HBsAg: negative`,
+ * `Rubella IgG 3.2 index (positive)`. An unknown comparator reads `?`.
+ */
+function labResultCodedText(content) {
+    if (content == null || typeof content !== 'object')
+        return null;
+    const label = analyteLabel(content.analyte);
+    const text = typeof content.valueText === 'string' && content.valueText !== '' ? content.valueText : null;
+    let figure = null;
+    if (typeof content.value === 'number') {
+        const comparator = labComparatorOf({ type: exports.LAB_RESULT_CODED, content });
+        const unit = labUnitText(content);
+        figure = (comparator == null ? '' : (comparator === 'unknown' ? '?' : comparator) + ' ') + content.value + (unit ? ' ' + unit : '');
+    }
+    if (figure != null) {
+        const full = text ? `${figure} (${text})` : figure;
+        return label ? `${label} ${full}` : full;
+    }
+    if (text != null)
+        return label ? `${label}: ${text}` : text;
+    return label;
+}
+/**
+ * FHIR `Observation.value[x]` of a lab event (an item event with a number, or `lab-result/coded-v1`), or null.
+ * The comparator is set only when the value is a limit; an unknown comparator gives no value at all (never an exact
+ * figure by mistake). An item event reads as it displays (`number.display`: HbA1c 0.057 → 5.7 %). UCUM `system` /
+ * `code` only on coded results: item eventTypes carry no UCUM code.
+ */
+function labValueToFhir(event, model = (0, HDSModelInitAndSingleton_ts_1.getModel)()) {
+    if (event == null)
+        return null;
+    const comparator = labComparatorOf(event);
+    if (comparator === 'unknown')
+        return null;
+    if (event.type === exports.LAB_RESULT_CODED) {
+        const c = event.content;
+        if (c == null || typeof c !== 'object')
+            return null;
+        const text = typeof c.valueText === 'string' ? c.valueText : null;
+        if (typeof c.value === 'number') {
+            const q = { value: c.value };
+            if (comparator)
+                q.comparator = comparator;
+            const unit = labUnitText(c);
+            if (unit)
+                q.unit = unit;
+            if (typeof c.unit === 'string') {
+                q.system = UCUM_SYSTEM;
+                q.code = c.unit;
+            }
+            return text ? { valueQuantity: q, note: text } : { valueQuantity: q };
+        }
+        if (Array.isArray(c.valueCodes) && c.valueCodes.length > 0) {
+            const coding = c.valueCodes.map(({ system, code, version, display }) => ({ system, code, ...(version ? { version } : {}), ...(display ? { display } : {}) }));
+            return { valueCodeableConcept: { coding, ...(text ? { text } : {}) } };
+        }
+        return text ? { valueString: text } : null;
+    }
+    if (typeof event.content !== 'number' || typeof event.type !== 'string')
+        return null;
+    const itemDef = model.itemsDefs.forEvent(event, false);
+    const display = itemDef?.data?.number?.display;
+    const multiplier = typeof display?.multiplier === 'number' ? display.multiplier : 1;
+    const q = { value: Number((event.content * multiplier).toPrecision(12)) };
+    if (comparator)
+        q.comparator = comparator;
+    const suffix = display?.suffix ? (0, localizeText_ts_1.localizeText)(display.suffix) : null;
+    const unit = suffix || (multiplier === 1 ? itemUnitLabel(event, itemDef, model) : null);
+    if (unit)
+        q.unit = unit;
+    return { valueQuantity: q };
+}
+/**
+ * The unit an item event reads in: its `concentration/*` variation option label (`ng/mL` on `ug-l`; other option
+ * labels are form words such as `Lbs`), else the eventType symbol.
+ */
+function itemUnitLabel(event, itemDef, model) {
+    if (event.type?.startsWith('concentration/')) {
+        const option = itemDef?.data?.variations?.eventType?.options?.find((o) => o?.value === event.type);
+        const label = option?.label == null ? null : (typeof option.label === 'string' ? option.label : (0, localizeText_ts_1.localizeText)(option.label));
+        if (label)
+            return label;
+    }
+    try {
+        return model.eventTypes.getEventTypeSymbol(event.type) || null;
+    }
+    catch {
+        return null;
+    }
+}
+function primaryCoding(content) {
+    const codes = Array.isArray(content?.analyte?.codes) ? content.analyte.codes : [];
+    return codes.find((c) => c?.system === LOINC_SYSTEM) ?? codes[0] ?? null;
+}
+/**
+ * Series identity, so a chart never merges two analytes of one coded stream nor two units of one analyte:
+ * `<itemKey>` for an item event (`<itemKey>|<eventType>` when the item offers several units: merging them is the
+ * caller's choice, through `unitConversions`), `<itemKey or streamId>|<system>|<code>|<unit>` for
+ * `lab-result/coded-v1` (its LOINC code first, else its first code). Null when the event resolves to nothing.
+ */
+function labSeriesKey(event, model = (0, HDSModelInitAndSingleton_ts_1.getModel)()) {
+    if (event == null)
+        return null;
+    const itemDef = model.itemsDefs.forEvent(event, false);
+    if (event.type !== exports.LAB_RESULT_CODED) {
+        if (itemDef == null)
+            return null;
+        return itemDef.eventTypes.length > 1 ? `${itemDef.key}|${event.type}` : itemDef.key;
+    }
+    const coding = primaryCoding(event.content);
+    if (coding == null)
+        return null;
+    const base = itemDef?.key ?? event.streamIds?.[0] ?? '';
+    return `${base}|${coding.system}|${coding.code}|${event.content?.unit ?? ''}`;
+}
+/** A LOINC code with a valid mod-10 check digit (`8867-4`). */
+function isValidLoincCode(code) {
+    if (typeof code !== 'string' || !/^\d{1,7}-\d$/.test(code))
+        return false;
+    const digits = code.replace('-', '');
+    let sum = 0;
+    for (let i = 0; i < digits.length; i++) {
+        let d = Number(digits[digits.length - 1 - i]);
+        if (i % 2 === 1) {
+            d *= 2;
+            if (d > 9)
+                d -= 9;
+        }
+        sum += d;
+    }
+    return sum % 10 === 0;
+}
+/**
+ * Model checks of a `lab-result/coded-v1` event the schema cannot make. All are warnings for the writer:
+ * `owned-by-item` (an item asserts this LOINC: the result belongs there, except the interim while the item lacks
+ * the printed unit, BLOOD-CHEMISTRY.md), `no-loinc` (no `http://loinc.org` code), `invalid-loinc` (bad check digit).
+ */
+function checkLabResultCoded(event, model = (0, HDSModelInitAndSingleton_ts_1.getModel)()) {
+    if (event?.type !== exports.LAB_RESULT_CODED)
+        return [];
+    const codes = Array.isArray(event.content?.analyte?.codes) ? event.content.analyte.codes : [];
+    const loincs = codes.filter((c) => c?.system === LOINC_SYSTEM).map((c) => c.code);
+    if (loincs.length === 0)
+        return [{ code: 'no-loinc' }];
+    const issues = [];
+    for (const loinc of loincs) {
+        if (!isValidLoincCode(loinc)) {
+            issues.push({ code: 'invalid-loinc', loinc });
+            continue;
+        }
+        const owner = model.itemsDefs.forLoinc(loinc);
+        if (owner)
+            issues.push({ code: 'owned-by-item', itemKey: owner.key, loinc });
+    }
+    return issues;
 }
 
 
@@ -25714,8 +26012,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.cmcScope = exports.cmcDataExport = void 0;
+exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -25757,6 +26055,19 @@ const eventToShortText_ts_1 = __webpack_require__(/*! ./HDSModel/eventToShortTex
 Object.defineProperty(exports, "eventToShortText", ({ enumerable: true, get: function () { return eventToShortText_ts_1.eventToShortText; } }));
 Object.defineProperty(exports, "eventToShortTextWithOrigin", ({ enumerable: true, get: function () { return eventToShortText_ts_1.eventToShortTextWithOrigin; } }));
 Object.defineProperty(exports, "formatEventDate", ({ enumerable: true, get: function () { return eventToShortText_ts_1.formatEventDate; } }));
+const labResults_ts_1 = __webpack_require__(/*! ./HDSModel/labResults.js */ "./ts/HDSModel/labResults.ts");
+Object.defineProperty(exports, "LAB_RESULT_CODED", ({ enumerable: true, get: function () { return labResults_ts_1.LAB_RESULT_CODED; } }));
+Object.defineProperty(exports, "LAB_COMPARATORS", ({ enumerable: true, get: function () { return labResults_ts_1.LAB_COMPARATORS; } }));
+Object.defineProperty(exports, "labComparatorOf", ({ enumerable: true, get: function () { return labResults_ts_1.labComparatorOf; } }));
+Object.defineProperty(exports, "isExactLabValue", ({ enumerable: true, get: function () { return labResults_ts_1.isExactLabValue; } }));
+Object.defineProperty(exports, "labUnitText", ({ enumerable: true, get: function () { return labResults_ts_1.labUnitText; } }));
+Object.defineProperty(exports, "labResultCodedText", ({ enumerable: true, get: function () { return labResults_ts_1.labResultCodedText; } }));
+Object.defineProperty(exports, "labValueToFhir", ({ enumerable: true, get: function () { return labResults_ts_1.labValueToFhir; } }));
+Object.defineProperty(exports, "labSeriesKey", ({ enumerable: true, get: function () { return labResults_ts_1.labSeriesKey; } }));
+Object.defineProperty(exports, "isValidLoincCode", ({ enumerable: true, get: function () { return labResults_ts_1.isValidLoincCode; } }));
+Object.defineProperty(exports, "checkLabResultCoded", ({ enumerable: true, get: function () { return labResults_ts_1.checkLabResultCoded; } }));
+const HDSItemDef_ts_1 = __webpack_require__(/*! ./HDSModel/HDSItemDef.js */ "./ts/HDSModel/HDSItemDef.ts");
+Object.defineProperty(exports, "ENTERABLE_ITEM_TYPES", ({ enumerable: true, get: function () { return HDSItemDef_ts_1.ENTERABLE_ITEM_TYPES; } }));
 const MonitorScope_ts_1 = __webpack_require__(/*! ./MonitorScope.js */ "./ts/MonitorScope.ts");
 Object.defineProperty(exports, "MonitorScope", ({ enumerable: true, get: function () { return MonitorScope_ts_1.MonitorScope; } }));
 const HDSSettings_ts_1 = __webpack_require__(/*! ./settings/HDSSettings.js */ "./ts/settings/HDSSettings.ts");
@@ -25829,6 +26140,17 @@ const HDSLib = {
     eventToShortText: eventToShortText_ts_1.eventToShortText,
     eventToShortTextWithOrigin: eventToShortText_ts_1.eventToShortTextWithOrigin,
     formatEventDate: eventToShortText_ts_1.formatEventDate,
+    LAB_RESULT_CODED: labResults_ts_1.LAB_RESULT_CODED,
+    LAB_COMPARATORS: labResults_ts_1.LAB_COMPARATORS,
+    labComparatorOf: labResults_ts_1.labComparatorOf,
+    isExactLabValue: labResults_ts_1.isExactLabValue,
+    labUnitText: labResults_ts_1.labUnitText,
+    labResultCodedText: labResults_ts_1.labResultCodedText,
+    labValueToFhir: labResults_ts_1.labValueToFhir,
+    labSeriesKey: labResults_ts_1.labSeriesKey,
+    isValidLoincCode: labResults_ts_1.isValidLoincCode,
+    checkLabResultCoded: labResults_ts_1.checkLabResultCoded,
+    ENTERABLE_ITEM_TYPES: HDSItemDef_ts_1.ENTERABLE_ITEM_TYPES,
     MonitorScope: MonitorScope_ts_1.MonitorScope,
     HDSSettings: HDSSettings_ts_1.HDSSettings,
     SETTING_TYPES: HDSSettings_ts_1.SETTING_TYPES,
