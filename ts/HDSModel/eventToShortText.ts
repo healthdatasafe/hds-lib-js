@@ -52,18 +52,84 @@ function formatDayParts (p: DayParts, fmt: DateFormat | null, opts: FormatEventD
   return name ? name + ' ' + text : text;
 }
 
+/** The part of an event `formatEventDate` reads: its time and the partial-date keys of its `clientData`. */
+export interface EventDateSource {
+  time: number;
+  clientData?: {
+    /** data-model `documentation/PARTIAL-DATES.md`: `minute`, `day`, `month`, `year` or `approx`. */
+    hdsTimePrecision?: string;
+    /** The date as the source wrote it; shown after "about" for `approx`. */
+    hdsTimeText?: string;
+    /** IANA zone of an exact (`minute`) time. */
+    hdsTimeZone?: string;
+    [key: string]: unknown;
+  } | null;
+}
+
+const ABOUT = { en: 'about', fr: 'vers', es: 'hacia' };
+
+/** Calendar day of `d` in an IANA zone, or null when the zone is unknown. */
+function dayPartsInZone (d: Date, timeZone: string): DayParts | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(d);
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    return { y: get('year'), m: get('month'), d: get('day') };
+  } catch {
+    return null;
+  }
+}
+
+function utcDayParts (d: Date): DayParts {
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+}
+
 /**
- * Format a Unix timestamp (seconds) as a date string.
- * Uses the resolved account/app dateFormat when available (local calendar day), otherwise the ISO date (UTC).
+ * Format an event's date, or a Unix timestamp (seconds), as a date string: the local calendar day, in the resolved
+ * account/app dateFormat when available, otherwise as an ISO date.
  * `opts.year: false` leaves the year out, `opts.weekday: true` puts the short weekday name first.
+ *
+ * Given an event, honours its partial date (data-model `PARTIAL-DATES.md`, `clientData.hdsTimePrecision`), read in
+ * UTC: `day` the date, `month` "March 1999", `year` "1997" (`opts.year` ignored), `approx` "about spring 1998" from
+ * `hdsTimeText` (else "about 1998"); `minute` with `hdsTimeZone` takes the day in that zone. Without a precision, or
+ * with an unknown one, the event's date reads as its timestamp's.
  */
-export function formatEventDate (timeSec: number, opts: FormatEventDateOptions = {}): string {
+export function formatEventDate (timeOrEvent: number | EventDateSource, opts: FormatEventDateOptions = {}): string {
+  const timeSec = typeof timeOrEvent === 'number' ? timeOrEvent : timeOrEvent.time;
+  const clientData = typeof timeOrEvent === 'number' ? null : timeOrEvent.clientData;
   const d = new Date(timeSec * 1000);
   const fmt = resolvedDateFormat();
-  const parts: DayParts = fmt
-    ? { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() }
-    : { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+  const locale = opts.locale ?? getPreferredLocales()[0] ?? 'en';
+  switch (clientData?.hdsTimePrecision) {
+    case 'day':
+      return formatDayParts(utcDayParts(d), fmt, opts);
+    case 'month':
+      return formatMonth(d, locale, opts.year !== false);
+    case 'year':
+      return String(d.getUTCFullYear());
+    case 'approx': {
+      const text = typeof clientData.hdsTimeText === 'string' && clientData.hdsTimeText.trim() !== ''
+        ? clientData.hdsTimeText.trim()
+        : String(d.getUTCFullYear());
+      return (localizeText(ABOUT) || ABOUT.en) + ' ' + text;
+    }
+    case 'minute': {
+      const zoned = typeof clientData.hdsTimeZone === 'string' ? dayPartsInZone(d, clientData.hdsTimeZone) : null;
+      if (zoned) return formatDayParts(zoned, fmt, opts);
+    }
+  }
+  // The local calendar day, with or without a date format: the time shown beside it is local (B-2026-10-28-33).
+  const parts: DayParts = { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
   return formatDayParts(parts, fmt, opts);
+}
+
+/** "March 1999" (or "March" without the year) in `locale`, read in UTC; the ISO `1999-03` for an unknown locale. */
+function formatMonth (d: Date, locale: string, year: boolean): string {
+  try {
+    return new Intl.DateTimeFormat(locale, { month: 'long', ...(year ? { year: 'numeric' } : {}), timeZone: 'UTC' }).format(d);
+  } catch {
+    const m = pad(d.getUTCMonth() + 1);
+    return year ? d.getUTCFullYear() + '-' + m : m;
+  }
 }
 
 /**
@@ -81,16 +147,21 @@ function formatContentDate (content: unknown): string | null {
 }
 
 /**
- * Format a Unix timestamp (seconds) as a date + time string.
- * Used for checkbox events where the event time IS the data.
+ * Format an event's time as a date + time string.
+ * Used for checkbox events where the event time IS the data. A partial date (`hdsTimePrecision` other than
+ * `minute`) has no time of day: its date only.
  */
-export function formatEventDateTime (timeSec: number): string {
-  const d = new Date(timeSec * 1000);
+export function formatEventDateTime (event: EventDateSource): string {
+  const precision = event.clientData?.hdsTimePrecision;
+  if (precision === 'day' || precision === 'month' || precision === 'year' || precision === 'approx') {
+    return formatEventDate(event);
+  }
+  const d = new Date(event.time * 1000);
   const hours = d.getHours();
   const minutes = d.getMinutes();
   // If time is midnight (00:00), show date only — likely no meaningful time
-  if (hours === 0 && minutes === 0) return formatEventDate(timeSec);
-  return formatEventDate(timeSec) + ' ' + pad(hours) + ':' + pad(minutes);
+  if (hours === 0 && minutes === 0) return formatEventDate(event);
+  return formatEventDate(event) + ' ' + pad(hours) + ':' + pad(minutes);
 }
 
 /**
@@ -165,10 +236,10 @@ export function eventToShortTextWithOrigin (event: any): ShortTextResult {
   if (itemDef) {
     // For checkbox/date items, content may be null — the event time IS the data
     if (content == null && itemDef.data.type === 'checkbox') {
-      return { text: formatEventDateTime(event.time), origin: null };
+      return { text: formatEventDateTime(event), origin: null };
     }
     if (content == null && itemDef.data.type === 'date') {
-      return { text: formatEventDate(event.time), origin: null };
+      return { text: formatEventDate(event), origin: null };
     }
     // A document: its title (`file/xds-v1`), else the name of its first file (`file/attached` has no content)
     if (itemDef.data.type === 'attachments') {
@@ -203,7 +274,7 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
   if (type === 'date') {
     // A date stored as the value (`date/iso-8601`, the date of birth) is the data; otherwise the
     // event's own time is (B-2026-10-26-6: the entry time was shown instead of the stored date).
-    return formatContentDate(content) ?? formatEventDate(event.time);
+    return formatContentDate(content) ?? formatEventDate(event);
   }
 
   if (type === 'datasource-search') {

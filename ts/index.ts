@@ -30,7 +30,7 @@ import * as cmcConstants from './cmc/constants.ts';
 import * as cmcDataExport from './cmc/dataExport.ts';
 import * as cmcScope from './cmc/scope.ts';
 export type { Localizable, localizableText } from './localizeText.ts';
-export type { FormatEventDateOptions, ShortTextOrigin, ShortTextResult } from './HDSModel/eventToShortText.ts';
+export type { FormatEventDateOptions, EventDateSource, ShortTextOrigin, ShortTextResult } from './HDSModel/eventToShortText.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';

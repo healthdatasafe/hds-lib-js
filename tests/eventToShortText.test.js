@@ -222,8 +222,8 @@ describe('[ESTX] eventToShortText', () => {
 
     const dobEvent = () => {
       const itemDef = model.itemsDefs.forKey('profile-date-of-birth');
-      // entered on 2024-01-15, born on 1990-04-12
-      return { content: '1990-04-12', streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0], time: 1705320000 };
+      // entered on 2024-01-15 (local noon, the 15th in every zone), born on 1990-04-12
+      return { content: '1990-04-12', streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0], time: new Date(2024, 0, 15, 12).getTime() / 1000 };
     };
 
     it('[EST7D1] the stored date, not the entry time', () => {
@@ -248,6 +248,12 @@ describe('[ESTX] eventToShortText', () => {
     it('[EST7D5] without an itemDef, a date/iso-8601 string is formatted too', () => {
       HDSSettings._testInject('dateFormat', 'DD/MM/YYYY');
       assert.equal(eventToShortText({ content: '2001-02-03', streamIds: ['not-a-model-stream'], type: 'date/iso-8601', time: 1705320000 }), '03/02/2001');
+    });
+
+    it('[EST7D6] no stored date: the event time honours a partial date (site-agents#26)', () => {
+      // 1999-03-01T12:00:00Z, known to the month
+      const partial = { ...dobEvent(), content: null, time: 920289600, clientData: { hdsTimePrecision: 'month' } };
+      assert.equal(eventToShortText(partial), 'March 1999');
     });
   });
 
@@ -337,6 +343,12 @@ describe('[ESTX] eventToShortText', () => {
     const result = eventToShortText(event);
     assert.ok(result, 'Should return a date string');
     assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(result), `Expected date only, got: ${result}`);
+  });
+
+  it('[EST16a3] checkbox with a partial date has no time of day (site-agents#26)', () => {
+    const base = { content: null, streamIds: ['fertility-cycles-start'], type: 'activity/plain', time: 920289600 };
+    assert.equal(eventToShortText({ ...base, clientData: { hdsTimePrecision: 'year' } }), '1999');
+    assert.equal(eventToShortText({ ...base, clientData: { hdsTimePrecision: 'day' } }), '1999-03-01');
   });
 
   it('[EST16b] medication with plain string label (not i18n object)', () => {

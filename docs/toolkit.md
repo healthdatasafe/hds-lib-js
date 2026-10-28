@@ -117,12 +117,27 @@ const { text, origin } = eventToShortTextWithOrigin(event);
 `origin` is null for non-convertible items. `targetKey` / `targetName` / `match` are null when the value is shown as
 recorded; `match` is 0-100 (the text leaves it out at 100).
 
-### formatEventDate(timeSec, options?)
+### formatEventDate(eventOrTimeSec, options?)
 
-A day in the resolved date format (`resolveAccountPreference('dateFormat')`), else the ISO date.
+The local calendar day, in the resolved date format (`resolveAccountPreference('dateFormat')`), else as an ISO date.
 
 | Option | Default | Effect |
 |--------|---------|--------|
 | `year` | `true` | `false` leaves the year out: `15.01.`, `15/01`, `01/15`, `01-15` |
 | `weekday` | `false` | `true` puts the short weekday name first: `Mon 15.01.2024`, `lun. 15.01.` |
-| `locale` | first preferred locale | language of the weekday name |
+| `locale` | first preferred locale | language of the weekday and month names |
+
+Pass the event (anything with `time` and `clientData`) rather than `event.time` to honour a partial date (data-model
+`documentation/PARTIAL-DATES.md`, `clientData.hdsTimePrecision`), whose calendar fields are read in UTC:
+
+| `hdsTimePrecision` | Result |
+|--------------------|--------|
+| *(absent, unknown)* | as for the timestamp |
+| `minute` | the day in `hdsTimeZone` when it is a known IANA zone, else as for the timestamp |
+| `day` | the date, in the resolved format |
+| `month` | `March 1999`, `mars 1999`; `March` with `year: false` |
+| `year` | `1997` (`year: false` and `weekday` do not apply) |
+| `approx` | `about spring 1998` (`hdsTimeText`), else `about 1998` |
+
+`eventToShortText` passes the event, so a date or checkbox item whose time is the value reads the same way (a partial
+date shows no time of day).
