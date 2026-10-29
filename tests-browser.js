@@ -17702,17 +17702,18 @@ class HDSModelItemsDefs {
         return this.getAll().filter((itemDef) => !itemDef.isDeprecated && itemDef.isEnterable);
     }
     /**
-     * The active item that asserts `code` in its `references.loinc`, or null. An item owns the LOINC codes it asserts
-     * (one owner per code, data-model `[LABC-LOINC-1]`), so a `lab-result/coded-v1` event carrying one belongs on that
-     * item (`checkLabResultCoded`).
+     * The active item that asserts `code` in its `references.loinc` or `references.loincMethod` (method-specific codes,
+     * data-model 3.32.0), or null. An item owns the LOINC codes it asserts (one owner per code over both lists,
+     * data-model `[LABC-LOINC-1]`), so a `lab-result/coded-v1` event carrying one belongs on that item
+     * (`checkLabResultCoded`).
      */
     forLoinc(code) {
+        const asList = (codes) => Array.isArray(codes) ? codes : (codes != null ? [codes] : []);
         for (const itemDef of this.getAll()) {
             if (itemDef.isDeprecated)
                 continue;
-            const loinc = itemDef.data.references?.loinc;
-            const codes = Array.isArray(loinc) ? loinc : (loinc != null ? [loinc] : []);
-            if (codes.includes(code))
+            const refs = itemDef.data.references;
+            if (asList(refs?.loinc).includes(code) || asList(refs?.loincMethod).includes(code))
                 return itemDef;
         }
         return null;
@@ -19647,6 +19648,7 @@ exports.isExactLabValue = isExactLabValue;
 exports.labUnitText = labUnitText;
 exports.labResultCodedText = labResultCodedText;
 exports.labValueToFhir = labValueToFhir;
+exports.labLoincOf = labLoincOf;
 exports.labSeriesKey = labSeriesKey;
 exports.isValidLoincCode = isValidLoincCode;
 exports.checkLabResultCoded = checkLabResultCoded;
@@ -19804,6 +19806,32 @@ function itemUnitLabel(event, itemDef, model) {
     catch {
         return null;
     }
+}
+/**
+ * The LOINC code of a lab event, for FHIR `Observation.code`, or null. A `lab-result/coded-v1` event: its own LOINC
+ * code. An item event with unit options: the code its option states (`variations.eventType.options[].loinc`,
+ * data-model 3.32.0: mass and moles of one analyte are two codes; null for a unit LOINC has no code for). Never
+ * inherited from the item, so a unit without a stated code gives null, never the code of another property. An item
+ * with one unit: its code when it asserts exactly one. Owned-only codes (`references.loincMethod`) are never returned.
+ */
+function labLoincOf(event, model = (0, HDSModelInitAndSingleton_ts_1.getModel)()) {
+    if (event == null || typeof event.type !== 'string')
+        return null;
+    if (event.type === exports.LAB_RESULT_CODED) {
+        const coding = primaryCoding(event.content);
+        return coding?.system === LOINC_SYSTEM ? coding.code : null;
+    }
+    const itemDef = model.itemsDefs.forEvent(event, false);
+    if (itemDef == null)
+        return null;
+    const options = itemDef.data?.variations?.eventType?.options ?? [];
+    if (options.length > 0) {
+        const code = options.find((o) => o?.value === event.type)?.loinc;
+        return typeof code === 'string' ? code : null;
+    }
+    const loinc = itemDef.data?.references?.loinc;
+    const codes = Array.isArray(loinc) ? loinc : (loinc != null ? [loinc] : []);
+    return codes.length === 1 ? codes[0] : null;
 }
 function primaryCoding(content) {
     const codes = Array.isArray(content?.analyte?.codes) ? content.analyte.codes : [];
@@ -26012,8 +26040,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = void 0;
+exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -26063,6 +26091,7 @@ Object.defineProperty(exports, "isExactLabValue", ({ enumerable: true, get: func
 Object.defineProperty(exports, "labUnitText", ({ enumerable: true, get: function () { return labResults_ts_1.labUnitText; } }));
 Object.defineProperty(exports, "labResultCodedText", ({ enumerable: true, get: function () { return labResults_ts_1.labResultCodedText; } }));
 Object.defineProperty(exports, "labValueToFhir", ({ enumerable: true, get: function () { return labResults_ts_1.labValueToFhir; } }));
+Object.defineProperty(exports, "labLoincOf", ({ enumerable: true, get: function () { return labResults_ts_1.labLoincOf; } }));
 Object.defineProperty(exports, "labSeriesKey", ({ enumerable: true, get: function () { return labResults_ts_1.labSeriesKey; } }));
 Object.defineProperty(exports, "isValidLoincCode", ({ enumerable: true, get: function () { return labResults_ts_1.isValidLoincCode; } }));
 Object.defineProperty(exports, "checkLabResultCoded", ({ enumerable: true, get: function () { return labResults_ts_1.checkLabResultCoded; } }));
@@ -26147,6 +26176,7 @@ const HDSLib = {
     labUnitText: labResults_ts_1.labUnitText,
     labResultCodedText: labResults_ts_1.labResultCodedText,
     labValueToFhir: labResults_ts_1.labValueToFhir,
+    labLoincOf: labResults_ts_1.labLoincOf,
     labSeriesKey: labResults_ts_1.labSeriesKey,
     isValidLoincCode: labResults_ts_1.isValidLoincCode,
     checkLabResultCoded: labResults_ts_1.checkLabResultCoded,
@@ -40593,11 +40623,11 @@ describe('[ESTX] eventToShortText', () => {
       return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
     };
 
-    // AMH and vitamin D dropped their suffix in data-model 3.21.0 (unit variations); ferritin and
-    // C-peptide still declare one.
-    it('[EST27a] a suffix replaces the eventType symbol (ferritin, C-peptide: ng/mL over µg/L)', () => {
+    // AMH and vitamin D dropped their suffix in data-model 3.21.0 (unit variations), C-peptide in 3.30.0;
+    // ferritin still declares one. C-peptide reads ng/mL either way (suffix before 3.30.0, option label after).
+    it('[EST27a] ng/mL over µg/L: ferritin by its suffix, C-peptide by its suffix or (3.30.0+) its option label', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-ferritin', 2.1)), '2.1 ng/mL');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ev('body-blood-serum-c-peptide', 30)), '30 ng/mL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ content: 30, streamIds: ['body-blood-serum-c-peptide'], type: 'concentration/ug-l' }), '30 ng/mL');
     });
 
     it('[EST27b] sperm concentration reads 10⁶/mL, not the G/L symbol of concentration/megacount-ml', () => {
