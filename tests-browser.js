@@ -18969,6 +18969,10 @@ function formatWithItemDef(event, content, itemDef, model) {
     if (type === 'composite') {
         return formatComposite(content, itemDef);
     }
+    // A number item on `ratio/generic` (INR, data-model 3.33.0) stores `{ value, relativeTo }` and reads as its value
+    if (type === 'number' && event.type === 'ratio/generic' && typeof content?.value === 'number') {
+        content = content.value;
+    }
     // number, text, composite, etc.
     if (typeof content === 'number') {
         const display = itemDef.data?.number?.display;
@@ -19644,6 +19648,7 @@ function itemKeyOrDefToDef(model, keyOrDef) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = void 0;
 exports.labComparatorOf = labComparatorOf;
+exports.labNumberOf = labNumberOf;
 exports.isExactLabValue = isExactLabValue;
 exports.labUnitText = labUnitText;
 exports.labResultCodedText = labResultCodedText;
@@ -19665,6 +19670,9 @@ exports.LAB_RESULT_CODED = 'lab-result/coded-v1';
 exports.LAB_COMPARATORS = ['<', '<=', '>', '>='];
 const LOINC_SYSTEM = 'http://loinc.org';
 const UCUM_SYSTEM = 'http://unitsofmeasure.org';
+const RATIO_GENERIC = 'ratio/generic';
+/** UCUM code of a number `ratio/generic` item, by its LOINC code (FHIR lab examples code INR as `{INR}`). */
+const RATIO_UCUM_BY_LOINC = { '6301-6': '{INR}' };
 /**
  * The comparator of a numeric lab result: `content.comparator` on `lab-result/coded-v1` (`clientData.hdsComparator`
  * ignored there), `clientData.hdsComparator` otherwise. `null` = exact; `'unknown'` = a comparator is present but not
@@ -19678,12 +19686,26 @@ function labComparatorOf(event) {
         return null;
     return exports.LAB_COMPARATORS.includes(raw) ? raw : 'unknown';
 }
+/**
+ * The number a lab event holds, or null: `content.value` on `lab-result/coded-v1`, and on a `ratio/generic` object
+ * relative to 1 (a number item on it, data-model 3.33.0: INR stores `{ value: 2.5, relativeTo: 1 }`); else a numeric
+ * content. A `ratio/generic` over another denominator (a select's scale, `{ value: 4, relativeTo: 8 }`) is a
+ * numerator, not a lab figure: null.
+ */
+function labNumberOf(event) {
+    if (event == null)
+        return null;
+    if (event.type === RATIO_GENERIC && event.content?.relativeTo !== 1)
+        return null;
+    const objectContent = event.type === exports.LAB_RESULT_CODED || event.type === RATIO_GENERIC;
+    const value = objectContent ? event.content?.value : event.content;
+    return typeof value === 'number' ? value : null;
+}
 /** True when the event holds a number that is an exact figure: charts and statistics use only those as exact. */
 function isExactLabValue(event) {
     if (event == null || labComparatorOf(event) !== null)
         return false;
-    const value = event.type === exports.LAB_RESULT_CODED ? event.content?.value : event.content;
-    return typeof value === 'number';
+    return labNumberOf(event) !== null;
 }
 /**
  * The unit of a coded result for display: `unitText` (as printed) when present, else the UCUM code made readable
@@ -19743,7 +19765,9 @@ function labResultCodedText(content) {
  * FHIR `Observation.value[x]` of a lab event (an item event with a number, or `lab-result/coded-v1`), or null.
  * The comparator is set only when the value is a limit; an unknown comparator gives no value at all (never an exact
  * figure by mistake). An item event reads as it displays (`number.display`: HbA1c 0.057 → 5.7 %). UCUM `system` /
- * `code` only on coded results: item eventTypes carry no UCUM code.
+ * `code` only on coded results, item eventTypes carry no UCUM code; except a number item on `ratio/generic` (INR), a
+ * dimensionless ratio relative to 1: `{INR}` for INR, `1` for another. A select on `ratio/generic` (a scale) and a
+ * ratio over another denominator give null.
  */
 function labValueToFhir(event, model = (0, HDSModelInitAndSingleton_ts_1.getModel)()) {
     if (event == null)
@@ -19775,12 +19799,29 @@ function labValueToFhir(event, model = (0, HDSModelInitAndSingleton_ts_1.getMode
         }
         return text ? { valueString: text } : null;
     }
-    if (typeof event.content !== 'number' || typeof event.type !== 'string')
+    const value = labNumberOf(event);
+    if (value === null || typeof event.type !== 'string')
         return null;
     const itemDef = model.itemsDefs.forEvent(event, false);
+    if (event.type === RATIO_GENERIC) {
+        if (itemDef?.data?.type !== 'number')
+            return null;
+        const q = { value };
+        if (comparator)
+            q.comparator = comparator;
+        // labNumberOf gave a value, so the ratio is relative to 1: dimensionless, `{INR}` for INR
+        const loinc = labLoincOf(event, model);
+        const code = (loinc && RATIO_UCUM_BY_LOINC[loinc]) || '1';
+        const unit = labUnitText({ unit: code });
+        if (unit)
+            q.unit = unit;
+        q.system = UCUM_SYSTEM;
+        q.code = code;
+        return { valueQuantity: q };
+    }
     const display = itemDef?.data?.number?.display;
     const multiplier = typeof display?.multiplier === 'number' ? display.multiplier : 1;
-    const q = { value: Number((event.content * multiplier).toPrecision(12)) };
+    const q = { value: Number((value * multiplier).toPrecision(12)) };
     if (comparator)
         q.comparator = comparator;
     const suffix = display?.suffix ? (0, localizeText_ts_1.localizeText)(display.suffix) : null;
@@ -26040,8 +26081,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = void 0;
+exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -26088,6 +26129,7 @@ Object.defineProperty(exports, "LAB_RESULT_CODED", ({ enumerable: true, get: fun
 Object.defineProperty(exports, "LAB_COMPARATORS", ({ enumerable: true, get: function () { return labResults_ts_1.LAB_COMPARATORS; } }));
 Object.defineProperty(exports, "labComparatorOf", ({ enumerable: true, get: function () { return labResults_ts_1.labComparatorOf; } }));
 Object.defineProperty(exports, "isExactLabValue", ({ enumerable: true, get: function () { return labResults_ts_1.isExactLabValue; } }));
+Object.defineProperty(exports, "labNumberOf", ({ enumerable: true, get: function () { return labResults_ts_1.labNumberOf; } }));
 Object.defineProperty(exports, "labUnitText", ({ enumerable: true, get: function () { return labResults_ts_1.labUnitText; } }));
 Object.defineProperty(exports, "labResultCodedText", ({ enumerable: true, get: function () { return labResults_ts_1.labResultCodedText; } }));
 Object.defineProperty(exports, "labValueToFhir", ({ enumerable: true, get: function () { return labResults_ts_1.labValueToFhir; } }));
@@ -26173,6 +26215,7 @@ const HDSLib = {
     LAB_COMPARATORS: labResults_ts_1.LAB_COMPARATORS,
     labComparatorOf: labResults_ts_1.labComparatorOf,
     isExactLabValue: labResults_ts_1.isExactLabValue,
+    labNumberOf: labResults_ts_1.labNumberOf,
     labUnitText: labResults_ts_1.labUnitText,
     labResultCodedText: labResults_ts_1.labResultCodedText,
     labValueToFhir: labResults_ts_1.labValueToFhir,
