@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.29.0] - 2026-10-29
+
+### Added
+- **`labLoincOf(event)`** (site-agents#27, data-model 3.32.0): the LOINC code of a lab event, for FHIR
+  `Observation.code`. For an item event with unit options it is the code its option states
+  (`variations.eventType.options[].loinc`: mass and moles of one analyte are two codes), never inherited from the
+  item, so an option without a stated code gives `null`; for a one-unit item, its code when it asserts exactly one.
+  For a `lab-result/coded-v1` event it is its own LOINC code. Owned-only codes (`loincMethod`) are never returned.
+
+### Changed
+- `itemsDefs.forLoinc(code)` also reads `references.loincMethod` (method-specific codes such as "… by Automated
+  count", data-model 3.32.0), so `checkLabResultCoded` reports `owned-by-item` for a result coded with one.
+
+### Tests
+- `[EST27a]` C-peptide reads ng/mL with or without its unit variation (data-model 3.30.0).
+- `[LABR-5c]` method codes and per-option codes, on a fixture model.
+
 ## [2.28.0] - 2026-10-28
 
 ### Added
