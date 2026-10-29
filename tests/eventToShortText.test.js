@@ -44,11 +44,11 @@ describe('[ESTX] eventToShortText', () => {
       return { content, streamIds: [itemDef.data.streamId], type: itemDef.eventTypes[0] };
     };
 
-    // AMH and vitamin D dropped their suffix in data-model 3.21.0 (unit variations); ferritin and
-    // C-peptide still declare one.
-    it('[EST27a] a suffix replaces the eventType symbol (ferritin, C-peptide: ng/mL over µg/L)', () => {
+    // AMH and vitamin D dropped their suffix in data-model 3.21.0 (unit variations), C-peptide in 3.30.0;
+    // ferritin still declares one. C-peptide reads ng/mL either way (suffix before 3.30.0, option label after).
+    it('[EST27a] ng/mL over µg/L: ferritin by its suffix, C-peptide by its suffix or (3.30.0+) its option label', () => {
       assert.equal(eventToShortText(ev('body-blood-serum-ferritin', 2.1)), '2.1 ng/mL');
-      assert.equal(eventToShortText(ev('body-blood-serum-c-peptide', 30)), '30 ng/mL');
+      assert.equal(eventToShortText({ content: 30, streamIds: ['body-blood-serum-c-peptide'], type: 'concentration/ug-l' }), '30 ng/mL');
     });
 
     it('[EST27b] sperm concentration reads 10⁶/mL, not the G/L symbol of concentration/megacount-ml', () => {
