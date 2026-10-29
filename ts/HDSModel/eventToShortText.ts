@@ -297,6 +297,11 @@ function formatWithItemDef (event: any, content: any, itemDef: any, model: any):
     return formatComposite(content, itemDef);
   }
 
+  // A number item on `ratio/generic` (INR, data-model 3.33.0) stores `{ value, relativeTo }` and reads as its value
+  if (type === 'number' && event.type === 'ratio/generic' && typeof content?.value === 'number') {
+    content = content.value;
+  }
+
   // number, text, composite, etc.
   if (typeof content === 'number') {
     const display = itemDef.data?.number?.display;
