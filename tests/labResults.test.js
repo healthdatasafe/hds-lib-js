@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { eventToShortText, labComparatorOf, isExactLabValue, labUnitText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, cmcFormSpec } from '../ts/index.ts';
+import { eventToShortText, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, cmcFormSpec } from '../ts/index.ts';
 import { getModel, resetModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 
 /**
@@ -81,6 +81,35 @@ function makeModel () {
           }
         },
         references: { loinc: ['2345-7', '14749-6'], loincMethod: ['41653-7'] }
+      },
+      'body-blood-coagulation-inr': {
+        version: 'v1',
+        label: { en: 'INR' },
+        description: { en: 'International normalized ratio.' },
+        streamId: 'body-blood-coagulation-inr',
+        eventType: 'ratio/generic',
+        type: 'number',
+        ratioRelativeTo: 1,
+        references: { loinc: ['6301-6'] }
+      },
+      'body-ratio-other': {
+        version: 'v1',
+        label: { en: 'Another ratio' },
+        description: { en: 'A number ratio without a UCUM code of its own.' },
+        streamId: 'body-ratio-other',
+        eventType: 'ratio/generic',
+        type: 'number',
+        ratioRelativeTo: 1
+      },
+      'fertility-ratio-scale': {
+        version: 'v1',
+        label: { en: 'A scale' },
+        description: { en: 'A select on ratio/generic.' },
+        streamId: 'fertility-ratio-scale',
+        eventType: 'ratio/generic',
+        type: 'select',
+        options: [{ value: 0, label: { en: 'none' } }, { value: 8, label: { en: 'max' } }],
+        ratioRelativeTo: 8
       }
     },
     streams: [
@@ -92,7 +121,11 @@ function makeModel () {
       { id: 'sync-status', name: 'Sync', parentId: null },
       { id: 'future-thing', name: 'Future', parentId: null },
       { id: 'old-ferritin', name: 'Old', parentId: null },
-      { id: 'body-blood-serum-glucose-random', name: 'Glucose (random)', parentId: 'body-blood' }
+      { id: 'body-blood-serum-glucose-random', name: 'Glucose (random)', parentId: 'body-blood' },
+      { id: 'body-blood-coagulation', name: 'Coagulation', parentId: 'body-blood' },
+      { id: 'body-blood-coagulation-inr', name: 'INR', parentId: 'body-blood-coagulation' },
+      { id: 'body-ratio-other', name: 'Another ratio', parentId: 'body' },
+      { id: 'fertility-ratio-scale', name: 'A scale', parentId: null }
     ]
   };
 }
@@ -142,6 +175,43 @@ describe('[LABR] lab results', () => {
     assert.equal(eventToShortText(coded({ analyte: { label: { en: 'Rubella IgG' }, codes: [{ system: 'urn:oid:1.2.3', code: 'RUB' }] }, value: 3.2, unit: '{index}', valueText: 'positive' })), 'Rubella IgG 3.2 index (positive)');
     // shown the same on a stream with no item (the items ship one data-model release later)
     assert.equal(eventToShortText({ ...coded({ analyte: hiv, value: 20, unit: '{copies}/mL' }), streamIds: ['body-blood'] }), 'HIV-1 RNA (viral load) 20 copies/mL');
+  });
+
+  // data-model 3.33.0: INR is a number item on ratio/generic, its content `{ value, relativeTo: 1 }`
+  const inr = (value, clientData) => ({ streamIds: ['body-blood-coagulation-inr'], type: 'ratio/generic', content: { value, relativeTo: 1 }, clientData });
+
+  it('[LABR-RGEN-1] a number item on ratio/generic reads content.value', () => {
+    assert.equal(labNumberOf(inr(2.5)), 2.5);
+    assert.equal(labNumberOf(ferritin(30)), 30);
+    assert.equal(labNumberOf(coded({ analyte: hiv, value: 20, unit: '{copies}/mL' })), 20);
+    assert.equal(labNumberOf(coded({ analyte: hiv, valueText: 'not detected' })), null);
+    assert.equal(labNumberOf({ ...inr(2.5), content: 2.5 }), null);
+    // a select's scale is a numerator over its denominator, not a lab figure
+    assert.equal(labNumberOf({ streamIds: ['fertility-ratio-scale'], type: 'ratio/generic', content: { value: 4, relativeTo: 8 } }), null);
+    assert.equal(isExactLabValue({ streamIds: ['fertility-ratio-scale'], type: 'ratio/generic', content: { value: 4, relativeTo: 8 } }), false);
+    assert.equal(labNumberOf({ ...inr(2.5), content: { value: 2.5, relativeTo: 2 } }), null);
+    assert.equal(isExactLabValue(inr(2.5)), true);
+    assert.equal(isExactLabValue(inr(8, { hdsComparator: '>' })), false);
+  });
+
+  it('[LABR-RGEN-2] eventToShortText: the value with its comparator, never [object Object]', () => {
+    assert.equal(eventToShortText(inr(2.5)), '2.5');
+    assert.equal(eventToShortText(inr(8, { hdsComparator: '>' })), '> 8');
+    // a select on ratio/generic keeps its "value/relativeTo label" text
+    assert.equal(eventToShortText({ streamIds: ['fertility-ratio-scale'], type: 'ratio/generic', content: { value: 8, relativeTo: 8 } }), '8/8 max');
+  });
+
+  it('[LABR-RGEN-3] labValueToFhir: INR as UCUM {INR}, a select scale gives nothing', () => {
+    assert.deepEqual(labValueToFhir(inr(2.5)), { valueQuantity: { value: 2.5, unit: 'INR', system: 'http://unitsofmeasure.org', code: '{INR}' } });
+    assert.deepEqual(labValueToFhir(inr(8, { hdsComparator: '>' })),
+      { valueQuantity: { value: 8, comparator: '>', unit: 'INR', system: 'http://unitsofmeasure.org', code: '{INR}' } });
+    assert.equal(labValueToFhir(inr(8, { hdsComparator: '=' })), null);
+    assert.deepEqual(labValueToFhir({ streamIds: ['body-ratio-other'], type: 'ratio/generic', content: { value: 1.4, relativeTo: 1 } }),
+      { valueQuantity: { value: 1.4, system: 'http://unitsofmeasure.org', code: '1' } });
+    assert.equal(labValueToFhir({ streamIds: ['fertility-ratio-scale'], type: 'ratio/generic', content: { value: 8, relativeTo: 8 } }), null);
+    assert.equal(labValueToFhir({ ...inr(2.5), content: { value: 2.5, relativeTo: 2 } }), null);
+    assert.equal(labLoincOf(inr(2.5)), '6301-6');
+    assert.equal(labSeriesKey(inr(2.5)), 'body-blood-coagulation-inr');
   });
 
   it('[LABR-2b] labUnitText prefers unitText, else a readable UCUM code', () => {
@@ -230,7 +300,7 @@ describe('[LABR] lab results', () => {
     assert.equal(coded.isImported, true);
     assert.equal(coded.isEnterable, false);
     assert.equal(model.itemsDefs.forKey('body-blood-serum-ferritin').isImported, false);
-    assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-blood-serum-ferritin', 'body-blood-hba1c', 'body-blood-serum-glucose-random']);
+    assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-blood-serum-ferritin', 'body-blood-hba1c', 'body-blood-serum-glucose-random', 'body-blood-coagulation-inr', 'body-ratio-other', 'fertility-ratio-scale']);
     assert.equal(model.itemsDefs.forEvent({ streamIds: ['body-blood-coded'], type: 'lab-result/coded-v1' }).key, 'body-blood-coded');
     assert.equal(model.itemsDefs.forEvent({ streamIds: ['body-blood'], type: 'lab-result/coded-v1' }, false), null);
     assert.deepEqual(cmcFormSpec.validateFormSpecItemKeys({ sections: [{ key: 's', itemKeys: ['body-blood-coded'] }] }, model), []);

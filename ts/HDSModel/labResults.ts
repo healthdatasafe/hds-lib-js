@@ -14,6 +14,9 @@ export type LabComparator = '<' | '<=' | '>' | '>=';
 export const LAB_COMPARATORS: readonly LabComparator[] = ['<', '<=', '>', '>='];
 const LOINC_SYSTEM = 'http://loinc.org';
 const UCUM_SYSTEM = 'http://unitsofmeasure.org';
+const RATIO_GENERIC = 'ratio/generic';
+/** UCUM code of a number `ratio/generic` item, by its LOINC code (FHIR lab examples code INR as `{INR}`). */
+const RATIO_UCUM_BY_LOINC: Record<string, string> = { '6301-6': '{INR}' };
 
 interface LabEventLike { type?: string; streamIds?: string[]; content?: any; clientData?: any }
 
@@ -29,11 +32,24 @@ export function labComparatorOf (event: LabEventLike): LabComparator | 'unknown'
   return (LAB_COMPARATORS as readonly string[]).includes(raw) ? raw : 'unknown';
 }
 
+/**
+ * The number a lab event holds, or null: `content.value` on `lab-result/coded-v1`, and on a `ratio/generic` object
+ * relative to 1 (a number item on it, data-model 3.33.0: INR stores `{ value: 2.5, relativeTo: 1 }`); else a numeric
+ * content. A `ratio/generic` over another denominator (a select's scale, `{ value: 4, relativeTo: 8 }`) is a
+ * numerator, not a lab figure: null.
+ */
+export function labNumberOf (event: LabEventLike): number | null {
+  if (event == null) return null;
+  if (event.type === RATIO_GENERIC && event.content?.relativeTo !== 1) return null;
+  const objectContent = event.type === LAB_RESULT_CODED || event.type === RATIO_GENERIC;
+  const value = objectContent ? event.content?.value : event.content;
+  return typeof value === 'number' ? value : null;
+}
+
 /** True when the event holds a number that is an exact figure: charts and statistics use only those as exact. */
 export function isExactLabValue (event: LabEventLike): boolean {
   if (event == null || labComparatorOf(event) !== null) return false;
-  const value = event.type === LAB_RESULT_CODED ? event.content?.value : event.content;
-  return typeof value === 'number';
+  return labNumberOf(event) !== null;
 }
 
 /**
@@ -100,7 +116,9 @@ export interface LabFhirValue {
  * FHIR `Observation.value[x]` of a lab event (an item event with a number, or `lab-result/coded-v1`), or null.
  * The comparator is set only when the value is a limit; an unknown comparator gives no value at all (never an exact
  * figure by mistake). An item event reads as it displays (`number.display`: HbA1c 0.057 → 5.7 %). UCUM `system` /
- * `code` only on coded results: item eventTypes carry no UCUM code.
+ * `code` only on coded results, item eventTypes carry no UCUM code; except a number item on `ratio/generic` (INR), a
+ * dimensionless ratio relative to 1: `{INR}` for INR, `1` for another. A select on `ratio/generic` (a scale) and a
+ * ratio over another denominator give null.
  */
 export function labValueToFhir (event: LabEventLike, model: any = getModel()): LabFhirValue | null {
   if (event == null) return null;
@@ -125,11 +143,25 @@ export function labValueToFhir (event: LabEventLike, model: any = getModel()): L
     }
     return text ? { valueString: text } : null;
   }
-  if (typeof event.content !== 'number' || typeof event.type !== 'string') return null;
+  const value = labNumberOf(event);
+  if (value === null || typeof event.type !== 'string') return null;
   const itemDef = model.itemsDefs.forEvent(event, false);
+  if (event.type === RATIO_GENERIC) {
+    if (itemDef?.data?.type !== 'number') return null;
+    const q: LabFhirValue['valueQuantity'] = { value };
+    if (comparator) q.comparator = comparator;
+    // labNumberOf gave a value, so the ratio is relative to 1: dimensionless, `{INR}` for INR
+    const loinc = labLoincOf(event, model);
+    const code = (loinc && RATIO_UCUM_BY_LOINC[loinc]) || '1';
+    const unit = labUnitText({ unit: code });
+    if (unit) q.unit = unit;
+    q.system = UCUM_SYSTEM;
+    q.code = code;
+    return { valueQuantity: q };
+  }
   const display = itemDef?.data?.number?.display;
   const multiplier: number = typeof display?.multiplier === 'number' ? display.multiplier : 1;
-  const q: LabFhirValue['valueQuantity'] = { value: Number((event.content * multiplier).toPrecision(12)) };
+  const q: LabFhirValue['valueQuantity'] = { value: Number((value * multiplier).toPrecision(12)) };
   if (comparator) q.comparator = comparator;
   const suffix = display?.suffix ? localizeText(display.suffix) : null;
   const unit = suffix || (multiplier === 1 ? itemUnitLabel(event, itemDef, model) : null);

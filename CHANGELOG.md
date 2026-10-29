@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.30.0] - 2026-10-29
+
+### Added
+- **Number items on `ratio/generic`** (site-agents#27, data-model 3.33.0: INR `body-blood-coagulation-inr`, content
+  `{ value: 2.5, relativeTo: 1 }`):
+  - **`labNumberOf(event)`**: the number a lab event holds (`content.value` on `lab-result/coded-v1` and on a
+    `ratio/generic` object relative to 1, else a numeric content), or `null`. A `ratio/generic` over another
+    denominator (a select's scale) gives `null`, so `isExactLabValue`, which reads it, stays false for scales.
+  - `eventToShortText` shows the value with its comparator (`2.5`, `> 8`) instead of a bare object read.
+  - `labValueToFhir` gives `valueQuantity { value, unit: 'INR', system: UCUM, code: '{INR}' }` (`1` for another
+    ratio relative to 1); a `select` on `ratio/generic` (a scale) and a ratio over another denominator give `null`.
+
 ## [2.29.0] - 2026-10-29
 
 ### Added
