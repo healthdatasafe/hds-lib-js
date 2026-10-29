@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.31.0] - 2026-10-29
+
+### Added
+- **Care encounters and providers** (site-agents#24, data-model `ENCOUNTER.md`: `encounter/visit-v1`,
+  `provider/practitioner-v1`, `provider/organization-v1`), new `HDSModel/encounters.ts`:
+  - `contentEventIds(event)`: the event ids an event holds in its content, as `{ field, eventId }`, for
+    `file/xds-v1` `supersedes[]`, `authors[].eventId`, `encounterId`, `encounter/visit-v1` `participants[].eventId`,
+    `serviceProvider.eventId` and `provider/practitioner-v1` `organizations[].eventId`. Empty for other types.
+  - `withRelatedMirror(event, previousContent?)`: the `clientData` to write, with each content id as
+    `related.<eventId>: true` (PROVENANCE.md, now a MUST). Given the stored content on an update, the keys of ids that
+    left content are removed, and only those. On a provider, `hdsGln` / `hdsZsr` hold its GLN / ZSR identifier value
+    (an existing value kept while still listed, else the first), and are removed when it has none. Pure: the event is
+    not changed. **An update must pass `previousContent` and the event with its stored `clientData`**: without them a
+    removed `hdsGln` / `hdsZsr` gets no `null`, and the server keeps it (`events.update` merges top-level `clientData`
+    keys).
+  - `checkRelatedMirror(event, targets?)`: writer warnings `missing-related`, `wrong-target-type` (given the
+    referenced events by id: participants a practitioner, authors a practitioner or an organization,
+    serviceProvider and organizations an organization, encounterId a visit, supersedes a document),
+    `missing-provider-key` (a GLN / ZSR identifier, no key) and `stale-provider-key` (a key no identifier of its
+    system holds, which would send another writer's lookup to the wrong provider).
+  - `ENCOUNTER_VISIT`, `PROVIDER_PRACTITIONER`, `PROVIDER_ORGANIZATION`, `IDENTIFIER_SYSTEM_GLN`
+    (`urn:oid:2.51.1.3`), `IDENTIFIER_SYSTEM_ZSR` (`urn:oid:2.16.756.5.30.1.123.100.2.1.1`).
+- **`eventToShortText`** reads a visit as its kind and specialty (`Hospital stay · Cardiology`), a practitioner as
+  their name and first specialty (`specialties[0]`, data-model 3.34.0), an organization as its name. Keyed on the eventType: the kind label comes from the
+  `encounter-visit` item's `kind` options when the model has it, else from built-in en / fr labels.
+
+### Tests
+- `[ENC-LIB-1]` to `[ENC-LIB-4b]` (with `[ENC-LIB-3d]` for `stale-provider-key`) on a fixture model, with and
+  without the items.
+
 ## [2.30.0] - 2026-10-29
 
 ### Added

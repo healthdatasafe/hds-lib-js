@@ -6,6 +6,7 @@ import HDSSettings from '../settings/HDSSettings.ts';
 import { resolveAccountPreference, hasAccountPreference } from '../settings/accountPreferences.ts';
 import type { DateFormat } from '../settings/HDSSettings.ts';
 import { LAB_RESULT_CODED, labComparatorOf, labResultCodedText } from './labResults.ts';
+import { ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, encounterShortText } from './encounters.ts';
 
 /** A calendar day: year, month (1-12), day of month. */
 interface DayParts { y: number; m: number; d: number }
@@ -239,6 +240,13 @@ export function eventToShortTextWithOrigin (event: any): ShortTextResult {
   if (event.type === LAB_RESULT_CODED) {
     const lab = labResultCodedText(content);
     if (lab) return { text: lab, origin: null };
+  }
+
+  // Visits and providers (site-agents#24): eventType-driven too, "Hospital stay · Cardiology", a provider's name. The
+  // composite item would otherwise read "Type of visit: …" or the first string of the content.
+  if (event.type === ENCOUNTER_VISIT || event.type === PROVIDER_PRACTITIONER || event.type === PROVIDER_ORGANIZATION) {
+    const text = encounterShortText(event, itemDef, model);
+    if (text) return { text, origin: null };
   }
 
   if (itemDef) {
