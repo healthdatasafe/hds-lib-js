@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { eventToShortText, labComparatorOf, isExactLabValue, labUnitText, labValueToFhir, labSeriesKey, isValidLoincCode, checkLabResultCoded, cmcFormSpec } from '../ts/index.ts';
+import { eventToShortText, labComparatorOf, isExactLabValue, labUnitText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, cmcFormSpec } from '../ts/index.ts';
 import { getModel, resetModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 
 /**
@@ -64,6 +64,23 @@ function makeModel () {
         type: 'number',
         deprecated: true,
         references: { loinc: '2947-0' }
+      },
+      'body-blood-serum-glucose-random': {
+        version: 'v1',
+        label: { en: 'Glucose (random)' },
+        description: { en: 'Blood sugar.' },
+        streamId: 'body-blood-serum-glucose-random',
+        type: 'number',
+        variations: {
+          eventType: {
+            options: [
+              { value: 'concentration/mg-dl', label: { en: 'mg/dL' }, loinc: '2345-7' },
+              { value: 'concentration/mmol-l', label: { en: 'mmol/L' }, loinc: '14749-6' },
+              { value: 'concentration/umol-l', label: { en: 'μmol/L' }, loinc: null }
+            ]
+          }
+        },
+        references: { loinc: ['2345-7', '14749-6'], loincMethod: ['41653-7'] }
       }
     },
     streams: [
@@ -74,7 +91,8 @@ function makeModel () {
       { id: 'body-blood-coded', name: 'Other blood results', parentId: 'body-blood' },
       { id: 'sync-status', name: 'Sync', parentId: null },
       { id: 'future-thing', name: 'Future', parentId: null },
-      { id: 'old-ferritin', name: 'Old', parentId: null }
+      { id: 'old-ferritin', name: 'Old', parentId: null },
+      { id: 'body-blood-serum-glucose-random', name: 'Glucose (random)', parentId: 'body-blood' }
     ]
   };
 }
@@ -186,6 +204,22 @@ describe('[LABR] lab results', () => {
     assert.deepEqual(checkLabResultCoded(ferritin(30)), []);
   });
 
+  it('[LABR-5c] forLoinc reads method codes; labLoincOf gives the code an event stores (data-model 3.32.0)', () => {
+    const glucose = (type) => ({ streamIds: ['body-blood-serum-glucose-random'], type, content: 5 });
+    assert.equal(model.itemsDefs.forLoinc('41653-7').key, 'body-blood-serum-glucose-random', 'a method code owns');
+    assert.equal(model.itemsDefs.forLoinc('14749-6').key, 'body-blood-serum-glucose-random');
+    assert.deepEqual(checkLabResultCoded(coded({ analyte: { label: { en: 'Glucose' }, codes: [{ system: 'http://loinc.org', code: '41653-7' }] }, value: 5, unit: 'mmol/L' })),
+      [{ code: 'owned-by-item', itemKey: 'body-blood-serum-glucose-random', loinc: '41653-7' }]);
+    assert.equal(labLoincOf(glucose('concentration/mg-dl')), '2345-7');
+    assert.equal(labLoincOf(glucose('concentration/mmol-l')), '14749-6');
+    assert.equal(labLoincOf(glucose('concentration/umol-l')), null, 'an option without a code');
+    assert.equal(labLoincOf(ferritin(30)), null, 'unit options without a stated code: never inherited');
+    assert.equal(labLoincOf({ streamIds: ['old-ferritin'], type: 'concentration/ug-l', content: 30 }), '2947-0', 'one unit, one code');
+    assert.equal(labLoincOf(coded({ analyte: hiv, value: 20, unit: '{copies}/mL' })), '20447-9');
+    assert.equal(labLoincOf(coded({ analyte: { label: { en: 'X' }, codes: [{ system: 'urn:oid:1.2.3', code: 'X' }] }, valueText: 'x' })), null);
+    assert.equal(labLoincOf({ streamIds: ['body-blood-hba1c'], type: 'ratio/proportion', content: 0.05 }), null, 'no code asserted');
+  });
+
   it('[LABR-5b] isValidLoincCode checks the mod-10 digit', () => {
     for (const ok of ['8867-4', '2947-0', '20447-9', '5196-1', '2880-3']) assert.equal(isValidLoincCode(ok), true, ok);
     for (const bad of ['8867-5', '2947', 'LP1234-5', '12345678-9', '']) assert.equal(isValidLoincCode(bad), false, bad);
@@ -196,7 +230,7 @@ describe('[LABR] lab results', () => {
     assert.equal(coded.isImported, true);
     assert.equal(coded.isEnterable, false);
     assert.equal(model.itemsDefs.forKey('body-blood-serum-ferritin').isImported, false);
-    assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-blood-serum-ferritin', 'body-blood-hba1c']);
+    assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-blood-serum-ferritin', 'body-blood-hba1c', 'body-blood-serum-glucose-random']);
     assert.equal(model.itemsDefs.forEvent({ streamIds: ['body-blood-coded'], type: 'lab-result/coded-v1' }).key, 'body-blood-coded');
     assert.equal(model.itemsDefs.forEvent({ streamIds: ['body-blood'], type: 'lab-result/coded-v1' }, false), null);
     assert.deepEqual(cmcFormSpec.validateFormSpecItemKeys({ sections: [{ key: 's', itemKeys: ['body-blood-coded'] }] }, model), []);

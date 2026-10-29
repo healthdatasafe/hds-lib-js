@@ -52,16 +52,17 @@ export class HDSModelItemsDefs {
   }
 
   /**
-   * The active item that asserts `code` in its `references.loinc`, or null. An item owns the LOINC codes it asserts
-   * (one owner per code, data-model `[LABC-LOINC-1]`), so a `lab-result/coded-v1` event carrying one belongs on that
-   * item (`checkLabResultCoded`).
+   * The active item that asserts `code` in its `references.loinc` or `references.loincMethod` (method-specific codes,
+   * data-model 3.32.0), or null. An item owns the LOINC codes it asserts (one owner per code over both lists,
+   * data-model `[LABC-LOINC-1]`), so a `lab-result/coded-v1` event carrying one belongs on that item
+   * (`checkLabResultCoded`).
    */
   forLoinc (code: string): HDSItemDef | null {
+    const asList = (codes: any): string[] => Array.isArray(codes) ? codes : (codes != null ? [codes] : []);
     for (const itemDef of this.getAll()) {
       if (itemDef.isDeprecated) continue;
-      const loinc = itemDef.data.references?.loinc;
-      const codes = Array.isArray(loinc) ? loinc : (loinc != null ? [loinc] : []);
-      if (codes.includes(code)) return itemDef;
+      const refs = itemDef.data.references;
+      if (asList(refs?.loinc).includes(code) || asList(refs?.loincMethod).includes(code)) return itemDef;
     }
     return null;
   }

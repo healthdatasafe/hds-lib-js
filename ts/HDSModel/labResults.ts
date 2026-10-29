@@ -154,6 +154,31 @@ function itemUnitLabel (event: LabEventLike, itemDef: any, model: any): string |
   }
 }
 
+/**
+ * The LOINC code of a lab event, for FHIR `Observation.code`, or null. A `lab-result/coded-v1` event: its own LOINC
+ * code. An item event with unit options: the code its option states (`variations.eventType.options[].loinc`,
+ * data-model 3.32.0: mass and moles of one analyte are two codes; null for a unit LOINC has no code for). Never
+ * inherited from the item, so a unit without a stated code gives null, never the code of another property. An item
+ * with one unit: its code when it asserts exactly one. Owned-only codes (`references.loincMethod`) are never returned.
+ */
+export function labLoincOf (event: LabEventLike, model: any = getModel()): string | null {
+  if (event == null || typeof event.type !== 'string') return null;
+  if (event.type === LAB_RESULT_CODED) {
+    const coding = primaryCoding(event.content);
+    return coding?.system === LOINC_SYSTEM ? coding.code : null;
+  }
+  const itemDef = model.itemsDefs.forEvent(event, false);
+  if (itemDef == null) return null;
+  const options: any[] = itemDef.data?.variations?.eventType?.options ?? [];
+  if (options.length > 0) {
+    const code = options.find((o) => o?.value === event.type)?.loinc;
+    return typeof code === 'string' ? code : null;
+  }
+  const loinc = itemDef.data?.references?.loinc;
+  const codes: string[] = Array.isArray(loinc) ? loinc : (loinc != null ? [loinc] : []);
+  return codes.length === 1 ? codes[0] : null;
+}
+
 function primaryCoding (content: any): { system: string; code: string } | null {
   const codes = Array.isArray(content?.analyte?.codes) ? content.analyte.codes : [];
   return codes.find((c: any) => c?.system === LOINC_SYSTEM) ?? codes[0] ?? null;
