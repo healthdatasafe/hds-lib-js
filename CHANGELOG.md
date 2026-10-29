@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.32.0] - 2026-10-29
+
+### Changed
+- **`pryv` 3.17.3**, with `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor` and `@pryv/socket.io` following to
+  3.17.3 (lib-js release `6de3a1b`). One fix: `createEventWithFormData` and `createEventWithFileFromBuffer` now refine
+  the server-time offset from the response `meta`, like `createEventWithFile`; an answer that is not a Pryv API answer
+  (a proxy's JSON error) now throws instead of being returned as the body. `HDSProfile` uploads its avatar through
+  `createEventWithFileFromBuffer`.
+- **`@pryv/cmc` 3.22.0** (from 3.21.1). `readOffer` also returns `capabilityState` (`'open'`, `'consumed'`,
+  `'invalidated'` or `null`); `acceptInvite`, `acceptMembership`, `refuseInvite` and `declineMembership` throw
+  `cmc-capability-consumed` / `cmc-capability-invalidated` before writing a trigger, instead of leaving a `failed` one
+  (pryv/lib-js#75); `refuseInvite` and `declineMembership` read the offer first. `listAcceptedRelationships` leaves out
+  failed accept triggers, and its `limit` now caps the relationships returned rather than the events read (it may
+  page through several `events.get` calls). hds-lib calls none of these directly.
+
+### Tests
+- 928 Node and 547 browser tests green on the new pins.
+
 ## [2.31.0] - 2026-10-29
 
 ### Added
