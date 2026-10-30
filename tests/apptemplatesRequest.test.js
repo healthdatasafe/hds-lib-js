@@ -545,6 +545,25 @@ describe('[APRX] appTemplates Requests', function () {
       assert.deepEqual(after.proposedPermissions, []);
     });
 
+    it('[APRQC-6] permissions added by applyQuestionnaireCoverage survive buildPermissions (the save path)', () => {
+      const r = new CollectorRequest({});
+      const q = new Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      q.addQuestion('m', moodQuestion());
+      const added = r.applyQuestionnaireCoverage(q).proposedPermissions.map((p) => p.streamId).sort();
+      assert.ok(added.length > 0);
+      r.buildPermissions();
+      assert.deepEqual(r.permissions.map((p) => p.streamId).sort(), added, 'kept after the rebuild');
+      assert.equal(r.checkQuestionnaireCoverage(q).ok, true);
+      // applying twice records each stream once
+      r.applyQuestionnaireCoverage(q);
+      assert.equal(r.permissionsExtra.length, added.length);
+      // and they travel with the content
+      const copy = new CollectorRequest(r.content);
+      copy.buildPermissions();
+      assert.deepEqual(copy.permissions.map((p) => p.streamId).sort(), added);
+    });
+
     it('[APRQC-5] standalone checkQuestionnaireCoverage accepts raw content for both sides', async () => {
       const { checkQuestionnaireCoverage } = await import('../ts/appTemplates/questionnaireCoverage.ts');
       const q = new Questionnaire({ title: { en: 'Q' } });

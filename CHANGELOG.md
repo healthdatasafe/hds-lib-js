@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.33.0] - 2026-10-30
+
+### Fixed
+- **`CollectorRequest.applyQuestionnaireCoverage`: the permissions it adds survive `buildPermissions()`.** They were
+  added to the permission list only, which `buildPermissions()` rebuilds from the sections' item keys: a form builder
+  that applied a bundled questionnaire's coverage and then saved (doctor-dashboard's save calls `buildPermissions()`)
+  silently dropped them, and the saved form asked for less than its questionnaire needs. They are now also kept in
+  `permissionsExtra` (once per stream), so the rebuild and the request content carry them.
+
+### Tests
+- `[APRQC-6]`; 929 Node tests green.
+
 ## [2.32.0] - 2026-10-29
 
 ### Changed

@@ -449,11 +449,16 @@ export class CollectorRequest {
    * permissions are missing, add them to this request in place. Returns the
    * report so callers can surface unknownItems / proposedPermissions to the
    * doctor (e.g. "Added 3 permissions to your request: body-weight, ...").
+   * They are also kept in `permissionsExtra`, so `buildPermissions()` (which
+   * rebuilds from the sections' item keys) does not drop them on save.
    */
   applyQuestionnaireCoverage (q: Questionnaire | QuestionnaireRequestContent): QuestionnaireCoverageReport {
     const report = checkQuestionnaireCoverage(q, this);
     for (const p of report.proposedPermissions) {
       this.addPermission(p.streamId, p.defaultName, p.level);
+      if (!this.#permissionsExtra.some((e) => e.streamId === p.streamId)) {
+        this.addPermissionExtra({ streamId: p.streamId, defaultName: p.defaultName, level: p.level });
+      }
     }
     return report;
   }
