@@ -21717,11 +21717,16 @@ class CollectorRequest {
      * permissions are missing, add them to this request in place. Returns the
      * report so callers can surface unknownItems / proposedPermissions to the
      * doctor (e.g. "Added 3 permissions to your request: body-weight, ...").
+     * They are also kept in `permissionsExtra`, so `buildPermissions()` (which
+     * rebuilds from the sections' item keys) does not drop them on save.
      */
     applyQuestionnaireCoverage(q) {
         const report = (0, questionnaireCoverage_ts_1.checkQuestionnaireCoverage)(q, this);
         for (const p of report.proposedPermissions) {
             this.addPermission(p.streamId, p.defaultName, p.level);
+            if (!this.#permissionsExtra.some((e) => e.streamId === p.streamId)) {
+                this.addPermissionExtra({ streamId: p.streamId, defaultName: p.defaultName, level: p.level });
+            }
         }
         return report;
     }
@@ -39374,6 +39379,25 @@ describe('[APRX] appTemplates Requests', function () {
       const after = r.checkQuestionnaireCoverage(q);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(after.ok, true);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(after.proposedPermissions, []);
+    });
+
+    it('[APRQC-6] permissions added by applyQuestionnaireCoverage survive buildPermissions (the save path)', () => {
+      const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest({});
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_3__.Questionnaire({ title: { en: 'Q' } });
+      q.addQuestion('w', bodyWeightQuestion());
+      q.addQuestion('m', moodQuestion());
+      const added = r.applyQuestionnaireCoverage(q).proposedPermissions.map((p) => p.streamId).sort();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(added.length > 0);
+      r.buildPermissions();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(r.permissions.map((p) => p.streamId).sort(), added, 'kept after the rebuild');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.checkQuestionnaireCoverage(q).ok, true);
+      // applying twice records each stream once
+      r.applyQuestionnaireCoverage(q);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.permissionsExtra.length, added.length);
+      // and they travel with the content
+      const copy = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(r.content);
+      copy.buildPermissions();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(copy.permissions.map((p) => p.streamId).sort(), added);
     });
 
     it('[APRQC-5] standalone checkQuestionnaireCoverage accepts raw content for both sides', async () => {
