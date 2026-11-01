@@ -69,6 +69,7 @@ function account ({ streams = [], events = [] } = {}) {
       }
       case 'events.get':
         return out('events', [...state.events.values()].filter(e =>
+          (params.state === 'all' || (!e.trashed && params.streams.every(id => !state.streams.find(s => s.id === id)?.trashed))) &&
           e.streamIds.some(s => params.streams.includes(s)) && (!params.types || params.types.includes(e.type))).slice(0, params.limit ?? Infinity));
       default:
         throw new Error('unexpected ' + method);
@@ -331,10 +332,12 @@ describe('[CDOC] cmcDocuments', function () {
       for (const c of conn.calls.filter(c => c.method === 'streams.delete')) assert.strictEqual(c.params.mergeEventsWithParent, false);
     });
 
-    it('[CDOC42] a child trashed by an interrupted cleanup is still found and deleted; more than one page of received events', async () => {
+    it('[CDOC42] children trashed by an interrupted cleanup are still found and drained (trashed events too), then deleted; several pages', async () => {
       const streams = tree();
       streams[1].trashed = true;
+      streams[2].trashed = true;
       const received = Array.from({ length: 1200 }, (_, i) => doc('r' + i, ['share-rrrrrrrrrrrr']));
+      received[0].trashed = true;
       const conn = account({ streams, events: received });
       const deleted = await cmcDocuments.cleanupDocumentShares(conn, 'acc-1:3');
       assert.deepStrictEqual(deleted.sort(), ['share-rrrrrrrrrrrr', 'share-ssssssssssss']);

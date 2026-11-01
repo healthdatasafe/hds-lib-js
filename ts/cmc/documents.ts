@@ -367,9 +367,10 @@ export async function cleanupDocumentShares (connection: pryv.Connection, relati
   const base = relationshipIdOf(relationship);
   const mine = (await listShareStreams(connection, { includeTrashed: true })).filter(s => s.relationship === base);
   for (const s of mine.filter(s => s.direction === 'received')) {
-    // each moved event leaves the child, so reading the first page again until it is empty walks them all
+    // each moved event leaves the child, so reading the first page again until it is empty walks them all;
+    // `state: 'all'` for trashed events, and because a trashed child is not expanded otherwise
     for (;;) {
-      const events = await connection.apiOne('events.get', { streams: [s.id], limit: 500 }, 'events') as Array<{ id: string }>;
+      const events = await connection.apiOne('events.get', { streams: [s.id], state: 'all', limit: 500 }, 'events') as Array<{ id: string }>;
       if (events.length === 0) break;
       for (const e of events) {
         await connection.apiOne('events.update', { id: e.id, update: { streamIds: [DOCUMENTS_STREAM_ID] } }, 'event');
