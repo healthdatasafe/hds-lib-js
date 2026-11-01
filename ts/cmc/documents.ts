@@ -18,6 +18,11 @@
  * without its serial), so it survives scope updates. The other side is told by a
  * `notification/alert-cmc` with `content.hds = { kind, eventId }` on the sender's own collectors
  * stream, as the data-export requests (`dataExport.ts`).
+ *
+ * Known limits: scope updates write the whole permission set from `rel.grantedPermissions`, so pass
+ * a freshly read relationship (a stale one re-grants what another device removed). Two devices
+ * sharing with a contact for the first time at the same moment can each create a `shared` child;
+ * `stopSharingDocuments` removes the first one listed in the grant.
  */
 
 import { pryv } from '../patchedPryv.ts';
@@ -25,7 +30,8 @@ import { HDSLibError } from '../errors.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { pryvErrorCode } from './appScope.ts';
 import { ET_ALERT } from './dataExport.ts';
-import { shareStreamsAgain, stopSharingStream } from './scope.ts';
+import { provisionHdsNoop } from './formSpec.ts';
+import { personPermissions, shareStreamsAgain, stopSharingStream } from './scope.ts';
 import type { ScopeChangeOptions, ScopeChangeResult, ScopePermission, ScopeRelationship } from './scope.ts';
 
 export const DOCUMENTS_STREAM_ID = 'documents';
@@ -194,10 +200,15 @@ export async function listDocumentAlerts (connection: pryv.Connection, collector
 
 // ---- the person's side (personal token) ---- //
 
-/** The share children in the person's account. Empty when the root does not exist yet. */
-export async function listShareStreams (connection: pryv.Connection): Promise<ShareStream[]> {
+/**
+ * The share children in the person's account. Empty when the root does not exist yet. `includeTrashed`: also the
+ * trashed ones (a cleanup interrupted between its two deletes).
+ */
+export async function listShareStreams (connection: pryv.Connection, opts: { includeTrashed?: boolean } = {}): Promise<ShareStream[]> {
   try {
-    const streams = await connection.apiOne('streams.get', { parentId: DOCUMENT_SHARES_ROOT_ID }, 'streams') as any[];
+    const params: Record<string, unknown> = { parentId: DOCUMENT_SHARES_ROOT_ID };
+    if (opts.includeTrashed === true) params.state = 'all';
+    const streams = await connection.apiOne('streams.get', params, 'streams') as any[];
     return shareStreamsIn(streams);
   } catch (e) {
     if (pryvErrorCode(e) === 'unknown-referenced-resource') return [];
@@ -288,8 +299,9 @@ export async function unshareDocument (
 
 /**
  * Stop sharing all documents with a contact: its `read` on the share child removed (scope
- * update with `hds.removed`). A chat-only remainder (`hds-noop`) is accepted. Documents keep
- * their share id until the child is deleted (`cleanupDocumentShares`); the contact no longer reads them.
+ * update with `hds.removed`). The conversation goes on: a chat-only remainder is accepted, and
+ * when nothing else is shared the `hds-noop` placeholder is granted (and provisioned). Documents
+ * keep their share id until the child is deleted (`cleanupDocumentShares`); the contact no longer reads them.
  */
 export async function stopSharingDocuments (
   connection: pryv.Connection,
@@ -298,6 +310,8 @@ export async function stopSharingDocuments (
 ): Promise<ScopeChangeResult> {
   const shared = shareStreamsOf(rel.grantedPermissions).shared;
   if (shared == null) throw new HDSLibError('stopSharingDocuments: no document is shared with this relationship', { reason: 'not-shared' });
+  const others = personPermissions(rel.grantedPermissions).filter(p => p.streamId !== shared);
+  if (!others.some(p => p.streamId != null && !p.streamId.startsWith(':_'))) await provisionHdsNoop(connection);
   return stopSharingStream(connection, rel, shared, { ...opts, parentIds: [DOCUMENT_SHARES_ROOT_ID], allowChatOnly: true });
 }
 
@@ -318,18 +332,24 @@ export async function allowDocumentsFrom (
 export type ReceiveRefusal = 'not-received' | 'not-a-document' | 'no-attachment' | 'too-large';
 
 /**
- * Process a document a contact sent: checked (on a share child, `file/xds-v1`, with an attachment,
- * at most `maxBytes` in all when given), then moved to `streamIds = ['documents']` in one update so
- * it can later be shared back. A refused event is left as it is; the app decides what to tell.
+ * Process a document a contact sent: checked (only on `received` share children, of
+ * `opts.relationship` when given; `file/xds-v1`, with an attachment, at most `maxBytes` in all when
+ * given), then moved to `streamIds = ['documents']` in one update so it can later be shared back.
+ * An event already on `documents` (received before, or the person's own) is refused, so a repeated
+ * or forged `document-sent` never strips its shares. A refused event is left as it is.
  */
 export async function receiveDocument (
   connection: pryv.Connection,
   eventId: string,
-  opts: { maxBytes?: number } = {}
+  opts: { maxBytes?: number; relationship?: string } = {}
 ): Promise<{ ok: true } | { ok: false; reason: ReceiveRefusal }> {
   const event = await getEvent(connection, eventId);
   const streamIds: string[] = event.streamIds ?? [];
-  if (!streamIds.some(isShareStreamId)) return { ok: false, reason: 'not-received' };
+  const relationship = opts.relationship != null ? relationshipIdOf(opts.relationship) : null;
+  const receiving = new Set((await listShareStreams(connection))
+    .filter(s => s.direction === 'received' && (relationship == null || s.relationship === relationship))
+    .map(s => s.id));
+  if (streamIds.length === 0 || !streamIds.every(id => receiving.has(id))) return { ok: false, reason: 'not-received' };
   if (event.type !== ET_DOCUMENT) return { ok: false, reason: 'not-a-document' };
   const attachments: Array<{ size?: number }> = event.attachments ?? [];
   if (attachments.length === 0) return { ok: false, reason: 'no-attachment' };
@@ -344,11 +364,16 @@ export async function receiveDocument (
  * Returns the deleted child ids.
  */
 export async function cleanupDocumentShares (connection: pryv.Connection, relationship: string): Promise<string[]> {
-  const mine = (await listShareStreams(connection)).filter(s => s.relationship === relationship);
+  const base = relationshipIdOf(relationship);
+  const mine = (await listShareStreams(connection, { includeTrashed: true })).filter(s => s.relationship === base);
   for (const s of mine.filter(s => s.direction === 'received')) {
-    const events = await connection.apiOne('events.get', { streams: [s.id], limit: 1000 }, 'events') as Array<{ id: string }>;
-    for (const e of events) {
-      await connection.apiOne('events.update', { id: e.id, update: { streamIds: [DOCUMENTS_STREAM_ID] } }, 'event');
+    // each moved event leaves the child, so reading the first page again until it is empty walks them all
+    for (;;) {
+      const events = await connection.apiOne('events.get', { streams: [s.id], limit: 500 }, 'events') as Array<{ id: string }>;
+      if (events.length === 0) break;
+      for (const e of events) {
+        await connection.apiOne('events.update', { id: e.id, update: { streamIds: [DOCUMENTS_STREAM_ID] } }, 'event');
+      }
     }
   }
   for (const s of mine) {
@@ -367,8 +392,8 @@ export async function cleanupDocumentShares (connection: pryv.Connection, relati
 
 /** After a restore (accesses are not restored): clean up every share child whose relationship is not in `liveRelationships`. */
 export async function cleanupOrphanDocumentShares (connection: pryv.Connection, liveRelationships: string[]): Promise<string[]> {
-  const live = new Set(liveRelationships);
-  const orphans = [...new Set((await listShareStreams(connection)).map(s => s.relationship))].filter(r => !live.has(r));
+  const live = new Set(liveRelationships.map(relationshipIdOf));
+  const orphans = [...new Set((await listShareStreams(connection, { includeTrashed: true })).map(s => s.relationship))].filter(r => !live.has(r));
   const deleted: string[] = [];
   for (const r of orphans) deleted.push(...await cleanupDocumentShares(connection, r));
   return deleted;
@@ -424,9 +449,14 @@ async function getEvent (connection: pryv.Connection, eventId: string): Promise<
   return await connection.apiOne('events.getOne', { id: eventId }, 'event') as Record<string, any>;
 }
 
+/** Delay before the second re-read of `changeEventStreams` (ms); tests set it to 0. */
+export const streamsCheck = { delayMs: 1000 };
+
 /**
- * `events.update` replaces the whole `streamIds` list and has no conditional write: write, re-read,
- * and throw if another device changed the list in between (`concurrent-update`).
+ * `events.update` replaces the whole `streamIds` list and has no conditional write: write, then
+ * re-read at once and again after `streamsCheck.delayMs`, and throw `concurrent-update` if another
+ * device changed the list. This narrows the race, it does not close it: a write from another
+ * device landing later still wins (an atomic add / remove is asked of the platform).
  */
 async function changeEventStreams (connection: pryv.Connection, eventId: string, change: (ids: string[]) => string[], fn: string): Promise<void> {
   const before: string[] = (await getEvent(connection, eventId)).streamIds ?? [];
@@ -434,8 +464,11 @@ async function changeEventStreams (connection: pryv.Connection, eventId: string,
   if (wanted.length === 0) throw new HDSLibError(`${fn}: an event needs at least one stream`, { reason: 'no-stream-left', eventId });
   if (sameList(before, wanted)) return;
   await connection.apiOne('events.update', { id: eventId, update: { streamIds: wanted } }, 'event');
-  const after: string[] = (await getEvent(connection, eventId)).streamIds ?? [];
-  if (!sameList(after, wanted)) throw new HDSLibError(`${fn}: the document's streams changed meanwhile`, { reason: 'concurrent-update', eventId, streamIds: after });
+  for (const wait of [0, streamsCheck.delayMs]) {
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    const after: string[] = (await getEvent(connection, eventId)).streamIds ?? [];
+    if (!sameList(after, wanted)) throw new HDSLibError(`${fn}: the document's streams changed meanwhile`, { reason: 'concurrent-update', eventId, streamIds: after });
+  }
 }
 
 function sameList (a: string[], b: string[]): boolean {

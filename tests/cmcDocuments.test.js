@@ -29,7 +29,7 @@ function account ({ streams = [], events = [] } = {}) {
     switch (method) {
       case 'streams.get':
         if (params.parentId && !state.streams.find(s => s.id === params.parentId)) throw apiError('unknown-referenced-resource');
-        return out('streams', children(params.parentId ?? null));
+        return out('streams', children(params.parentId ?? null).filter(s => params.state === 'all' || !s.trashed));
       case 'streams.create': {
         if (state.streams.find(s => s.id === params.id)) throw apiError('item-already-exists');
         const s = { parentId: null, ...params };
@@ -69,7 +69,7 @@ function account ({ streams = [], events = [] } = {}) {
       }
       case 'events.get':
         return out('events', [...state.events.values()].filter(e =>
-          e.streamIds.some(s => params.streams.includes(s)) && (!params.types || params.types.includes(e.type))));
+          e.streamIds.some(s => params.streams.includes(s)) && (!params.types || params.types.includes(e.type))).slice(0, params.limit ?? Infinity));
       default:
         throw new Error('unexpected ' + method);
     }
@@ -83,6 +83,12 @@ function account ({ streams = [], events = [] } = {}) {
   return state;
 }
 
+const tree = () => [
+  { id: 'document-shares', parentId: null, name: 'Shared documents' },
+  { id: 'share-ssssssssssss', parentId: 'document-shares', name: 'share-ssssssssssss', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } },
+  { id: 'share-rrrrrrrrrrrr', parentId: 'document-shares', name: 'share-rrrrrrrrrrrr', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'received' } } },
+  { id: 'share-oooooooooooo', parentId: 'document-shares', name: 'share-oooooooooooo', clientData: { hdsDocumentShare: { relationship: 'acc-2', direction: 'shared' } } }
+];
 const doc = (id, streamIds = ['documents']) => ({ id, type: 'file/xds-v1', streamIds, content: { title: 'Bilan' }, attachments: [{ id: 'a', size: 100 }] });
 const relWith = (perms) => ({ accessId: 'acc-1:2', localCollectorStreamId: COLLECTORS, grantedPermissions: [...perms, ...CHANNEL] });
 const alerts = (conn) => [...conn.events.values()].filter(e => e.type === 'notification/alert-cmc');
@@ -90,6 +96,7 @@ const alerts = (conn) => [...conn.events.values()].filter(e => e.type === 'notif
 describe('[CDOC] cmcDocuments', function () {
   before(async () => {
     await getModel().load(modelURL);
+    cmcDocuments.streamsCheck.delayMs = 0;
   });
 
   describe('[CDOC-P] pure helpers', () => {
@@ -232,10 +239,23 @@ describe('[CDOC] cmcDocuments', function () {
       assert.deepStrictEqual(conn.grant, [{ streamId: 'hds-noop', level: 'read' }]);
       const update = [...conn.events.values()].find(e => e.type === 'consent/scope-update-cmc');
       assert.deepStrictEqual(update.content.hds, { removed: ['share-aaaaaaaaaaaa'] });
+      assert.ok(!conn.calls.some(c => c.method === 'streams.create'), 'hds-noop already granted: nothing provisioned');
       await assert.rejects(cmcDocuments.stopSharingDocuments(conn, relWith([{ streamId: 'body-weight', level: 'read' }])),
         (e) => e.innerObject?.reason === 'not-shared');
-      await assert.rejects(cmcDocuments.stopSharingDocuments(conn, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }])),
-        (e) => e.innerObject?.reason === 'nothing-left');
+    });
+
+    it('[CDOC22] nothing else shared: hds-noop provisioned and granted, the conversation goes on', async () => {
+      const conn = account();
+      await cmcDocuments.stopSharingDocuments(conn, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]));
+      assert.ok(conn.streams.find(s => s.id === 'hds-noop'), 'hds-noop provisioned');
+      assert.deepStrictEqual(conn.grant, [{ streamId: 'hds-noop', level: 'read' }]);
+    });
+
+    it('[CDOC23] other streams keep their meaning: without allowChatOnly the last one is still refused', async () => {
+      const { cmcScope } = await import('../ts/index.ts');
+      assert.deepStrictEqual(cmcScope.planStopSharing([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }], 'share-aaaaaaaaaaaa'), { ok: false, reason: 'nothing-left' });
+      assert.deepStrictEqual(cmcScope.planStopSharing([{ streamId: 'document-shares', level: 'read' }, { streamId: 'body-weight', level: 'read' }], 'share-aaaaaaaaaaaa', { parentIds: ['document-shares'] }),
+        { ok: false, reason: 'shared-through-parent' });
     });
   });
 
@@ -269,6 +289,7 @@ describe('[CDOC] cmcDocuments', function () {
 
     it('[CDOC32] receiveDocument moves a valid document to documents, refuses the rest unchanged', async () => {
       const conn = account({
+        streams: tree(),
         events: [
           doc('ok', ['share-rrrrrrrrrrrr']),
           { ...doc('note', ['share-rrrrrrrrrrrr']), type: 'note/txt' },
@@ -285,16 +306,21 @@ describe('[CDOC] cmcDocuments', function () {
       assert.deepStrictEqual(await cmcDocuments.receiveDocument(conn, 'mine'), { ok: false, reason: 'not-received' });
       assert.deepStrictEqual(conn.events.get('note').streamIds, ['share-rrrrrrrrrrrr']);
     });
+
+    it('[CDOC33] a shared document, or one sent through another relationship, is never "received": its shares stay', async () => {
+      const conn = account({
+        streams: tree(),
+        events: [doc('shared', ['documents', 'share-ssssssssssss']), doc('onShared', ['share-ssssssssssss']), doc('sent', ['share-rrrrrrrrrrrr'])]
+      });
+      assert.deepStrictEqual(await cmcDocuments.receiveDocument(conn, 'shared'), { ok: false, reason: 'not-received' });
+      assert.deepStrictEqual(conn.events.get('shared').streamIds, ['documents', 'share-ssssssssssss']);
+      assert.deepStrictEqual(await cmcDocuments.receiveDocument(conn, 'onShared'), { ok: false, reason: 'not-received' });
+      assert.deepStrictEqual(await cmcDocuments.receiveDocument(conn, 'sent', { relationship: 'acc-2' }), { ok: false, reason: 'not-received' });
+      assert.deepStrictEqual(await cmcDocuments.receiveDocument(conn, 'sent', { relationship: 'acc-1:4' }), { ok: true });
+    });
   });
 
   describe('[CDOC-C] cleanup', () => {
-    const tree = () => [
-      { id: 'document-shares', parentId: null, name: 'Shared documents' },
-      { id: 'share-ssssssssssss', parentId: 'document-shares', name: 'share-ssssssssssss', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } },
-      { id: 'share-rrrrrrrrrrrr', parentId: 'document-shares', name: 'share-rrrrrrrrrrrr', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'received' } } },
-      { id: 'share-oooooooooooo', parentId: 'document-shares', name: 'share-oooooooooooo', clientData: { hdsDocumentShare: { relationship: 'acc-2', direction: 'shared' } } }
-    ];
-
     it('[CDOC40] full revoke: the receive child processed first, both children deleted, documents kept', async () => {
       const conn = account({ streams: tree(), events: [doc('d1', ['documents', 'share-ssssssssssss']), doc('r1', ['share-rrrrrrrrrrrr'])] });
       const deleted = await cmcDocuments.cleanupDocumentShares(conn, 'acc-1');
@@ -305,9 +331,20 @@ describe('[CDOC] cmcDocuments', function () {
       for (const c of conn.calls.filter(c => c.method === 'streams.delete')) assert.strictEqual(c.params.mergeEventsWithParent, false);
     });
 
+    it('[CDOC42] a child trashed by an interrupted cleanup is still found and deleted; more than one page of received events', async () => {
+      const streams = tree();
+      streams[1].trashed = true;
+      const received = Array.from({ length: 1200 }, (_, i) => doc('r' + i, ['share-rrrrrrrrrrrr']));
+      const conn = account({ streams, events: received });
+      const deleted = await cmcDocuments.cleanupDocumentShares(conn, 'acc-1:3');
+      assert.deepStrictEqual(deleted.sort(), ['share-rrrrrrrrrrrr', 'share-ssssssssssss']);
+      assert.strictEqual(conn.events.size, 1200, 'every received document survives');
+      assert.ok([...conn.events.values()].every(e => e.streamIds.length === 1 && e.streamIds[0] === 'documents'));
+    });
+
     it('[CDOC41] after a restore: children of relationships that no longer exist are cleaned up', async () => {
       const conn = account({ streams: tree() });
-      assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(conn, ['acc-1']), ['share-oooooooooooo']);
+      assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(conn, ['acc-1:2']), ['share-oooooooooooo']);
       assert.deepStrictEqual(await cmcDocuments.listShareStreams(account()), [], 'no root yet: no share child');
     });
   });

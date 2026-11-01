@@ -15,12 +15,16 @@
   a later take-back), `buildDocumentAlertContent` (fixed EN / FR / ES title and body, never the document's title),
   `shareStreamsOf`, `sharesAllDocuments`, `shareStreamsIn`, `listShareStreams`, `newShareStreamId`,
   `relationshipIdOf` (the base of the counterparty access id, stored as `hdsDocumentShare.relationship`). Stream
-  changes are written, re-read and checked (`concurrent-update`).
+  changes are written, re-read at once and after `streamsCheck.delayMs` (`concurrent-update`); this narrows the race,
+  the platform has no conditional write. `receiveDocument` accepts only an event that sits on `received` children
+  alone (of `opts.relationship` when given), so a repeated or forged `document-sent` never strips a document's shares.
+  Cleanups also see trashed children, page through the receive child, and normalise relationship ids.
 - **`cmcScope.planStopSharing` / `stopSharingStream`** take `{ parentIds, allowChatOnly }`: parents from the account's
-  own stream tree for a stream the model does not know, and a remainder of `hds-noop` only accepted.
+  own stream tree for a stream the model does not know; with `allowChatOnly` a remainder of `hds-noop` only is
+  accepted, and `hds-noop` is granted when nothing would remain. Without the options nothing changes.
 
 ### Tests
-- `[CDOC1]`–`[CDOC41]`; 947 Node tests green.
+- `[CDOC1]`–`[CDOC42]`.
 
 ## [2.33.0] - 2026-10-30
 

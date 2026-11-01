@@ -106,7 +106,10 @@ export type StopSharingPlan =
 export interface PlanStopSharingOptions {
   /** The stream's parents in the account's own stream tree (e.g. `document-shares` for a share child). */
   parentIds?: string[];
-  /** Accept a remaining set of `hds-noop` only: the conversation goes on, chat-only. */
+  /**
+   * The conversation goes on, chat-only: a remainder of `hds-noop` only is accepted, and when nothing would remain
+   * the `hds-noop` placeholder is granted instead (the stream must exist: `cmcFormSpec.provisionHdsNoop`).
+   */
   allowChatOnly?: boolean;
 }
 
@@ -150,8 +153,10 @@ export function planStopSharing (perms: ScopePermission[], streamId: string, opt
   if (own.some(p => p.streamId != null && above.has(p.streamId))) return { ok: false, reason: 'shared-through-parent' };
   if (!own.some(p => p.streamId === streamId)) return { ok: false, reason: 'not-shared' };
   const kept = own.filter(p => p.streamId !== streamId);
-  const keepsSomething = kept.some(p => isDataStream(p.streamId) || (opts.allowChatOnly === true && p.streamId === 'hds-noop'));
-  if (!keepsSomething) return { ok: false, reason: 'nothing-left' };
+  if (!kept.some(p => isDataStream(p.streamId))) {
+    if (opts.allowChatOnly !== true) return { ok: false, reason: 'nothing-left' };
+    if (!kept.some(p => p.streamId === 'hds-noop')) return { ok: true, newPermissions: [...kept, { streamId: 'hds-noop', level: 'read' }] };
+  }
   return { ok: true, newPermissions: kept };
 }
 
