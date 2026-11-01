@@ -102,14 +102,25 @@ export type StopSharingPlan =
   | { ok: true; newPermissions: ScopePermission[] }
   | { ok: false; reason: StopSharingRefusal };
 
+/** How to plan stopping one stream, for streams the data model does not know. */
+export interface PlanStopSharingOptions {
+  /** The stream's parents in the account's own stream tree (e.g. `document-shares` for a share child). */
+  parentIds?: string[];
+  /**
+   * The conversation goes on, chat-only: a remainder of `hds-noop` only is accepted, and when nothing would remain
+   * the `hds-noop` placeholder is granted instead (the stream must exist: `cmcFormSpec.provisionHdsNoop`).
+   */
+  allowChatOnly?: boolean;
+}
+
 /** A data stream the person would recognise as shared data (not a platform stream, not the chat-only placeholder). */
 function isDataStream (streamId: string | undefined): streamId is string {
   return streamId != null && !streamId.startsWith(':_') && streamId !== 'hds-noop';
 }
 
-/** The stream ids above `streamId` in the data model, plus `*`. Empty set of parents for a stream outside the model. */
-function streamsAbove (streamId: string): Set<string> {
-  const above = new Set<string>(['*']);
+/** The stream ids above `streamId` in the data model and in `parentIds`, plus `*`. */
+function streamsAbove (streamId: string, parentIds: string[] = []): Set<string> {
+  const above = new Set<string>(['*', ...parentIds]);
   try {
     for (const id of getModel().streams.getParentsIds(streamId, false)) {
       if (id !== streamId) above.add(id);
@@ -133,15 +144,19 @@ export function personPermissions (perms: ScopePermission[]): ScopePermission[] 
 
 /**
  * Whether one stream can stop being shared on its own, and the permission set that would
- * remain. Pure: the model is only read to find the stream's parents.
+ * remain. Pure: the model is only read to find the stream's parents; `opts.parentIds` adds the
+ * parents of a stream the model does not know.
  */
-export function planStopSharing (perms: ScopePermission[], streamId: string): StopSharingPlan {
+export function planStopSharing (perms: ScopePermission[], streamId: string, opts: PlanStopSharingOptions = {}): StopSharingPlan {
   const own = personPermissions(perms);
-  const above = streamsAbove(streamId);
+  const above = streamsAbove(streamId, opts.parentIds);
   if (own.some(p => p.streamId != null && above.has(p.streamId))) return { ok: false, reason: 'shared-through-parent' };
   if (!own.some(p => p.streamId === streamId)) return { ok: false, reason: 'not-shared' };
   const kept = own.filter(p => p.streamId !== streamId);
-  if (!kept.some(p => isDataStream(p.streamId))) return { ok: false, reason: 'nothing-left' };
+  if (!kept.some(p => isDataStream(p.streamId))) {
+    if (opts.allowChatOnly !== true) return { ok: false, reason: 'nothing-left' };
+    if (!kept.some(p => p.streamId === 'hds-noop')) return { ok: true, newPermissions: [...kept, { streamId: 'hds-noop', level: 'read' }] };
+  }
   return { ok: true, newPermissions: kept };
 }
 
@@ -180,10 +195,10 @@ export async function stopSharingStream (
   connection: pryv.Connection,
   rel: ScopeRelationship,
   streamId: string,
-  opts: ScopeChangeOptions = {}
+  opts: ScopeChangeOptions & PlanStopSharingOptions = {}
 ): Promise<ScopeChangeResult> {
   const collectorStreamId = requireCollectorStream(rel, 'stopSharingStream');
-  const plan = planStopSharing(rel.grantedPermissions, streamId);
+  const plan = planStopSharing(rel.grantedPermissions, streamId, opts);
   if ('reason' in plan) {
     throw new HDSLibError(`stopSharingStream: cannot stop sharing "${streamId}" on its own (${plan.reason})`, { reason: plan.reason, streamId });
   }

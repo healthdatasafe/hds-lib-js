@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.34.0] - 2026-11-01
+
+### Added
+- **`cmcDocuments`: documents in a conversation** (data-model 3.37.0, `DOCUMENTS.md` § `document-shares`,
+  `CUSTOM-FIELDS-AND-SYSTEM.md` document alert kinds). The person: `shareDocument` (share child created and granted
+  `read` once, by scope update, then its id added to the document and a `document-shared` alert; only the alert when the
+  contact already reads `documents` or `*`), `unshareDocument`, `stopSharingDocuments` (chat-only remainder accepted),
+  `allowDocumentsFrom` (`create-only` receive child), `receiveDocument` (checks a sent `file/xds-v1` with its
+  attachment, optional `maxBytes`, then sets `streamIds = ['documents']`), `cleanupDocumentShares` (full revoke: receive
+  child processed first, both children deleted with `mergeEventsWithParent: false`), `cleanupOrphanDocumentShares`
+  (after a restore). The contact: `sendDocument` (one multipart create on the receive child, then a `document-sent`
+  alert). Either side: `listDocumentAlerts` / `parseDocumentAlerts` (one per `(kind, eventId)`, a share current until
+  a later take-back), `buildDocumentAlertContent` (fixed EN / FR / ES title and body, never the document's title),
+  `shareStreamsOf`, `sharesAllDocuments`, `shareStreamsIn`, `listShareStreams`, `newShareStreamId`,
+  `relationshipIdOf` (the base of the counterparty access id, stored as `hdsDocumentShare.relationship`). Stream
+  changes are written, re-read at once and after `streamsCheck.delayMs` (`concurrent-update`); this narrows the race,
+  the platform has no conditional write. `receiveDocument` accepts only an event that sits on `received` children
+  alone (of `opts.relationship` when given), so a repeated or forged `document-sent` never strips a document's shares.
+  Cleanups also see trashed children, page through the receive child, and normalise relationship ids.
+- **`cmcScope.planStopSharing` / `stopSharingStream`** take `{ parentIds, allowChatOnly }`: parents from the account's
+  own stream tree for a stream the model does not know; with `allowChatOnly` a remainder of `hds-noop` only is
+  accepted, and `hds-noop` is granted when nothing would remain. Without the options nothing changes.
+
+### Tests
+- `[CDOC1]`–`[CDOC42]`.
+
 ## [2.33.0] - 2026-10-30
 
 ### Fixed
