@@ -520,6 +520,36 @@ await cmc.acceptScopeUpdate(connection, request.id);   // or cmc.refuseScopeUpda
 Requests are answered with `cmc.acceptScopeUpdate` / `refuseScopeUpdate`, which write a fixed content: `hds.asked`
 is read by `listSharingNotes` when an answer carries it, but these calls cannot record it.
 
+`planStopSharing` / `stopSharingStream` take `{ parentIds?, allowChatOnly? }` for a stream the data model does not
+know: its parents in the account's own tree, and whether a remainder of `hds-noop` only (chat-only) is accepted.
+
+### Documents in a conversation
+
+`cmcDocuments` shares one document with one contact, takes it back, and lets a contact send documents (data-model
+3.37.0, `DOCUMENTS.md` § `document-shares`). A document stays one event on `documents`; sharing adds the id of an opaque
+share child (`document-shares/share-<12 base36>`, one per relationship and direction) that only that contact is granted.
+The other side is told by a `notification/alert-cmc` with `content.hds = { kind, eventId }`.
+
+```javascript
+import { cmcDocuments } from 'hds-lib';
+// The person (personal token)
+await cmcDocuments.shareDocument(connection, rel, eventId);       // child + read grant (once), id added, alert
+await cmcDocuments.unshareDocument(connection, rel, eventId);     // id removed, 'document-unshared' alert
+await cmcDocuments.stopSharingDocuments(connection, rel);         // the contact's read on the child removed
+const { receiveStreamId } = await cmcDocuments.allowDocumentsFrom(connection, rel); // create-only (Route B)
+await cmcDocuments.receiveDocument(connection, sentEventId, { maxBytes }); // checked, moved to ['documents']
+await cmcDocuments.cleanupDocumentShares(connection, cmcDocuments.relationshipIdOf(rel.accessId)); // full revoke
+// The contact (data grant + own connection)
+const { receiveStreamId: to } = cmcDocuments.shareStreamsOf(grantPermissions); // { shared, received }
+await cmcDocuments.sendDocument(personConnection, ownConnection, { receiveStreamId: to, collectorStreamId, content, file, filename });
+// Either side: one bubble per (kind, eventId); a 'document-shared' is current until a later 'document-unshared'
+const alerts = await cmcDocuments.listDocumentAlerts(connection, collectorStreamId);
+```
+
+`shareDocument` posts only the alert when the contact already reads `documents` or `*` (`mode: 'all'`). Stream changes
+are written, re-read and checked (`concurrent-update` when another device changed them meanwhile). Readers label a
+share child from its `direction`, never from its name.
+
 ### Permission labels
 
 `appTemplates.dataName(streamId, { locale?, fallback? })` names the data a stream holds from the data model (the item

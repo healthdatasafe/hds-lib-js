@@ -25280,6 +25280,470 @@ function randomId() {
 
 /***/ },
 
+/***/ "./ts/cmc/documents.ts"
+/*!*****************************!*\
+  !*** ./ts/cmc/documents.ts ***!
+  \*****************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * Documents in a conversation: the person shares one document with one contact, takes it back,
+ * and lets a contact send documents. data-model 3.37.0, `documentation/DOCUMENTS.md` (the
+ * `document-shares` root) and `CUSTOM-FIELDS-AND-SYSTEM.md` (the alert kinds).
+ *
+ * A document stays one event on `documents`. Sharing adds the id of a share child to its
+ * `streamIds`; the child sits under the `document-shares` root, one per relationship and
+ * direction, and only that contact is granted it:
+ *
+ *   document-shares/share-<12 base36>   name = id
+ *     clientData.hdsDocumentShare = { relationship, direction: 'shared' | 'received' }
+ *
+ * - `shared`, granted `read`: the documents the person shares with the contact;
+ * - `received`, granted `create-only`: the documents the contact may send (Route B). On receipt
+ *   the person's app sets the event's `streamIds` to `['documents']` (`receiveDocument`).
+ *
+ * `relationship` is the base id of the person's counterparty access (`CmcRelationship.accessId`
+ * without its serial), so it survives scope updates. The other side is told by a
+ * `notification/alert-cmc` with `content.hds = { kind, eventId }` on the sender's own collectors
+ * stream, as the data-export requests (`dataExport.ts`).
+ *
+ * Known limits: scope updates write the whole permission set from `rel.grantedPermissions`, so pass
+ * a freshly read relationship (a stale one re-grants what another device removed). Two devices
+ * sharing with a contact for the first time at the same moment can each create a `shared` child;
+ * `stopSharingDocuments` removes the first one listed in the grant.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.streamsCheck = exports.DOCUMENT_ALERT_KINDS = exports.ET_DOCUMENT = exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = exports.DOCUMENTS_STREAM_ID = void 0;
+exports.newShareStreamId = newShareStreamId;
+exports.isShareStreamId = isShareStreamId;
+exports.relationshipIdOf = relationshipIdOf;
+exports.shareStreamsOf = shareStreamsOf;
+exports.sharesAllDocuments = sharesAllDocuments;
+exports.shareStreamsIn = shareStreamsIn;
+exports.buildDocumentAlertContent = buildDocumentAlertContent;
+exports.parseDocumentAlerts = parseDocumentAlerts;
+exports.postDocumentAlert = postDocumentAlert;
+exports.listDocumentAlerts = listDocumentAlerts;
+exports.listShareStreams = listShareStreams;
+exports.ensureDocumentSharesRoot = ensureDocumentSharesRoot;
+exports.ensureShareStream = ensureShareStream;
+exports.shareDocument = shareDocument;
+exports.unshareDocument = unshareDocument;
+exports.stopSharingDocuments = stopSharingDocuments;
+exports.allowDocumentsFrom = allowDocumentsFrom;
+exports.receiveDocument = receiveDocument;
+exports.cleanupDocumentShares = cleanupDocumentShares;
+exports.cleanupOrphanDocumentShares = cleanupOrphanDocumentShares;
+exports.sendDocument = sendDocument;
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const appScope_ts_1 = __webpack_require__(/*! ./appScope.js */ "./ts/cmc/appScope.ts");
+const dataExport_ts_1 = __webpack_require__(/*! ./dataExport.js */ "./ts/cmc/dataExport.ts");
+const formSpec_ts_1 = __webpack_require__(/*! ./formSpec.js */ "./ts/cmc/formSpec.ts");
+const scope_ts_1 = __webpack_require__(/*! ./scope.js */ "./ts/cmc/scope.ts");
+exports.DOCUMENTS_STREAM_ID = 'documents';
+exports.DOCUMENT_SHARES_ROOT_ID = 'document-shares';
+exports.SHARE_STREAM_PREFIX = 'share-';
+exports.ET_DOCUMENT = 'file/xds-v1';
+exports.DOCUMENT_ALERT_KINDS = {
+    SHARED: 'document-shared',
+    UNSHARED: 'document-unshared',
+    SENT: 'document-sent'
+};
+const READ_LEVELS = new Set(['read', 'contribute', 'manage']);
+// ---- pure helpers ---- //
+/** A new share child id: `share-` + 12 lowercase base36 characters, random. */
+function newShareStreamId() {
+    const bytes = new Uint8Array(12);
+    globalThis.crypto.getRandomValues(bytes);
+    return exports.SHARE_STREAM_PREFIX + Array.from(bytes, b => (b % 36).toString(36)).join('');
+}
+function isShareStreamId(streamId) {
+    return typeof streamId === 'string' && /^share-[a-z0-9]{12}$/.test(streamId);
+}
+/** The relationship key stored on a share child: the base of the counterparty access id. */
+function relationshipIdOf(accessId) {
+    try {
+        return patchedPryv_ts_1.pryv.utils.parseAccessRef(accessId).base;
+    }
+    catch {
+        return accessId;
+    }
+}
+/** The share children of a grant: `read` on a share id is the shared one, `create-only` the received one. */
+function shareStreamsOf(perms) {
+    let shared = null;
+    let received = null;
+    for (const p of perms ?? []) {
+        if (!isShareStreamId(p.streamId))
+            continue;
+        if (p.level === 'create-only')
+            received ??= p.streamId;
+        else if (READ_LEVELS.has(p.level ?? 'read'))
+            shared ??= p.streamId;
+    }
+    return { shared, received };
+}
+/** The grant already reads every document (`documents` or `*`): sharing one only posts the alert. */
+function sharesAllDocuments(perms) {
+    return (perms ?? []).some(p => (p.streamId === exports.DOCUMENTS_STREAM_ID || p.streamId === '*') && READ_LEVELS.has(p.level ?? 'read'));
+}
+/** The share children in a stream tree (`streams.get` output, any depth), with valid `hdsDocumentShare`. */
+function shareStreamsIn(streams) {
+    const out = [];
+    const walk = (list) => {
+        for (const s of list ?? []) {
+            const info = s.clientData?.hdsDocumentShare;
+            if (s.parentId === exports.DOCUMENT_SHARES_ROOT_ID && isShareStreamId(s.id) && typeof info?.relationship === 'string' &&
+                (info.direction === 'shared' || info.direction === 'received')) {
+                out.push({ id: s.id, relationship: info.relationship, direction: info.direction });
+            }
+            if (Array.isArray(s.children))
+                walk(s.children);
+        }
+    };
+    walk(streams);
+    return out;
+}
+/** Alert content for one document kind: fixed title and body, never the document's title. */
+function buildDocumentAlertContent(kind, eventId, locale = 'en') {
+    if (!Object.values(exports.DOCUMENT_ALERT_KINDS).includes(kind))
+        throw new errors_ts_1.HDSLibError(`unknown document alert kind "${kind}"`);
+    if (!eventId)
+        throw new errors_ts_1.HDSLibError('buildDocumentAlertContent: eventId is required');
+    const text = TEXT[kind][locale] ?? TEXT[kind].en;
+    const lang = TEXT[kind][locale] ? locale : 'en';
+    return {
+        level: 'info',
+        title: { [lang]: text.title },
+        body: { [lang]: text.body },
+        code: 'hds-' + kind,
+        hds: { kind, eventId }
+    };
+}
+/**
+ * Pure part of `listDocumentAlerts` (exported for tests): one alert per `(kind, eventId)`, the
+ * earliest, oldest first. A `document-shared` is `current` unless a later `document-unshared`
+ * of the same document exists.
+ */
+function parseDocumentAlerts(events) {
+    const kinds = new Set(Object.values(exports.DOCUMENT_ALERT_KINDS));
+    const seen = new Map();
+    const lastShare = new Map();
+    const sorted = [...(events ?? [])].sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
+    for (const e of sorted) {
+        if (e.type !== dataExport_ts_1.ET_ALERT)
+            continue;
+        const c = e.content ?? {};
+        const kind = c.hds?.kind;
+        const eventId = c.hds?.eventId;
+        if (!kinds.has(kind) || typeof eventId !== 'string' || eventId.length === 0)
+            continue;
+        const time = e.time ?? 0;
+        if (kind !== exports.DOCUMENT_ALERT_KINDS.SENT)
+            lastShare.set(eventId, { kind, time });
+        const key = kind + ':' + eventId;
+        if (seen.has(key))
+            continue;
+        const from = c.from && typeof c.from.username === 'string' ? { username: c.from.username, host: String(c.from.host ?? '') } : null;
+        seen.set(key, { alertEventId: e.id, kind, eventId, time, direction: from ? 'received' : 'sent', from, current: true });
+    }
+    const out = [...seen.values()];
+    for (const a of out) {
+        if (a.kind === exports.DOCUMENT_ALERT_KINDS.SHARED)
+            a.current = lastShare.get(a.eventId)?.kind === exports.DOCUMENT_ALERT_KINDS.SHARED;
+    }
+    return out;
+}
+// ---- both sides ---- //
+/** Post a document alert on the own collectors stream; the plugin delivers it to the peer. */
+async function postDocumentAlert(connection, collectorStreamId, kind, eventId, locale) {
+    if (!collectorStreamId)
+        throw new errors_ts_1.HDSLibError('postDocumentAlert: collectorStreamId is required', { reason: 'no-collector-stream' });
+    const event = await connection.apiOne('events.create', {
+        streamIds: [collectorStreamId],
+        type: dataExport_ts_1.ET_ALERT,
+        content: buildDocumentAlertContent(kind, eventId, locale)
+    }, 'event');
+    return { alertEventId: event.id };
+}
+/** The document alerts on one collectors stream (either side), as `parseDocumentAlerts` returns them. */
+async function listDocumentAlerts(connection, collectorStreamId, opts = {}) {
+    const events = await connection.apiOne('events.get', {
+        streams: [collectorStreamId],
+        types: [dataExport_ts_1.ET_ALERT],
+        limit: opts.limit ?? 500
+    }, 'events');
+    return parseDocumentAlerts(events);
+}
+// ---- the person's side (personal token) ---- //
+/**
+ * The share children in the person's account. Empty when the root does not exist yet. `includeTrashed`: also the
+ * trashed ones (a cleanup interrupted between its two deletes).
+ */
+async function listShareStreams(connection, opts = {}) {
+    try {
+        const params = { parentId: exports.DOCUMENT_SHARES_ROOT_ID };
+        if (opts.includeTrashed === true)
+            params.state = 'all';
+        const streams = await connection.apiOne('streams.get', params, 'streams');
+        return shareStreamsIn(streams);
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) === 'unknown-referenced-resource')
+            return [];
+        throw e;
+    }
+}
+/** Create the `document-shares` root (with its model name) if missing. Idempotent. */
+async function ensureDocumentSharesRoot(connection) {
+    let name = 'Shared documents';
+    try {
+        name = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(exports.DOCUMENT_SHARES_ROOT_ID).name ?? name;
+    }
+    catch { /* model not loaded */ }
+    try {
+        await connection.apiOne('streams.create', { id: exports.DOCUMENT_SHARES_ROOT_ID, name });
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'item-already-exists')
+            throw e;
+    }
+}
+/** The relationship's share child for `direction`, created (with the root) when missing. */
+async function ensureShareStream(connection, rel, direction) {
+    const relationship = relationshipIdOf(requireAccessId(rel, 'ensureShareStream'));
+    const existing = (await listShareStreams(connection)).find(s => s.relationship === relationship && s.direction === direction);
+    if (existing)
+        return existing.id;
+    await ensureDocumentSharesRoot(connection);
+    const id = newShareStreamId();
+    // pryv's typings take flat clientData values only
+    await connection.apiOne('streams.create', {
+        id,
+        name: id,
+        parentId: exports.DOCUMENT_SHARES_ROOT_ID,
+        clientData: { hdsDocumentShare: { relationship, direction } }
+    }, 'stream');
+    return id;
+}
+/**
+ * Share one document with a contact. In order: the share child (created if needed), the
+ * contact's `read` on it (scope update, waited for), the share id added to the document, then
+ * the `document-shared` alert. When the grant already reads every document, only the alert.
+ */
+async function shareDocument(connection, rel, eventId, opts = {}) {
+    const collectorStreamId = requireCollectorStream(rel, 'shareDocument');
+    if (sharesAllDocuments(rel.grantedPermissions)) {
+        const { alertEventId } = await postDocumentAlert(connection, collectorStreamId, exports.DOCUMENT_ALERT_KINDS.SHARED, eventId, opts.locale);
+        return { mode: 'all', shareStreamId: null, scopeUpdate: null, alertEventId };
+    }
+    let shareStreamId = shareStreamsOf(rel.grantedPermissions).shared;
+    let scopeUpdate = null;
+    if (shareStreamId == null) {
+        shareStreamId = await ensureShareStream(connection, rel, 'shared');
+        scopeUpdate = await (0, scope_ts_1.shareStreamsAgain)(connection, rel, [shareStreamId], { ...opts, level: 'read', waitForCompletion: true });
+    }
+    await changeEventStreams(connection, eventId, ids => ids.includes(shareStreamId) ? ids : [...ids, shareStreamId], 'shareDocument');
+    const { alertEventId } = await postDocumentAlert(connection, collectorStreamId, exports.DOCUMENT_ALERT_KINDS.SHARED, eventId, opts.locale);
+    return { mode: 'shared', shareStreamId, scopeUpdate, alertEventId };
+}
+/** Take one document back: the relationship's share id removed from it, then the `document-unshared` alert. */
+async function unshareDocument(connection, rel, eventId, opts = {}) {
+    const collectorStreamId = requireCollectorStream(rel, 'unshareDocument');
+    const relationship = relationshipIdOf(requireAccessId(rel, 'unshareDocument'));
+    const ids = new Set((await listShareStreams(connection)).filter(s => s.relationship === relationship && s.direction === 'shared').map(s => s.id));
+    const granted = shareStreamsOf(rel.grantedPermissions).shared;
+    if (granted)
+        ids.add(granted);
+    if (ids.size === 0)
+        throw new errors_ts_1.HDSLibError('unshareDocument: nothing is shared with this relationship', { reason: 'not-shared', eventId });
+    await changeEventStreams(connection, eventId, list => list.filter(id => !ids.has(id)), 'unshareDocument');
+    return postDocumentAlert(connection, collectorStreamId, exports.DOCUMENT_ALERT_KINDS.UNSHARED, eventId, opts.locale);
+}
+/**
+ * Stop sharing all documents with a contact: its `read` on the share child removed (scope
+ * update with `hds.removed`). The conversation goes on: a chat-only remainder is accepted, and
+ * when nothing else is shared the `hds-noop` placeholder is granted (and provisioned). Documents
+ * keep their share id until the child is deleted (`cleanupDocumentShares`); the contact no longer reads them.
+ */
+async function stopSharingDocuments(connection, rel, opts = {}) {
+    const shared = shareStreamsOf(rel.grantedPermissions).shared;
+    if (shared == null)
+        throw new errors_ts_1.HDSLibError('stopSharingDocuments: no document is shared with this relationship', { reason: 'not-shared' });
+    const others = (0, scope_ts_1.personPermissions)(rel.grantedPermissions).filter(p => p.streamId !== shared);
+    if (!others.some(p => p.streamId != null && !p.streamId.startsWith(':_')))
+        await (0, formSpec_ts_1.provisionHdsNoop)(connection);
+    return (0, scope_ts_1.stopSharingStream)(connection, rel, shared, { ...opts, parentIds: [exports.DOCUMENT_SHARES_ROOT_ID], allowChatOnly: true });
+}
+/** Let a contact send documents (Route B): `create-only` on the relationship's receive child. */
+async function allowDocumentsFrom(connection, rel, opts = {}) {
+    requireCollectorStream(rel, 'allowDocumentsFrom');
+    const granted = shareStreamsOf(rel.grantedPermissions).received;
+    if (granted)
+        return { receiveStreamId: granted, scopeUpdate: null };
+    const receiveStreamId = await ensureShareStream(connection, rel, 'received');
+    const scopeUpdate = await (0, scope_ts_1.shareStreamsAgain)(connection, rel, [receiveStreamId], { ...opts, level: 'create-only', waitForCompletion: true });
+    return { receiveStreamId, scopeUpdate };
+}
+/**
+ * Process a document a contact sent: checked (only on `received` share children, of
+ * `opts.relationship` when given; `file/xds-v1`, with an attachment, at most `maxBytes` in all when
+ * given), then moved to `streamIds = ['documents']` in one update so it can later be shared back.
+ * An event already on `documents` (received before, or the person's own) is refused, so a repeated
+ * or forged `document-sent` never strips its shares. A refused event is left as it is.
+ */
+async function receiveDocument(connection, eventId, opts = {}) {
+    const event = await getEvent(connection, eventId);
+    const streamIds = event.streamIds ?? [];
+    const relationship = opts.relationship != null ? relationshipIdOf(opts.relationship) : null;
+    const receiving = new Set((await listShareStreams(connection))
+        .filter(s => s.direction === 'received' && (relationship == null || s.relationship === relationship))
+        .map(s => s.id));
+    if (streamIds.length === 0 || !streamIds.every(id => receiving.has(id)))
+        return { ok: false, reason: 'not-received' };
+    if (event.type !== exports.ET_DOCUMENT)
+        return { ok: false, reason: 'not-a-document' };
+    const attachments = event.attachments ?? [];
+    if (attachments.length === 0)
+        return { ok: false, reason: 'no-attachment' };
+    if (opts.maxBytes != null && attachments.reduce((n, a) => n + (a.size ?? 0), 0) > opts.maxBytes)
+        return { ok: false, reason: 'too-large' };
+    await connection.apiOne('events.update', { id: eventId, update: { streamIds: [exports.DOCUMENTS_STREAM_ID] } }, 'event');
+    return { ok: true };
+}
+/**
+ * When a relationship ends: every event on its receive child moved to `['documents']`, then both
+ * children deleted with `mergeEventsWithParent: false` (shared documents keep `documents`).
+ * Returns the deleted child ids.
+ */
+async function cleanupDocumentShares(connection, relationship) {
+    const base = relationshipIdOf(relationship);
+    const mine = (await listShareStreams(connection, { includeTrashed: true })).filter(s => s.relationship === base);
+    for (const s of mine.filter(s => s.direction === 'received')) {
+        // each moved event leaves the child, so reading the first page again until it is empty walks them all;
+        // `state: 'all'` for trashed events, and because a trashed child is not expanded otherwise
+        for (;;) {
+            const events = await connection.apiOne('events.get', { streams: [s.id], state: 'all', limit: 500 }, 'events');
+            if (events.length === 0)
+                break;
+            for (const e of events) {
+                await connection.apiOne('events.update', { id: e.id, update: { streamIds: [exports.DOCUMENTS_STREAM_ID] } }, 'event');
+            }
+        }
+    }
+    for (const s of mine) {
+        // the first call trashes the stream, the second deletes it; the API takes the boolean
+        // `mergeEventsWithParent` (pryv's typings say `mergeEventsWithParents`, a string)
+        for (let i = 0; i < 2; i++) {
+            try {
+                await connection.apiOne('streams.delete', { id: s.id, mergeEventsWithParent: false });
+            }
+            catch (e) {
+                if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'unknown-resource')
+                    throw e;
+            }
+        }
+    }
+    return mine.map(s => s.id);
+}
+/** After a restore (accesses are not restored): clean up every share child whose relationship is not in `liveRelationships`. */
+async function cleanupOrphanDocumentShares(connection, liveRelationships) {
+    const live = new Set(liveRelationships.map(relationshipIdOf));
+    const orphans = [...new Set((await listShareStreams(connection, { includeTrashed: true })).map(s => s.relationship))].filter(r => !live.has(r));
+    const deleted = [];
+    for (const r of orphans)
+        deleted.push(...await cleanupDocumentShares(connection, r));
+    return deleted;
+}
+// ---- the contact's side ---- //
+/**
+ * Send one document to the person (Route B): the event and its file in one multipart create on
+ * the person's receive child (through the data grant), then the `document-sent` alert on the own
+ * collectors stream. The contact keeps its own copy separately.
+ */
+async function sendDocument(personConnection, ownConnection, params) {
+    if (!isShareStreamId(params?.receiveStreamId))
+        throw new errors_ts_1.HDSLibError('sendDocument: receiveStreamId must be a share child', { reason: 'not-a-share-stream' });
+    if (!params.collectorStreamId)
+        throw new errors_ts_1.HDSLibError('sendDocument: collectorStreamId is required', { reason: 'no-collector-stream' });
+    const event = { streamIds: [params.receiveStreamId], type: exports.ET_DOCUMENT, content: params.content };
+    if (params.time != null)
+        event.time = params.time;
+    const body = await personConnection.createEventWithFileFromBuffer(event, params.file, params.filename);
+    const eventId = body?.event?.id;
+    if (!eventId)
+        throw new errors_ts_1.HDSLibError('sendDocument: the document was not created', { reason: 'not-created', error: body?.error });
+    const { alertEventId } = await postDocumentAlert(ownConnection, params.collectorStreamId, exports.DOCUMENT_ALERT_KINDS.SENT, eventId, params.locale);
+    return { eventId, alertEventId };
+}
+// ---- internals ---- //
+function requireAccessId(rel, fn) {
+    if (!rel?.accessId)
+        throw new errors_ts_1.HDSLibError(`${fn}: the relationship's accessId is required`);
+    return rel.accessId;
+}
+function requireCollectorStream(rel, fn) {
+    requireAccessId(rel, fn);
+    if (!rel.localCollectorStreamId) {
+        throw new errors_ts_1.HDSLibError(`${fn}: the relationship has no collectors stream (no system channel)`, { reason: 'no-collector-stream', accessId: rel.accessId });
+    }
+    return rel.localCollectorStreamId;
+}
+async function getEvent(connection, eventId) {
+    return await connection.apiOne('events.getOne', { id: eventId }, 'event');
+}
+/** Delay before the second re-read of `changeEventStreams` (ms); tests set it to 0. */
+exports.streamsCheck = { delayMs: 1000 };
+/**
+ * `events.update` replaces the whole `streamIds` list and has no conditional write: write, then
+ * re-read at once and again after `streamsCheck.delayMs`, and throw `concurrent-update` if another
+ * device changed the list. This narrows the race, it does not close it: a write from another
+ * device landing later still wins (an atomic add / remove is asked of the platform).
+ */
+async function changeEventStreams(connection, eventId, change, fn) {
+    const before = (await getEvent(connection, eventId)).streamIds ?? [];
+    const wanted = change(before);
+    if (wanted.length === 0)
+        throw new errors_ts_1.HDSLibError(`${fn}: an event needs at least one stream`, { reason: 'no-stream-left', eventId });
+    if (sameList(before, wanted))
+        return;
+    await connection.apiOne('events.update', { id: eventId, update: { streamIds: wanted } }, 'event');
+    for (const wait of [0, exports.streamsCheck.delayMs]) {
+        if (wait > 0)
+            await new Promise(resolve => setTimeout(resolve, wait));
+        const after = (await getEvent(connection, eventId)).streamIds ?? [];
+        if (!sameList(after, wanted))
+            throw new errors_ts_1.HDSLibError(`${fn}: the document's streams changed meanwhile`, { reason: 'concurrent-update', eventId, streamIds: after });
+    }
+}
+function sameList(a, b) {
+    return a.length === b.length && [...a].sort().join('\n') === [...b].sort().join('\n');
+}
+const TEXT = {
+    'document-shared': {
+        en: { title: 'Document shared', body: 'A document was shared with you in this conversation.' },
+        fr: { title: 'Document partagé', body: 'Un document a été partagé avec vous dans cette conversation.' },
+        es: { title: 'Documento compartido', body: 'Se ha compartido un documento con usted en esta conversación.' }
+    },
+    'document-unshared': {
+        en: { title: 'Document no longer shared', body: 'A document shared with you in this conversation is no longer available.' },
+        fr: { title: 'Document retiré', body: 'Un document partagé avec vous dans cette conversation n’est plus disponible.' },
+        es: { title: 'Documento retirado', body: 'Un documento compartido con usted en esta conversación ya no está disponible.' }
+    },
+    'document-sent': {
+        en: { title: 'Document received', body: 'You received a document in this conversation.' },
+        fr: { title: 'Document reçu', body: 'Vous avez reçu un document dans cette conversation.' },
+        es: { title: 'Documento recibido', body: 'Ha recibido un documento en esta conversación.' }
+    }
+};
+
+
+/***/ },
+
 /***/ "./ts/cmc/formSpec.ts"
 /*!****************************!*\
   !*** ./ts/cmc/formSpec.ts ***!
@@ -25785,9 +26249,9 @@ exports.ET_SCOPE_REQUEST = 'consent/scope-request-cmc';
 function isDataStream(streamId) {
     return streamId != null && !streamId.startsWith(':_') && streamId !== 'hds-noop';
 }
-/** The stream ids above `streamId` in the data model, plus `*`. Empty set of parents for a stream outside the model. */
-function streamsAbove(streamId) {
-    const above = new Set(['*']);
+/** The stream ids above `streamId` in the data model and in `parentIds`, plus `*`. */
+function streamsAbove(streamId, parentIds = []) {
+    const above = new Set(['*', ...parentIds]);
     try {
         for (const id of (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getParentsIds(streamId, false)) {
             if (id !== streamId)
@@ -25811,18 +26275,23 @@ function personPermissions(perms) {
 }
 /**
  * Whether one stream can stop being shared on its own, and the permission set that would
- * remain. Pure: the model is only read to find the stream's parents.
+ * remain. Pure: the model is only read to find the stream's parents; `opts.parentIds` adds the
+ * parents of a stream the model does not know.
  */
-function planStopSharing(perms, streamId) {
+function planStopSharing(perms, streamId, opts = {}) {
     const own = personPermissions(perms);
-    const above = streamsAbove(streamId);
+    const above = streamsAbove(streamId, opts.parentIds);
     if (own.some(p => p.streamId != null && above.has(p.streamId)))
         return { ok: false, reason: 'shared-through-parent' };
     if (!own.some(p => p.streamId === streamId))
         return { ok: false, reason: 'not-shared' };
     const kept = own.filter(p => p.streamId !== streamId);
-    if (!kept.some(p => isDataStream(p.streamId)))
-        return { ok: false, reason: 'nothing-left' };
+    if (!kept.some(p => isDataStream(p.streamId))) {
+        if (opts.allowChatOnly !== true)
+            return { ok: false, reason: 'nothing-left' };
+        if (!kept.some(p => p.streamId === 'hds-noop'))
+            return { ok: true, newPermissions: [...kept, { streamId: 'hds-noop', level: 'read' }] };
+    }
     return { ok: true, newPermissions: kept };
 }
 /**
@@ -25851,7 +26320,7 @@ function scopeDiff(current, requested) {
  */
 async function stopSharingStream(connection, rel, streamId, opts = {}) {
     const collectorStreamId = requireCollectorStream(rel, 'stopSharingStream');
-    const plan = planStopSharing(rel.grantedPermissions, streamId);
+    const plan = planStopSharing(rel.grantedPermissions, streamId, opts);
     if ('reason' in plan) {
         throw new errors_ts_1.HDSLibError(`stopSharingStream: cannot stop sharing "${streamId}" on its own (${plan.reason})`, { reason: plan.reason, streamId });
     }
@@ -26426,7 +26895,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = void 0;
+exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -26532,6 +27001,8 @@ const cmcDataExport = __importStar(__webpack_require__(/*! ./cmc/dataExport.js *
 exports.cmcDataExport = cmcDataExport;
 const cmcScope = __importStar(__webpack_require__(/*! ./cmc/scope.js */ "./ts/cmc/scope.ts"));
 exports.cmcScope = cmcScope;
+const cmcDocuments = __importStar(__webpack_require__(/*! ./cmc/documents.js */ "./ts/cmc/documents.ts"));
+exports.cmcDocuments = cmcDocuments;
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
 exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
@@ -26601,7 +27072,8 @@ const HDSLib = {
     cmcAppScope,
     cmcConstants,
     cmcDataExport,
-    cmcScope
+    cmcScope,
+    cmcDocuments
 };
 exports["default"] = HDSLib;
 
