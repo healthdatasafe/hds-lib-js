@@ -523,6 +523,36 @@ is read by `listSharingNotes` when an answer carries it, but these calls cannot 
 `planStopSharing` / `stopSharingStream` take `{ parentIds?, allowChatOnly? }` for a stream the data model does not
 know: its parents in the account's own tree, and whether a remainder of `hds-noop` only (chat-only) is accepted.
 
+### Updating a consented person's data set
+
+A person keeps a frozen copy of the data set (`hdsFormSpec` on her `consent/accept-cmc` event). A changed data set
+reaches her inside a scope request, `content.hds = { formSpec, formSpecHash }` (data-model 3.41.0,
+`CUSTOM-FIELDS-AND-SYSTEM.md`), and her acceptance replaces her copy. Every change goes this way, one within the
+current grant included (the request then carries the unchanged permission set). `openLink` never leaves the
+connection's account: `formSpecForPerson` strips it, for invites (`createInviteWithFormSpec`) and requests alike.
+
+```javascript
+import { cmcScope } from 'hds-lib';
+
+// Connection side (the doctor), on the relationship's own collectors stream
+const sent = await cmcScope.proposeDataSetUpdate(connection, rel.localCollectorStreamId, formSpec, {
+  newPermissions,                      // default: what the data set needs; may be wider, never narrower
+  message: { en: '…', fr: '…' },
+  // expires: default now + 30 days (DATASET_REQUEST_TTL_SEC)
+});                                    // { scopeRequestEventId, remoteScopeRequestEventId, status, formSpecHash }
+const requests = await cmcScope.listScopeRequests(connection, rel.localCollectorStreamId);
+// each: { delivery, answer: 'accepted' | 'refused' | 'expired' | null, superseded, formSpecHash, reason, asked, … }
+const held = cmcScope.acceptedDataSetHash(requests) ?? await cmcFormSpec.formSpecFingerprint(inviteSnapshot);
+
+// Person side: notes of kind 'request' carry `formSpec` and `superseded` (never offer a superseded one)
+const res = await cmcScope.acceptDataSetUpdate(connection, note, acceptEventId); // { dataSetUpdated, … }
+```
+
+`proposeDataSetUpdate` throws `HDSLibError` with `reason` `permissions-do-not-cover` (before writing),
+`previous-request-in-flight` (an earlier request of the stream is neither delivered, failed nor expired: requests go
+out in order), `delivery-failed` or `delivery-pending` (with `scopeRequestEventId`). An unanswered request carrying a
+data set is `superseded` once a later one carries a data set, answered or not.
+
 ### Documents in a conversation
 
 `cmcDocuments` shares one document with one contact, takes it back, and lets a contact send documents (data-model

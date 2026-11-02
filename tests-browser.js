@@ -25813,6 +25813,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HDS_NOOP_PERMISSION = exports.HDS_NOOP_STREAM_ID = exports.FORM_SPEC_EVENT_TYPE = void 0;
 exports.formSpecFingerprint = formSpecFingerprint;
+exports.formSpecForPerson = formSpecForPerson;
 exports.validateFormSpecItemKeys = validateFormSpecItemKeys;
 exports.saveFormSpec = saveFormSpec;
 exports.loadFormSpec = loadFormSpec;
@@ -25859,6 +25860,15 @@ async function formSpecFingerprint(formSpec) {
     });
     const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(json));
     return 'sha256:' + [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+/**
+ * The copy of a FormSpec that may leave the doctor's account: without `openLink`, whose
+ * `capabilityUrl` is the permanent link itself (data-model CUSTOM-FIELDS-AND-SYSTEM.md, 3.41.0).
+ * Used for the invite snapshot and the data set carried by a scope request.
+ */
+function formSpecForPerson(formSpec) {
+    const { openLink: _o, ...rest } = formSpec;
+    return rest;
 }
 /**
  * Check every `sections[].itemKeys` entry of a FormSpec against the published
@@ -26082,7 +26092,7 @@ async function createInviteWithFormSpec(connection, params) {
         requesterMeta,
         // HDS-extension: snapshot the FormSpec on the trigger event content
         // so the capability-mint hook copies it into the offer event.
-        hdsFormSpec: params.formSpec
+        hdsFormSpec: formSpecForPerson(params.formSpec)
     };
     if (params.mode && params.mode !== 'single-use') {
         content.capability = { mode: params.mode };
@@ -26423,9 +26433,17 @@ const TEXT = {
  * A connection asking for data again sends a `consent/scope-request-cmc` (`cmc.proposeScopeUpdate`);
  * the person answers it with `cmc.acceptScopeUpdate` / `cmc.refuseScopeUpdate`, not with these
  * helpers. `listSharingNotes` reads all of it back as one list for the conversation.
+ *
+ * A connection's updated data set travels in a scope request too (data-model 3.41.0):
+ *
+ *   content.hds = { formSpec: FormSpec (never `openLink`), formSpecHash: 'sha256:…' }
+ *
+ * `proposeDataSetUpdate` writes it (connection side) and `listScopeRequests` reads the requests
+ * back with their answers; `acceptDataSetUpdate` accepts one and replaces the person's copy of the
+ * data set on her `consent/accept-cmc` event (person side).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ET_SCOPE_REQUEST = exports.ET_SCOPE_UPDATE = void 0;
+exports.DATASET_REQUEST_TTL_SEC = exports.ET_SCOPE_REQUEST = exports.ET_SCOPE_UPDATE = void 0;
 exports.personPermissions = personPermissions;
 exports.planStopSharing = planStopSharing;
 exports.scopeDiff = scopeDiff;
@@ -26433,8 +26451,16 @@ exports.stopSharingStream = stopSharingStream;
 exports.shareStreamsAgain = shareStreamsAgain;
 exports.listSharingNotes = listSharingNotes;
 exports.parseSharingNotes = parseSharingNotes;
+exports.proposeDataSetUpdate = proposeDataSetUpdate;
+exports.listScopeRequests = listScopeRequests;
+exports.parseScopeRequests = parseScopeRequests;
+exports.acceptedDataSetHash = acceptedDataSetHash;
+exports.acceptDataSetUpdate = acceptDataSetUpdate;
+exports.uncoveredPermissions = uncoveredPermissions;
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+const formSpec_ts_1 = __webpack_require__(/*! ./formSpec.js */ "./ts/cmc/formSpec.ts");
 exports.ET_SCOPE_UPDATE = 'consent/scope-update-cmc';
 exports.ET_SCOPE_REQUEST = 'consent/scope-request-cmc';
 /** A data stream the person would recognise as shared data (not a platform stream, not the chat-only placeholder). */
@@ -26596,11 +26622,187 @@ function parseSharingNotes(events, nowSec = Date.now() / 1000) {
                 expires,
                 answer,
                 answerEventId: answered?.id ?? null,
-                asked: answered?.asked ?? null
+                asked: answered?.asked ?? null,
+                formSpec: formSpecOf(c.hds),
+                superseded: false
             });
         }
     }
-    return out.sort((a, b) => a.time - b.time);
+    out.sort((a, b) => a.time - b.time);
+    markSuperseded(out.filter((n) => n.kind === 'request'));
+    return out;
+}
+// ---- data-set updates (data-model 3.41.0) ---- //
+/** Default lifetime of a data-set update request, in seconds (30 days). */
+exports.DATASET_REQUEST_TTL_SEC = 30 * 24 * 3600;
+/**
+ * Connection side: send an updated data set to one person, inside a scope request on the
+ * relationship's own collectors stream. Every change goes this way, one within the current grant
+ * included (`newPermissions` then equal to the grant). `openLink` is removed from the copy sent.
+ *
+ * Throws `HDSLibError` (`innerObject.reason`): `permissions-do-not-cover` when `newPermissions`
+ * misses a permission the data set needs; `previous-request-in-flight` while an earlier request
+ * of this stream is neither delivered nor failed nor expired (requests go out in order);
+ * `delivery-failed` / `delivery-pending` (with `scopeRequestEventId`) after the write.
+ */
+async function proposeDataSetUpdate(connection, collectorStreamId, formSpec, opts = {}) {
+    if (!collectorStreamId)
+        throw new errors_ts_1.HDSLibError('proposeDataSetUpdate: collectorStreamId is required');
+    const sent = (0, formSpec_ts_1.formSpecForPerson)(formSpec);
+    const needed = (0, formSpec_ts_1.deriveCmcPermissions)(sent);
+    const newPermissions = opts.newPermissions ?? needed;
+    const missing = uncoveredPermissions(needed, newPermissions);
+    if (missing.length > 0) {
+        throw new errors_ts_1.HDSLibError('proposeDataSetUpdate: newPermissions do not cover the data set', { reason: 'permissions-do-not-cover', missing });
+    }
+    const nowSec = Date.now() / 1000;
+    const previous = await listScopeRequests(connection, collectorStreamId);
+    const inFlight = previous.find(r => r.delivery === 'pending' && r.answer !== 'expired');
+    if (inFlight) {
+        throw new errors_ts_1.HDSLibError('proposeDataSetUpdate: the previous request is not delivered yet', { reason: 'previous-request-in-flight', scopeRequestEventId: inFlight.id });
+    }
+    const formSpecHash = await (0, formSpec_ts_1.formSpecFingerprint)(sent);
+    const hds = { formSpec: sent, formSpecHash };
+    const content = {
+        newPermissions,
+        expires: opts.expires ?? Math.round(nowSec + exports.DATASET_REQUEST_TTL_SEC),
+        hds
+    };
+    if (opts.message)
+        content.message = opts.message;
+    const event = await connection.apiOne('events.create', {
+        streamIds: [collectorStreamId],
+        type: exports.ET_SCOPE_REQUEST,
+        content
+    }, 'event');
+    if (opts.waitForDelivery === false) {
+        return { scopeRequestEventId: event.id, remoteScopeRequestEventId: null, status: 'pending', formSpecHash };
+    }
+    const until = Date.now() + (opts.deliveryTimeoutMs ?? 20000);
+    const interval = opts.deliveryPollIntervalMs ?? 400;
+    for (;;) {
+        const ev = await connection.apiOne('events.getOne', { id: event.id }, 'event');
+        const c = ev?.content ?? {};
+        if (c.status === 'failed') {
+            const reason = c.failure?.reason ?? 'delivery-failed';
+            throw new errors_ts_1.HDSLibError(`proposeDataSetUpdate: request not delivered: ${reason}`, { reason: 'delivery-failed', failure: c.failure, scopeRequestEventId: event.id });
+        }
+        if (typeof c.remoteEventId === 'string') {
+            return { scopeRequestEventId: event.id, remoteScopeRequestEventId: c.remoteEventId, status: c.status ?? 'delivered', formSpecHash };
+        }
+        if (Date.now() >= until)
+            break;
+        await new Promise(resolve => setTimeout(resolve, interval));
+    }
+    throw new errors_ts_1.HDSLibError('proposeDataSetUpdate: request not delivered yet', { reason: 'delivery-pending', scopeRequestEventId: event.id });
+}
+/**
+ * Connection side: its scope requests on one collectors stream, oldest first, each joined with the
+ * person's answer (the delivered `consent/scope-update-cmc` names the person's copy, which is the
+ * request's `remoteEventId`).
+ */
+async function listScopeRequests(connection, collectorStreamId, opts = {}) {
+    const events = await connection.apiOne('events.get', {
+        streams: [collectorStreamId],
+        types: [exports.ET_SCOPE_UPDATE, exports.ET_SCOPE_REQUEST],
+        limit: opts.limit ?? 200
+    }, 'events');
+    return parseScopeRequests(events);
+}
+/** Pure part of `listScopeRequests` (exported for tests). `nowSec` decides expiry. */
+function parseScopeRequests(events, nowSec = Date.now() / 1000) {
+    const answers = new Map();
+    for (const e of events ?? []) {
+        const c = e.content ?? {};
+        // the person's answers only: delivered here, so stamped with `from`
+        if (e.type !== exports.ET_SCOPE_UPDATE || c.from == null || typeof c.scopeRequestEventId !== 'string' || typeof c.accept !== 'boolean')
+            continue;
+        answers.set(c.scopeRequestEventId, { accepted: c.accept, id: e.id, time: e.time ?? 0, reason: messageOf(c.reason), asked: stringList(c.hds?.asked) });
+    }
+    const out = [];
+    for (const e of events ?? []) {
+        const c = e.content ?? {};
+        // the connection's own requests: no `from`
+        if (e.type !== exports.ET_SCOPE_REQUEST || c.from != null || !Array.isArray(c.newPermissions))
+            continue;
+        const remoteEventId = typeof c.remoteEventId === 'string' ? c.remoteEventId : null;
+        const answered = remoteEventId != null ? answers.get(remoteEventId) : undefined;
+        const expires = typeof c.expires === 'number' ? c.expires : null;
+        const formSpec = formSpecOf(c.hds);
+        let answer = null;
+        if (answered)
+            answer = answered.accepted ? 'accepted' : 'refused';
+        else if (expires != null && expires < nowSec)
+            answer = 'expired';
+        out.push({
+            id: e.id,
+            time: e.time ?? 0,
+            permissions: c.newPermissions,
+            message: messageOf(c.message),
+            expires,
+            remoteEventId,
+            delivery: remoteEventId != null ? 'delivered' : c.status === 'failed' ? 'failed' : 'pending',
+            formSpec,
+            formSpecHash: formSpec != null && typeof c.hds?.formSpecHash === 'string' ? c.hds.formSpecHash : null,
+            answer,
+            answeredAt: answered?.time ?? null,
+            answerEventId: answered?.id ?? null,
+            reason: answered?.reason ?? null,
+            asked: answered?.asked ?? null,
+            superseded: false
+        });
+    }
+    out.sort((a, b) => a.time - b.time);
+    markSuperseded(out.filter(r => r.delivery !== 'failed'));
+    return out;
+}
+/**
+ * Connection side: the `formSpecHash` of the data set a person holds through scope requests: the
+ * one of the request carrying a data set whose acceptance is the most recent. Null when she never
+ * accepted one: she then holds the invite's snapshot.
+ */
+function acceptedDataSetHash(requests) {
+    let best = null;
+    for (const r of requests ?? []) {
+        if (r.answer !== 'accepted' || r.formSpecHash == null)
+            continue;
+        if (best == null || (r.answeredAt ?? 0) > (best.answeredAt ?? 0))
+            best = r;
+    }
+    return best?.formSpecHash ?? null;
+}
+/**
+ * Person side: accept a connection's scope request and, when it carries a data set, replace her
+ * copy (`hdsFormSpec` on her `consent/accept-cmc` event `acceptEventId`) once the grant changed.
+ * Throws as `cmc.acceptScopeUpdate` does when nothing was applied; the copy is then untouched.
+ */
+async function acceptDataSetUpdate(connection, request, acceptEventId, opts = {}) {
+    const res = await patchedPryv_ts_1.cmc.acceptScopeUpdate(connection, request.id, opts);
+    let dataSetUpdated = false;
+    if (request.formSpec != null && acceptEventId != null) {
+        await (0, formSpec_ts_1.mirrorFormSpecOnAcceptEvent)(connection, acceptEventId, (0, formSpec_ts_1.formSpecForPerson)(request.formSpec));
+        dataSetUpdated = true;
+    }
+    return {
+        updateAcceptEventId: res.updateAcceptEventId,
+        newPermissions: Array.isArray(res.newPermissions) ? res.newPermissions : [],
+        peerNotified: res.peerNotified !== false,
+        dataSetUpdated
+    };
+}
+/**
+ * The permissions of `needed` that `granted` does not cover: a stream is covered by itself, a
+ * parent in the data model or `*`, at a level that includes the needed one.
+ */
+function uncoveredPermissions(needed, granted) {
+    return (needed ?? []).filter(n => {
+        if (n.streamId == null)
+            return !(granted ?? []).some(g => g.feature === n.feature && g.setting === n.setting);
+        const above = streamsAbove(n.streamId);
+        return !(granted ?? []).some(g => g.streamId != null &&
+            (g.streamId === n.streamId || above.has(g.streamId)) &&
+            levelIncludes(g.level ?? 'read', n.level ?? 'read'));
+    });
 }
 // ---- internals ---- //
 function requireCollectorStream(rel, fn) {
@@ -26618,6 +26820,31 @@ function messageOf(v) {
     if (v == null || typeof v !== 'object' || Array.isArray(v))
         return null;
     return v;
+}
+function formSpecOf(hds) {
+    const f = hds?.formSpec;
+    return f != null && typeof f === 'object' && Array.isArray(f.sections) ? f : null;
+}
+/**
+ * An unanswered request carrying a data set is superseded once a later one (`time`) carries a data
+ * set, answered or not: accepting it would bring back an older version (data-model 3.41.1).
+ * `requests` is sorted oldest first.
+ */
+function markSuperseded(requests) {
+    const withDataSet = requests.filter(r => r.formSpec != null);
+    for (const r of withDataSet.slice(0, -1)) {
+        if (r.answer == null)
+            r.superseded = true;
+    }
+}
+const LEVEL_INCLUDES = {
+    manage: ['manage', 'contribute', 'read', 'create-only'],
+    contribute: ['contribute', 'read', 'create-only'],
+    read: ['read'],
+    'create-only': ['create-only']
+};
+function levelIncludes(have, need) {
+    return (LEVEL_INCLUDES[have] ?? [have]).includes(need);
 }
 async function writeScopeUpdate(connection, collectorStreamId, content, opts) {
     const event = await connection.apiOne('events.create', {
@@ -40581,6 +40808,156 @@ describe('[CSCP] cmcScope', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(calls[0].params.streams, [COLLECTORS]);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(calls[0].params.types.sort(), ['consent/scope-request-cmc', 'consent/scope-update-cmc']);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(notes.length, 5);
+    });
+
+    it('[CSCP23] a request carrying a data set exposes it; an older unanswered one is superseded', () => {
+      const fs = { version: 1, title: { en: 'T' }, description: { en: '' }, permissions: [], sections: [] };
+      const notes = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.parseSharingNotes([
+        { id: 'd1', type: 'consent/scope-request-cmc', time: 10, content: { newPermissions: [{ streamId: 'body-weight', level: 'read' }], hds: { formSpec: fs, formSpecHash: 'sha256:a' } } },
+        { id: 'd2', type: 'consent/scope-request-cmc', time: 20, content: { newPermissions: [{ streamId: 'body-weight', level: 'read' }], hds: { formSpec: fs, formSpecHash: 'sha256:b' } } },
+        { id: 'p1', type: 'consent/scope-request-cmc', time: 30, content: { newPermissions: [{ streamId: 'body-height', level: 'read' }] } }
+      ], 100);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(notes.map(n => [n.id, n.formSpec != null, n.superseded]), [['d1', true, true], ['d2', true, false], ['p1', false, false]]);
+    });
+
+    it('[CSCP24] the older request stays superseded once the newer one is answered', () => {
+      const fs = { version: 1, title: { en: 'T' }, description: { en: '' }, permissions: [], sections: [] };
+      const notes = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.parseSharingNotes([
+        { id: 'd1', type: 'consent/scope-request-cmc', time: 10, content: { newPermissions: [{ streamId: 'body-weight', level: 'read' }], hds: { formSpec: fs } } },
+        { id: 'd2', type: 'consent/scope-request-cmc', time: 20, content: { newPermissions: [{ streamId: 'body-weight', level: 'read' }], hds: { formSpec: fs }, status: 'accepted' } }
+      ], 100);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(notes.map(n => [n.id, n.answer, n.superseded]), [['d1', null, true], ['d2', 'accepted', false]]);
+    });
+  });
+
+  describe('[CSCP-D] data-set updates (data-model 3.41.0)', () => {
+    const DOC = ':_cmc:apps:hds-collector:c1:collectors:patient--api-x';
+    const formSpec = {
+      version: 1,
+      title: { en: 'Follow-up' },
+      description: { en: '' },
+      permissions: [{ streamId: 'body-weight', level: 'read' }],
+      sections: [{ key: 's1', type: 'permanent', name: { en: 'S' }, itemKeys: ['body-weight'] }],
+      openLink: { inviteEventId: 'inv', capabilityUrl: 'https://cap@x/', createdAt: 1, expiresAt: null }
+    };
+
+    /** A doctor connection: `existing` events on the stream; a created request gets `settle(content)` on read. */
+    function doctorConnection (existing = [], settle = (c) => ({ ...c, status: 'completed', remoteEventId: 'remote-1' })) {
+      const calls = [];
+      const created = new Map();
+      return {
+        calls,
+        async apiOne (method, params, key) {
+          calls.push({ method, params });
+          if (method === 'events.get') return existing;
+          if (method === 'events.create') {
+            const event = { id: 'req-' + calls.length, ...params };
+            created.set(event.id, event);
+            return key ? event : { event };
+          }
+          if (method === 'events.getOne') {
+            const event = created.get(params.id);
+            return { ...event, content: settle(event.content) };
+          }
+          throw new Error('unexpected ' + method);
+        }
+      };
+    }
+
+    it('[CSCP30] proposeDataSetUpdate writes the data set in content.hds, without openLink, with expires', async () => {
+      const conn = doctorConnection();
+      const message = { en: 'Your data set was updated.' };
+      const before = Date.now() / 1000;
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(conn, DOC, formSpec, { message, deliveryPollIntervalMs: 1 });
+      const create = conn.calls.find(c => c.method === 'events.create');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(create.params.streamIds, [DOC]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(create.params.type, 'consent/scope-request-cmc');
+      const c = create.params.content;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(c).sort(), ['expires', 'hds', 'message', 'newPermissions']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(c.newPermissions, [{ streamId: 'body-weight', level: 'read' }], 'defaults to what the data set needs');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(c.expires >= before + _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.DATASET_REQUEST_TTL_SEC - 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.hds.formSpec.openLink, undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(formSpec.openLink.capabilityUrl, 'https://cap@x/', 'the caller\'s data set is not changed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(c.hds.formSpecHash, /^sha256:[0-9a-f]{64}$/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.hds.formSpecHash, await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcFormSpec.formSpecFingerprint(formSpec), 'the fingerprint ignores openLink');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res, { scopeRequestEventId: create.params.id ?? 'req-2', remoteScopeRequestEventId: 'remote-1', status: 'completed', formSpecHash: c.hds.formSpecHash });
+    });
+
+    it('[CSCP31] an unchanged or wider permission set is accepted; a narrower one is refused before writing', async () => {
+      const wider = [{ streamId: 'body', level: 'read' }, { streamId: 'body-height', level: 'read' }];
+      const ok = doctorConnection();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(ok, DOC, formSpec, { newPermissions: wider, deliveryPollIntervalMs: 1 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(ok.calls.find(c => c.method === 'events.create').params.content.newPermissions, wider);
+      const ko = doctorConnection();
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(ko, DOC, formSpec, { newPermissions: [{ streamId: 'body-height', level: 'read' }] }),
+        /do not cover/
+      );
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!ko.calls.some(c => c.method === 'events.create'));
+    });
+
+    it('[CSCP32] a chat-only data set asks for hds-noop', async () => {
+      const conn = doctorConnection();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(conn, DOC, { ...formSpec, permissions: [], sections: [] }, { deliveryPollIntervalMs: 1 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.calls.find(c => c.method === 'events.create').params.content.newPermissions, [{ streamId: 'hds-noop', level: 'read' }]);
+    });
+
+    it('[CSCP33] refuses while the previous request is in flight; a delivered, failed or expired one does not block', async () => {
+      const pending = { id: 'old', type: 'consent/scope-request-cmc', time: 1, content: { newPermissions: [{ streamId: 'body-weight', level: 'read' }], status: 'pending' } };
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(doctorConnection([pending]), DOC, formSpec), /previous-request-in-flight|not delivered yet/);
+      for (const content of [{ remoteEventId: 'r' }, { status: 'failed' }, { expires: 1 }]) {
+        const conn = doctorConnection([{ ...pending, content: { ...pending.content, ...content } }]);
+        await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(conn, DOC, formSpec, { deliveryPollIntervalMs: 1 });
+      }
+    });
+
+    it('[CSCP34] delivery failure and timeout throw with the request id', async () => {
+      const failed = doctorConnection([], (c) => ({ ...c, status: 'failed', failure: { reason: 'cmc-handler-delivery-failed' } }));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(failed, DOC, formSpec, { deliveryPollIntervalMs: 1 }), (e) => e.innerObject?.reason === 'delivery-failed' && e.innerObject.scopeRequestEventId != null);
+      const slow = doctorConnection([], (c) => ({ ...c, status: 'pending' }));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(slow, DOC, formSpec, { deliveryTimeoutMs: 5, deliveryPollIntervalMs: 1 }), (e) => e.innerObject?.reason === 'delivery-pending');
+      const nowait = doctorConnection();
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.proposeDataSetUpdate(nowait, DOC, formSpec, { waitForDelivery: false });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.status, 'pending');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!nowait.calls.some(c => c.method === 'events.getOne'));
+    });
+
+    it('[CSCP35] parseScopeRequests joins the delivered answers on remoteEventId, flags superseded and expired', () => {
+      const fs = { version: 1, title: { en: 'T' }, description: { en: '' }, permissions: [], sections: [] };
+      const req = (id, time, content) => ({ id, type: 'consent/scope-request-cmc', time, content: { newPermissions: [{ streamId: 'body-weight', level: 'read' }], ...content } });
+      const records = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.parseScopeRequests([
+        req('q1', 10, { remoteEventId: 'p1', hds: { formSpec: fs, formSpecHash: 'sha256:1' } }),
+        { id: 'a1', type: 'consent/scope-update-cmc', time: 15, content: { scopeRequestEventId: 'p1', accept: true, applied: true, from: { username: 'pat' } } },
+        req('q2', 20, { remoteEventId: 'p2' }),
+        { id: 'a2', type: 'consent/scope-update-cmc', time: 25, content: { scopeRequestEventId: 'p2', accept: false, reason: { en: 'no' }, hds: { asked: ['body-weight'] }, from: { username: 'pat' } } },
+        req('q3', 30, { remoteEventId: 'p3', hds: { formSpec: fs, formSpecHash: 'sha256:3' } }),
+        req('q4', 40, { remoteEventId: 'p4', hds: { formSpec: fs, formSpecHash: 'sha256:4' } }),
+        req('q5', 50, { status: 'failed', hds: { formSpec: fs, formSpecHash: 'sha256:5' } }),
+        req('q6', 5, { remoteEventId: 'p6', expires: 50 }),
+        // the person's own scope update (self-initiated) and a request copy with `from` are not the connection's
+        { id: 'x1', type: 'consent/scope-update-cmc', time: 60, content: { newPermissions: [], hds: { removed: ['body-weight'] }, from: { username: 'pat' } } },
+        { id: 'x2', type: 'consent/scope-request-cmc', time: 70, content: { newPermissions: [], from: { username: 'dr' } } }
+      ], 100);
+      const by = Object.fromEntries(records.map(r => [r.id, r]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(records.map(r => r.id), ['q6', 'q1', 'q2', 'q3', 'q4', 'q5']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([by.q1.answer, by.q1.answeredAt, by.q1.answerEventId, by.q1.formSpecHash], ['accepted', 15, 'a1', 'sha256:1']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([by.q2.answer, by.q2.reason, by.q2.asked, by.q2.formSpec], ['refused', { en: 'no' }, ['body-weight'], null]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([by.q3.superseded, by.q4.superseded, by.q5.superseded], [true, false, false]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([by.q5.delivery, by.q4.delivery, by.q6.answer], ['failed', 'delivered', 'expired']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.acceptedDataSetHash(records), 'sha256:1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.acceptedDataSetHash([]), null);
+    });
+
+    it('[CSCP36] acceptedDataSetHash takes the most recent acceptance, not the most recent request', () => {
+      const r = (id, time, answeredAt, hash) => ({ id, time, answer: 'accepted', answeredAt, formSpecHash: hash });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.acceptedDataSetHash([r('new', 20, 30, 'sha256:new'), r('old', 10, 40, 'sha256:old')]), 'sha256:old');
+    });
+
+    it('[CSCP37] uncoveredPermissions: parent, * and a higher level cover; a lower level does not', () => {
+      const need = [{ streamId: 'body-weight', level: 'contribute' }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.uncoveredPermissions(need, [{ streamId: 'body', level: 'manage' }]), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.uncoveredPermissions(need, [{ streamId: '*', level: 'contribute' }]), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.uncoveredPermissions(need, [{ streamId: 'body-weight', level: 'read' }]), need);
     });
   });
 });
