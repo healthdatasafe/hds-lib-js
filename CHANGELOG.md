@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.35.0] - 2026-11-02
+## [2.36.0] - 2026-11-02
 
 ### Added
 - **`cmcItemReminders`: a contact reminds the person of one item** (data-model 3.40.0, `CUSTOM-FIELDS-AND-SYSTEM.md`
