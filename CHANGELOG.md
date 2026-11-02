@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.37.0] - 2026-11-02
+
+### Added
+- **`cmcScope`: a connection's updated data set, confirmed by the person** (data-model 3.41.0 / 3.41.1,
+  `CUSTOM-FIELDS-AND-SYSTEM.md`, `content.hds = { formSpec, formSpecHash }` on `consent/scope-request-cmc`). The
+  connection: `proposeDataSetUpdate` (default permissions = what the data set needs, refuses a narrower set
+  `permissions-do-not-cover`, one request in flight at a time `previous-request-in-flight`, `expires` default 30 days
+  `DATASET_REQUEST_TTL_SEC`, waits for delivery), `listScopeRequests` / `parseScopeRequests` (its requests joined with
+  the person's answers on `remoteEventId`: delivery, answer, reason, asked, superseded), `acceptedDataSetHash`. The
+  person: `acceptDataSetUpdate` (accepts, then replaces `hdsFormSpec` on her accept event); `listSharingNotes` request
+  notes now carry `formSpec` and `superseded`. `uncoveredPermissions` (parent, `*` and higher levels cover).
+  Verified on demo: the platform accepts a request with an unchanged permission set.
+- `cmcFormSpec.formSpecForPerson`: a FormSpec without `openLink`.
+
+### Fixed
+- **The invite snapshot no longer carries `openLink`** (the permanent link's capability URL): `createInviteWithFormSpec`
+  sends `formSpecForPerson(formSpec)`, so it no longer lands on every patient's accept event.
+
 ## [2.36.0] - 2026-11-02
 
 ### Added

@@ -24,11 +24,22 @@
  * A connection asking for data again sends a `consent/scope-request-cmc` (`cmc.proposeScopeUpdate`);
  * the person answers it with `cmc.acceptScopeUpdate` / `cmc.refuseScopeUpdate`, not with these
  * helpers. `listSharingNotes` reads all of it back as one list for the conversation.
+ *
+ * A connection's updated data set travels in a scope request too (data-model 3.41.0):
+ *
+ *   content.hds = { formSpec: FormSpec (never `openLink`), formSpecHash: 'sha256:…' }
+ *
+ * `proposeDataSetUpdate` writes it (connection side) and `listScopeRequests` reads the requests
+ * back with their answers; `acceptDataSetUpdate` accepts one and replaces the person's copy of the
+ * data set on her `consent/accept-cmc` event (person side).
  */
 
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { HDSLibError } from '../errors.ts';
+import { cmc } from '../patchedPryv.ts';
 import type { pryv } from '../patchedPryv.ts';
+import { deriveCmcPermissions, formSpecFingerprint, formSpecForPerson, mirrorFormSpecOnAcceptEvent } from './formSpec.ts';
+import type { FormSpec } from './formSpec.ts';
 
 export const ET_SCOPE_UPDATE = 'consent/scope-update-cmc';
 export const ET_SCOPE_REQUEST = 'consent/scope-request-cmc';
@@ -258,6 +269,10 @@ export type SharingNote =
     answerEventId: string | null;
     /** `hds.asked` recorded on the answer, when its writer recorded it. */
     asked: string[] | null;
+    /** The updated data set the request carries (`hds.formSpec`), else null. */
+    formSpec: FormSpec | null;
+    /** A newer unanswered data-set request of the same stream replaces this one: do not offer to answer it. */
+    superseded: boolean;
   };
 
 interface ScopeEvent { id: string; type: string; time?: number; content?: Record<string, any> | null }
@@ -317,11 +332,256 @@ export function parseSharingNotes (events: ScopeEvent[], nowSec: number = Date.n
         expires,
         answer,
         answerEventId: answered?.id ?? null,
-        asked: answered?.asked ?? null
+        asked: answered?.asked ?? null,
+        formSpec: formSpecOf(c.hds),
+        superseded: false
       });
     }
   }
-  return out.sort((a, b) => a.time - b.time);
+  out.sort((a, b) => a.time - b.time);
+  markSuperseded(out.filter((n): n is Extract<SharingNote, { kind: 'request' }> => n.kind === 'request'));
+  return out;
+}
+
+// ---- data-set updates (data-model 3.41.0) ---- //
+
+/** Default lifetime of a data-set update request, in seconds (30 days). */
+export const DATASET_REQUEST_TTL_SEC = 30 * 24 * 3600;
+
+/** The HDS sub-envelope of a `consent/scope-request-cmc` content. */
+export interface ScopeRequestHds {
+  formSpec?: FormSpec;
+  formSpecHash?: string;
+}
+
+export interface ProposeDataSetUpdateOptions {
+  /** The full permission set the grant will hold. Default: what the data set needs (`deriveCmcPermissions`). */
+  newPermissions?: ScopePermission[];
+  /** The notice for the person, per language. */
+  message?: ScopeMessage;
+  /** Unix seconds; default now + {@link DATASET_REQUEST_TTL_SEC}. */
+  expires?: number;
+  /** Default true: resolve once delivered (`remoteEventId` recorded). False: return right after the write. */
+  waitForDelivery?: boolean;
+  /** Default 20000 ms. */
+  deliveryTimeoutMs?: number;
+  /** Default 400 ms. */
+  deliveryPollIntervalMs?: number;
+}
+
+export interface ProposeDataSetUpdateResult {
+  /** The connection's `consent/scope-request-cmc` trigger. */
+  scopeRequestEventId: string;
+  /** The person's copy, once delivered; the person's answer names it. */
+  remoteScopeRequestEventId: string | null;
+  /** `pending` when not waiting; else the trigger's status. */
+  status: string;
+  /** `formSpecFingerprint` of the data set sent. */
+  formSpecHash: string;
+}
+
+/** A connection's scope request with the person's answer, as {@link listScopeRequests} returns it. */
+export interface ScopeRequestRecord {
+  id: string;
+  time: number;
+  permissions: ScopePermission[];
+  message: ScopeMessage | null;
+  expires: number | null;
+  /** The person's copy (set by the platform on delivery). */
+  remoteEventId: string | null;
+  delivery: 'pending' | 'delivered' | 'failed';
+  /** The data set the request carries, else null. */
+  formSpec: FormSpec | null;
+  formSpecHash: string | null;
+  answer: 'accepted' | 'refused' | 'expired' | null;
+  /** `time` of the delivered answer. */
+  answeredAt: number | null;
+  answerEventId: string | null;
+  /** On a refusal: the person's words (pryv's `reason`). */
+  reason: ScopeMessage | null;
+  /** `hds.asked` on the answer. */
+  asked: string[] | null;
+  /** A newer unanswered data-set request replaces this one: not pending any more. */
+  superseded: boolean;
+}
+
+/**
+ * Connection side: send an updated data set to one person, inside a scope request on the
+ * relationship's own collectors stream. Every change goes this way, one within the current grant
+ * included (`newPermissions` then equal to the grant). `openLink` is removed from the copy sent.
+ *
+ * Throws `HDSLibError` (`innerObject.reason`): `permissions-do-not-cover` when `newPermissions`
+ * misses a permission the data set needs; `previous-request-in-flight` while an earlier request
+ * of this stream is neither delivered nor failed nor expired (requests go out in order);
+ * `delivery-failed` / `delivery-pending` (with `scopeRequestEventId`) after the write.
+ */
+export async function proposeDataSetUpdate (
+  connection: pryv.Connection,
+  collectorStreamId: string,
+  formSpec: FormSpec,
+  opts: ProposeDataSetUpdateOptions = {}
+): Promise<ProposeDataSetUpdateResult> {
+  if (!collectorStreamId) throw new HDSLibError('proposeDataSetUpdate: collectorStreamId is required');
+  const sent = formSpecForPerson(formSpec);
+  const needed = deriveCmcPermissions(sent) as ScopePermission[];
+  const newPermissions = opts.newPermissions ?? needed;
+  const missing = uncoveredPermissions(needed, newPermissions);
+  if (missing.length > 0) {
+    throw new HDSLibError('proposeDataSetUpdate: newPermissions do not cover the data set', { reason: 'permissions-do-not-cover', missing });
+  }
+  const nowSec = Date.now() / 1000;
+  const previous = await listScopeRequests(connection, collectorStreamId);
+  const inFlight = previous.find(r => r.delivery === 'pending' && r.answer !== 'expired');
+  if (inFlight) {
+    throw new HDSLibError('proposeDataSetUpdate: the previous request is not delivered yet', { reason: 'previous-request-in-flight', scopeRequestEventId: inFlight.id });
+  }
+  const formSpecHash = await formSpecFingerprint(sent);
+  const hds: ScopeRequestHds = { formSpec: sent, formSpecHash };
+  const content: Record<string, any> = {
+    newPermissions,
+    expires: opts.expires ?? Math.round(nowSec + DATASET_REQUEST_TTL_SEC),
+    hds
+  };
+  if (opts.message) content.message = opts.message;
+  const event = await connection.apiOne('events.create', {
+    streamIds: [collectorStreamId],
+    type: ET_SCOPE_REQUEST,
+    content
+  }, 'event') as { id: string };
+  if (opts.waitForDelivery === false) {
+    return { scopeRequestEventId: event.id, remoteScopeRequestEventId: null, status: 'pending', formSpecHash };
+  }
+  const until = Date.now() + (opts.deliveryTimeoutMs ?? 20000);
+  const interval = opts.deliveryPollIntervalMs ?? 400;
+  for (;;) {
+    const ev = await connection.apiOne('events.getOne', { id: event.id }, 'event') as { content?: Record<string, any> };
+    const c = ev?.content ?? {};
+    if (c.status === 'failed') {
+      const reason = c.failure?.reason ?? 'delivery-failed';
+      throw new HDSLibError(`proposeDataSetUpdate: request not delivered: ${reason}`, { reason: 'delivery-failed', failure: c.failure, scopeRequestEventId: event.id });
+    }
+    if (typeof c.remoteEventId === 'string') {
+      return { scopeRequestEventId: event.id, remoteScopeRequestEventId: c.remoteEventId, status: c.status ?? 'delivered', formSpecHash };
+    }
+    if (Date.now() >= until) break;
+    await new Promise(resolve => setTimeout(resolve, interval));
+  }
+  throw new HDSLibError('proposeDataSetUpdate: request not delivered yet', { reason: 'delivery-pending', scopeRequestEventId: event.id });
+}
+
+/**
+ * Connection side: its scope requests on one collectors stream, oldest first, each joined with the
+ * person's answer (the delivered `consent/scope-update-cmc` names the person's copy, which is the
+ * request's `remoteEventId`).
+ */
+export async function listScopeRequests (
+  connection: pryv.Connection,
+  collectorStreamId: string,
+  opts: { limit?: number } = {}
+): Promise<ScopeRequestRecord[]> {
+  const events = await connection.apiOne('events.get', {
+    streams: [collectorStreamId],
+    types: [ET_SCOPE_UPDATE, ET_SCOPE_REQUEST],
+    limit: opts.limit ?? 200
+  }, 'events') as ScopeEvent[];
+  return parseScopeRequests(events);
+}
+
+/** Pure part of `listScopeRequests` (exported for tests). `nowSec` decides expiry. */
+export function parseScopeRequests (events: ScopeEvent[], nowSec: number = Date.now() / 1000): ScopeRequestRecord[] {
+  const answers = new Map<string, { accepted: boolean; id: string; time: number; reason: ScopeMessage | null; asked: string[] | null }>();
+  for (const e of events ?? []) {
+    const c = e.content ?? {};
+    // the person's answers only: delivered here, so stamped with `from`
+    if (e.type !== ET_SCOPE_UPDATE || c.from == null || typeof c.scopeRequestEventId !== 'string' || typeof c.accept !== 'boolean') continue;
+    answers.set(c.scopeRequestEventId, { accepted: c.accept, id: e.id, time: e.time ?? 0, reason: messageOf(c.reason), asked: stringList(c.hds?.asked) });
+  }
+  const out: ScopeRequestRecord[] = [];
+  for (const e of events ?? []) {
+    const c = e.content ?? {};
+    // the connection's own requests: no `from`
+    if (e.type !== ET_SCOPE_REQUEST || c.from != null || !Array.isArray(c.newPermissions)) continue;
+    const remoteEventId = typeof c.remoteEventId === 'string' ? c.remoteEventId : null;
+    const answered = remoteEventId != null ? answers.get(remoteEventId) : undefined;
+    const expires = typeof c.expires === 'number' ? c.expires : null;
+    const formSpec = formSpecOf(c.hds);
+    let answer: ScopeRequestRecord['answer'] = null;
+    if (answered) answer = answered.accepted ? 'accepted' : 'refused';
+    else if (expires != null && expires < nowSec) answer = 'expired';
+    out.push({
+      id: e.id,
+      time: e.time ?? 0,
+      permissions: c.newPermissions as ScopePermission[],
+      message: messageOf(c.message),
+      expires,
+      remoteEventId,
+      delivery: remoteEventId != null ? 'delivered' : c.status === 'failed' ? 'failed' : 'pending',
+      formSpec,
+      formSpecHash: formSpec != null && typeof c.hds?.formSpecHash === 'string' ? c.hds.formSpecHash : null,
+      answer,
+      answeredAt: answered?.time ?? null,
+      answerEventId: answered?.id ?? null,
+      reason: answered?.reason ?? null,
+      asked: answered?.asked ?? null,
+      superseded: false
+    });
+  }
+  out.sort((a, b) => a.time - b.time);
+  markSuperseded(out.filter(r => r.delivery !== 'failed'));
+  return out;
+}
+
+/**
+ * Connection side: the `formSpecHash` of the data set a person holds through scope requests: the
+ * one of the request carrying a data set whose acceptance is the most recent. Null when she never
+ * accepted one: she then holds the invite's snapshot.
+ */
+export function acceptedDataSetHash (requests: ScopeRequestRecord[]): string | null {
+  let best: ScopeRequestRecord | null = null;
+  for (const r of requests ?? []) {
+    if (r.answer !== 'accepted' || r.formSpecHash == null) continue;
+    if (best == null || (r.answeredAt ?? 0) > (best.answeredAt ?? 0)) best = r;
+  }
+  return best?.formSpecHash ?? null;
+}
+
+/**
+ * Person side: accept a connection's scope request and, when it carries a data set, replace her
+ * copy (`hdsFormSpec` on her `consent/accept-cmc` event `acceptEventId`) once the grant changed.
+ * Throws as `cmc.acceptScopeUpdate` does when nothing was applied; the copy is then untouched.
+ */
+export async function acceptDataSetUpdate (
+  connection: pryv.Connection,
+  request: { id: string; formSpec: FormSpec | null },
+  acceptEventId: string | null,
+  opts: { scopeStreamId?: string; completionTimeoutMs?: number } = {}
+): Promise<{ updateAcceptEventId: string; newPermissions: ScopePermission[]; peerNotified: boolean; dataSetUpdated: boolean }> {
+  const res = await cmc.acceptScopeUpdate(connection, request.id, opts) as Record<string, any>;
+  let dataSetUpdated = false;
+  if (request.formSpec != null && acceptEventId != null) {
+    await mirrorFormSpecOnAcceptEvent(connection, acceptEventId, formSpecForPerson(request.formSpec));
+    dataSetUpdated = true;
+  }
+  return {
+    updateAcceptEventId: res.updateAcceptEventId,
+    newPermissions: Array.isArray(res.newPermissions) ? res.newPermissions : [],
+    peerNotified: res.peerNotified !== false,
+    dataSetUpdated
+  };
+}
+
+/**
+ * The permissions of `needed` that `granted` does not cover: a stream is covered by itself, a
+ * parent in the data model or `*`, at a level that includes the needed one.
+ */
+export function uncoveredPermissions (needed: ScopePermission[], granted: ScopePermission[]): ScopePermission[] {
+  return (needed ?? []).filter(n => {
+    if (n.streamId == null) return !(granted ?? []).some(g => g.feature === n.feature && g.setting === n.setting);
+    const above = streamsAbove(n.streamId);
+    return !(granted ?? []).some(g => g.streamId != null &&
+      (g.streamId === n.streamId || above.has(g.streamId)) &&
+      levelIncludes(g.level ?? 'read', n.level ?? 'read'));
+  });
 }
 
 // ---- internals ---- //
@@ -341,6 +601,34 @@ function stringList (v: unknown): string[] | null {
 function messageOf (v: unknown): ScopeMessage | null {
   if (v == null || typeof v !== 'object' || Array.isArray(v)) return null;
   return v as ScopeMessage;
+}
+
+function formSpecOf (hds: unknown): FormSpec | null {
+  const f = (hds as ScopeRequestHds | null | undefined)?.formSpec;
+  return f != null && typeof f === 'object' && Array.isArray(f.sections) ? f : null;
+}
+
+/**
+ * An unanswered request carrying a data set is superseded once a later one (`time`) carries a data
+ * set, answered or not: accepting it would bring back an older version (data-model 3.41.1).
+ * `requests` is sorted oldest first.
+ */
+function markSuperseded (requests: Array<{ answer: string | null; formSpec: FormSpec | null; superseded: boolean }>): void {
+  const withDataSet = requests.filter(r => r.formSpec != null);
+  for (const r of withDataSet.slice(0, -1)) {
+    if (r.answer == null) r.superseded = true;
+  }
+}
+
+const LEVEL_INCLUDES: Record<string, string[]> = {
+  manage: ['manage', 'contribute', 'read', 'create-only'],
+  contribute: ['contribute', 'read', 'create-only'],
+  read: ['read'],
+  'create-only': ['create-only']
+};
+
+function levelIncludes (have: string, need: string): boolean {
+  return (LEVEL_INCLUDES[have] ?? [have]).includes(need);
 }
 
 async function writeScopeUpdate (

@@ -131,6 +131,16 @@ export async function formSpecFingerprint (formSpec: FormSpec): Promise<string> 
   return 'sha256:' + [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * The copy of a FormSpec that may leave the doctor's account: without `openLink`, whose
+ * `capabilityUrl` is the permanent link itself (data-model CUSTOM-FIELDS-AND-SYSTEM.md, 3.41.0).
+ * Used for the invite snapshot and the data set carried by a scope request.
+ */
+export function formSpecForPerson (formSpec: FormSpec): FormSpec {
+  const { openLink: _o, ...rest } = formSpec;
+  return rest;
+}
+
 /** Why a FormSpec item key does not resolve cleanly against the published data-model. */
 export type FormSpecItemKeyIssueReason = 'unknown' | 'deprecated' | 'system';
 
@@ -442,7 +452,7 @@ export async function createInviteWithFormSpec (
     requesterMeta,
     // HDS-extension: snapshot the FormSpec on the trigger event content
     // so the capability-mint hook copies it into the offer event.
-    hdsFormSpec: params.formSpec
+    hdsFormSpec: formSpecForPerson(params.formSpec)
   };
   if (params.mode && params.mode !== 'single-use') {
     content.capability = { mode: params.mode };

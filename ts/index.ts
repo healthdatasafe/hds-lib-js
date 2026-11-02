@@ -59,7 +59,7 @@ export type { FormSpec, FormSpecRecord, FormSpecItemKeyIssue, FormSpecItemKeyIss
 export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './appTemplates/datasetTemplate.ts';
 export type { LoadTemplateFromUrlOptions } from './appTemplates/loader.ts';
 export type { DataExportRequest, DataExportRequestParams } from './cmc/dataExport.ts';
-export type { ScopePermission, ScopeMessage, ScopeRelationship, ScopeUpdateHds, ScopeChangeOptions, ScopeChangeResult, StopSharingRefusal, StopSharingPlan, PlanStopSharingOptions, SharingNote } from './cmc/scope.ts';
+export type { ScopePermission, ScopeMessage, ScopeRelationship, ScopeUpdateHds, ScopeChangeOptions, ScopeChangeResult, StopSharingRefusal, StopSharingPlan, PlanStopSharingOptions, SharingNote, ScopeRequestHds, ProposeDataSetUpdateOptions, ProposeDataSetUpdateResult, ScopeRequestRecord } from './cmc/scope.ts';
 export type { DocumentAlertKind, ShareDirection, ShareStream, DocumentRelationship, DocumentAlert, ShareDocumentResult, ReceiveRefusal } from './cmc/documents.ts';
 export type { ItemReminder, ReminderSection, ItemReminderRefusal } from './cmc/itemReminders.ts';
 export type { PermissionView, PermissionLabelOptions } from './appTemplates/permissionLabels.ts';
