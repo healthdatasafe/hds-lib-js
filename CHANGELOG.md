@@ -1,6 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [2.35.0] - 2026-11-02
+
+### Added
+- **`cmcItemReminders`: a contact reminds the person of one item** (data-model 3.40.0, `CUSTOM-FIELDS-AND-SYSTEM.md`
+  kind `item-reminder`). The contact: `postItemReminder` (only an enterable item of a section of its request, else
+  `HDSLibError` with `reason` `not-in-request` / `unknown-item` / `not-enterable`; fixed EN / FR / ES title and body,
+  never the item's label), `lastRemindedAt` (its own copies, by item). The person: `reminderAction` (the section to
+  open the form in, and its index in the sections passed: the first section listing the item whose entry stream the
+  relationship's grant covers, the entry stream being the section's `context` when it is a model descendant of the
+  item's stream, else the item's stream; else the reason). Either side: `listItemReminders` / `parseItemReminders`
+  (every reminder, oldest first, `received` when it carries `content.from`), `buildItemReminderContent`,
+  `checkItemReminder`, `entryStreamOf`, `grantCovers`, `sectionsOfItem`. No reminder state.
 
 ## [2.35.0] - 2026-11-02
 

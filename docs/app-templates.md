@@ -550,6 +550,25 @@ const alerts = await cmcDocuments.listDocumentAlerts(connection, collectorStream
 are written, re-read and checked (`concurrent-update` when another device changed them meanwhile). Readers label a
 share child from its `direction`, never from its name.
 
+`cmcItemReminders` lets a contact remind the person to fill in one item of its request (data-model 3.40.0, kind
+`item-reminder`): a `notification/alert-cmc` with `content.hds = { kind: 'item-reminder', itemKey }`. Nothing else
+changes: no reminder state, and the item's own `reminder` definition (`computeReminders`) is not involved.
+
+```javascript
+import { cmcItemReminders } from 'hds-lib';
+// The contact: only an enterable item of a section of its request (else HDSLibError, reason not-in-request / ...)
+await cmcItemReminders.postItemReminder(ownConnection, collectorStreamId, 'body-weight', { sections, locale: 'fr' });
+const last = cmcItemReminders.lastRemindedAt(await cmcItemReminders.listItemReminders(ownConnection, collectorStreamId));
+// The person: the delivered ones (direction 'received'), and whether the form opens, from that relationship's grant
+const reminders = (await cmcItemReminders.listItemReminders(connection, collectorStreamId)).filter(r => r.direction === 'received');
+const action = cmcItemReminders.reminderAction(itemKey, rel.hdsFormSpec.sections, rel.grantedPermissions); // { ok, section, sectionIndex } | { ok: false, reason }
+```
+
+`reminderAction` checks the stream the entry would be written to (the section's `itemCustomizations[itemKey].context`
+when it is a model descendant of the item's stream, else the item's stream) against the grant (that stream, a model
+parent, or `*`, at a read level), trying every section that lists the item. `sectionIndex` is the index in the
+`sections` passed, not in an app's list of all its contacts' sections: map it, or open the form on `section`.
+
 ### Permission labels
 
 `appTemplates.dataName(streamId, { locale?, fallback? })` names the data a stream holds from the data model (the item
