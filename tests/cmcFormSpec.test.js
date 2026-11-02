@@ -238,6 +238,15 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       await cmcFormSpec.createInviteWithFormSpec(captureConn(calls), inviteParams());
       assert.ok(!('accessType' in calls[0].params.content.request));
     });
+
+    it('[CFS62] the snapshot sent to the patient carries no openLink (its capability URL)', async () => {
+      const calls = [];
+      const openLink = { inviteEventId: 'inv', capabilityUrl: 'https://cap@x/', createdAt: 1, expiresAt: null };
+      const formSpec = { ...basicSpec(), openLink };
+      await cmcFormSpec.createInviteWithFormSpec(captureConn(calls), inviteParams({ formSpec }));
+      assert.ok(!('openLink' in calls[0].params.content.hdsFormSpec));
+      assert.deepStrictEqual(formSpec.openLink, openLink, 'the doctor\'s data set keeps it');
+    });
   });
 });
 
