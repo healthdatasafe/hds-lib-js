@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.35.0] - 2026-11-02
+
+### Fixed
+- **The default export `HDSLib` now offers every named export.** `HDSModelPreferred`, `getPreferredInput`,
+  `getPreferredDisplay`, `CERVICAL_FLUID_METHOD_KEY`, `CERVICAL_FLUID_METHOD_LEGACY_KEY`, `HDSModelAppStreams` and
+  `HDSLibError` were importable by name but missing from `HDSLib.x`. A test (`[HDXD]`) now fails when a named runtime
+  export is left out of the default object (B-2026-11-02-10).
+
 ### Docs
 - README: an "Importer helpers" section listing `StreamsAutoCreate`, `formatEventDate`, the lab helpers, `forLoinc`,
   `checkLabResultCoded`, `withRelatedMirror` / `checkRelatedMirror` and `permissionView`, each with its data-model page
