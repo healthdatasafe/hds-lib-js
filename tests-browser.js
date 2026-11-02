@@ -26197,6 +26197,198 @@ function isChatOnlyFormSpec(formSpec) {
 
 /***/ },
 
+/***/ "./ts/cmc/itemReminders.ts"
+/*!*********************************!*\
+  !*** ./ts/cmc/itemReminders.ts ***!
+  \*********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * A contact reminds the person to fill in one item of its request. data-model 3.40.0,
+ * `CUSTOM-FIELDS-AND-SYSTEM.md` (the `item-reminder` kind): a `notification/alert-cmc` with
+ * `content.hds = { kind: 'item-reminder', itemKey }` on the contact's own collectors stream, which
+ * the plugin delivers to the person. Nothing else: no reminder state, the request is unchanged, and
+ * the item's own `reminder` definition (`computeReminders`) is not involved.
+ *
+ * - The contact (`postItemReminder`) names only an enterable item of a section of its request.
+ * - The person keeps the reminders carrying `content.from` (delivered), and offers the item's form
+ *   only while the relationship's grant covers the stream the entry would be written to
+ *   (`reminderAction`), read at display time.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ITEM_REMINDER_KIND = void 0;
+exports.buildItemReminderContent = buildItemReminderContent;
+exports.sectionsOfItem = sectionsOfItem;
+exports.checkItemReminder = checkItemReminder;
+exports.entryStreamOf = entryStreamOf;
+exports.grantCovers = grantCovers;
+exports.reminderAction = reminderAction;
+exports.parseItemReminders = parseItemReminders;
+exports.lastRemindedAt = lastRemindedAt;
+exports.postItemReminder = postItemReminder;
+exports.listItemReminders = listItemReminders;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const dataExport_ts_1 = __webpack_require__(/*! ./dataExport.js */ "./ts/cmc/dataExport.ts");
+exports.ITEM_REMINDER_KIND = 'item-reminder';
+const READ_LEVELS = new Set(['read', 'contribute', 'manage']);
+// ---- pure helpers ---- //
+/** Alert content for one item: fixed title and body, the item named by the reader from its model. */
+function buildItemReminderContent(itemKey, locale = 'en') {
+    if (typeof itemKey !== 'string' || itemKey.length === 0)
+        throw new errors_ts_1.HDSLibError('buildItemReminderContent: itemKey is required');
+    const lang = Object.hasOwn(TEXT, locale) ? locale : 'en';
+    return {
+        level: 'info',
+        title: { [lang]: TEXT[lang].title },
+        body: { [lang]: TEXT[lang].body },
+        code: 'hds-' + exports.ITEM_REMINDER_KIND,
+        hds: { kind: exports.ITEM_REMINDER_KIND, itemKey }
+    };
+}
+/** The item, when the loaded model knows it and a person can enter it; else the refusal. */
+function enterableItem(itemKey) {
+    let itemDef = null;
+    try {
+        itemDef = (0, HDSModelInitAndSingleton_ts_1.getModel)().itemsDefs.forKey(itemKey, false);
+    }
+    catch { /* model not loaded */ }
+    if (itemDef == null)
+        return { ok: false, reason: 'unknown-item' };
+    if (!itemDef.isEnterable)
+        return { ok: false, reason: 'not-enterable' };
+    return { ok: true, streamId: itemDef.data.streamId };
+}
+/** Every section of `sections` that lists `itemKey`, with its index in `sections`. */
+function sectionsOfItem(itemKey, sections) {
+    return (sections ?? []).flatMap((section, index) => (section?.itemKeys ?? []).includes(itemKey) ? [{ section, index }] : []);
+}
+/** The writer rule: null when `itemKey` may be reminded of under `sections`, else the refusal. */
+function checkItemReminder(itemKey, sections) {
+    const item = enterableItem(itemKey);
+    if ('reason' in item)
+        return item.reason;
+    return sectionsOfItem(itemKey, sections).length === 0 ? 'not-in-request' : null;
+}
+/**
+ * The stream an entry of `itemKey` would be written to: the section's `context` stream, else the
+ * item's. Null for an unknown or non-enterable item, and for a `context` that is not the item's
+ * stream or a model descendant of it (the form refuses to write there).
+ */
+function entryStreamOf(itemKey, section) {
+    const item = enterableItem(itemKey);
+    if ('reason' in item)
+        return null;
+    const custom = section?.itemCustomizations?.[itemKey];
+    const context = custom?.context;
+    if (typeof context !== 'string' || context.length === 0 || context === item.streamId)
+        return item.streamId;
+    try {
+        if ((0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getParentsIds(context, false).includes(item.streamId))
+            return context;
+    }
+    catch { /* model not loaded */ }
+    return null;
+}
+/** `perms` lets the contact read `streamId`: on that stream, a parent of it in the data model, or `*`. */
+function grantCovers(perms, streamId) {
+    const covering = new Set(['*', streamId]);
+    try {
+        for (const id of (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getParentsIds(streamId, false))
+            covering.add(id);
+    }
+    catch { /* model not loaded or stream unknown: the stream itself and `*` */ }
+    return (perms ?? []).some(p => p.streamId != null && covering.has(p.streamId) && READ_LEVELS.has(p.level ?? 'read'));
+}
+/**
+ * What the person's app may do with a reminder: open the item's form (`{ ok: true }`, with the
+ * first section listing the item whose entry stream the grant covers, and its index **in
+ * `sections`**), or show the bubble without the action. `perms` is the grant of the relationship
+ * whose collectors stream carries the reminder, `sections` its request's sections. A section whose
+ * `context` the form cannot write to is skipped; when only such sections list the item, the
+ * reason is `not-enterable`.
+ */
+function reminderAction(itemKey, sections, perms) {
+    const item = enterableItem(itemKey);
+    if ('reason' in item)
+        return { ok: false, reason: item.reason };
+    const found = sectionsOfItem(itemKey, sections);
+    if (found.length === 0)
+        return { ok: false, reason: 'not-in-request' };
+    let writable = false;
+    for (const { section, index } of found) {
+        const streamId = entryStreamOf(itemKey, section);
+        if (streamId == null)
+            continue;
+        writable = true;
+        if (grantCovers(perms, streamId))
+            return { ok: true, section, sectionIndex: index, streamId };
+    }
+    return { ok: false, reason: writable ? 'not-covered' : 'not-enterable' };
+}
+/** Pure part of `listItemReminders` (exported for tests): every reminder, oldest first. */
+function parseItemReminders(events) {
+    const out = [];
+    for (const e of events ?? []) {
+        if (e.type !== dataExport_ts_1.ET_ALERT)
+            continue;
+        const c = e.content ?? {};
+        const itemKey = c.hds?.itemKey;
+        if (c.hds?.kind !== exports.ITEM_REMINDER_KIND || typeof itemKey !== 'string' || itemKey.length === 0)
+            continue;
+        const from = c.from && typeof c.from.username === 'string' ? { username: c.from.username, host: String(c.from.host ?? '') } : null;
+        out.push({ alertEventId: e.id, itemKey, time: e.time ?? 0, direction: from ? 'received' : 'sent', from });
+    }
+    return out.sort((a, b) => a.time - b.time);
+}
+/** The contact's side: when it last reminded the person of each item (its own copies), by `itemKey`. */
+function lastRemindedAt(reminders) {
+    const out = {};
+    for (const r of reminders ?? []) {
+        if (r.direction === 'sent' && (out[r.itemKey] ?? -Infinity) < r.time)
+            out[r.itemKey] = r.time;
+    }
+    return out;
+}
+// ---- both sides ---- //
+/**
+ * The contact's side: remind the person of one item, on the own collectors stream (the plugin
+ * delivers it). `sections` are the request's sections: an item outside them, unknown to the model or
+ * not enterable is refused (`HDSLibError`, `reason`).
+ */
+async function postItemReminder(connection, collectorStreamId, itemKey, opts) {
+    if (!collectorStreamId)
+        throw new errors_ts_1.HDSLibError('postItemReminder: collectorStreamId is required', { reason: 'no-collector-stream' });
+    const refusal = checkItemReminder(itemKey, opts?.sections ?? []);
+    if (refusal != null)
+        throw new errors_ts_1.HDSLibError(`postItemReminder: cannot remind of "${itemKey}" (${refusal})`, { reason: refusal, itemKey });
+    const event = await connection.apiOne('events.create', {
+        streamIds: [collectorStreamId],
+        type: dataExport_ts_1.ET_ALERT,
+        content: buildItemReminderContent(itemKey, opts.locale)
+    }, 'event');
+    return { alertEventId: event.id };
+}
+/** The reminders on one collectors stream (either side), as `parseItemReminders` returns them. */
+async function listItemReminders(connection, collectorStreamId, opts = {}) {
+    const events = await connection.apiOne('events.get', {
+        streams: [collectorStreamId],
+        types: [dataExport_ts_1.ET_ALERT],
+        limit: opts.limit ?? 500
+    }, 'events');
+    return parseItemReminders(events);
+}
+const TEXT = {
+    en: { title: 'Reminder', body: 'Your contact asks you to fill in an entry.' },
+    fr: { title: 'Rappel', body: 'Votre contact vous demande de compléter une saisie.' },
+    es: { title: 'Recordatorio', body: 'Su contacto le pide que complete un registro.' }
+};
+
+
+/***/ },
+
 /***/ "./ts/cmc/scope.ts"
 /*!*************************!*\
   !*** ./ts/cmc/scope.ts ***!
@@ -26895,7 +27087,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = void 0;
+exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -27003,6 +27195,8 @@ const cmcScope = __importStar(__webpack_require__(/*! ./cmc/scope.js */ "./ts/cm
 exports.cmcScope = cmcScope;
 const cmcDocuments = __importStar(__webpack_require__(/*! ./cmc/documents.js */ "./ts/cmc/documents.ts"));
 exports.cmcDocuments = cmcDocuments;
+const cmcItemReminders = __importStar(__webpack_require__(/*! ./cmc/itemReminders.js */ "./ts/cmc/itemReminders.ts"));
+exports.cmcItemReminders = cmcItemReminders;
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
 exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
@@ -27066,14 +27260,22 @@ const HDSLib = {
     saveLanguage: accountPreferences_ts_1.saveLanguage,
     HDSModelConversions: HDSModel_Conversions_ts_1.HDSModelConversions,
     HDSModelConverters: HDSModel_Converters_ts_1.HDSModelConverters,
+    HDSModelPreferred: HDSModel_Preferred_ts_1.HDSModelPreferred,
+    getPreferredInput: HDSModel_Preferred_ts_1.getPreferredInput,
+    getPreferredDisplay: HDSModel_Preferred_ts_1.getPreferredDisplay,
+    CERVICAL_FLUID_METHOD_KEY: HDSModel_Preferred_ts_1.CERVICAL_FLUID_METHOD_KEY,
+    CERVICAL_FLUID_METHOD_LEGACY_KEY: HDSModel_Preferred_ts_1.CERVICAL_FLUID_METHOD_LEGACY_KEY,
+    HDSModelAppStreams: HDSModel_AppStreams_ts_1.HDSModelAppStreams,
     EuclidianDistanceEngine: EuclidianDistanceEngine_ts_1.EuclidianDistanceEngine,
+    HDSLibError: errors_ts_1.HDSLibError,
     extractOverloadAsDefinitions: overloadExtract_ts_1.extractOverloadAsDefinitions,
     cmcFormSpec,
     cmcAppScope,
     cmcConstants,
     cmcDataExport,
     cmcScope,
-    cmcDocuments
+    cmcDocuments,
+    cmcItemReminders
 };
 exports["default"] = HDSLib;
 
@@ -42649,6 +42851,7 @@ describe('[FED] formatEventDate', function () {
 (__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
 
 "use strict";
+var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1___namespace_cache;
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
@@ -42691,6 +42894,11 @@ describe('[HDLX] HDSLib.index', () => {
     const model2 = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel();
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model0, model2, 'HDSLib.getHDSModel() should used cached model');
     // -- refresh model
+  });
+
+  it('[HDXD] the default export offers every named export (B-2026-11-02-10)', () => {
+    const missing = Object.keys(/*#__PURE__*/ (_ts_index_ts__WEBPACK_IMPORTED_MODULE_1___namespace_cache || (_ts_index_ts__WEBPACK_IMPORTED_MODULE_1___namespace_cache = __webpack_require__.t(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__, 2)))).filter((k) => k !== 'default' && !(k in _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(missing, [], `missing from the default HDSLib export: ${missing.join(', ')}`);
   });
 
   describe('[HDUX] Utils', () => {
