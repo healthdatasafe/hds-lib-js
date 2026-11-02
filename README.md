@@ -32,6 +32,29 @@ const weight = model.itemsDefs.forKey('body-weight');
 const itemDef = model.itemsDefs.forEvent(event);
 ```
 
+## Importer helpers
+
+Helpers for code that writes or checks imported records (lab reports, documents, encounters). Each implements a
+convention specified in the [data model documentation](https://github.com/healthdatasafe/data-model/tree/main/documentation);
+the right column names the page. All need the model loaded (`initHDSModel()`) except where noted.
+
+| Helper | What it does | Import | Convention |
+|---|---|---|---|
+| `toolkit.StreamsAutoCreate` | `attachToConnection(connection)`, then `ensureExistsForItems(['body-weight', …])` creates the model streams the items need before the first write | `import { toolkit } from 'hds-lib'` | [`toolkit.md`](https://healthdatasafe.github.io/hds-lib-js/toolkit) |
+| `formatEventDate(eventOrTimeSec, opts?)` | Displays an event's date, honouring a partial date (`clientData.hdsTimePrecision`: `day`, `month`, `year`, `approx`) (no model needed) | `import { formatEventDate } from 'hds-lib'` | [PARTIAL-DATES.md](https://github.com/healthdatasafe/data-model/blob/main/documentation/PARTIAL-DATES.md) |
+| `model.itemsDefs.forLoinc(code)` | The item that owns a LOINC code, or null: a result with that code goes on the item, not on `lab-result/coded-v1` | `getHDSModel().itemsDefs` | [BLOOD-CHEMISTRY.md](https://github.com/healthdatasafe/data-model/blob/main/documentation/BLOOD-CHEMISTRY.md) |
+| `checkLabResultCoded(event)` | Warnings on a `lab-result/coded-v1` event: `owned-by-item`, `no-loinc`, `invalid-loinc` | `import { checkLabResultCoded } from 'hds-lib'` | BLOOD-CHEMISTRY.md |
+| `isValidLoincCode(code)` | LOINC check digit (no model needed) | `import { isValidLoincCode } from 'hds-lib'` | BLOOD-CHEMISTRY.md |
+| `labLoincOf(event)`, `labNumberOf(event)`, `labComparatorOf(event)`, `isExactLabValue(event)`, `labUnitText(content)`, `labSeriesKey(event)`, `labValueToFhir(event)` | Read a lab event: its LOINC code, its number (INR `ratio/generic` included), a printed limit (`< 1.5`), the unit as printed, its chart series, its FHIR `Observation.value[x]` (only `labLoincOf`, `labSeriesKey`, `labValueToFhir` need the model) | `import { labLoincOf, … } from 'hds-lib'` | BLOOD-CHEMISTRY.md, [FHIR-MAPPING.md](https://github.com/healthdatasafe/data-model/blob/main/documentation/FHIR-MAPPING.md) |
+| `withRelatedMirror(event, previousContent?)` | Returns the `clientData` to write: every event id held in content (`supersedes`, `authors[].eventId`, `encounterId`, `participants[].eventId`, …) mirrored as `related.<eventId>: true`, and a provider's `hdsGln` / `hdsZsr` set (no model needed) | `import { withRelatedMirror } from 'hds-lib'` | [PROVENANCE.md](https://github.com/healthdatasafe/data-model/blob/main/documentation/PROVENANCE.md), [ENCOUNTER.md](https://github.com/healthdatasafe/data-model/blob/main/documentation/ENCOUNTER.md), [DOCUMENTS.md](https://github.com/healthdatasafe/data-model/blob/main/documentation/DOCUMENTS.md) |
+| `checkRelatedMirror(event, targets?)`, `contentEventIds(event)` | Warnings for a missing or wrong mirror; the event ids an event holds in content (no model needed) | `import { checkRelatedMirror } from 'hds-lib'` | PROVENANCE.md, ENCOUNTER.md |
+| `appTemplates.permissionView(perm)`, `appTemplates.dataName(streamId)` | Names a requested permission from the model (with "and everything under it" for a parent stream), to show what an importer's access covers (without the model: `inModel: false`) | `import { appTemplates } from 'hds-lib'` | BLOOD-CHEMISTRY.md, [`app-templates.md`](https://healthdatasafe.github.io/hds-lib-js/app-templates) |
+
+Constants beside them: `LAB_RESULT_CODED`, `LAB_COMPARATORS`, `ENCOUNTER_VISIT`, `PROVIDER_PRACTITIONER`,
+`PROVIDER_ORGANIZATION`, `IDENTIFIER_SYSTEM_GLN`, `IDENTIFIER_SYSTEM_ZSR`. `clientData.sourceKey` and
+`clientData.hdsInstrument` (PROVENANCE.md) and medication coding ([MEDICATION.md](https://github.com/healthdatasafe/data-model/blob/main/documentation/MEDICATION.md))
+are conventions with no helper: the importer writes them itself.
+
 ## Content-Security-Policy
 
 `hds-lib` requires **no `'unsafe-eval'`**. Up to 2.6.1 it did — the AppTemplate loader compiled its

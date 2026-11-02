@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Docs
+- README: an "Importer helpers" section listing `StreamsAutoCreate`, `formatEventDate`, the lab helpers, `forLoinc`,
+  `checkLabResultCoded`, `withRelatedMirror` / `checkRelatedMirror` and `permissionView`, each with its data-model page
+  (site-agents#36 A12).
+
 ## [2.34.0] - 2026-11-01
 
 ### Added
