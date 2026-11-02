@@ -2,7 +2,7 @@ import { assert } from './test-utils/deps-node.js';
 /**
  * Tests related to HDSLib.index.js & utils
  */
-import HDSLib from '../ts/index.ts';
+import HDSLib, * as named from '../ts/index.ts';
 import { waitUntilFalse } from '../ts/utils.ts';
 import { resetModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 
@@ -35,6 +35,11 @@ describe('[HDLX] HDSLib.index', () => {
     const model2 = HDSLib.getHDSModel();
     assert.equal(model0, model2, 'HDSLib.getHDSModel() should used cached model');
     // -- refresh model
+  });
+
+  it('[HDXD] the default export offers every named export (B-2026-11-02-10)', () => {
+    const missing = Object.keys(named).filter((k) => k !== 'default' && !(k in HDSLib));
+    assert.deepEqual(missing, [], `missing from the default HDSLib export: ${missing.join(', ')}`);
   });
 
   describe('[HDUX] Utils', () => {
