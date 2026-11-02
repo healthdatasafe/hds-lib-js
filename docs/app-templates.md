@@ -561,11 +561,13 @@ await cmcItemReminders.postItemReminder(ownConnection, collectorStreamId, 'body-
 const last = cmcItemReminders.lastRemindedAt(await cmcItemReminders.listItemReminders(ownConnection, collectorStreamId));
 // The person: the delivered ones (direction 'received'), and whether the form opens, from that relationship's grant
 const reminders = (await cmcItemReminders.listItemReminders(connection, collectorStreamId)).filter(r => r.direction === 'received');
-const action = cmcItemReminders.reminderAction(itemKey, sections, rel.grantedPermissions); // { ok, sectionIndex } | { ok: false, reason }
+const action = cmcItemReminders.reminderAction(itemKey, rel.hdsFormSpec.sections, rel.grantedPermissions); // { ok, section, sectionIndex } | { ok: false, reason }
 ```
 
-`reminderAction` checks the stream the entry would be written to (the section's `itemCustomizations[itemKey].context`,
-else the item's stream) against the grant (that stream, a model parent, or `*`, at a read level).
+`reminderAction` checks the stream the entry would be written to (the section's `itemCustomizations[itemKey].context`
+when it is a model descendant of the item's stream, else the item's stream) against the grant (that stream, a model
+parent, or `*`, at a read level), trying every section that lists the item. `sectionIndex` is the index in the
+`sections` passed, not in an app's list of all its contacts' sections: map it, or open the form on `section`.
 
 ### Permission labels
 

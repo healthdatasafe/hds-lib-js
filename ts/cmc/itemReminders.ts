@@ -29,10 +29,10 @@ export interface ItemReminder {
   from: { username: string; host: string } | null;
 }
 
-/** A request section as these helpers read it (a `CollectorSectionInterface` fits). */
+/** A request section as these helpers read it (a FormSpec's `sections` entry fits). */
 export interface ReminderSection {
   itemKeys?: string[];
-  itemCustomizations?: Record<string, Record<string, unknown>>;
+  itemCustomizations?: Record<string, unknown>;
 }
 
 /** Why a reminder cannot be sent, or why its form cannot be opened. */
@@ -45,7 +45,7 @@ const READ_LEVELS = new Set(['read', 'contribute', 'manage']);
 /** Alert content for one item: fixed title and body, the item named by the reader from its model. */
 export function buildItemReminderContent (itemKey: string, locale: string = 'en'): Record<string, unknown> {
   if (typeof itemKey !== 'string' || itemKey.length === 0) throw new HDSLibError('buildItemReminderContent: itemKey is required');
-  const lang = TEXT[locale] ? locale : 'en';
+  const lang = Object.hasOwn(TEXT, locale) ? locale : 'en';
   return {
     level: 'info',
     title: { [lang]: TEXT[lang].title },
@@ -64,25 +64,33 @@ function enterableItem (itemKey: string): { ok: true; streamId: string } | { ok:
   return { ok: true, streamId: itemDef.data.streamId };
 }
 
-/** The first section of `sections` that lists `itemKey`, with its index; null when none does. */
-export function sectionOfItem<S extends ReminderSection> (itemKey: string, sections: S[] | null | undefined): { section: S; index: number } | null {
-  const index = (sections ?? []).findIndex(s => (s?.itemKeys ?? []).includes(itemKey));
-  return index < 0 ? null : { section: sections![index], index };
+/** Every section of `sections` that lists `itemKey`, with its index in `sections`. */
+export function sectionsOfItem<S extends ReminderSection> (itemKey: string, sections: S[] | null | undefined): Array<{ section: S; index: number }> {
+  return (sections ?? []).flatMap((section, index) => (section?.itemKeys ?? []).includes(itemKey) ? [{ section, index }] : []);
 }
 
 /** The writer rule: null when `itemKey` may be reminded of under `sections`, else the refusal. */
 export function checkItemReminder (itemKey: string, sections: ReminderSection[]): ItemReminderRefusal | null {
   const item = enterableItem(itemKey);
   if ('reason' in item) return item.reason;
-  return sectionOfItem(itemKey, sections) == null ? 'not-in-request' : null;
+  return sectionsOfItem(itemKey, sections).length === 0 ? 'not-in-request' : null;
 }
 
-/** The stream an entry of `itemKey` would be written to: the section's `context` stream, else the item's. */
+/**
+ * The stream an entry of `itemKey` would be written to: the section's `context` stream, else the
+ * item's. Null for an unknown or non-enterable item, and for a `context` that is not the item's
+ * stream or a model descendant of it (the form refuses to write there).
+ */
 export function entryStreamOf (itemKey: string, section?: ReminderSection | null): string | null {
-  const context = section?.itemCustomizations?.[itemKey]?.context;
-  if (typeof context === 'string' && context.length > 0) return context;
   const item = enterableItem(itemKey);
-  return item.ok ? item.streamId : null;
+  if ('reason' in item) return null;
+  const custom = section?.itemCustomizations?.[itemKey] as { context?: unknown } | undefined;
+  const context = custom?.context;
+  if (typeof context !== 'string' || context.length === 0 || context === item.streamId) return item.streamId;
+  try {
+    if (getModel().streams.getParentsIds(context, false).includes(item.streamId)) return context;
+  } catch { /* model not loaded */ }
+  return null;
 }
 
 /** `perms` lets the contact read `streamId`: on that stream, a parent of it in the data model, or `*`. */
@@ -96,8 +104,11 @@ export function grantCovers (perms: ScopePermission[], streamId: string): boolea
 
 /**
  * What the person's app may do with a reminder: open the item's form (`{ ok: true }`, with the
- * section to open it in), or show the bubble without the action. `perms` is the grant of the
- * relationship whose collectors stream carries the reminder, `sections` its request's sections.
+ * first section listing the item whose entry stream the grant covers, and its index **in
+ * `sections`**), or show the bubble without the action. `perms` is the grant of the relationship
+ * whose collectors stream carries the reminder, `sections` its request's sections. A section whose
+ * `context` the form cannot write to is skipped; when only such sections list the item, the
+ * reason is `not-enterable`.
  */
 export function reminderAction<S extends ReminderSection> (
   itemKey: string,
@@ -106,11 +117,16 @@ export function reminderAction<S extends ReminderSection> (
 ): { ok: true; section: S; sectionIndex: number; streamId: string } | { ok: false; reason: ItemReminderRefusal } {
   const item = enterableItem(itemKey);
   if ('reason' in item) return { ok: false, reason: item.reason };
-  const found = sectionOfItem(itemKey, sections);
-  if (found == null) return { ok: false, reason: 'not-in-request' };
-  const streamId = entryStreamOf(itemKey, found.section) ?? item.streamId;
-  if (!grantCovers(perms, streamId)) return { ok: false, reason: 'not-covered' };
-  return { ok: true, section: found.section, sectionIndex: found.index, streamId };
+  const found = sectionsOfItem(itemKey, sections);
+  if (found.length === 0) return { ok: false, reason: 'not-in-request' };
+  let writable = false;
+  for (const { section, index } of found) {
+    const streamId = entryStreamOf(itemKey, section);
+    if (streamId == null) continue;
+    writable = true;
+    if (grantCovers(perms, streamId)) return { ok: true, section, sectionIndex: index, streamId };
+  }
+  return { ok: false, reason: writable ? 'not-covered' : 'not-enterable' };
 }
 
 /** Pure part of `listItemReminders` (exported for tests): every reminder, oldest first. */

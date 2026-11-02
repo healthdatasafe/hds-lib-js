@@ -51,10 +51,12 @@ describe('[CREM] cmcItemReminders', function () {
       assert.strictEqual(cmcItemReminders.checkItemReminder('document', [{ itemKeys: ['document'] }]), 'not-enterable');
     });
 
-    it('[CREM3] the entry stream is the section context when set, else the item stream', () => {
+    it('[CREM3] the entry stream is the section context when set, else the item stream; a context the form cannot write to is null', () => {
       assert.strictEqual(cmcItemReminders.entryStreamOf('treatment-basic', SECTIONS[1]), 'treatment-fertility');
       assert.strictEqual(cmcItemReminders.entryStreamOf('treatment-basic', null), 'treatment');
       assert.strictEqual(cmcItemReminders.entryStreamOf('no-such-item'), null);
+      assert.strictEqual(cmcItemReminders.entryStreamOf('treatment-basic', { itemCustomizations: { 'treatment-basic': { context: 'body-weight' } } }), null);
+      assert.strictEqual(cmcItemReminders.entryStreamOf('treatment-basic', { itemCustomizations: { 'treatment-basic': { context: 'no-such-stream' } } }), null);
     });
 
     it('[CREM4] grantCovers: the stream, a model parent, or *, at a read level', () => {
@@ -74,6 +76,20 @@ describe('[CREM] cmcItemReminders', function () {
       assert.deepStrictEqual(cmcItemReminders.reminderAction('body-height', SECTIONS, [{ streamId: '*', level: 'read' }]), { ok: false, reason: 'not-in-request' });
       assert.deepStrictEqual(cmcItemReminders.reminderAction('no-such-item', SECTIONS, ctxOnly), { ok: false, reason: 'unknown-item' });
       assert.deepStrictEqual(cmcItemReminders.reminderAction('body-weight', null, ctxOnly), { ok: false, reason: 'not-in-request' });
+    });
+
+    it('[CREM5b] every section listing the item is tried; a context the form cannot write to is skipped', () => {
+      const bad = { itemKeys: ['treatment-basic'], itemCustomizations: { 'treatment-basic': { context: 'body-weight' } } };
+      const plain = { itemKeys: ['treatment-basic'] };
+      const both = [bad, SECTIONS[1], plain];
+      const onlyTreatment = [{ streamId: 'treatment', level: 'read' }];
+      const ok = cmcItemReminders.reminderAction('treatment-basic', both, onlyTreatment);
+      assert.deepStrictEqual({ ok: ok.ok, sectionIndex: ok.sectionIndex, streamId: ok.streamId }, { ok: true, sectionIndex: 1, streamId: 'treatment-fertility' });
+      const notFertility = cmcItemReminders.reminderAction('treatment-basic', [bad, plain], onlyTreatment);
+      assert.strictEqual(notFertility.sectionIndex, 1);
+      assert.deepStrictEqual(cmcItemReminders.reminderAction('treatment-basic', [bad], onlyTreatment), { ok: false, reason: 'not-enterable' });
+      assert.deepStrictEqual(cmcItemReminders.reminderAction('treatment-basic', [bad, plain], [{ streamId: 'mood', level: 'read' }]), { ok: false, reason: 'not-covered' });
+      assert.strictEqual(cmcItemReminders.buildItemReminderContent('body-weight', 'constructor').title.en, 'Reminder');
     });
 
     it('[CREM6] parse: every reminder oldest first, direction from content.from; other alerts and bad ones left out', () => {

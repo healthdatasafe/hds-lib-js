@@ -7,10 +7,11 @@
   kind `item-reminder`). The contact: `postItemReminder` (only an enterable item of a section of its request, else
   `HDSLibError` with `reason` `not-in-request` / `unknown-item` / `not-enterable`; fixed EN / FR / ES title and body,
   never the item's label), `lastRemindedAt` (its own copies, by item). The person: `reminderAction` (the section to
-  open the form in, while the relationship's grant covers the stream the entry would be written to: the section's
-  `context`, else the item's stream; else the reason). Either side: `listItemReminders` / `parseItemReminders` (every
-  reminder, oldest first, `received` when it carries `content.from`), `buildItemReminderContent`, `checkItemReminder`,
-  `entryStreamOf`, `grantCovers`, `sectionOfItem`. No reminder state.
+  open the form in, and its index in the sections passed: the first section listing the item whose entry stream the
+  relationship's grant covers, the entry stream being the section's `context` when it is a model descendant of the
+  item's stream, else the item's stream; else the reason). Either side: `listItemReminders` / `parseItemReminders`
+  (every reminder, oldest first, `received` when it carries `content.from`), `buildItemReminderContent`,
+  `checkItemReminder`, `entryStreamOf`, `grantCovers`, `sectionsOfItem`. No reminder state.
 
 ### Docs
 - README: an "Importer helpers" section listing `StreamsAutoCreate`, `formatEventDate`, the lab helpers, `forLoinc`,
