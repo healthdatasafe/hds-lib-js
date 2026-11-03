@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.38.0] - 2026-11-03
+
+### Added
+- **`appDescription`: how an HDS app names the app holding an access** (data-model 3.42.0, `APP-DESCRIPTION.md`).
+  `describeApp` applies the rule, first match wins: `vouched` (a catalogue entry by `id` / `appCode`, bound to its
+  `counterparty` for CMC, whatever the pointer; the manifest fills its gaps only when the pointer is the vouched
+  one), `registered` (an OAuth client's registration), `unvouched` (the manifest's name and host, never its icon),
+  `none`. `needsManifest` says when a fetch is needed (never for an entry with name, description and icon);
+  `loadAppManifest` reads it once per session (no credentials, no referrer, no redirect, JSON, 64 KB, 5 s; never
+  throws); `parseAppManifest`, `manifestPointerOf`, `vouchingEntry`, `appIdentityOfAccess`. CMC: the invite's
+  `requesterMeta.hdsApp` is mirrored on the person's accept event at accept (`mirrorAppPointerOnAcceptEvent`) and
+  read back through `clientData.cmc.acceptEventId` (`manifestPointerOfAccess`).
+
 ## [2.37.0] - 2026-11-02
 
 ### Added
