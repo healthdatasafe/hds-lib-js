@@ -1,6 +1,7 @@
 import { pryv } from '../patchedPryv.ts';
 import { getAttachmentUrl } from '../toolkit/getAttachmentUrl.ts';
 import { setPreferredLocales } from '../localizeText.ts';
+import { deleteForGood } from './HDSSettings.ts';
 import type { DateFormat, UnitSystem } from './HDSSettings.ts';
 
 type Connection = InstanceType<typeof pryv.Connection>;
@@ -370,6 +371,15 @@ const HDSProfile = {
 
     const field = PROFILE_FIELDS[key];
     const existing = _cache[key];
+
+    // Clearing any other field deletes its event, as HDSSettings.setDynamic(key, null) does: an event with
+    // `content: null` would keep the field "stored" (B-2026-10-28-10). The value falls back as on a load.
+    if (value === null) {
+      if (existing) await deleteForGood(_connection, existing.id);
+      delete _cache[key];
+      (_values as any)[key] = ({ ...DEFAULTS, ...browserDefaults() } as any)[key];
+      return;
+    }
 
     if (existing) {
       const updated = await _connection.apiOne(

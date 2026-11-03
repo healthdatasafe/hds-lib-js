@@ -95,7 +95,7 @@ function findDynamicPrefix (key: string): { prefix: string; eventType: string; c
  * already trashed elsewhere is deleted by the first call. B-2026-10-26-7: a single call
  * expecting `eventDeletion` threw "eventDeletion missing" and left the setting in place.
  */
-async function deleteForGood (connection: pryv.Connection, id: string): Promise<void> {
+export async function deleteForGood (connection: pryv.Connection, id: string): Promise<void> {
   const first = await connection.apiOne('events.delete', { id }) as { event?: unknown; eventDeletion?: unknown };
   if (first?.eventDeletion != null) return;
   // pryv's typings know only the trashing answer (`event`) of events.delete, hence the cast

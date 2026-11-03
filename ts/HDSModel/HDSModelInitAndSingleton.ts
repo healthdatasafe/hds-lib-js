@@ -1,5 +1,6 @@
 import { HDSModel } from './HDSModel.ts';
 import { HDSService } from '../HDSService.ts';
+import { HDSLibError } from '../errors.ts';
 import type { HDSModelOverload } from './HDSModel-Overload.ts';
 
 let hdsModelInstance: HDSModel | null = null;
@@ -37,8 +38,12 @@ export async function initHDSModel (opts: InitHDSModelOptions = {}): Promise<HDS
   if (!hdsModelInstance!.isLoaded) {
     const service = new HDSService();
     const serviceInfo = await service.info();
+    const modelUrl = serviceInfo.assets?.['hds-model'];
+    if (typeof modelUrl !== 'string' || modelUrl === '') {
+      throw new HDSLibError(`initHDSModel: the service info has no "hds-model" asset (assets: ${JSON.stringify(Object.keys(serviceInfo.assets ?? {}))})`);
+    }
     hdsModelInstance!.assets = serviceInfo.assets;
-    await hdsModelInstance!.load(serviceInfo.assets['hds-model'], opts.overload ?? null);
+    await hdsModelInstance!.load(modelUrl, opts.overload ?? null);
   }
   return hdsModelInstance!;
 }
