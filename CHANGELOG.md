@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.38.1] - 2026-11-03
+
+### Fixed
+- **`HDSProfile.set(key, null)` deletes the field's event** (B-2026-10-28-10), as `HDSSettings.setDynamic(key, null)`
+  has since 2.20.0. Only the avatar was cleared before; every other field kept an event with `content: null`, so an
+  emptied field still read as stored (`isStored`). The value falls back as on a load (identity fields `null`, account
+  preferences their default); clearing a field never stored is a no-op. Test `[HDSP-S8]`.
+- **`initHDSModel` fails with an explicit error** when the service info has no `hds-model` asset (B-2026-10-28-19),
+  instead of a `TypeError` inside `load`. Test `[IHM1]`.
+- Tests: `HDSProfile.test.js` restores the preferred locales after its `fr` round-trip, so a file run after it (e.g.
+  `eventToShortText`) no longer reads French labels.
+
 ## [2.38.0] - 2026-11-03
 
 ### Added

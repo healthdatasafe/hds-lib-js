@@ -1,6 +1,7 @@
 import { assert } from './test-utils/deps-node.js';
 import { HDSProfile, PROFILE_FIELDS, pryv } from '../ts/index.ts';
 import { createUser, init as initPryvService } from './test-utils/pryvService.js';
+import { resetPreferredLocales } from '../ts/localizeText.ts';
 
 describe('[PRFL] PROFILE_FIELDS', () => {
   it('[PRFL1] has expected keys', () => {
@@ -56,6 +57,11 @@ describe('[HDSP] HDSProfile (dev API)', function () {
 
   afterEach(() => {
     HDSProfile.unhook();
+  });
+
+  // [HDSP-S6] stores `fr` first: a hook applies it, so restore the default for the files that run next
+  after(() => {
+    resetPreferredLocales();
   });
 
   describe('[HDSP-U] unhook / defaults', () => {
@@ -213,6 +219,32 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       assert.strictEqual(all.dateOfBirth, '1985-03-15');
       assert.strictEqual(all.sex, 'male');
       assert.strictEqual(all.country, 'Switzerland');
+    });
+
+    it('[HDSP-S8] set(key, null) deletes the event instead of storing null content (B-2026-10-28-10)', async () => {
+      await HDSProfile.hookToConnection(connection);
+      assert.strictEqual(HDSProfile.isStored('country'), true);
+
+      await HDSProfile.set('country', null);
+      assert.strictEqual(HDSProfile.get('country'), null);
+      assert.strictEqual(HDSProfile.isStored('country'), false);
+      const left = await connection.apiOne('events.get', { streams: [PROFILE_FIELDS.country.streamId], state: 'all', types: [PROFILE_FIELDS.country.eventType] }, 'events');
+      assert.strictEqual(left.length, 0, 'no live or trashed event left');
+
+      await HDSProfile.reload();
+      assert.strictEqual(HDSProfile.get('country'), null);
+      assert.strictEqual(HDSProfile.isStored('country'), false);
+
+      // An account preference falls back to the same value a load gives it
+      await HDSProfile.set('timezone', null);
+      const cleared = HDSProfile.get('timezone');
+      assert.strictEqual(HDSProfile.isStored('timezone'), false);
+      await HDSProfile.reload();
+      assert.strictEqual(HDSProfile.get('timezone'), cleared);
+
+      // Clearing a field that was never stored is a no-op
+      await HDSProfile.set('country', null);
+      assert.strictEqual(HDSProfile.isStored('country'), false);
     });
   });
 
