@@ -18770,6 +18770,7 @@ exports.resetModel = resetModel;
 exports.initHDSModel = initHDSModel;
 const HDSModel_ts_1 = __webpack_require__(/*! ./HDSModel.js */ "./ts/HDSModel/HDSModel.ts");
 const HDSService_ts_1 = __webpack_require__(/*! ../HDSService.js */ "./ts/HDSService.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 let hdsModelInstance = null;
 function getModel() {
     if (hdsModelInstance == null) {
@@ -18793,8 +18794,12 @@ async function initHDSModel(opts = {}) {
     if (!hdsModelInstance.isLoaded) {
         const service = new HDSService_ts_1.HDSService();
         const serviceInfo = await service.info();
+        const modelUrl = serviceInfo.assets?.['hds-model'];
+        if (typeof modelUrl !== 'string' || modelUrl === '') {
+            throw new errors_ts_1.HDSLibError(`initHDSModel: the service info has no "hds-model" asset (assets: ${JSON.stringify(Object.keys(serviceInfo.assets ?? {}))})`);
+        }
         hdsModelInstance.assets = serviceInfo.assets;
-        await hdsModelInstance.load(serviceInfo.assets['hds-model'], opts.overload ?? null);
+        await hdsModelInstance.load(modelUrl, opts.overload ?? null);
     }
     return hdsModelInstance;
 }
@@ -20993,6 +20998,269 @@ class MonitorScope {
     }
 }
 exports.MonitorScope = MonitorScope;
+
+
+/***/ },
+
+/***/ "./ts/appDescription.ts"
+/*!******************************!*\
+  !*** ./ts/appDescription.ts ***!
+  \******************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * App description (data-model APP-DESCRIPTION.md): how an HDS app names the app holding an access.
+ *
+ * Three sources, one rule: the operator's catalogue (`vouched`), an OAuth client's registration (`registered`), the
+ * app's own manifest (`unvouched`), pointed to by `hdsApp.manifest` (`clientData.hdsApp` on a plain access; for a
+ * CMC relationship, the invite's `requesterMeta.hdsApp`, which the person's app mirrors as `content.hdsApp` on her
+ * accept event, read through `clientData.cmc.acceptEventId`). Pure but for `loadAppManifest` (one fetch per URL per
+ * session, never throws), `manifestPointerOfAccess` (reads the accept event) and `mirrorAppPointerOnAcceptEvent`.
+ * The words shown around a description ("not listed by Health Data Safe") are the apps'.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.manifestPointerOf = manifestPointerOf;
+exports.parseAppManifest = parseAppManifest;
+exports.loadAppManifest = loadAppManifest;
+exports.clearAppManifests = clearAppManifests;
+exports.vouchingEntry = vouchingEntry;
+exports.needsManifest = needsManifest;
+exports.describeApp = describeApp;
+exports.appIdentityOfAccess = appIdentityOfAccess;
+exports.manifestPointerOfAccess = manifestPointerOfAccess;
+exports.mirrorAppPointerOnAcceptEvent = mirrorAppPointerOnAcceptEvent;
+const MAX_URL = 2048;
+const MAX_BYTES = 64 * 1024;
+const TIMEOUT_MS = 5000;
+function httpsUrl(value) {
+    if (typeof value !== 'string' || value.length > MAX_URL)
+        return null;
+    try {
+        const url = new URL(value);
+        if (url.protocol !== 'https:' || url.username || url.password)
+            return null;
+        return url.href;
+    }
+    catch {
+        return null;
+    }
+}
+const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+function localized(raw, check = text) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+        return null;
+    const out = {};
+    for (const [lang, v] of Object.entries(raw)) {
+        const value = check(v);
+        if (value)
+            out[lang] = value;
+    }
+    return out.en ? out : null;
+}
+function openLinks(raw) {
+    const out = {};
+    if (typeof raw !== 'object' || raw === null)
+        return out;
+    for (const k of ['web', 'ios', 'android']) {
+        const url = httpsUrl(raw[k]);
+        if (url)
+            out[k] = url;
+    }
+    return out;
+}
+/** The manifest URL in an `hdsApp` holder (an access's `clientData`, an invite's `requesterMeta`), or null */
+function manifestPointerOf(holder) {
+    const raw = holder?.hdsApp?.manifest;
+    const url = httpsUrl(raw);
+    return url && !new URL(url).hash ? url : null;
+}
+/** An untrusted manifest body as an `AppManifest`, or null; a bad optional field is dropped, never the manifest */
+function parseAppManifest(raw) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+        return null;
+    const m = raw;
+    if (m.format !== 'hds-app-manifest' || m.formatVersion !== 1)
+        return null;
+    const appCode = text(m.appCode);
+    const name = localized(m.name);
+    if (!appCode || !name)
+        return null;
+    const out = { appCode, name, open: openLinks(m.open) };
+    const description = localized(m.description);
+    if (description)
+        out.description = description;
+    const icon = httpsUrl(m.icon);
+    if (icon)
+        out.icon = icon;
+    const p = m.provider;
+    const providerName = localized(p?.name);
+    if (providerName) {
+        out.provider = { name: providerName };
+        const url = httpsUrl(p?.url);
+        if (url)
+            out.provider.url = url;
+    }
+    const privacy = localized(m.privacy, httpsUrl);
+    if (privacy)
+        out.privacy = privacy;
+    const support = httpsUrl(m.support);
+    if (support)
+        out.support = support;
+    return out;
+}
+const loads = new Map();
+/**
+ * The manifest at `url`, read once per session (a failure is retried on the next call); never throws. No credentials,
+ * no referrer, no redirect, a JSON content type, 64 KB, 5 s.
+ */
+function loadAppManifest(url, fetchImpl = fetch) {
+    let p = loads.get(url);
+    if (!p) {
+        p = fetchManifest(url, fetchImpl);
+        loads.set(url, p);
+        p.then(m => { if (m === null && loads.get(url) === p)
+            loads.delete(url); });
+    }
+    return p;
+}
+async function fetchManifest(url, fetchImpl) {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
+    try {
+        const res = await fetchImpl(url, { credentials: 'omit', mode: 'cors', referrerPolicy: 'no-referrer', redirect: 'error', signal: abort.signal });
+        if (!res.ok || !/json/i.test(res.headers.get('content-type') ?? ''))
+            return null;
+        if (Number(res.headers.get('content-length') ?? 0) > MAX_BYTES)
+            return null;
+        const body = await res.text();
+        if (body.length > MAX_BYTES)
+            return null;
+        return parseAppManifest(JSON.parse(body));
+    }
+    catch {
+        return null;
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+/** Forget what was read (tests, sign-out) */
+function clearAppManifests() {
+    loads.clear();
+}
+/** The catalogue entry that vouches for this app: by `appCode` / `id`, and for an entry with `counterparty`, by it too */
+function vouchingEntry(input) {
+    return (input.catalogue ?? []).find(e => {
+        if (e.appCode !== input.appCode && e.id !== input.appCode)
+            return false;
+        if (!e.counterparty)
+            return true;
+        const c = input.counterparty;
+        return c?.host === e.counterparty.host && (e.counterparty.username == null || c?.username === e.counterparty.username);
+    }) ?? null;
+}
+/** Whether `describeApp` would use a manifest: no entry supplies the words, and the app points at one */
+function needsManifest(input) {
+    if (!input.pointer)
+        return false;
+    const entry = vouchingEntry(input);
+    if (!entry)
+        return !input.oauthClient?.clientName;
+    return sameUrl(entry.manifest, input.pointer) && !(entry.name && entry.description && entry.icon);
+}
+function sameUrl(a, b) {
+    return a != null && b != null && httpsUrl(a) === httpsUrl(b);
+}
+const hostOf = (url) => new URL(url).host;
+/** The one rule (APP-DESCRIPTION.md § The rule): first match wins */
+function describeApp(input) {
+    const { appCode, pointer, oauthClient } = input;
+    const manifest = input.manifest && input.manifest.appCode === appCode ? input.manifest : null;
+    const entry = vouchingEntry(input);
+    if (entry) {
+        const fill = manifest && pointer && sameUrl(entry.manifest, pointer) ? manifest : null;
+        const name = entry.name ? { en: entry.name } : fill?.name ?? null;
+        const description = localized(entry.description) ?? fill?.description;
+        const icon = entry.icon ?? (fill?.icon ? { type: 'url', value: fill.icon } : undefined);
+        const open = Object.keys(openLinks(entry.urls)).length > 0 ? openLinks(entry.urls) : fill?.open ?? {};
+        const provider = entry.provider ?? fill?.provider?.name;
+        return {
+            trust: 'vouched',
+            appCode,
+            name,
+            ...(description && { description }),
+            ...(icon && { icon }),
+            open,
+            ...(provider && { provider }),
+            ...(fill && pointer && { host: hostOf(pointer) })
+        };
+    }
+    if (oauthClient?.clientName) {
+        const logo = httpsUrl(oauthClient.logoUri);
+        const web = httpsUrl(oauthClient.clientUri);
+        return {
+            trust: 'registered',
+            appCode,
+            name: { en: oauthClient.clientName },
+            ...(logo && { icon: { type: 'url', value: logo } }),
+            open: web ? { web } : {}
+        };
+    }
+    if (manifest && pointer) {
+        return {
+            trust: 'unvouched',
+            appCode,
+            name: manifest.name,
+            ...(manifest.description && { description: manifest.description }),
+            open: manifest.open,
+            ...(manifest.provider && { provider: manifest.provider.name }),
+            host: hostOf(pointer)
+        };
+    }
+    return { trust: 'none', appCode, name: null, open: {} };
+}
+/** Who an access says it is: its app code (`cmc.appCode`, else the access name = `requestingAppId`) and its CMC counterparty */
+function appIdentityOfAccess(access) {
+    const cmc = access.clientData?.cmc;
+    const appCode = typeof cmc?.appCode === 'string' && cmc.appCode ? cmc.appCode : access.name ?? '';
+    return { appCode, counterparty: cmc?.counterparty ?? null };
+}
+/**
+ * The manifest URL an access points at: `clientData.hdsApp` on a plain access; for a CMC relationship, `content.hdsApp`
+ * on the person's accept event (`clientData.cmc.acceptEventId`; the offer itself is gone behind the consumed
+ * capability). Never throws.
+ */
+async function manifestPointerOfAccess(connection, access) {
+    const own = manifestPointerOf(access.clientData);
+    if (own)
+        return own;
+    const acceptEventId = access.clientData?.cmc?.acceptEventId;
+    if (typeof acceptEventId !== 'string')
+        return null;
+    try {
+        const accept = await connection.apiOne('events.getOne', { id: acceptEventId }, 'event');
+        return manifestPointerOf(accept?.content);
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * Person-side, at accept: mirror the invite's `requesterMeta.hdsApp` (read before consent, e.g. through
+ * `cmcFormSpec.readOfferWithFormSpec(...).content.requesterMeta`) onto her `consent/accept-cmc` event as
+ * `content.hdsApp`, as `mirrorFormSpecOnAcceptEvent` does for the data set. Writes nothing (and returns false) when
+ * the invite carries no valid pointer.
+ */
+async function mirrorAppPointerOnAcceptEvent(connection, acceptEventId, requesterMeta) {
+    const manifest = manifestPointerOf(requesterMeta);
+    if (!manifest)
+        return false;
+    const current = await connection.apiOne('events.getOne', { id: acceptEventId }, 'event');
+    await connection.apiOne('events.update', { id: acceptEventId, update: { content: { ...(current?.content ?? {}), hdsApp: { manifest } } } }, 'event');
+    return true;
+}
 
 
 /***/ },
@@ -27314,7 +27582,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = void 0;
+exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -27424,6 +27692,8 @@ const cmcDocuments = __importStar(__webpack_require__(/*! ./cmc/documents.js */ 
 exports.cmcDocuments = cmcDocuments;
 const cmcItemReminders = __importStar(__webpack_require__(/*! ./cmc/itemReminders.js */ "./ts/cmc/itemReminders.ts"));
 exports.cmcItemReminders = cmcItemReminders;
+const appDescription = __importStar(__webpack_require__(/*! ./appDescription.js */ "./ts/appDescription.ts"));
+exports.appDescription = appDescription;
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
 exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
@@ -27502,7 +27772,8 @@ const HDSLib = {
     cmcDataExport,
     cmcScope,
     cmcDocuments,
-    cmcItemReminders
+    cmcItemReminders,
+    appDescription
 };
 exports["default"] = HDSLib;
 
@@ -27799,6 +28070,7 @@ exports.HDSProfile = exports.PROFILE_FIELDS = void 0;
 exports.getHookedProfileConnection = getHookedProfileConnection;
 const getAttachmentUrl_ts_1 = __webpack_require__(/*! ../toolkit/getAttachmentUrl.js */ "./ts/toolkit/getAttachmentUrl.ts");
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const HDSSettings_ts_1 = __webpack_require__(/*! ./HDSSettings.js */ "./ts/settings/HDSSettings.ts");
 /**
  * Profile field definitions — each maps to a Pryv event in the profile/ stream tree.
  * These are account-level, shared across all connections (unlike HDSSettings which is per-app).
@@ -28112,6 +28384,15 @@ const HDSProfile = {
         }
         const field = exports.PROFILE_FIELDS[key];
         const existing = _cache[key];
+        // Clearing any other field deletes its event, as HDSSettings.setDynamic(key, null) does: an event with
+        // `content: null` would keep the field "stored" (B-2026-10-28-10). The value falls back as on a load.
+        if (value === null) {
+            if (existing)
+                await (0, HDSSettings_ts_1.deleteForGood)(_connection, existing.id);
+            delete _cache[key];
+            _values[key] = { ...DEFAULTS, ...browserDefaults() }[key];
+            return;
+        }
         if (existing) {
             const updated = await _connection.apiOne('events.update', { id: existing.id, update: { content: value } }, 'event');
             _cache[key] = updated;
@@ -28231,6 +28512,7 @@ exports["default"] = HDSProfile;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HDSSettings = exports.SETTING_TYPES = void 0;
+exports.deleteForGood = deleteForGood;
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 /**
  * Known setting event types — each stored as a separate Pryv event.
@@ -38185,6 +38467,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
 /* harmony import */ var _test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./test-utils/pryvService.js */ "./tests/test-utils/pryvService.js");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
 
 
 
@@ -38243,6 +38527,11 @@ describe('[HDSP] HDSProfile (dev API)', function () {
 
   afterEach(() => {
     _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+  });
+
+  // [HDSP-S6] stores `fr` first: a hook applies it, so restore the default for the files that run next
+  after(() => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)();
   });
 
   describe('[HDSP-U] unhook / defaults', () => {
@@ -38400,6 +38689,32 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.dateOfBirth, '1985-03-15');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.sex, 'male');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(all.country, 'Switzerland');
+    });
+
+    it('[HDSP-S8] set(key, null) deletes the event instead of storing null content (B-2026-10-28-10)', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('country'), true);
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('country', null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('country'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('country'), false);
+      const left = await connection.apiOne('events.get', { streams: [_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.country.streamId], state: 'all', types: [_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROFILE_FIELDS.country.eventType] }, 'events');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(left.length, 0, 'no live or trashed event left');
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('country'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('country'), false);
+
+      // An account preference falls back to the same value a load gives it
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('timezone', null);
+      const cleared = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('timezone');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('timezone'), false);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('timezone'), cleared);
+
+      // Clearing a field that was never stored is a no-op
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('country', null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('country'), false);
     });
   });
 
