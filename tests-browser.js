@@ -18539,6 +18539,27 @@ class HDSModelStreams {
         return streamData != null && streamData.role === 'context';
     }
     /**
+     * Ids of the roots marked `explicitGrantOnly` (data-model 3.43.0: `genetics`). An access covers such a root only
+     * when it names it or one of its children, never through `*` or a grant on another root: a `*` consent request is
+     * expanded into the model roots minus these, a directly minted `*` access carries a `level: 'none'` mask on each.
+     * See data-model documentation/GENETICS.md.
+     */
+    explicitGrantOnlyRootIds() {
+        return Object.values(this.#modelStreamsById)
+            .filter((s) => s.parentId == null && s.explicitGrantOnly === true)
+            .map((s) => s.id);
+    }
+    /**
+     * Whether `streamId` is a marked root or under one (see `explicitGrantOnlyRootIds`). False for a stream the model
+     * does not know.
+     */
+    isExplicitGrantOnly(streamId) {
+        const marked = this.explicitGrantOnlyRootIds();
+        if (marked.length === 0 || this.#modelStreamsById[streamId] == null)
+            return false;
+        return [streamId, ...this.getParentsIds(streamId, false)].some((id) => marked.includes(id));
+    }
+    /**
      * Get all parents id;
      */
     getParentsIds(streamId, throwErrorIfNotFound = true, initialArray = []) {
@@ -19082,6 +19103,7 @@ const HDSSettings_ts_1 = __importDefault(__webpack_require__(/*! ../settings/HDS
 const accountPreferences_ts_1 = __webpack_require__(/*! ../settings/accountPreferences.js */ "./ts/settings/accountPreferences.ts");
 const labResults_ts_1 = __webpack_require__(/*! ./labResults.js */ "./ts/HDSModel/labResults.ts");
 const encounters_ts_1 = __webpack_require__(/*! ./encounters.js */ "./ts/HDSModel/encounters.ts");
+const genetics_ts_1 = __webpack_require__(/*! ./genetics.js */ "./ts/HDSModel/genetics.ts");
 const DATE_SEPARATORS = {
     'DD.MM.YYYY': (p, year) => pad(p.d) + '.' + pad(p.m) + '.' + (year ? p.y : ''),
     'DD/MM/YYYY': (p, year) => pad(p.d) + '/' + pad(p.m) + (year ? '/' + p.y : ''),
@@ -19256,6 +19278,13 @@ function eventToShortTextWithOrigin(event) {
         const lab = (0, labResults_ts_1.labResultCodedText)(content);
         if (lab)
             return { text: lab, origin: null };
+    }
+    // A genetic variant result (site-agents#37): eventType-driven, "MTHFR C677T: present, heterozygous"; the `imported`
+    // item would otherwise fall to the generic object path.
+    if (event.type === genetics_ts_1.GENETIC_VARIANT_CODED) {
+        const text = (0, genetics_ts_1.geneticVariantText)(content);
+        if (text)
+            return { text, origin: null };
     }
     // Visits and providers (site-agents#24): eventType-driven too, "Hospital stay · Cardiology", a provider's name. The
     // composite item would otherwise read "Type of visit: …" or the first string of the content.
@@ -19940,6 +19969,41 @@ function getSymbol(eventType, model) {
     catch {
         return null;
     }
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/genetics.ts"
+/*!*********************************!*\
+  !*** ./ts/HDSModel/genetics.ts ***!
+  \*********************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.GENETIC_VARIANT_CODED = void 0;
+exports.geneticVariantText = geneticVariantText;
+/**
+ * Genetic test results (data-model 3.43.0, site-agents#37): one `genetic-variant/coded-v1` event per tested variant,
+ * under the `explicitGrantOnly` root `genetics`. See data-model documentation/GENETICS.md.
+ */
+exports.GENETIC_VARIANT_CODED = 'genetic-variant/coded-v1';
+/**
+ * Short text of a `genetic-variant/coded-v1` content: "MTHFR C677T: C677T hétérozygote" with the result as printed,
+ * else the coded result and zygosity ("MTHFR C677T: present, heterozygous"). Null when the content is not an object.
+ */
+function geneticVariantText(content) {
+    if (content == null || typeof content !== 'object')
+        return null;
+    const name = [content.gene?.label, content.variant?.label].filter((s) => typeof s === 'string' && s !== '').join(' ');
+    const printed = typeof content.resultText === 'string' && content.resultText !== '' ? content.resultText : null;
+    const coded = [content.result, content.zygosity].filter((s) => typeof s === 'string' && s !== '').join(', ');
+    const result = printed ?? (coded !== '' ? coded : null);
+    if (name === '')
+        return result;
+    return result ? `${name}: ${result}` : name;
 }
 
 
@@ -22211,6 +22275,11 @@ class Contact {
     accessObjects;
     /** Cached set of accessible stream IDs (built by initStreamCache) */
     #accessibleStreamIds;
+    /**
+     * Per access, the streams its `level: 'none'` entries forbid (with their model children), keyed by the same index as
+     * `#grantsByAccess`. A mask only narrows the access it belongs to (B-2026-11-03-9).
+     */
+    #grantsByAccess = [];
     // ---- CMC-shaped fields (Plan 59 Phase 5a; canonical Plan 61 Phase C) ---- //
     /** CMC counterparty identity */
     counterparty;
@@ -22240,14 +22309,26 @@ class Contact {
      */
     initStreamCache(streamsById) {
         this.#accessibleStreamIds = new Set();
+        this.#grantsByAccess = [];
         for (const access of this.accessObjects) {
             if (access.deleted)
                 continue;
             if (!access.permissions)
                 continue;
+            const grant = { ids: new Set(), forbidden: new Set() };
+            this.#grantsByAccess.push(grant);
             for (const p of access.permissions) {
                 if (!p.streamId)
                     continue;
+                if (p.level === 'none') {
+                    // An exclusion mask: the core refuses the stream and its children whatever else this access grants
+                    // (B-2026-11-03-9; data-model 3.43.0 `explicitGrantOnly` roots get one on a minted `*` access).
+                    grant.forbidden.add(p.streamId);
+                    const masked = streamsById[p.streamId];
+                    if (masked)
+                        (0, StreamsTools_ts_1.getStreamIdAndChildrenIds)(masked).forEach((id) => grant.forbidden.add(id));
+                    continue;
+                }
                 if (p.streamId === '*') {
                     if (!this.isPerson) {
                         // Bridge with wildcard: resolve bridge's own streams from access name
@@ -22259,19 +22340,22 @@ class Contact {
                         }
                         continue; // don't add wildcard for bridges
                     }
+                    // wildcard covers everything for person contacts, but this access's masks still narrow it
                     this.#accessibleStreamIds.add('*');
-                    return; // wildcard covers everything for person contacts
+                    grant.ids.add('*');
+                    continue;
                 }
                 // The granted root is accessible whether or not the stream exists yet —
                 // item streams are auto-created on first entry, AFTER this cache is
                 // built. Skipping unknown roots made first-ever entries invisible
                 // until the next contact rebuild (B-2026-07-02 patient-app flow).
                 this.#accessibleStreamIds.add(p.streamId);
+                grant.ids.add(p.streamId);
                 const stream = streamsById[p.streamId];
                 if (!stream)
                     continue;
                 const ids = (0, StreamsTools_ts_1.getStreamIdAndChildrenIds)(stream);
-                ids.forEach((id) => this.#accessibleStreamIds.add(id));
+                ids.forEach((id) => { this.#accessibleStreamIds.add(id); grant.ids.add(id); });
             }
         }
         // Plan 59 Phase 5a — also accept chat-stream ids from CMC relationships
@@ -22281,12 +22365,19 @@ class Contact {
         // eventIsAccessible because they're not under any access permission
         // entry on the patient's side. Bare add — both streams have at most
         // one event each per chat message so no children to expand.
+        const chat = { ids: new Set(), forbidden: new Set() };
         for (const rel of this.cmcRelationships) {
-            if (rel.localChatStreamId)
+            if (rel.localChatStreamId) {
                 this.#accessibleStreamIds.add(rel.localChatStreamId);
-            if (rel.remoteChatStreamId)
+                chat.ids.add(rel.localChatStreamId);
+            }
+            if (rel.remoteChatStreamId) {
                 this.#accessibleStreamIds.add(rel.remoteChatStreamId);
+                chat.ids.add(rel.remoteChatStreamId);
+            }
         }
+        if (chat.ids.size > 0)
+            this.#grantsByAccess.push(chat);
     }
     /**
      * Check if an event belongs to this contact's scope.
@@ -22309,18 +22400,16 @@ class Contact {
             }
             return false;
         }
-        // Person contacts: filter by stream permissions
+        // Person contacts: filter by stream permissions, one access at a time (the platform's rule: an access reads an
+        // event when one of its streams is granted and none of them is masked by that access)
         if (!this.#accessibleStreamIds)
             return false;
-        if (this.#accessibleStreamIds.has('*'))
-            return true;
-        if (!event.streamIds)
-            return false;
-        for (const streamId of event.streamIds) {
-            if (this.#accessibleStreamIds.has(streamId))
-                return true;
-        }
-        return false;
+        const streamIds = event.streamIds ?? [];
+        return this.#grantsByAccess.some((g) => {
+            if (streamIds.some((id) => g.forbidden.has(id)))
+                return false;
+            return g.ids.has('*') || streamIds.some((id) => g.ids.has(id));
+        });
     }
     /** Check if an event was created/modified by this contact (including replaced accesses) */
     eventIsFromContact(event) {
@@ -26739,10 +26828,14 @@ function isDataStream(streamId) {
 function streamsAbove(streamId, parentIds = []) {
     const above = new Set(['*', ...parentIds]);
     try {
-        for (const id of (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getParentsIds(streamId, false)) {
+        const streams = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams;
+        for (const id of streams.getParentsIds(streamId, false)) {
             if (id !== streamId)
                 above.add(id);
         }
+        // `*` never reaches an explicitGrantOnly root (data-model 3.43.0): only a grant naming it does
+        if (streams.isExplicitGrantOnly(streamId))
+            above.delete('*');
     }
     catch { /* model not loaded or stream unknown: only `*` */ }
     return above;
@@ -27581,8 +27674,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = void 0;
+exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -27646,6 +27739,9 @@ Object.defineProperty(exports, "IDENTIFIER_SYSTEM_ZSR", ({ enumerable: true, get
 Object.defineProperty(exports, "contentEventIds", ({ enumerable: true, get: function () { return encounters_ts_1.contentEventIds; } }));
 Object.defineProperty(exports, "withRelatedMirror", ({ enumerable: true, get: function () { return encounters_ts_1.withRelatedMirror; } }));
 Object.defineProperty(exports, "checkRelatedMirror", ({ enumerable: true, get: function () { return encounters_ts_1.checkRelatedMirror; } }));
+const genetics_ts_1 = __webpack_require__(/*! ./HDSModel/genetics.js */ "./ts/HDSModel/genetics.ts");
+Object.defineProperty(exports, "GENETIC_VARIANT_CODED", ({ enumerable: true, get: function () { return genetics_ts_1.GENETIC_VARIANT_CODED; } }));
+Object.defineProperty(exports, "geneticVariantText", ({ enumerable: true, get: function () { return genetics_ts_1.geneticVariantText; } }));
 const HDSItemDef_ts_1 = __webpack_require__(/*! ./HDSModel/HDSItemDef.js */ "./ts/HDSModel/HDSItemDef.ts");
 Object.defineProperty(exports, "ENTERABLE_ITEM_TYPES", ({ enumerable: true, get: function () { return HDSItemDef_ts_1.ENTERABLE_ITEM_TYPES; } }));
 const MonitorScope_ts_1 = __webpack_require__(/*! ./MonitorScope.js */ "./ts/MonitorScope.ts");
@@ -27746,6 +27842,8 @@ const HDSLib = {
     contentEventIds: encounters_ts_1.contentEventIds,
     withRelatedMirror: encounters_ts_1.withRelatedMirror,
     checkRelatedMirror: encounters_ts_1.checkRelatedMirror,
+    GENETIC_VARIANT_CODED: genetics_ts_1.GENETIC_VARIANT_CODED,
+    geneticVariantText: genetics_ts_1.geneticVariantText,
     ENTERABLE_ITEM_TYPES: HDSItemDef_ts_1.ENTERABLE_ITEM_TYPES,
     MonitorScope: MonitorScope_ts_1.MonitorScope,
     HDSSettings: HDSSettings_ts_1.HDSSettings,
