@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.40.0] - 2026-11-04
+
+### Changed
+- **`pryv` 3.18.0**, with `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor` and `@pryv/socket.io` following to
+  3.18.0 (lib-js release `5850f62`). **Behaviour change for consumers:** `Connection#accessInfo()` now rejects a
+  refused token with a `PryvError` whose `innerObject` is the core's error (`e.innerObject.id ===
+  'invalid-access-token'`), instead of resolving `{ error }` and caching it; a failure is never cached
+  (pryv/lib-js#80). `Connection#username()` rejects with the same error. Code that checked `.error` on the resolved
+  value must catch instead. `@pryv/monitor` `start()` now resolves once its update methods are ready (pryv/lib-js#79);
+  `@pryv/socket.io` scoped subscriptions survive a reconnection, and the `Socket` update method catches up after it.
+  Typings for account auto-deletion and account transfer (types only).
+- **`@pryv/cmc` 3.23.0** (from 3.22.0): `listMembers` returns `member.displayName` when the core keeps it. Additive.
+- `createAppStreams` (`appTemplates`) now fails with the pryv error on a refused token, instead of
+  `Application requires a … "app" type of access` (the `{ error }` answer had no `type`). `MonitorScope` registers its `error` listener before `start()`, so a failing
+  `Socket` opening is reported through `onError`, as before.
+
+### Tests
+- 996 Node and 560 browser tests green on the new pins.
+
 ## [2.39.0] - 2026-11-04
 
 Enforcement of data-model 3.43.0's `explicitGrantOnly` stream marker (the `genetics` root, site-agents#37).
