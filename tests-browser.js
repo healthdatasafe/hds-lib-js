@@ -1982,10 +1982,14 @@ function memberRecordFromAccess (access) {
   const c = access.clientData.cmc;
   const cp = c.counterparty || {};
   const membership = c.membership || {};
+  // Identity only: the counterparty's endpoint is never copied.
+  const member = { username: cp.username || null, host: cp.host || null };
+  // The name the member gave in the request, kept by cores that store it
+  // (absent on older memberships).
+  if (typeof cp.displayName === 'string' && cp.displayName !== '') member.displayName = cp.displayName;
   return {
     membershipAccessId: access.id,
-    // Identity only: the counterparty's endpoint is never copied.
-    member: { username: cp.username || null, host: cp.host || null },
+    member,
     appCode: c.appCode || null,
     scopeStreamId: c.scopeStreamId || null,
     scopes: (access.permissions || [])
@@ -2002,7 +2006,9 @@ function memberRecordFromAccess (access) {
 /**
  * Administrator side: list the group's members (accesses with
  * `clientData.cmc.role === 'member'`). Needs a token allowed to list the
- * group's accesses (personal token).
+ * group's accesses (personal token). Each record's `member` is
+ * `{ username, host }`, plus `displayName` (the name the member gave in the
+ * request) when the core keeps it.
  *
  * @param {Object} conn
  * @returns {Promise<Array>}
@@ -4086,10 +4092,20 @@ class Monitor extends EventEmitter {
       updatingEvents: false, // semaphore to prevent updating events in parallel
       updatingStreams: false // semaphore to prevent updating streams in parallel
     };
+    /**
+     * @private
+     * Collects, while READY is emitted, the promises of the update methods'
+     * `ready()` (see `ready()`); null otherwise.
+     * @type {Array<Promise<void>>|null}
+     */
+    this._readyTasks = null;
   }
 
   /**
-   * Start the monitor and perform initial sync
+   * Start the monitor and perform initial sync.
+   * Resolves once the update methods are ready too (e.g. the Socket update
+   * method has subscribed to the server's notifications), so a change made
+   * after `await monitor.start()` is notified.
    * @returns {Promise<Monitor>} Promise resolving to this Monitor instance
    */
   async start () {
@@ -4103,7 +4119,14 @@ class Monitor extends EventEmitter {
 
     this.states.starting = false;
     this.states.started = true;
-    this.ready();
+    try {
+      await this.ready();
+    } catch (e) {
+      // an update method failed and nobody listens to `error`: start() fails,
+      // so leave the monitor stopped (update methods get STOP to clean up)
+      this.stop();
+      throw e;
+    }
     return this;
   }
 
@@ -4134,7 +4157,8 @@ class Monitor extends EventEmitter {
         this.updateEvents();
       }.bind(this), 1);
     } else {
-      this.ready();
+      // an update method's failure was emitted as `error` (dropped if nobody listens)
+      this.ready().catch(() => {});
     }
     return this;
   }
@@ -4166,7 +4190,8 @@ class Monitor extends EventEmitter {
         this.updateStreams();
       }.bind(this), 1);
     } else {
-      this.ready();
+      // an update method's failure was emitted as `error` (dropped if nobody listens)
+      this.ready().catch(() => {});
     }
     return this;
   }
@@ -4176,10 +4201,29 @@ class Monitor extends EventEmitter {
    * Called after init phase and each updateEvents
    * Advertise the update method or any listener that the Monitor is ready
    * for a next event update
+   * @returns {Promise<void>} resolves once the update methods' `ready()`
+   *   started by this READY have completed (their errors go to the `error` event)
    */
   ready () {
-    if (!this.states.started) return; // it might be stoped
-    this.emit(Changes.READY);
+    if (!this.states.started) return Promise.resolve(); // it might be stoped
+    const previousTasks = this._readyTasks;
+    const tasks = this._readyTasks = [];
+    try {
+      this.emit(Changes.READY);
+    } finally {
+      this._readyTasks = previousTasks;
+    }
+    return Promise.all(tasks).then(() => {});
+  }
+
+  /**
+   * @private
+   * Called by an update method from its READY listener with the promise of
+   * its `ready()`: the pending `ready()` call waits for it.
+   * @param {Promise<void>} task
+   */
+  _addReadyTask (task) {
+    if (this._readyTasks != null) this._readyTasks.push(task);
   }
 
   /**
@@ -4281,6 +4325,11 @@ class EventsTimer extends UpdateMethod {
       if (this.monitor.started) this.monitor.updateEvents();
     }, this.updateRateMS);
   }
+
+  async stop () {
+    if (this.timer != null) clearTimeout(this.timer);
+    this.timer = null;
+  }
 }
 
 module.exports = EventsTimer;
@@ -4302,6 +4351,8 @@ module.exports = EventsTimer;
 const UpdateMethod = __webpack_require__(/*! ./UpdateMethod */ "./node_modules/@pryv/monitor/src/UpdateMethod/UpdateMethod.js");
 const Changes = __webpack_require__(/*! ../lib/Changes */ "./node_modules/@pryv/monitor/src/lib/Changes.js");
 
+const DEFAULT_SUBSCRIBE_TIMEOUT_MS = 15000;
+
 /**
  * Update method that uses @pryv/socket.io events for real-time updates.
  * Requires @pryv/socket.io to be loaded.
@@ -4309,14 +4360,74 @@ const Changes = __webpack_require__(/*! ../lib/Changes */ "./node_modules/@pryv/
  * @extends UpdateMethod
  */
 class Socket extends UpdateMethod {
+  /**
+   * @param {Object} [options]
+   * @param {number} [options.subscribeTimeoutMs=15000] - how long to wait for
+   *   the server to acknowledge the subscription before the opening fails
+   */
+  constructor (options = {}) {
+    super();
+    const timeout = options.subscribeTimeoutMs;
+    if (timeout != null && !(typeof timeout === 'number' && timeout > 0)) {
+      throw new Error('Monitor socket subscribeTimeoutMs should be a number > 0');
+    }
+    this.subscribeTimeoutMs = timeout ?? DEFAULT_SUBSCRIBE_TIMEOUT_MS;
+  }
+
+  /**
+   * Open the socket and subscribe to the monitor's scope; resolves once
+   * subscribed, then up to date (see `_open()`). A call while that is in
+   * progress waits for it; its failure is reported once, by the call that
+   * started it.
+   * @returns {Promise<void>}
+   */
   async ready () {
     if (this.socket) return;
+    if (this._opening != null) return this._opening.then(() => {}, () => {});
+    this._opening = this._open().finally(() => { this._opening = null; });
+    return this._opening;
+  }
+
+  /**
+   * @private
+   * @returns {Promise<void>}
+   */
+  async _open () {
     // @ts-ignore - socket is added by @pryv/socket.io extension
     if (!this.monitor.connection.socket) {
       throw new Error('You should load package @pryv/socket.io to use monitor with websockets');
     }
     // @ts-ignore - socket is added by @pryv/socket.io extension
-    this.socket = await this.monitor.connection.socket.open();
+    const socket = await this.monitor.connection.socket.open();
+    if (!this.monitor.started) { // stopped while opening
+      try { socket.close(); } catch (e) { }
+      return;
+    }
+    this.socket = socket;
+    // a rebuild (after the transport gave up) or a restart reuses the same
+    // `connection.socket`: drop the listeners of the previous opening first
+    this._removeListeners();
+
+    this._listen('error', (error) => {
+      // If the underlying socket.io-client transport has been torn down
+      // (i.e. SocketIO emitted 'error' after reconnect_failed), drop our
+      // reference so a future Changes.READY can rebuild instead of
+      // short-circuiting on the cached, dead handle (and end a pending
+      // subscribe wait: its ack will not come).
+      // `_io` is the SocketIO instance's internal transport handle (not typed)
+      if (this.socket && !(/** @type {any} */ (this.socket))._io) {
+        this.socket = null;
+        if (this._abortSubscribe != null) this._abortSubscribe(null);
+      }
+      // This arrives from the transport, inside socket.io-client: an `error`
+      // event nobody listens to would throw there (an uncaught exception).
+      if (this.monitor.listenerCount(Changes.ERROR) > 0) {
+        this.monitor.emit(Changes.ERROR, error);
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('@pryv/monitor: socket error: ' + message + ' (listen to "error" on the monitor to handle it)');
+      }
+    });
 
     // Scoped notifications (opt-in): register this monitor's scope so the server
     // wakes us only when a matching change occurs, delivered as a single
@@ -4327,7 +4438,7 @@ class Socket extends UpdateMethod {
     // method); we then fall back to the legacy coarse signals.
     const onEvents = () => { this.monitor.updateEvents(); };
     const onStreams = () => { this.monitor.updateStreams(); };
-    this.socket.on('notificationsChanged', (payload) => {
+    this._listen('notificationsChanged', (payload) => {
       const keys = (payload && payload.keys) || [];
       if (keys.includes('monEvents')) onEvents();
       if (keys.includes('monStreams')) onStreams();
@@ -4339,43 +4450,108 @@ class Socket extends UpdateMethod {
       if (scope[f] != null) eventsQuery[f] = scope[f];
     }
     const streamsQuery = scope.streams != null ? { streams: scope.streams } : {};
-    const ack = await this.socket.subscribe({
-      scopes: {
-        monEvents: { kind: 'events', query: eventsQuery },
-        monStreams: { kind: 'streams', query: streamsQuery }
-      }
+    // Once the socket is closed (by stop()) the ack never comes (socket.io-client
+    // drops ack callbacks on disconnect): stop() ends the wait instead. An ack
+    // lost with a brief disconnection is replaced by the one of the
+    // re-subscription @pryv/socket.io sends on reconnection; without a
+    // reconnection in time the opening fails after `subscribeTimeoutMs`.
+    const stopped = new Promise((resolve) => { this._abortSubscribe = resolve; });
+    let timer;
+    const timedOut = new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('socket.io: no answer to subscribe within ' + this.subscribeTimeoutMs + 'ms')), this.subscribeTimeoutMs);
     });
-    if (!ack || ack.ok !== true) {
-      // Server does not support scoped subscriptions — use coarse signals.
-      this.socket.on('eventsChanged', onEvents);
-      this.socket.on('streamsChanged', onStreams);
+    let ack;
+    try {
+      ack = await Promise.race([
+        this.socket.subscribe({
+          scopes: {
+            monEvents: { kind: 'events', query: eventsQuery },
+            monStreams: { kind: 'streams', query: streamsQuery }
+          }
+        }),
+        stopped,
+        timedOut
+      ]);
+    } catch (e) {
+      // not subscribed: drop this opening so a next READY opens again
+      if (this.socket === socket) {
+        this._removeListeners();
+        this.socket = null;
+        try { socket.close(); } catch (ex) { }
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      this._abortSubscribe = null;
     }
+    if (this.socket !== socket) return; // stopped (or torn down) while subscribing
+    let coarse = false;
+    const useCoarseSignals = () => {
+      coarse = true;
+      this._listen('eventsChanged', onEvents);
+      this._listen('streamsChanged', onStreams);
+    };
+    // Server does not support scoped subscriptions — use coarse signals.
+    if (!ack || ack.ok !== true) useCoarseSignals();
+    // After an automatic reconnection @pryv/socket.io has sent the
+    // subscription again (the server forgets it with the old connection);
+    // nothing was notified while disconnected: fetch what changed.
+    this._listen('reconnect', (info) => {
+      if (!this.monitor.started) return;
+      if (!coarse && !(info && info.resubscribed)) useCoarseSignals();
+      this.monitor.updateEvents();
+      this.monitor.updateStreams();
+    });
     // Re-emit the server's fine-grained `accessUpdated` event on the
     // Monitor itself so consumers can subscribe via
     // `monitor.onAccessUpdated(handler)`. The underlying SocketIO has
     // already busted the connection's accessInfo cache; the payload
     // carries the new composite accessId + serial for fine-grained
     // reactions.
-    this.socket.on('accessUpdated', (payload) => {
+    this._listen('accessUpdated', (payload) => {
       this.monitor.emit('accessUpdated', payload);
     });
-    this.socket.on('error', (error) => {
-      this.monitor.emit(Changes.ERROR, error);
-      // If the underlying socket.io-client transport has been torn down
-      // (i.e. SocketIO emitted 'error' after reconnect_failed), drop our
-      // reference so a future Changes.READY can rebuild instead of
-      // short-circuiting on the cached, dead handle.
-      // `_io` is the SocketIO instance's internal transport handle (not typed)
-      if (this.socket && !(/** @type {any} */ (this.socket))._io) {
-        this.socket = null;
-      }
-    });
+    // A change made between the monitor's last fetch and the subscription
+    // above sent no notification: fetch what changed since, once. Best effort
+    // for the "before start() resolves" part: if an events update is already
+    // running, updateEvents() only queues a re-run and returns at once (the
+    // running update and the re-run still cover the gap).
+    if (this.monitor.started) await this.monitor.updateEvents();
   }
 
   async stop () {
+    this._removeListeners();
+    if (this._abortSubscribe != null) this._abortSubscribe(null);
     if (!this.socket) return;
     try { this.socket.close(); } catch (e) { }
     this.socket = null;
+  }
+
+  /**
+   * @private
+   * Listen to `eventName` on the current socket, remembering the listener
+   * so `_removeListeners()` can drop it.
+   * @param {string} eventName
+   * @param {(...args: any[]) => void} listener
+   */
+  _listen (eventName, listener) {
+    const socket = this.socket;
+    // @ts-ignore - eventName is one of the SocketIO events
+    socket.on(eventName, listener);
+    if (this._listeners == null) this._listeners = [];
+    this._listeners.push({ socket, eventName, listener });
+  }
+
+  /**
+   * @private
+   * Remove the listeners added by `_listen()`.
+   */
+  _removeListeners () {
+    if (this._listeners == null) return;
+    for (const { socket, eventName, listener } of this._listeners) {
+      socket.removeListener(eventName, listener);
+    }
+    this._listeners = null;
   }
 }
 module.exports = Socket;
@@ -4410,12 +4586,24 @@ class UpdateMethod {
       throw new Error('An update Method can be assigned to one monitor only');
     }
     this.monitor = monitor;
+    // On each READY, run ready() and hand its promise to the monitor, so
+    // monitor.start() resolves only once this update method is ready.
+    // A failure goes to the monitor's `error` event.
+    const onReady = () => {
+      const task = new Promise((resolve) => { resolve(this.ready()); })
+        .catch((e) => { monitor.emit(Changes.ERROR, e); });
+      // `_addReadyTask` is internal to the Monitor (not typed)
+      (/** @type {any} */ (monitor))._addReadyTask(task);
+      return task;
+    };
     // @ts-ignore - Changes.READY and Changes.STOP are valid event names
-    monitor.on(Changes.READY, this.ready.bind(this));
+    monitor.on(Changes.READY, onReady);
     // @ts-ignore
     monitor.on(Changes.STOP, this.stop.bind(this));
     if (monitor.started) {
-      this.ready();
+      // added to a started monitor: nobody awaits this ready(); a failure was
+      // emitted as `error` (dropped if nobody listens)
+      onReady().catch(() => {});
     }
   }
 
@@ -4628,7 +4816,12 @@ module.exports = async function _updateStreams (monitor) {
 const io = __webpack_require__(/*! socket.io-client */ "./node_modules/socket.io-client/build/cjs/index.js");
 const { EventEmitter } = __webpack_require__(/*! events */ "./node_modules/events/events.js");
 
+// events relayed from the server-side socket
 const EVENTS = ['eventsChanged', 'streamsChanged', 'accessesChanged', 'accessUpdated', 'notificationsChanged', 'disconnect', 'error'];
+// events a listener can be added for: the relayed ones, and `reconnect`
+// (emitted by this object once the subscriptions are sent again after an
+// automatic reconnection)
+const LISTENABLE_EVENTS = EVENTS.concat(['reconnect']);
 
 /**
  * Socket.IO transport for a Connection.
@@ -4647,6 +4840,20 @@ class SocketIO extends EventEmitter {
     /** @type {boolean} */
     this.connecting = false;
     this._io = null;
+    /**
+     * @private
+     * Scoped subscriptions requested on this socket (key → `{ kind, query }`),
+     * sent again after a reconnection.
+     * @type {Map<string, Object>}
+     */
+    this._scopes = new Map();
+    /**
+     * @private
+     * Resolvers of `subscribe()` calls still waiting for their ack: an ack
+     * lost with a disconnection is replaced by the one of the re-subscription.
+     * @type {Set<(ack: Object) => void>}
+     */
+    this._pendingSubscribes = new Set();
   }
 
   /**
@@ -4667,44 +4874,63 @@ class SocketIO extends EventEmitter {
           // socket.io-client default is reconnectionAttempts: Infinity, max delay 5s.
           // With these settings, a stuck client gives up after ~10 attempts spread
           // over ~1 minute (with randomization), then surfaces 'error' to consumers.
-          // @ts-ignore - io is callable in socket.io-client
-          this._io = io(socketEndpoint, {
+          this._io = this._createIo(socketEndpoint, {
             forceNew: true,
             transports: ['websocket'],
             reconnectionAttempts: 10,
             reconnectionDelayMax: 60000,
             randomizationFactor: 0.5
           });
+          const ioSocket = this._io;
 
-          // Terminal failure: socket.io-client gave up reconnecting.
-          // Tear down our handle and surface 'error' so consumers (e.g. Monitor)
-          // can clean up instead of leaving a zombie socket reference.
-          this._io.on('reconnect_failed', () => {
-            const dead = this._io;
+          // Terminal failure: socket.io-client gave up reconnecting (emitted by
+          // its Manager, `socket.io`, not by the socket). Tear down our handle
+          // and surface 'error' so consumers (e.g. Monitor) can clean up
+          // instead of leaving a zombie socket reference.
+          ioSocket.io.on('reconnect_failed', () => {
+            if (this._io !== ioSocket) return; // closed or replaced meanwhile
             this._io = null;
             this.connecting = false;
-            try { if (dead) dead.close(); } catch (ex) { }
-            this.emit('error', new Error('socket.io: reconnect_failed (gave up after configured attempts)'));
+            try { ioSocket.close(); } catch (ex) { }
+            this._scopes.clear();
+            settlePendingSubscribes(this, { ok: false, error: new Error('socket closed') });
+            const error = new Error('socket.io: reconnect_failed (gave up after configured attempts)');
+            // without a listener, EventEmitter throws 'error' events, here
+            // inside socket.io-client's reconnection timer: an uncaught exception
+            if (this.listenerCount('error') > 0) {
+              this.emit('error', error);
+            } else {
+              console.warn('@pryv/socket.io: ' + error.message + '; the socket is closed (listen to "error" on connection.socket to handle it)');
+            }
           });
 
           // handle failure
           for (const errcode of ['connect_error', 'connection_failed', 'error', 'connection_timeout']) {
             const myCode = errcode;
-            this._io.on(errcode, (e) => {
+            ioSocket.on(errcode, (e) => {
               if (!this.connecting) return; // do not care about errors if connected
 
+              // close the failed socket, or socket.io-client keeps retrying it
+              try { ioSocket.close(); } catch (ex) { }
               this._io = null;
               this.connecting = false;
               if (e === null) { e = myCode; }
               if (!(e instanceof Error)) { e = new Error(e); }
-
-              try { this._io.close(); } catch (ex) { }
               return reject(e);
             });
           }
 
           // handle success
+          // socket.io-client emits `connect` again after each automatic
+          // reconnection: that is a new server-side connection, without the
+          // scoped subscriptions of the previous one
+          let connected = false;
           this._io.on('connect', () => {
+            if (connected) {
+              this._onReconnect();
+              return;
+            }
+            connected = true;
             this.connecting = false;
             registerListeners(this);
             // When the server emits `accessUpdated` (fine-grained event
@@ -4727,24 +4953,45 @@ class SocketIO extends EventEmitter {
   }
 
   /**
+   * @private
+   * Create the socket.io-client socket (a seam for tests).
+   * @param {string} endpoint
+   * @param {Object} options
+   * @returns {any} the socket.io-client socket
+   */
+  _createIo (endpoint, options) {
+    // @ts-ignore - io is callable in socket.io-client
+    return io(endpoint, options);
+  }
+
+  /**
    * Close the socket
    */
   close () {
     checkOpen(this);
-    this._io.close();
+    // a closed socket.io-client socket never connects again (a later emit is
+    // only buffered): drop it, so a next open() creates a new one
+    const io = this._io;
+    this._io = null;
+    this.connecting = false;
+    try { io.close(); } catch (e) { }
+    // the server drops the subscriptions with the connection; a waiting
+    // subscribe() gets no ack any more
+    this._scopes.clear();
+    settlePendingSubscribes(this, { ok: false, error: new Error('socket closed') });
   }
 
   /**
    * Add listener for Socket.IO events
-   * @param {('eventsChanged'|'streamsChanged'|'accessesChanged'|'accessUpdated'|'disconnect'|'error')} eventName - The event to listen for
+   * @param {('eventsChanged'|'streamsChanged'|'accessesChanged'|'accessUpdated'|'notificationsChanged'|'disconnect'|'error'|'reconnect')} eventName - The event to listen for
    * @param {Function} listener - The callback function
    * @returns {SocketIO} this
    */
   // @ts-ignore - overriding EventEmitter.on with restricted signature
   on (eventName, listener) {
     checkOpen(this);
-    if (EVENTS.indexOf(eventName) < 0) {
-      throw new Error('Unkown event [' + eventName + ']. Allowed events are: ' + EVENTS);
+    if (LISTENABLE_EVENTS.indexOf(eventName) < 0) {
+      throw new Error('Unkown event [' + eventName + ']. Allowed events are: ' + LISTENABLE_EVENTS);
     }
     // @ts-ignore
     return super.on(eventName, listener);
@@ -4774,13 +5021,38 @@ class SocketIO extends EventEmitter {
    * changes are delivered as `notificationsChanged({ keys })`. Resolves the
    * server ack `{ ok, keys }`, or `{ ok: false }` when the server does not
    * support scoped notifications (so callers can fall back to coarse events).
+   *
+   * The subscriptions are kept by this object and sent again after an
+   * automatic reconnection (the server forgets them with the connection),
+   * then `reconnect` is emitted. A call whose ack was lost with a
+   * disconnection resolves with the ack of that re-subscription.
    * @param {object} payload - `{ key, kind, query }` or `{ scopes: { key: { kind, query } } }`
    * @returns {Promise<object>}
    */
   subscribe (payload) {
     checkOpen(this);
+    /** @type {Array<[string, Object]>} */
+    const requested = [];
+    if (payload != null && payload.scopes != null && typeof payload.scopes === 'object') {
+      for (const [key, spec] of Object.entries(payload.scopes)) requested.push([key, spec]);
+    } else if (payload != null && payload.key != null) {
+      const { key, ...spec } = payload;
+      requested.push([key, spec]);
+    }
+    for (const [key, spec] of requested) this._scopes.set(key, spec);
     return new Promise((resolve) => {
-      this._io.emit('subscribe', payload, (err, res) => resolve(err != null ? { ok: false, error: err } : (res || { ok: false })));
+      const done = (ack) => {
+        if (!this._pendingSubscribes.delete(done)) return; // already settled
+        if (ack == null || ack.ok !== true) {
+          // refused (or not supported): nothing to send again after a reconnection
+          for (const [key, spec] of requested) {
+            if (this._scopes.get(key) === spec) this._scopes.delete(key);
+          }
+        }
+        resolve(ack);
+      };
+      this._pendingSubscribes.add(done);
+      this._io.emit('subscribe', payload, (err, res) => done(err != null ? { ok: false, error: err } : (res || { ok: false })));
     });
   }
 
@@ -4791,6 +5063,9 @@ class SocketIO extends EventEmitter {
    */
   unsubscribe (payload) {
     checkOpen(this);
+    if (payload != null && payload.all === true) this._scopes.clear();
+    else if (payload != null && Array.isArray(payload.keys)) for (const k of payload.keys) this._scopes.delete(k);
+    else if (payload != null && payload.key != null) this._scopes.delete(payload.key);
     return new Promise((resolve) => {
       this._io.emit('unsubscribe', payload, (err, res) => resolve(err != null ? { ok: false, error: err } : res));
     });
@@ -4806,11 +5081,38 @@ class SocketIO extends EventEmitter {
       this._io.emit('getSubscriptions', null, (err, res) => resolve(err != null ? { scopes: {} } : res));
     });
   }
+
+  /**
+   * @private
+   * After an automatic reconnection: send the scoped subscriptions again (the
+   * new server-side connection has none), then emit `reconnect` with
+   * `{ resubscribed }` (true when there were subscriptions and the server
+   * accepted them again) so consumers can fetch what changed while disconnected.
+   */
+  _onReconnect () {
+    const io = this._io;
+    // subscribe() calls made before this reconnection: their ack may have been
+    // lost with the disconnection, and their scopes are in the re-subscription
+    const waiting = [...this._pendingSubscribes];
+    const finish = (ack) => {
+      if (this._io !== io) return; // closed meanwhile
+      for (const done of waiting) done(ack);
+      this.emit('reconnect', { resubscribed: ack.ok === true });
+    };
+    if (this._scopes.size === 0) return finish({ ok: false });
+    const scopes = Object.fromEntries(this._scopes);
+    io.emit('subscribe', { scopes }, (err, res) => finish(err != null ? { ok: false, error: err } : (res || { ok: false })));
+  }
 }
 
 // private method to fence the usage of socket before being open
 function checkOpen (socket) {
   if (!socket._io) throw new Error('Initialize socket.io with connection.socket.open() before');
+}
+
+// resolve every subscribe() still waiting for its ack with `ack`
+function settlePendingSubscribes (socket, ack) {
+  for (const done of [...socket._pendingSubscribes]) done(ack);
 }
 
 // private method to register to all events for an open socket
@@ -10891,7 +11193,14 @@ class AuthController {
   async _accessInfo (apiEndpoint) {
     // required here: Connection is not needed before the first switch
     const Connection = __webpack_require__(/*! ../Connection */ "./node_modules/pryv/src/Connection.js");
-    return await new Connection(apiEndpoint).accessInfo(true);
+    try {
+      return await new Connection(apiEndpoint).accessInfo(true);
+    } catch (e) {
+      // accessInfo() rejects an error answer with a PryvError carrying the
+      // server's error; anything else (network failure, unreadable answer) is thrown
+      if (e instanceof PryvError && e.innerObject != null) return { error: e.innerObject };
+      throw e;
+    }
   }
 
   /** @private */
@@ -12698,15 +13007,12 @@ class Connection {
    * Get username for this connection.
    * It's async as it's constructed from access info.
    * @returns {Promise<string>} Promise resolving to the username
+   * @throws {PryvError} If the server answers access-info with an error, as
+   *   `accessInfo()` does (server's error on `innerObject`)
    */
   async username () {
+    // rejects as accessInfo() does when the server answers with an error
     const accessInfo = await this.accessInfo();
-    if (accessInfo.error) {
-      throw new PryvError(
-        'Failed fetching accessinfo: ' + accessInfo.error.message,
-        accessInfo.error
-      );
-    }
     // @ts-ignore - username is always a string
     return accessInfo.user.username;
   }
@@ -12714,19 +13020,27 @@ class Connection {
   /**
    * Get access info for this connection.
    *
-   * Memoized per-Connection: the first call fetches from the server and
-   * caches the result; subsequent calls return the cached copy in O(1).
-   * Pass `forceRefresh: true` to invalidate the cache and fetch a fresh
-   * copy from the server — used internally by `connection.socket` to
-   * react to `accessUpdated` server-push events. A failed server
-   * fetch leaves any prior cached value intact.
+   * Memoized per-Connection: the first successful call fetches from the
+   * server and caches the result; subsequent calls return the cached copy
+   * in O(1). Pass `forceRefresh: true` to invalidate the cache and fetch a
+   * fresh copy from the server — used internally by `connection.socket` to
+   * react to `accessUpdated` server-push events.
+   *
+   * Only a successful answer is cached: a failure is never cached, so the
+   * next call asks the server again, and a failed refresh leaves any prior
+   * cached value intact.
    *
    * @param {boolean} [forceRefresh=false] - bypass + refresh the cache
    * @returns {Promise<AccessInfo>} Promise resolving to the access info
+   * @throws {PryvError} If the server answers with an error (for example
+   *   `invalid-access-token` for an unknown, expired or deleted token), as
+   *   `apiOne()` does: the message names the method and the server's error id
+   *   and message, the server's error is on `innerObject`.
    */
   async accessInfo (forceRefresh = false) {
     if (!forceRefresh && this._accessInfoCache != null) return this._accessInfoCache;
     const fresh = await this.get('access-info', null);
+    if (fresh.error) throw apiCallError('getAccessInfo', fresh.error);
     this._accessInfoCache = fresh;
     return fresh;
   }
@@ -12768,20 +13082,8 @@ class Connection {
       result[0].error ||
       (expectedKey != null && result[0][expectedKey] == null)
     ) {
-      const error = result[0]?.error;
-      const innerObject = error || result;
-      let reason;
-      if (error) {
-        reason = [error.id, error.message].filter((v) => v != null && v !== '').join(': ') || 'error answer';
-      } else if (result[0] == null) {
-        reason = 'no result';
-      } else {
-        reason = `"${expectedKey}" missing in result`;
-      }
-      throw new PryvError(
-        `Error for api method: "${method}" >> ${reason}`,
-        innerObject
-      );
+      const reason = result[0] == null ? 'no result' : `"${expectedKey}" missing in result`;
+      throw apiCallError(method, result[0]?.error, result, reason);
     }
     if (expectedKey != null) return result[0][expectedKey];
     return result[0];
@@ -12801,7 +13103,7 @@ class Connection {
     try {
       accessInfo = await this.accessInfo();
     } catch (e) {
-      if (e.response?.body?.error?.id === 'invalid-access-token') {
+      if (e.innerObject?.id === 'invalid-access-token') {
         return null; // Already revoked OK..
       }
       if (throwOnFail) throw e;
@@ -12809,10 +13111,9 @@ class Connection {
     }
     // delete access
     try {
-      const result = usingConnection.apiOne('accesses.delete', {
+      return await usingConnection.apiOne('accesses.delete', {
         id: accessInfo.id
       });
-      return result;
     } catch (e) {
       if (throwOnFail) throw e;
       return null;
@@ -13223,6 +13524,24 @@ module.exports = Connection;
 
 function getTimestamp () {
   return Date.now() / 1000;
+}
+
+/**
+ * The error thrown for a failed API call. The message names the method and the
+ * server's error id and message (or `reason` when there is no error answer);
+ * the server's error, or else the whole answer, is on `innerObject`. The call's
+ * params are never in the message: they can carry passwords and tokens.
+ * @param {string} method - API method id
+ * @param {Object} [error] - the server's error answer, if any
+ * @param {any} [answer] - the whole answer, kept when there is no error answer
+ * @param {string} [reason] - why the call failed when there is no error answer
+ * @returns {PryvError}
+ */
+function apiCallError (method, error, answer, reason) {
+  if (error) {
+    reason = [error.id, error.message].filter((v) => v != null && v !== '').join(': ') || 'error answer';
+  }
+  return new PryvError(`Error for api method: "${method}" >> ${reason}`, error || answer);
 }
 
 const MIME_TYPES = {
@@ -46041,7 +46360,7 @@ const validate = validate10;/* harmony default export */ const __WEBPACK_DEFAULT
 (module) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.17.3","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.18.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
 
 /***/ }
 
