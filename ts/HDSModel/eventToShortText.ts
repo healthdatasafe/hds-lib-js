@@ -7,6 +7,7 @@ import { resolveAccountPreference, hasAccountPreference } from '../settings/acco
 import type { DateFormat } from '../settings/HDSSettings.ts';
 import { LAB_RESULT_CODED, labComparatorOf, labResultCodedText } from './labResults.ts';
 import { ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, encounterShortText } from './encounters.ts';
+import { GENETIC_VARIANT_CODED, geneticVariantText } from './genetics.ts';
 
 /** A calendar day: year, month (1-12), day of month. */
 interface DayParts { y: number; m: number; d: number }
@@ -240,6 +241,13 @@ export function eventToShortTextWithOrigin (event: any): ShortTextResult {
   if (event.type === LAB_RESULT_CODED) {
     const lab = labResultCodedText(content);
     if (lab) return { text: lab, origin: null };
+  }
+
+  // A genetic variant result (site-agents#37): eventType-driven, "MTHFR C677T: present, heterozygous"; the `imported`
+  // item would otherwise fall to the generic object path.
+  if (event.type === GENETIC_VARIANT_CODED) {
+    const text = geneticVariantText(content);
+    if (text) return { text, origin: null };
   }
 
   // Visits and providers (site-agents#24): eventType-driven too, "Hospital stay · Cardiology", a provider's name. The

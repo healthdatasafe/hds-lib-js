@@ -92,6 +92,28 @@ export class HDSModelStreams {
   }
 
   /**
+   * Ids of the roots marked `explicitGrantOnly` (data-model 3.43.0: `genetics`). An access covers such a root only
+   * when it names it or one of its children, never through `*` or a grant on another root: a `*` consent request is
+   * expanded into the model roots minus these, a directly minted `*` access carries a `level: 'none'` mask on each.
+   * See data-model documentation/GENETICS.md.
+   */
+  explicitGrantOnlyRootIds (): string[] {
+    return Object.values(this.#modelStreamsById)
+      .filter((s: any) => s.parentId == null && s.explicitGrantOnly === true)
+      .map((s: any) => s.id);
+  }
+
+  /**
+   * Whether `streamId` is a marked root or under one (see `explicitGrantOnlyRootIds`). False for a stream the model
+   * does not know.
+   */
+  isExplicitGrantOnly (streamId: string): boolean {
+    const marked = this.explicitGrantOnlyRootIds();
+    if (marked.length === 0 || this.#modelStreamsById[streamId] == null) return false;
+    return [streamId, ...this.getParentsIds(streamId, false)].some((id) => marked.includes(id));
+  }
+
+  /**
    * Get all parents id;
    */
   getParentsIds (streamId: string, throwErrorIfNotFound: boolean = true, initialArray: string[] = []): string[] {

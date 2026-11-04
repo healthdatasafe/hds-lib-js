@@ -137,6 +137,11 @@ export class Contact {
 
   /** Cached set of accessible stream IDs (built by initStreamCache) */
   #accessibleStreamIds: Set<string> | null;
+  /**
+   * Per access, the streams its `level: 'none'` entries forbid (with their model children), keyed by the same index as
+   * `#grantsByAccess`. A mask only narrows the access it belongs to (B-2026-11-03-9).
+   */
+  #grantsByAccess: Array<{ ids: Set<string>; forbidden: Set<string> }> = [];
 
   // ---- CMC-shaped fields (Plan 59 Phase 5a; canonical Plan 61 Phase C) ---- //
 
@@ -172,11 +177,22 @@ export class Contact {
    */
   initStreamCache (streamsById: Record<string, any>): void {
     this.#accessibleStreamIds = new Set();
+    this.#grantsByAccess = [];
     for (const access of this.accessObjects) {
       if (access.deleted) continue;
       if (!access.permissions) continue;
+      const grant = { ids: new Set<string>(), forbidden: new Set<string>() };
+      this.#grantsByAccess.push(grant);
       for (const p of access.permissions) {
         if (!p.streamId) continue;
+        if (p.level === 'none') {
+          // An exclusion mask: the core refuses the stream and its children whatever else this access grants
+          // (B-2026-11-03-9; data-model 3.43.0 `explicitGrantOnly` roots get one on a minted `*` access).
+          grant.forbidden.add(p.streamId);
+          const masked = streamsById[p.streamId];
+          if (masked) getStreamIdAndChildrenIds(masked).forEach((id: string) => grant.forbidden.add(id));
+          continue;
+        }
         if (p.streamId === '*') {
           if (!this.isPerson) {
             // Bridge with wildcard: resolve bridge's own streams from access name
@@ -188,18 +204,21 @@ export class Contact {
             }
             continue; // don't add wildcard for bridges
           }
+          // wildcard covers everything for person contacts, but this access's masks still narrow it
           this.#accessibleStreamIds.add('*');
-          return; // wildcard covers everything for person contacts
+          grant.ids.add('*');
+          continue;
         }
         // The granted root is accessible whether or not the stream exists yet —
         // item streams are auto-created on first entry, AFTER this cache is
         // built. Skipping unknown roots made first-ever entries invisible
         // until the next contact rebuild (B-2026-07-02 patient-app flow).
         this.#accessibleStreamIds.add(p.streamId);
+        grant.ids.add(p.streamId);
         const stream = streamsById[p.streamId];
         if (!stream) continue;
         const ids = getStreamIdAndChildrenIds(stream);
-        ids.forEach((id: string) => this.#accessibleStreamIds!.add(id));
+        ids.forEach((id: string) => { this.#accessibleStreamIds!.add(id); grant.ids.add(id); });
       }
     }
     // Plan 59 Phase 5a — also accept chat-stream ids from CMC relationships
@@ -209,10 +228,12 @@ export class Contact {
     // eventIsAccessible because they're not under any access permission
     // entry on the patient's side. Bare add — both streams have at most
     // one event each per chat message so no children to expand.
+    const chat = { ids: new Set<string>(), forbidden: new Set<string>() };
     for (const rel of this.cmcRelationships) {
-      if (rel.localChatStreamId) this.#accessibleStreamIds.add(rel.localChatStreamId);
-      if (rel.remoteChatStreamId) this.#accessibleStreamIds.add(rel.remoteChatStreamId);
+      if (rel.localChatStreamId) { this.#accessibleStreamIds.add(rel.localChatStreamId); chat.ids.add(rel.localChatStreamId); }
+      if (rel.remoteChatStreamId) { this.#accessibleStreamIds.add(rel.remoteChatStreamId); chat.ids.add(rel.remoteChatStreamId); }
     }
+    if (chat.ids.size > 0) this.#grantsByAccess.push(chat);
   }
 
   /**
@@ -234,14 +255,14 @@ export class Contact {
       }
       return false;
     }
-    // Person contacts: filter by stream permissions
+    // Person contacts: filter by stream permissions, one access at a time (the platform's rule: an access reads an
+    // event when one of its streams is granted and none of them is masked by that access)
     if (!this.#accessibleStreamIds) return false;
-    if (this.#accessibleStreamIds.has('*')) return true;
-    if (!event.streamIds) return false;
-    for (const streamId of event.streamIds) {
-      if (this.#accessibleStreamIds.has(streamId)) return true;
-    }
-    return false;
+    const streamIds: string[] = event.streamIds ?? [];
+    return this.#grantsByAccess.some((g) => {
+      if (streamIds.some((id) => g.forbidden.has(id))) return false;
+      return g.ids.has('*') || streamIds.some((id) => g.ids.has(id));
+    });
   }
 
   /** Check if an event was created/modified by this contact (including replaced accesses) */
