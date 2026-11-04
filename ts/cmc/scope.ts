@@ -133,9 +133,12 @@ function isDataStream (streamId: string | undefined): streamId is string {
 function streamsAbove (streamId: string, parentIds: string[] = []): Set<string> {
   const above = new Set<string>(['*', ...parentIds]);
   try {
-    for (const id of getModel().streams.getParentsIds(streamId, false)) {
+    const streams = getModel().streams;
+    for (const id of streams.getParentsIds(streamId, false)) {
       if (id !== streamId) above.add(id);
     }
+    // `*` never reaches an explicitGrantOnly root (data-model 3.43.0): only a grant naming it does
+    if (streams.isExplicitGrantOnly(streamId)) above.delete('*');
   } catch { /* model not loaded or stream unknown: only `*` */ }
   return above;
 }

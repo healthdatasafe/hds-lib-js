@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.39.0] - 2026-11-04
+
+Enforcement of data-model 3.43.0's `explicitGrantOnly` stream marker (the `genetics` root, site-agents#37).
+
+### Added
+- **`model.streams.explicitGrantOnlyRootIds()`** (the marked roots, `['genetics']`) and
+  **`model.streams.isExplicitGrantOnly(streamId)`** (a marked root or under one), beside `isContext()`. An access covers
+  a marked root only when it names it: a `*` consent request is expanded into the model roots minus these, a directly
+  minted `*` access carries a `level: 'none'` mask on each.
+- **`geneticVariantText(content)`, `GENETIC_VARIANT_CODED`**; `eventToShortText` reads a `genetic-variant/coded-v1`
+  event as "MTHFR C677T: present, heterozygous" (the result as printed when there is one).
+- Tests `[GENX-M1..2]`, `[GENX-C1..3]`, `[GENX-T1]`.
+
+### Fixed
+- **`Contact.initStreamCache` / `eventIsAccessible` honour `level: 'none'`** (B-2026-11-03-9). A `none` entry was read
+  as shared; it is now an exclusion mask on its own access: the stream and its children are refused by that access,
+  even under `*` (the early return on `*` no longer skips the masks). Another access of the contact naming the stream
+  still reads it.
+
+### Changed
+- **`cmcScope.planStopSharing`**: `*` no longer counts as sharing a marked stream, so `genetics` can be stopped on its
+  own when it was named next to `*`.
+
 ## [2.38.1] - 2026-11-03
 
 ### Fixed
