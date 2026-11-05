@@ -9,6 +9,7 @@ import { HDSModelConversions } from './HDSModel-Conversions.ts';
 import { HDSModelConverters } from './HDSModel-Converters.ts';
 import { HDSModelPreferred } from './HDSModel-Preferred.ts';
 import { HDSModelAppStreams } from './HDSModel-AppStreams.ts';
+import { HDSModelVocabularies } from './HDSModel-Vocabularies.ts';
 import { applyOverload, validateOverload, type HDSModelOverload } from './HDSModel-Overload.ts';
 
 export class HDSModel {
@@ -172,6 +173,14 @@ export class HDSModel {
       this.laziliyLoadedMap.appStreams = new HDSModelAppStreams(this);
     }
     return this.laziliyLoadedMap.appStreams;
+  }
+
+  get vocabularies (): HDSModelVocabularies {
+    if (!this.isLoaded) throwNotLoadedError();
+    if (!this.laziliyLoadedMap.vocabularies) {
+      this.laziliyLoadedMap.vocabularies = new HDSModelVocabularies(this);
+    }
+    return this.laziliyLoadedMap.vocabularies;
   }
 }
 
