@@ -18913,6 +18913,55 @@ function loadModelStreamsById(streams, map) {
 
 /***/ },
 
+/***/ "./ts/HDSModel/HDSModel-Vocabularies.ts"
+/*!**********************************************!*\
+  !*** ./ts/HDSModel/HDSModel-Vocabularies.ts ***!
+  \**********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelVocabularies = void 0;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+/**
+ * Vocabularies - Extension of HDSModel
+ *
+ * Labels and code mappings of eventType enum values (data-model 3.46.0, pack section `vocabularies`), e.g. the
+ * medication `when` slots, a dose's status and skip reason. A pack without the section has no vocabulary.
+ */
+class HDSModelVocabularies {
+    #model;
+    constructor(model) {
+        this.#model = model;
+    }
+    #raw() {
+        return this.#model.modelData.vocabularies || {};
+    }
+    /** Get a vocabulary by key (e.g. "medication-skip-reason") */
+    forKey(key) {
+        const v = this.#raw()[key];
+        return v ? { key, ...v } : null;
+    }
+    /** The vocabulary labelling a field of an eventType (`path` dotted, e.g. "intake.when"), or null */
+    forField(eventType, path) {
+        for (const [key, v] of Object.entries(this.#raw())) {
+            if (v.binds?.some((b) => b.eventType === eventType && b.path === path))
+                return { key, ...v };
+        }
+        return null;
+    }
+    /** Localized label of a value, or null when the vocabulary or the value is unknown */
+    label(key, value) {
+        const label = this.#raw()[key]?.values?.[value]?.label;
+        return label ? (0, localizeText_ts_1.localizeText)(label) : null;
+    }
+}
+exports.HDSModelVocabularies = HDSModelVocabularies;
+
+
+/***/ },
+
 /***/ "./ts/HDSModel/HDSModel.ts"
 /*!*********************************!*\
   !*** ./ts/HDSModel/HDSModel.ts ***!
@@ -18934,6 +18983,7 @@ const HDSModel_Conversions_ts_1 = __webpack_require__(/*! ./HDSModel-Conversions
 const HDSModel_Converters_ts_1 = __webpack_require__(/*! ./HDSModel-Converters.js */ "./ts/HDSModel/HDSModel-Converters.ts");
 const HDSModel_Preferred_ts_1 = __webpack_require__(/*! ./HDSModel-Preferred.js */ "./ts/HDSModel/HDSModel-Preferred.ts");
 const HDSModel_AppStreams_ts_1 = __webpack_require__(/*! ./HDSModel-AppStreams.js */ "./ts/HDSModel/HDSModel-AppStreams.ts");
+const HDSModel_Vocabularies_ts_1 = __webpack_require__(/*! ./HDSModel-Vocabularies.js */ "./ts/HDSModel/HDSModel-Vocabularies.ts");
 const HDSModel_Overload_ts_1 = __webpack_require__(/*! ./HDSModel-Overload.js */ "./ts/HDSModel/HDSModel-Overload.ts");
 class HDSModel {
     /**
@@ -19086,6 +19136,14 @@ class HDSModel {
             this.laziliyLoadedMap.appStreams = new HDSModel_AppStreams_ts_1.HDSModelAppStreams(this);
         }
         return this.laziliyLoadedMap.appStreams;
+    }
+    get vocabularies() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.vocabularies) {
+            this.laziliyLoadedMap.vocabularies = new HDSModel_Vocabularies_ts_1.HDSModelVocabularies(this);
+        }
+        return this.laziliyLoadedMap.vocabularies;
     }
 }
 exports.HDSModel = HDSModel;
@@ -19423,6 +19481,7 @@ const accountPreferences_ts_1 = __webpack_require__(/*! ../settings/accountPrefe
 const labResults_ts_1 = __webpack_require__(/*! ./labResults.js */ "./ts/HDSModel/labResults.ts");
 const encounters_ts_1 = __webpack_require__(/*! ./encounters.js */ "./ts/HDSModel/encounters.ts");
 const genetics_ts_1 = __webpack_require__(/*! ./genetics.js */ "./ts/HDSModel/genetics.ts");
+const medication_ts_1 = __webpack_require__(/*! ./medication.js */ "./ts/HDSModel/medication.ts");
 const DATE_SEPARATORS = {
     'DD.MM.YYYY': (p, year) => pad(p.d) + '.' + pad(p.m) + '.' + (year ? p.y : ''),
     'DD/MM/YYYY': (p, year) => pad(p.d) + '/' + pad(p.m) + (year ? '/' + p.y : ''),
@@ -19577,6 +19636,23 @@ function eventToShortText(event) {
  * same string `eventToShortText` returns.
  */
 function eventToShortTextWithOrigin(event) {
+    const result = shortTextWithOrigin(event);
+    // A medication's state (data-model 3.46.0): "skipped (forgot)", "stopped (side effects)", "completed".
+    const status = result.text != null ? (0, medication_ts_1.medicationStatusText)(event, vocabularyLabel) : null;
+    if (status)
+        result.text += (result.text.includes(' — ') ? ', ' : ' — ') + status;
+    return result;
+}
+/** A vocabulary value's localized label, the value itself when the pack has none. */
+function vocabularyLabel(vocabulary, value) {
+    try {
+        return (0, HDSModelInitAndSingleton_ts_1.getModel)().vocabularies.label(vocabulary, value) ?? value;
+    }
+    catch {
+        return value;
+    }
+}
+function shortTextWithOrigin(event) {
     if (event == null)
         return { text: null, origin: null };
     const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
@@ -19991,13 +20067,10 @@ function formatDatasource(content) {
         text = JSON.stringify(content);
     }
     const parts = [];
-    // Medication intake (new {drug, intake} OR legacy flat with doseValue at top level)
-    const intake = content.intake || (datasourceObj === content ? content : null);
+    // Medication intake (new {drug, intake}, a prescription's {drug, posology}, OR legacy flat with doseValue at top level)
+    const intake = content.intake || content.posology || (datasourceObj === content ? content : null);
     if (intake?.doseValue) {
-        const unitLabel = intake.doseUnit
-            ? intake.doseUnit.replace(/^dose\//, '').replace(/^(mass|volume)\//, '')
-            : '';
-        parts.push(`${intake.doseValue} ${unitLabel}`.trim());
+        parts.push(`${intake.doseValue} ${doseUnitLabel(intake.doseUnit)}`.trim());
     }
     if (intake?.route)
         parts.push(intake.route);
@@ -20026,11 +20099,18 @@ function formatDatasource(content) {
         text += ' — ' + parts.join(', ');
     return text;
 }
+/** A dose unit as shown: `mass/mg` → `mg`, `dose/tablet` → `tablet`. */
+function doseUnitLabel(doseUnit) {
+    return typeof doseUnit === 'string' ? doseUnit.replace(/^(dose|mass|volume)\//, '') : '';
+}
 const AS_NEEDED = { en: 'as needed', fr: 'si besoin', es: 'si es necesario' };
+const FOR = { en: 'for', fr: 'pendant', es: 'durante' };
+const UNTIL = { en: 'until', fr: 'jusqu’au', es: 'hasta el' };
 /**
  * The regimen of a medication intake (data-model 3.23.0, the `posology` spelling):
- * `frequency` as "2×/d" or "1×/48 h", `asNeeded` as "as needed", and the printed `note`
- * only when there is no structured frequency (it usually says the same thing).
+ * `frequency` as "2×/d" or "1×/48 h", the times "08:00, 20:00" or the `when` slots "before breakfast"
+ * (3.46.0), `asNeeded` as "as needed", the course `bounds` as "for 7 d" / "until 12/12/2026", and the
+ * printed `note` only when there is nothing structured (it usually says the same thing).
  */
 function regimenParts(intake) {
     const parts = [];
@@ -20038,8 +20118,26 @@ function regimenParts(intake) {
     if (f && typeof f.times === 'number' && typeof f.period === 'number' && f.periodUnit) {
         parts.push(`${f.times}×/${f.period === 1 ? '' : f.period + ' '}${f.periodUnit}`);
     }
+    if (Array.isArray(intake.timeOfDay) && intake.timeOfDay.length > 0) {
+        parts.push(intake.timeOfDay.join(', '));
+    }
+    else if (Array.isArray(intake.when) && intake.when.length > 0) {
+        parts.push(intake.when.map((w) => {
+            const label = vocabularyLabel('medication-when', w);
+            return label.charAt(0).toLowerCase() + label.slice(1);
+        }).join(', '));
+    }
     if (intake.asNeeded === true)
         parts.push((0, localizeText_ts_1.localizeText)(AS_NEEDED));
+    const b = intake.bounds;
+    if (b && typeof b.duration === 'number' && b.durationUnit) {
+        parts.push(`${(0, localizeText_ts_1.localizeText)(FOR)} ${b.duration} ${b.durationUnit}`);
+    }
+    else if (b && typeof b.end === 'string') {
+        const end = formatContentDate(b.end);
+        if (end)
+            parts.push(`${(0, localizeText_ts_1.localizeText)(UNTIL)} ${end}`);
+    }
     if (!parts.length && typeof intake.note === 'string' && intake.note.trim() !== '') {
         const n = intake.note.trim();
         parts.push(n.length > 30 ? n.slice(0, 30) + '...' : n);
@@ -20059,13 +20157,13 @@ function formatObject(content) {
         const dl = content.drug.label;
         return typeof dl === 'string' ? dl : ((0, localizeText_ts_1.localizeText)(dl) || null);
     }
-    // medication/basic composite: { name, intake: { doseValue, doseUnit, route } }
-    // (legacy events stored the dose fields flat at the top level — read both).
+    // medication/basic composite: { name, intake: { doseValue, doseUnit, route } }, medication/prescription-basic-v1:
+    // { name, posology } (legacy events stored the dose fields flat at the top level — read both).
     if (content.name && typeof content.name === 'string') {
-        const intake = content.intake ?? content;
+        const intake = content.intake ?? content.posology ?? content;
         const parts = [];
         if (intake.doseValue) {
-            parts.push(`${intake.doseValue}${intake.doseUnit ? ' ' + intake.doseUnit : ''}`);
+            parts.push(`${intake.doseValue} ${doseUnitLabel(intake.doseUnit)}`.trim());
         }
         if (intake.route)
             parts.push(intake.route);
@@ -20666,6 +20764,75 @@ function checkLabResultCoded(event, model = (0, HDSModelInitAndSingleton_ts_1.ge
             issues.push({ code: 'owned-by-item', itemKey: owner.key, loinc });
     }
     return issues;
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/medication.ts"
+/*!***********************************!*\
+  !*** ./ts/HDSModel/medication.ts ***!
+  \***********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = void 0;
+exports.medicationIntakeKind = medicationIntakeKind;
+exports.isSkipped = isSkipped;
+exports.isCodedDrug = isCodedDrug;
+exports.medicationStatusText = medicationStatusText;
+/**
+ * Medications (data-model 3.46.0, documentation/MEDICATION.md). The `medication-intake` stream holds two kinds of fact,
+ * told apart by the event's duration, which the schema cannot see: **one intake** (a dose: no duration, or 0) and **a
+ * period of use** (a duration; `null` = ongoing). On a period `status` / `skipReason` are ignored; on a dose
+ * `stopReason` and the regimen's timing are.
+ */
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+exports.MEDICATION_INTAKE_TYPES = ['medication/basic', 'medication/coded-v1'];
+exports.MEDICATION_PRESCRIPTION_TYPES = ['medication/prescription-v1', 'medication/prescription-basic-v1'];
+/** `'intake'` for one dose (no duration, or 0), `'period'` for a period of use (a duration, `null` = ongoing). */
+function medicationIntakeKind(event) {
+    return event?.duration === undefined || event.duration === 0 ? 'intake' : 'period';
+}
+/** True for one intake recorded as not taken (`status: skipped`); always false on a period. */
+function isSkipped(event) {
+    return exports.MEDICATION_INTAKE_TYPES.includes(event?.type) && event.content?.status === 'skipped' && medicationIntakeKind(event) === 'intake';
+}
+/** True when a `drug` (or any datasource concept) carries at least one code. */
+function isCodedDrug(drug) {
+    return Array.isArray(drug?.codes) && drug.codes.some((c) => typeof c?.code === 'string' && c.code !== '');
+}
+const STOPPED = { en: 'stopped', fr: 'arrêté', es: 'suspendido' };
+function lowerFirst(s) {
+    return s.charAt(0).toLowerCase() + s.slice(1);
+}
+/**
+ * The state of a medication event for its short text, or null when there is nothing to say: a skipped dose
+ * "skipped (forgot)", an ended period with a reason "stopped (side effects)", a prescription "stopped (…)" /
+ * "completed". `label(vocabulary, value)` returns the value's localized label.
+ */
+function medicationStatusText(event, label) {
+    const c = event?.content;
+    if (c == null || typeof c !== 'object')
+        return null;
+    if (exports.MEDICATION_INTAKE_TYPES.includes(event.type)) {
+        if (isSkipped(event)) {
+            const reason = typeof c.skipReason === 'string' ? ` (${lowerFirst(label('medication-skip-reason', c.skipReason))})` : '';
+            return lowerFirst(label('medication-intake-status', 'skipped')) + reason;
+        }
+        // An ended period (a duration, not `null`): its reason only, ending as planned says nothing.
+        if (typeof event.duration === 'number' && event.duration > 0 && typeof c.stopReason === 'string') {
+            return `${(0, localizeText_ts_1.localizeText)(STOPPED)} (${lowerFirst(label('medication-stop-reason', c.stopReason))})`;
+        }
+        return null;
+    }
+    if (exports.MEDICATION_PRESCRIPTION_TYPES.includes(event.type) && (c.status === 'stopped' || c.status === 'completed')) {
+        const reason = c.status === 'stopped' && typeof c.stopReason === 'string' ? ` (${lowerFirst(label('medication-stop-reason', c.stopReason))})` : '';
+        return lowerFirst(label('medication-prescription-status', c.status)) + reason;
+    }
+    return null;
 }
 
 
@@ -27994,7 +28161,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = void 0;
+exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -28061,6 +28228,12 @@ Object.defineProperty(exports, "checkRelatedMirror", ({ enumerable: true, get: f
 const genetics_ts_1 = __webpack_require__(/*! ./HDSModel/genetics.js */ "./ts/HDSModel/genetics.ts");
 Object.defineProperty(exports, "GENETIC_VARIANT_CODED", ({ enumerable: true, get: function () { return genetics_ts_1.GENETIC_VARIANT_CODED; } }));
 Object.defineProperty(exports, "geneticVariantText", ({ enumerable: true, get: function () { return genetics_ts_1.geneticVariantText; } }));
+const medication_ts_1 = __webpack_require__(/*! ./HDSModel/medication.js */ "./ts/HDSModel/medication.ts");
+Object.defineProperty(exports, "MEDICATION_INTAKE_TYPES", ({ enumerable: true, get: function () { return medication_ts_1.MEDICATION_INTAKE_TYPES; } }));
+Object.defineProperty(exports, "MEDICATION_PRESCRIPTION_TYPES", ({ enumerable: true, get: function () { return medication_ts_1.MEDICATION_PRESCRIPTION_TYPES; } }));
+Object.defineProperty(exports, "medicationIntakeKind", ({ enumerable: true, get: function () { return medication_ts_1.medicationIntakeKind; } }));
+Object.defineProperty(exports, "isSkipped", ({ enumerable: true, get: function () { return medication_ts_1.isSkipped; } }));
+Object.defineProperty(exports, "isCodedDrug", ({ enumerable: true, get: function () { return medication_ts_1.isCodedDrug; } }));
 const HDSItemDef_ts_1 = __webpack_require__(/*! ./HDSModel/HDSItemDef.js */ "./ts/HDSModel/HDSItemDef.ts");
 Object.defineProperty(exports, "ENTERABLE_ITEM_TYPES", ({ enumerable: true, get: function () { return HDSItemDef_ts_1.ENTERABLE_ITEM_TYPES; } }));
 const MonitorScope_ts_1 = __webpack_require__(/*! ./MonitorScope.js */ "./ts/MonitorScope.ts");
@@ -28163,6 +28336,11 @@ const HDSLib = {
     checkRelatedMirror: encounters_ts_1.checkRelatedMirror,
     GENETIC_VARIANT_CODED: genetics_ts_1.GENETIC_VARIANT_CODED,
     geneticVariantText: genetics_ts_1.geneticVariantText,
+    MEDICATION_INTAKE_TYPES: medication_ts_1.MEDICATION_INTAKE_TYPES,
+    MEDICATION_PRESCRIPTION_TYPES: medication_ts_1.MEDICATION_PRESCRIPTION_TYPES,
+    medicationIntakeKind: medication_ts_1.medicationIntakeKind,
+    isSkipped: medication_ts_1.isSkipped,
+    isCodedDrug: medication_ts_1.isCodedDrug,
     ENTERABLE_ITEM_TYPES: HDSItemDef_ts_1.ENTERABLE_ITEM_TYPES,
     MonitorScope: MonitorScope_ts_1.MonitorScope,
     HDSSettings: HDSSettings_ts_1.HDSSettings,
@@ -45076,6 +45254,141 @@ describe('[LOGX] Logger', function () {
 
 /***/ },
 
+/***/ "./tests/medication.test.js"
+/*!**********************************!*\
+  !*** ./tests/medication.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+/**
+ * Medications, data-model 3.46.0: one intake vs a period of use, skipped doses, stops, the regimen's timing and
+ * course, the vocabularies that label them.
+ */
+describe('[MEDX] medications (data-model 3.46.0)', () => {
+  let model;
+  before(async () => {
+    model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)();
+    await model.load(modelURL);
+  });
+  afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)(); });
+
+  const intake = (content, extra = {}) => ({ content, streamIds: ['medication-intake'], type: 'medication/basic', ...extra });
+  const coded = (content, extra = {}) => ({ content, streamIds: ['medication-intake'], type: 'medication/coded-v1', ...extra });
+  const prescription = (content) => ({ content, streamIds: ['medication-prescription'], type: 'medication/prescription-v1' });
+  const IBU = { label: { en: 'Ibuprofen' }, codes: [{ system: 'ATC', code: 'M01AE01' }] };
+
+  describe('[MEDK] medicationIntakeKind', () => {
+    it('[MEDK1] a point event is one intake', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.medicationIntakeKind)({}), 'intake');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.medicationIntakeKind)({ duration: 0 }), 'intake');
+    });
+    it('[MEDK2] a duration, or null (ongoing), is a period', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.medicationIntakeKind)({ duration: 86400 }), 'period');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.medicationIntakeKind)({ duration: null }), 'period');
+    });
+  });
+
+  describe('[MEDS] isSkipped', () => {
+    it('[MEDS1] a skipped dose', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isSkipped)(intake({ name: 'Ibuprofen', status: 'skipped' })), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isSkipped)(coded({ drug: IBU, status: 'skipped', skipReason: 'forgot' })), true);
+    });
+    it('[MEDS2] taken, absent status, or a period are not skipped', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isSkipped)(intake({ name: 'Ibuprofen', status: 'taken' })), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isSkipped)(intake({ name: 'Ibuprofen' })), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isSkipped)(intake({ name: 'Ibuprofen', status: 'skipped' }, { duration: null })), false);
+    });
+    it('[MEDS3] only on the intake types', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isSkipped)({ type: 'activity/plain', content: { status: 'skipped' } }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([..._ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MEDICATION_INTAKE_TYPES], ['medication/basic', 'medication/coded-v1']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([..._ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.MEDICATION_PRESCRIPTION_TYPES], ['medication/prescription-v1', 'medication/prescription-basic-v1']);
+    });
+  });
+
+  it('[MEDC1] isCodedDrug needs one code', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isCodedDrug)(IBU), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isCodedDrug)({ label: { en: 'x' }, codes: [] }), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isCodedDrug)({ label: { en: 'x' }, codes: [{ system: 'ATC', code: '' }] }), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isCodedDrug)(null), false);
+  });
+
+  describe('[MEDV] model.vocabularies', () => {
+    it('[MEDV1] labels a value, localized', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.vocabularies.label('medication-skip-reason', 'forgot'), 'Forgot');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.vocabularies.label('medication-skip-reason', 'forgot'), 'Oubli');
+    });
+    it('[MEDV2] finds the vocabulary of a field', () => {
+      const v = model.vocabularies.forField('medication/prescription-v1', 'posology.when');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(v.key, 'medication-when');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(v.values.morning.fhir, 'MORN');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.vocabularies.forField('medication/coded-v1', 'drug'), null);
+    });
+    it('[MEDV3] unknown vocabulary or value', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.vocabularies.label('nope', 'x'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.vocabularies.label('medication-skip-reason', 'nope'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.vocabularies.forKey('nope'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.vocabularies.forKey('medication-intake-status').values.skipped.snomed, '1269470004');
+    });
+  });
+
+  describe('[MEDT] short text', () => {
+    it('[MEDT1] a skipped dose with its reason', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(coded({ drug: IBU, intake: { doseValue: 400, doseUnit: 'mass/mg' }, status: 'skipped', skipReason: 'side-effects' })), 'Ibuprofen — 400 mg, skipped (side effects)');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Ibuprofen', status: 'skipped' })), 'Ibuprofen — skipped');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Ibuprofène', status: 'skipped', skipReason: 'forgot' })), 'Ibuprofène — non pris (oubli)');
+    });
+    it('[MEDT2] status on a period is ignored; an ended period shows its stop reason', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Ibuprofen', status: 'skipped' }, { duration: null })), 'Ibuprofen');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Ibuprofen', stopReason: 'side-effects' }, { duration: 864000 })), 'Ibuprofen — stopped (side effects)');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Ibuprofen', stopReason: 'side-effects' }, { duration: null })), 'Ibuprofen');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Ibuprofen', stopReason: 'side-effects' })), 'Ibuprofen');
+    });
+    it('[MEDT3] a prescription: posology, stopped with reason, completed', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(prescription({ drug: IBU, posology: { doseValue: 400, doseUnit: 'mass/mg', frequency: { times: 3, period: 1, periodUnit: 'd' } } })), 'Ibuprofen — 400 mg, 3×/d');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(prescription({ drug: IBU, status: 'stopped', statusChanged: '2026-11-01', stopReason: 'ineffective' })), 'Ibuprofen — stopped (not working)');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(prescription({ drug: IBU, status: 'completed' })), 'Ibuprofen — completed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(prescription({ drug: IBU, status: 'active' })), 'Ibuprofen');
+    });
+    it('[MEDT4] a typed-name prescription reads like medication/basic', () => {
+      const event = { content: { name: 'Grandma tea', posology: { doseValue: 1, doseUnit: 'dose/cup', asNeeded: true } }, streamIds: ['medication-prescription'], type: 'medication/prescription-basic-v1' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Grandma tea — 1 cup, as needed');
+    });
+    it('[MEDT7] medication/basic shows the unit without its kind, as coded intakes do', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Ibuprofen', intake: { doseValue: 400, doseUnit: 'mass/mg', route: 'oral' } })), 'Ibuprofen — 400 mg, oral');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Ventolin', intake: { doseValue: 2, doseUnit: 'dose/puff' } })), 'Ventolin — 2 puff');
+    });
+    it('[MEDT5] timing: clock times, else the when slots', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Levothyroxine', intake: { frequency: { times: 2, period: 1, periodUnit: 'd' }, timeOfDay: ['08:00', '20:00'] } }, { duration: null })), 'Levothyroxine — 2×/d, 08:00, 20:00');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Levothyroxine', intake: { when: ['before-breakfast'] } }, { duration: null })), 'Levothyroxine — before breakfast');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Lévothyroxine', intake: { when: ['before-breakfast', 'bedtime'] } }, { duration: null })), 'Lévothyroxine — avant le petit-déjeuner, au coucher');
+    });
+    it('[MEDT6] course: a length, else an end date', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Amoxicillin', intake: { frequency: { times: 3, period: 1, periodUnit: 'd' }, bounds: { duration: 7, durationUnit: 'd' } } }, { duration: null })), 'Amoxicillin — 3×/d, for 7 d');
+      const until = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(intake({ name: 'Amoxicillin', intake: { bounds: { end: '2026-12-12' } } }, { duration: null }));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(/^Amoxicillin — until .*12/.test(until), until);
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/permissionLabels.test.js"
 /*!****************************************!*\
   !*** ./tests/permissionLabels.test.js ***!
@@ -46484,27 +46797,29 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
 /* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
 /* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Add new tests here
  */
+
 
 
 
