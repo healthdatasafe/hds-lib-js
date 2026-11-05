@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.41.0] - 2026-11-05
+
+Readers for the data-model 3.46.0 medication model (documentation/MEDICATION.md). The `medication-intake` stream holds
+one intake (a dose: no duration) or a period of use (a duration, `null` = ongoing), and only the event's duration tells
+them apart.
+
+### Added
+- **`medicationIntakeKind(event)`**: `'intake'` or `'period'`. **`isSkipped(event)`**: a dose with `status: skipped`
+  (false on a period, where `status` is ignored). **`isCodedDrug(drug)`**: carries at least one code.
+  `MEDICATION_INTAKE_TYPES`, `MEDICATION_PRESCRIPTION_TYPES`. A reader that counts doses must skip both periods and
+  skipped doses; until now every intake event counted as one dose taken.
+- **`model.vocabularies`** (pack section `vocabularies`): `label(vocabulary, value)` (localized), `forField(eventType,
+  path)`, `forKey(key)`, with each value's FHIR and SNOMED CT codes. Empty on a pack before 3.46.0.
+- **Short text** of medication events: a skipped dose "Ibuprofen — 400 mg, skipped (side effects)", an ended period with
+  its reason "… — stopped (side effects)", a prescription "stopped (not working)" / "completed"; the regimen's times
+  "08:00, 20:00" or `when` slots "before breakfast", and its course "for 7 d" / "until <date>"; a prescription's
+  `posology`, and `medication/prescription-basic-v1` read like `medication/basic`. EN/FR from the vocabularies.
+
+### Fixed
+- `medication/basic` short text showed the unit with its kind ("400 mass/mg"); it now reads "400 mg", as coded intakes
+  do.
+
+### Tests
+- `tests/medication.test.js` (`[MEDK]`, `[MEDS]`, `[MEDC]`, `[MEDV]`, `[MEDT]`), against the live pack; 1012 Node tests.
+
 ## [2.40.0] - 2026-11-04
 
 ### Changed

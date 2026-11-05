@@ -8,6 +8,7 @@ import type { DateFormat } from '../settings/HDSSettings.ts';
 import { LAB_RESULT_CODED, labComparatorOf, labResultCodedText } from './labResults.ts';
 import { ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, encounterShortText } from './encounters.ts';
 import { GENETIC_VARIANT_CODED, geneticVariantText } from './genetics.ts';
+import { medicationStatusText } from './medication.ts';
 
 /** A calendar day: year, month (1-12), day of month. */
 interface DayParts { y: number; m: number; d: number }
@@ -221,6 +222,23 @@ export interface ShortTextResult {
  * same string `eventToShortText` returns.
  */
 export function eventToShortTextWithOrigin (event: any): ShortTextResult {
+  const result = shortTextWithOrigin(event);
+  // A medication's state (data-model 3.46.0): "skipped (forgot)", "stopped (side effects)", "completed".
+  const status = result.text != null ? medicationStatusText(event, vocabularyLabel) : null;
+  if (status) result.text += (result.text!.includes(' — ') ? ', ' : ' — ') + status;
+  return result;
+}
+
+/** A vocabulary value's localized label, the value itself when the pack has none. */
+function vocabularyLabel (vocabulary: string, value: string): string {
+  try {
+    return getModel().vocabularies.label(vocabulary, value) ?? value;
+  } catch {
+    return value;
+  }
+}
+
+function shortTextWithOrigin (event: any): ShortTextResult {
   if (event == null) return { text: null, origin: null };
 
   const model = getModel();
@@ -648,13 +666,10 @@ function formatDatasource (content: any): string | null {
 
   const parts: string[] = [];
 
-  // Medication intake (new {drug, intake} OR legacy flat with doseValue at top level)
-  const intake = content.intake || (datasourceObj === content ? content : null);
+  // Medication intake (new {drug, intake}, a prescription's {drug, posology}, OR legacy flat with doseValue at top level)
+  const intake = content.intake || content.posology || (datasourceObj === content ? content : null);
   if (intake?.doseValue) {
-    const unitLabel = intake.doseUnit
-      ? intake.doseUnit.replace(/^dose\//, '').replace(/^(mass|volume)\//, '')
-      : '';
-    parts.push(`${intake.doseValue} ${unitLabel}`.trim());
+    parts.push(`${intake.doseValue} ${doseUnitLabel(intake.doseUnit)}`.trim());
   }
   if (intake?.route) parts.push(intake.route);
   if (intake) parts.push(...regimenParts(intake));
@@ -680,12 +695,20 @@ function formatDatasource (content: any): string | null {
   return text;
 }
 
+/** A dose unit as shown: `mass/mg` → `mg`, `dose/tablet` → `tablet`. */
+function doseUnitLabel (doseUnit: unknown): string {
+  return typeof doseUnit === 'string' ? doseUnit.replace(/^(dose|mass|volume)\//, '') : '';
+}
+
 const AS_NEEDED = { en: 'as needed', fr: 'si besoin', es: 'si es necesario' };
+const FOR = { en: 'for', fr: 'pendant', es: 'durante' };
+const UNTIL = { en: 'until', fr: 'jusqu’au', es: 'hasta el' };
 
 /**
  * The regimen of a medication intake (data-model 3.23.0, the `posology` spelling):
- * `frequency` as "2×/d" or "1×/48 h", `asNeeded` as "as needed", and the printed `note`
- * only when there is no structured frequency (it usually says the same thing).
+ * `frequency` as "2×/d" or "1×/48 h", the times "08:00, 20:00" or the `when` slots "before breakfast"
+ * (3.46.0), `asNeeded` as "as needed", the course `bounds` as "for 7 d" / "until 12/12/2026", and the
+ * printed `note` only when there is nothing structured (it usually says the same thing).
  */
 function regimenParts (intake: any): string[] {
   const parts: string[] = [];
@@ -693,7 +716,22 @@ function regimenParts (intake: any): string[] {
   if (f && typeof f.times === 'number' && typeof f.period === 'number' && f.periodUnit) {
     parts.push(`${f.times}×/${f.period === 1 ? '' : f.period + ' '}${f.periodUnit}`);
   }
+  if (Array.isArray(intake.timeOfDay) && intake.timeOfDay.length > 0) {
+    parts.push(intake.timeOfDay.join(', '));
+  } else if (Array.isArray(intake.when) && intake.when.length > 0) {
+    parts.push(intake.when.map((w: string) => {
+      const label = vocabularyLabel('medication-when', w);
+      return label.charAt(0).toLowerCase() + label.slice(1);
+    }).join(', '));
+  }
   if (intake.asNeeded === true) parts.push(localizeText(AS_NEEDED));
+  const b = intake.bounds;
+  if (b && typeof b.duration === 'number' && b.durationUnit) {
+    parts.push(`${localizeText(FOR)} ${b.duration} ${b.durationUnit}`);
+  } else if (b && typeof b.end === 'string') {
+    const end = formatContentDate(b.end);
+    if (end) parts.push(`${localizeText(UNTIL)} ${end}`);
+  }
   if (!parts.length && typeof intake.note === 'string' && intake.note.trim() !== '') {
     const n = intake.note.trim();
     parts.push(n.length > 30 ? n.slice(0, 30) + '...' : n);
@@ -712,13 +750,13 @@ function formatObject (content: any): string | null {
     const dl = content.drug.label;
     return typeof dl === 'string' ? dl : (localizeText(dl) || null);
   }
-  // medication/basic composite: { name, intake: { doseValue, doseUnit, route } }
-  // (legacy events stored the dose fields flat at the top level — read both).
+  // medication/basic composite: { name, intake: { doseValue, doseUnit, route } }, medication/prescription-basic-v1:
+  // { name, posology } (legacy events stored the dose fields flat at the top level — read both).
   if (content.name && typeof content.name === 'string') {
-    const intake = content.intake ?? content;
+    const intake = content.intake ?? content.posology ?? content;
     const parts: string[] = [];
     if (intake.doseValue) {
-      parts.push(`${intake.doseValue}${intake.doseUnit ? ' ' + intake.doseUnit : ''}`);
+      parts.push(`${intake.doseValue} ${doseUnitLabel(intake.doseUnit)}`.trim());
     }
     if (intake.route) parts.push(intake.route);
     parts.push(...regimenParts(intake));

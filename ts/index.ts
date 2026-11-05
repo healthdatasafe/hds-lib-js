@@ -16,6 +16,7 @@ import { eventToShortText, eventToShortTextWithOrigin, formatEventDate } from '.
 import { LAB_RESULT_CODED, LAB_COMPARATORS, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labResultCodedText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded } from './HDSModel/labResults.ts';
 import { ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, contentEventIds, withRelatedMirror, checkRelatedMirror } from './HDSModel/encounters.ts';
 import { GENETIC_VARIANT_CODED, geneticVariantText } from './HDSModel/genetics.ts';
+import { MEDICATION_INTAKE_TYPES, MEDICATION_PRESCRIPTION_TYPES, medicationIntakeKind, isSkipped, isCodedDrug } from './HDSModel/medication.ts';
 import { ENTERABLE_ITEM_TYPES } from './HDSModel/HDSItemDef.ts';
 import { MonitorScope } from './MonitorScope.ts';
 import { HDSSettings, SETTING_TYPES } from './settings/HDSSettings.ts';
@@ -40,6 +41,8 @@ export type { Localizable, localizableText } from './localizeText.ts';
 export type { FormatEventDateOptions, EventDateSource, ShortTextOrigin, ShortTextResult } from './HDSModel/eventToShortText.ts';
 export type { LabComparator, LabFhirValue, LabResultCodedIssue } from './HDSModel/labResults.ts';
 export type { ContentEventIdField, ContentEventId, RelatedMirrorIssue } from './HDSModel/encounters.ts';
+export type { MedicationIntakeKind } from './HDSModel/medication.ts';
+export type { VocabularyDef, VocabularyValue } from './HDSModel/HDSModel-Vocabularies.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';
@@ -56,7 +59,7 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, cyclePhaseAt, shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, LAB_RESULT_CODED, LAB_COMPARATORS, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labResultCodedText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, contentEventIds, withRelatedMirror, checkRelatedMirror, GENETIC_VARIANT_CODED, geneticVariantText, ENTERABLE_ITEM_TYPES, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope, cmcDocuments, cmcItemReminders, appDescription };
+export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, cyclePhaseAt, shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, LAB_RESULT_CODED, LAB_COMPARATORS, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labResultCodedText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, contentEventIds, withRelatedMirror, checkRelatedMirror, GENETIC_VARIANT_CODED, geneticVariantText, MEDICATION_INTAKE_TYPES, MEDICATION_PRESCRIPTION_TYPES, medicationIntakeKind, isSkipped, isCodedDrug, ENTERABLE_ITEM_TYPES, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope, cmcDocuments, cmcItemReminders, appDescription };
 export type { AppManifest, AppOpenLinks, CatalogueEntryLike, OAuthClientLike, AppTrust, AppDescription, DescribeAppInput, LocalizedMap } from './appDescription.ts';
 export type { FormSpec, FormSpecRecord, FormSpecItemKeyIssue, FormSpecItemKeyIssueReason, FormSpecSource, FormSpecOpenLink } from './cmc/formSpec.ts';
 export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './appTemplates/datasetTemplate.ts';
@@ -150,6 +153,11 @@ const HDSLib = {
   checkRelatedMirror,
   GENETIC_VARIANT_CODED,
   geneticVariantText,
+  MEDICATION_INTAKE_TYPES,
+  MEDICATION_PRESCRIPTION_TYPES,
+  medicationIntakeKind,
+  isSkipped,
+  isCodedDrug,
   ENTERABLE_ITEM_TYPES,
   MonitorScope,
   HDSSettings,

@@ -10,6 +10,7 @@ import './conversions.test.js';
 import './datasetTemplate.test.js';
 import './errors.test.js';
 import './eventToShortText.test.js';
+import './medication.test.js';
 import './formatEventDate.test.js';
 import './hdsLib.test.js';
 import './hdsModel.test.js';
