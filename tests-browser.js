@@ -21700,13 +21700,18 @@ async function fetchManifest(url, fetchImpl) {
 function clearAppManifests() {
     loads.clear();
 }
-/** The catalogue entry that vouches for this app: by `appCode` / `id`, and for an entry with `counterparty`, by it too */
+/**
+ * The catalogue entry that vouches for this app: by `appCode` / `id`, and for an entry with `counterparty`, by it too.
+ * A CMC relationship's app code is the requester's own claim, so only an entry with a matching `counterparty` vouches
+ * for one (APP-DESCRIPTION.md § The catalogue vouches).
+ */
 function vouchingEntry(input) {
+    const cmc = input.cmc === true || input.counterparty != null;
     return (input.catalogue ?? []).find(e => {
         if (e.appCode !== input.appCode && e.id !== input.appCode)
             return false;
         if (!e.counterparty)
-            return true;
+            return !cmc;
         const c = input.counterparty;
         return c?.host === e.counterparty.host && (e.counterparty.username == null || c?.username === e.counterparty.username);
     }) ?? null;
@@ -21771,11 +21776,14 @@ function describeApp(input) {
     }
     return { trust: 'none', appCode, name: null, open: {} };
 }
-/** Who an access says it is: its app code (`cmc.appCode`, else the access name = `requestingAppId`) and its CMC counterparty */
+/**
+ * Who an access says it is: its app code (`cmc.appCode`, else the access name = `requestingAppId`), its CMC
+ * counterparty, and whether it is a CMC relationship (`clientData.cmc`)
+ */
 function appIdentityOfAccess(access) {
     const cmc = access.clientData?.cmc;
     const appCode = typeof cmc?.appCode === 'string' && cmc.appCode ? cmc.appCode : access.name ?? '';
-    return { appCode, counterparty: cmc?.counterparty ?? null };
+    return { appCode, counterparty: cmc?.counterparty ?? null, cmc: cmc != null };
 }
 /**
  * The manifest URL an access points at: `clientData.hdsApp` on a plain access; for a CMC relationship, `content.hdsApp`
