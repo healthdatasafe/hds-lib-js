@@ -145,6 +145,31 @@ describe('[APPD] appDescription', () => {
       assert.equal(vouchingEntry({ ...CMC, catalogue: [entry({ counterparty: { host: 'dysnet.hds.ngo', username: 'other' } })] }), null);
     });
 
+    it('[APPD-R4b] an entry without counterparty never vouches for a CMC relationship: its app code is a claim', () => {
+      const plain = entry({ id: 'cycle-intelligence', appCode: 'cycle-intelligence', counterparty: undefined });
+      // a plain access (requestingAppId) is vouched by the entry, as before
+      assert.equal(vouchingEntry({ appCode: 'cycle-intelligence', catalogue: [plain] }), plain);
+      // any account sending a CMC invite under that app code is not
+      const claimed = { appCode: 'cycle-intelligence', counterparty: { username: 'mallory', host: 'evil.example' }, catalogue: [plain] };
+      assert.equal(vouchingEntry(claimed), null);
+      assert.equal(describeApp(claimed).trust, 'none');
+      assert.equal(vouchingEntry({ appCode: 'cycle-intelligence', cmc: true, catalogue: [plain] }), null);
+      assert.equal(vouchingEntry({ ...appIdentityOfAccess({ clientData: { cmc: { appCode: 'cycle-intelligence' } } }), catalogue: [plain] }), null);
+    });
+
+    it('[APPD-R4c] a practitioner app used by many accounts is unvouched, named from its own manifest', () => {
+      const plain = entry({ id: 'cycle-intelligence-monitor', appCode: 'cycle-intelligence-monitor', counterparty: undefined });
+      const pointer = 'https://healthdatasafe.github.io/ci/hds-app-manifest-monitor.json';
+      const own = parseAppManifest(manifestBody({ appCode: 'cycle-intelligence-monitor', name: { en: 'Cycle Intelligence Monitor' } }));
+      const input = { appCode: 'cycle-intelligence-monitor', counterparty: { username: 'dr-a', host: 'api.datasafe.dev' }, cmc: true, pointer, catalogue: [plain] };
+      assert.equal(needsManifest(input), true);
+      const d = describeApp({ ...input, manifest: own });
+      assert.equal(d.trust, 'unvouched');
+      assert.deepEqual(d.name, { en: 'Cycle Intelligence Monitor' });
+      assert.equal(d.icon, undefined);
+      assert.equal(d.host, 'healthdatasafe.github.io');
+    });
+
     it('[APPD-R5] registered: an OAuth client\'s registration, before any manifest', () => {
       const d = describeApp({ appCode: 'some-client', oauthClient: { clientName: 'Some Client', logoUri: 'https://c.example/l.png', clientUri: 'https://c.example/' } });
       assert.equal(d.trust, 'registered');
@@ -170,8 +195,10 @@ describe('[APPD] appDescription', () => {
 
   describe('[APPD-A] accesses', () => {
     it('[APPD-A1] identity: cmc.appCode, else the access name (requestingAppId)', () => {
-      assert.deepEqual(appIdentityOfAccess({ name: 'cmc:dysnet-registry:dysnet@dysnet.hds.ngo', clientData: { cmc: CMC } }), CMC);
-      assert.deepEqual(appIdentityOfAccess({ name: 'cycle-intelligence', clientData: {} }), { appCode: 'cycle-intelligence', counterparty: null });
+      assert.deepEqual(appIdentityOfAccess({ name: 'cmc:dysnet-registry:dysnet@dysnet.hds.ngo', clientData: { cmc: CMC } }), { ...CMC, cmc: true });
+      assert.deepEqual(appIdentityOfAccess({ name: 'cycle-intelligence', clientData: {} }), { appCode: 'cycle-intelligence', counterparty: null, cmc: false });
+      // a CMC grant without a stamped counterparty is still a CMC relationship
+      assert.deepEqual(appIdentityOfAccess({ name: 'x', clientData: { cmc: { appCode: 'cycle-intelligence' } } }), { appCode: 'cycle-intelligence', counterparty: null, cmc: true });
     });
 
     it('[APPD-A2] the pointer: on the access, else on the CMC accept event', async () => {

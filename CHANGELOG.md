@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.42.0] - 2026-11-06
+
+A catalogue entry without `counterparty` no longer vouches for a CMC relationship (data-model 3.47.1,
+APP-DESCRIPTION.md § The catalogue vouches): a CMC app code is the requester's own claim, so it vouched any account
+that claimed it.
+
+### Changed
+- **`vouchingEntry`** (and `describeApp`, `needsManifest`): a CMC input is vouched only by an entry whose `counterparty`
+  matches. A practitioner app used by many accounts is `unvouched`, named from its manifest. Plain accesses unchanged.
+
+### Added
+- **`DescribeAppInput.cmc`**: marks a CMC relationship (implied by `counterparty`). **`appIdentityOfAccess`** returns
+  `cmc: true` for an access with `clientData.cmc`, so a CMC grant without a stamped counterparty is still bound by the
+  rule. Tests `[APPD-R4b]`, `[APPD-R4c]`.
+
 ## [2.41.0] - 2026-11-05
 
 Readers for the data-model 3.46.0 medication model (documentation/MEDICATION.md). The `medication-intake` stream holds

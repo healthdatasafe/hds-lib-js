@@ -61,6 +61,8 @@ export interface DescribeAppInput {
   appCode: string;
   /** `clientData.cmc.counterparty`, for a CMC relationship */
   counterparty?: { username?: string; host?: string } | null;
+  /** a CMC relationship (its `appCode` is the requester's claim); implied by `counterparty` */
+  cmc?: boolean;
   /** the normalized `hdsApp.manifest` (`manifestPointerOf`) */
   pointer?: string | null;
   /** the manifest read from `pointer`, when one was needed (`needsManifest`) */
@@ -178,18 +180,23 @@ export function clearAppManifests (): void {
   loads.clear();
 }
 
-/** The catalogue entry that vouches for this app: by `appCode` / `id`, and for an entry with `counterparty`, by it too */
-export function vouchingEntry (input: Pick<DescribeAppInput, 'appCode' | 'counterparty' | 'catalogue'>): CatalogueEntryLike | null {
+/**
+ * The catalogue entry that vouches for this app: by `appCode` / `id`, and for an entry with `counterparty`, by it too.
+ * A CMC relationship's app code is the requester's own claim, so only an entry with a matching `counterparty` vouches
+ * for one (APP-DESCRIPTION.md § The catalogue vouches).
+ */
+export function vouchingEntry (input: Pick<DescribeAppInput, 'appCode' | 'counterparty' | 'catalogue' | 'cmc'>): CatalogueEntryLike | null {
+  const cmc = input.cmc === true || input.counterparty != null;
   return (input.catalogue ?? []).find(e => {
     if (e.appCode !== input.appCode && e.id !== input.appCode) return false;
-    if (!e.counterparty) return true;
+    if (!e.counterparty) return !cmc;
     const c = input.counterparty;
     return c?.host === e.counterparty.host && (e.counterparty.username == null || c?.username === e.counterparty.username);
   }) ?? null;
 }
 
 /** Whether `describeApp` would use a manifest: no entry supplies the words, and the app points at one */
-export function needsManifest (input: Pick<DescribeAppInput, 'appCode' | 'counterparty' | 'catalogue' | 'pointer' | 'oauthClient'>): boolean {
+export function needsManifest (input: Pick<DescribeAppInput, 'appCode' | 'counterparty' | 'cmc' | 'catalogue' | 'pointer' | 'oauthClient'>): boolean {
   if (!input.pointer) return false;
   const entry = vouchingEntry(input);
   if (!entry) return !input.oauthClient?.clientName;
@@ -253,11 +260,14 @@ export function describeApp (input: DescribeAppInput): AppDescription {
 interface AccessLike { name?: string; clientData?: Record<string, unknown> | null }
 interface ConnectionLike { apiOne: (method: string, params: unknown, resultKey?: string) => Promise<unknown> }
 
-/** Who an access says it is: its app code (`cmc.appCode`, else the access name = `requestingAppId`) and its CMC counterparty */
-export function appIdentityOfAccess (access: AccessLike): { appCode: string; counterparty: { username?: string; host?: string } | null } {
+/**
+ * Who an access says it is: its app code (`cmc.appCode`, else the access name = `requestingAppId`), its CMC
+ * counterparty, and whether it is a CMC relationship (`clientData.cmc`)
+ */
+export function appIdentityOfAccess (access: AccessLike): { appCode: string; counterparty: { username?: string; host?: string } | null; cmc: boolean } {
   const cmc = access.clientData?.cmc as { appCode?: unknown; counterparty?: { username?: string; host?: string } } | undefined;
   const appCode = typeof cmc?.appCode === 'string' && cmc.appCode ? cmc.appCode : access.name ?? '';
-  return { appCode, counterparty: cmc?.counterparty ?? null };
+  return { appCode, counterparty: cmc?.counterparty ?? null, cmc: cmc != null };
 }
 
 /**
