@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.43.0] - 2026-11-06
+
+pryv 3.19.0 (pryv/lib-js#81, for DysNet): auto-login checks that the stored access covers the app's
+`requestedPermissions`.
+
+### Changed
+- **`pryv`, `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor`, `@pryv/socket.io` 3.18.0 → 3.19.0** (`@pryv/cmc`
+  stays 3.23.0; one `pryv` copy). With a widened scope, auto-login no longer signs the person in: the state is
+  `INITIALIZED` with `reasonId: 'MISSING_PERMISSIONS'` and `missingPermissions`, and the button asks again once (a
+  fingerprint guard prevents loops; a delegated access is not gated). New `pryv.Auth.missingPermissions()` /
+  `authController.missingPermissions()`, reached through hds-lib's `pryv` export.
+
 ## [2.42.0] - 2026-11-06
 
 A catalogue entry without `counterparty` no longer vouches for a CMC relationship (data-model 3.47.1,
