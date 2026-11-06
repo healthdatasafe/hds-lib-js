@@ -10873,6 +10873,7 @@ const handoff = __webpack_require__(/*! ../lib/handoff */ "./node_modules/pryv/s
 const pollUrls = __webpack_require__(/*! ../lib/pollUrls */ "./node_modules/pryv/src/lib/pollUrls.js");
 const PryvError = __webpack_require__(/*! ../lib/PryvError */ "./node_modules/pryv/src/lib/PryvError.js");
 const { refusedState, unreadableAnswerState } = __webpack_require__(/*! ./pollOutcome */ "./node_modules/pryv/src/Auth/pollOutcome.js");
+const { missingPermissions, permissionsFingerprint } = __webpack_require__(/*! ./permissionsCoverage */ "./node_modules/pryv/src/Auth/permissionsCoverage.js");
 
 /**
  * Controller for authentication flow
@@ -10950,11 +10951,14 @@ class AuthController {
    */
   async init () {
     cancelAuthFlow(this);
+    const flowId = this._authFlowId;
     this.serviceInfo = this.service.infoSync();
     this.state = { status: AuthStates.LOADING };
     this.assets = await loadAssets(this);
 
     const loginButton = this.loginButton;
+    // why the stored sign-in was not used (on the INITIALIZED state)
+    let notSignedIn = null;
     // initialize human interaction interface
     if (loginButton != null) {
       // Register the button's state listener at most once: init() can run again
@@ -10966,14 +10970,17 @@ class AuthController {
         this._loginButtonListenerRegistered = true;
       }
       // autologin needs cookies/storage implemented in human interaction interface
-      await checkAutoLogin(this);
+      notSignedIn = await checkAutoLogin(this);
+      // a sign-out or another init() during the access check replaced this one
+      if (this._authFlowId !== flowId) return this.service;
     }
 
     // if auto login is not prompted
     if (this.state.status !== AuthStates.AUTHORIZED) {
-      this.state = { status: AuthStates.INITIALIZED, serviceInfo: this.serviceInfo };
+      this.state = Object.assign({ status: AuthStates.INITIALIZED, serviceInfo: this.serviceInfo }, notSignedIn);
     }
 
+    // must run after checkAutoLogin: its hasAuthReturn() reads the flow this finish clears
     if (loginButton != null && loginButton.finishAuthProcessAfterRedirection != null) {
       // @ts-ignore - this is a valid AuthController
       await loginButton.finishAuthProcessAfterRedirection(this);
@@ -11159,7 +11166,10 @@ class AuthController {
       if (this._authFlowId !== flowId) return;
       if (info != null && info.error == null) {
         const profile = profileFromAccessInfo(target, info);
-        this.state = { status: AuthStates.AUTHORIZED, username: profile.username, apiEndpoint: profile.apiEndpoint, profile };
+        const state = { status: AuthStates.AUTHORIZED, username: profile.username, apiEndpoint: profile.apiEndpoint, profile };
+        const missing = missingPermissions(this.settings.authRequest.requestedPermissions, info);
+        if (missing.length > 0) state.missingPermissions = missing;
+        this.state = state;
         return;
       }
       if (!ACCESS_GONE_ERRORS.includes(info?.error?.id)) {
@@ -11184,6 +11194,25 @@ class AuthController {
     const previous = restorableState(this.state);
     this.state = { status: AuthStates.SWITCHING, from: current?.username ?? null, to: null };
     await this.startAuthRequest({ actAs: 'allow' }, previous);
+  }
+
+  /**
+   * The requested stream permissions that an access does not cover (empty
+   * when it covers them all): see `pryv.Auth.missingPermissions`.
+   * @param {Object} accessInfo - as `connection.accessInfo()` returns it
+   * @returns {Array<Object>}
+   */
+  missingPermissions (accessInfo) {
+    return missingPermissions(this.settings.authRequest.requestedPermissions, accessInfo);
+  }
+
+  /**
+   * @private Fingerprint of this app's requested stream permissions, stored with each
+   * sign-in made through the auth request.
+   * @returns {string}
+   */
+  _requestedPermissionsFingerprint () {
+    return permissionsFingerprint(this.settings.authRequest.requestedPermissions);
   }
 
   /**
@@ -11412,7 +11441,8 @@ class AuthController {
         const previous = this._switchPrevious;
         this._switchPrevious = null;
         if (pollResponse.status === AuthStates.AUTHORIZED) {
-          pollResponse.profile = ProfileStore.fromAccepted(pollResponse);
+          // stored with the sign-in: the request it answered (see checkAutoLogin)
+          pollResponse.profile = ProfileStore.fromAccepted(pollResponse, this._requestedPermissionsFingerprint());
         } else if (previous != null) {
           // an account switch that did not complete: stay on the previous account
           console.warn('pryv: account switch did not complete (' +
@@ -11557,19 +11587,88 @@ async function checkAutoLogin (authController) {
     if (store.active == null || !ProfileStore.carriesToken(store.active.apiEndpoint)) return;
     const state = { status: AuthStates.AUTHORIZED, username: store.active.username, apiEndpoint: store.active.apiEndpoint, profile: store.active };
     if (store.authUrl != null) state.authUrl = store.authUrl;
-    authController.state = state;
-    return;
+    return await signInIfPermitted(authController, state);
   }
   // a button that cannot rewrite its storage still must not sign in to it
   if (typeof storedCredentials.apiEndpoint === 'string' && !ProfileStore.carriesToken(storedCredentials.apiEndpoint)) return;
   const state = Object.assign({}, { status: AuthStates.AUTHORIZED }, storedCredentials);
-  if (typeof state.username === 'string' && typeof state.apiEndpoint === 'string') state.profile = ProfileStore.profileOf(state);
+  if (typeof state.username === 'string' && typeof state.apiEndpoint === 'string') {
+    state.profile = ProfileStore.profileOf(state);
+    // kept on the profile only: the app's listener gets the stored shape it knows
+    delete state.permissionsFingerprint;
+  }
+  return await signInIfPermitted(authController, state);
+}
+
+/**
+ * Sign in from a stored sign-in (`state`, AUTHORIZED), unless its access no
+ * longer serves the app. When the app requests stream permissions, the
+ * stored access is checked with `access-info` (one call):
+ * - refused (`invalid-access-token`, `forbidden`): not signed in, the
+ *   account is marked unavailable;
+ * - not covering every requested permission (see `missingPermissions`): not
+ *   signed in, so a click on the button asks for the access again (the auth
+ *   page updates the app access in place). The stored sign-in is kept, the
+ *   next sign-in replaces it. Except when asking again cannot help, then
+ *   signed in as before with `missingPermissions` on the state: the access
+ *   works through account delegation, or the stored sign-in was made for
+ *   this same request (same permissions fingerprint: a sign-in that was
+ *   asked again and still does not cover them, which must not block every
+ *   page load);
+ * - any other failure (network, server error): signed in as before, so an
+ *   offline start does not sign the person out.
+ * Not checked on the return of a sign-in by redirection (the button reports
+ * it with `hasAuthReturn()`): that sign-in replaces the stored one at once.
+ * @returns {Promise<Object|undefined>} when not signed in, what to add to
+ *   the INITIALIZED state (`reasonId`, `missingPermissions`)
+ */
+async function signInIfPermitted (authController, state) {
+  const requested = authController.settings.authRequest.requestedPermissions;
+  // what an access without any permission would miss: nothing to check when empty
+  const asksForStreams = missingPermissions(requested, null).length > 0;
+  const loginButton = authController.loginButton;
+  const returning = typeof loginButton?.hasAuthReturn === 'function' && loginButton.hasAuthReturn() === true;
+  if (!asksForStreams || returning || typeof state.apiEndpoint !== 'string') {
+    authController.state = state;
+    return;
+  }
+  const flowId = authController._authFlowId;
+  let info;
+  try {
+    info = await authController._accessInfo(state.apiEndpoint);
+  } catch (e) {
+    info = null; // network failure, unreadable answer: nothing known about the access
+  }
+  // a sign-out or another init() during the check replaced this one
+  if (authController._authFlowId !== flowId) return;
+  if (info != null && info.error != null) {
+    if (ACCESS_GONE_ERRORS.includes(info.error.id)) {
+      if (typeof state.username === 'string') {
+        authController._saveProfiles(ProfileStore.markUnavailable(authController._readProfiles(), state.username));
+      }
+      return { reasonId: 'STORED_ACCESS_REFUSED' };
+    }
+    info = null; // any other answer (server error, rate limit) says nothing about the access
+  }
+  if (info != null) {
+    const missing = missingPermissions(requested, info);
+    if (missing.length > 0) {
+      const delegated = info.delegation?.isDelegatedAccess === true;
+      const storedFingerprint = state.profile?.permissionsFingerprint ?? state.permissionsFingerprint;
+      const askedAlready = storedFingerprint === authController._requestedPermissionsFingerprint();
+      if (!delegated && !askedAlready) {
+        return { reasonId: 'MISSING_PERMISSIONS', missingPermissions: missing };
+      }
+      state.missingPermissions = missing;
+    }
+  }
   authController.state = state;
 }
 
 /** A stored profile refreshed with what its access says about itself. */
 function profileFromAccessInfo (stored, info) {
   const profile = { username: stored.username, apiEndpoint: stored.apiEndpoint };
+  if (stored.permissionsFingerprint != null) profile.permissionsFingerprint = stored.permissionsFingerprint;
   const d = info.delegation;
   if (d != null && d.isDelegatedAccess === true && typeof d.delegate?.username === 'string') {
     profile.actingAs = { username: stored.username, delegate: d.delegate.username };
@@ -11791,9 +11890,11 @@ function get (languageCode, definitions) {
  * The top-level `apiEndpoint` / `username` are the active account (what
  * versions without profiles read); `profiles` lists every remembered
  * account, most recently used first, the active one included.
- * A profile is `{ username, apiEndpoint, actingAs?, unavailable? }`, where
- * `actingAs = { username, delegate }` marks an account used through account
- * delegation (`delegate` is the username of the person acting).
+ * A profile is `{ username, apiEndpoint, actingAs?, unavailable?,
+ * permissionsFingerprint? }`, where `actingAs = { username, delegate }` marks
+ * an account used through account delegation (`delegate` is the username of
+ * the person acting), and `permissionsFingerprint` identifies the requested
+ * permissions of the sign-in that stored it (see permissionsCoverage).
  * @memberof pryv.Auth
  */
 module.exports = {
@@ -11856,6 +11957,7 @@ function write (store) {
     data.apiEndpoint = store.active.apiEndpoint;
     data.username = store.active.username;
     if (store.active.actingAs != null) data.actingAs = store.active.actingAs;
+    if (store.active.permissionsFingerprint != null) data.permissionsFingerprint = store.active.permissionsFingerprint;
   }
   if (store.authUrl != null) data.authUrl = store.authUrl;
   data.profiles = store.profiles.map(profileOf);
@@ -11895,6 +11997,7 @@ function profileOf (p) {
     profile.actingAs = { username: p.username, delegate: p.actingAs.delegate };
   }
   if (p.unavailable === true) profile.unavailable = true;
+  if (typeof p.permissionsFingerprint === 'string') profile.permissionsFingerprint = p.permissionsFingerprint;
   return profile;
 }
 
@@ -11906,9 +12009,12 @@ function isProfile (p) {
  * The profile of an ACCEPTED auth-request body. Its `delegation` block is a
  * display hint posted by the auth page; `accessInfo().delegation` is
  * authoritative and replaces it when the profile is next activated.
+ * @param {Object} body
+ * @param {string} [permissionsFingerprint] - of the request this sign-in answered
  */
-function fromAccepted (body) {
+function fromAccepted (body, permissionsFingerprint) {
   const profile = { username: body.username, apiEndpoint: body.apiEndpoint };
+  if (typeof permissionsFingerprint === 'string') profile.permissionsFingerprint = permissionsFingerprint;
   const d = body.delegation;
   if (d != null && d.isDelegatedAccess === true && d.controlledUsername === body.username &&
       typeof d.delegate?.username === 'string') {
@@ -11934,6 +12040,7 @@ const AuthController = __webpack_require__(/*! ./AuthController */ "./node_modul
 const AuthStates = __webpack_require__(/*! ./AuthStates */ "./node_modules/pryv/src/Auth/AuthStates.js");
 const LoginButton = __webpack_require__(/*! ../Browser/LoginButton */ "./node_modules/pryv/src/Browser/LoginButton.js");
 const Service = __webpack_require__(/*! ../Service */ "./node_modules/pryv/src/Service.js");
+const { missingPermissions } = __webpack_require__(/*! ./permissionsCoverage */ "./node_modules/pryv/src/Auth/permissionsCoverage.js");
 
 /**
  * @memberof pryv
@@ -11942,7 +12049,8 @@ const Service = __webpack_require__(/*! ../Service */ "./node_modules/pryv/src/S
 module.exports = {
   setupAuth,
   AuthStates,
-  AuthController
+  AuthController,
+  missingPermissions
 };
 
 /**
@@ -11974,6 +12082,124 @@ async function setupAuth (settings, serviceInfoUrl, serviceCustomizations, Human
   await humanInteraction.init();
 
   return service;
+}
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/Auth/permissionsCoverage.js"
+/*!***********************************************************!*\
+  !*** ./node_modules/pryv/src/Auth/permissionsCoverage.js ***!
+  \***********************************************************/
+(module) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+
+/**
+ * Whether an access covers the stream permissions an app requests, and a
+ * fingerprint of a request, kept with a stored sign-in to know which request
+ * it was made for.
+ * @memberof pryv.Auth
+ */
+module.exports = {
+  missingPermissions,
+  permissionsFingerprint
+};
+
+/** The granted levels that cover each requested level. */
+const COVERED_BY = {
+  read: ['read', 'contribute', 'manage'],
+  'create-only': ['create-only', 'contribute', 'manage'],
+  contribute: ['contribute', 'manage'],
+  manage: ['manage']
+};
+
+/**
+ * The requested stream permissions the access does not cover (an empty
+ * array when it covers them all).
+ *
+ * A requested permission is covered by a permission of the access on the
+ * same `streamId`, or on `'*'`, with at least the requested level:
+ * `read` < `contribute` < `manage`; `create-only` is covered by
+ * `create-only`, `contribute` and `manage` (not by `read`); a requested
+ * `none` needs nothing. A permission on a parent stream does NOT cover a
+ * child stream (the stream ids are compared as they are, except that the
+ * local store prefix is left out: `:local:diary` and `diary` are the same
+ * stream, as the core stores it). Feature
+ * permissions (`{ feature, setting }`) are ignored on both sides. A personal
+ * access covers everything.
+ *
+ * @param {Array<Object>} requestedPermissions - e.g. `authRequest.requestedPermissions`
+ * @param {Object} accessInfo - the access, as `connection.accessInfo()` returns it (`type`, `permissions`)
+ * @returns {Array<Object>} the uncovered requested permissions, as requested
+ */
+function missingPermissions (requestedPermissions, accessInfo) {
+  const requested = streamPermissions(requestedPermissions).filter((p) => p.level !== 'none');
+  if (accessInfo?.type === 'personal') return [];
+  const granted = streamPermissions(accessInfo?.permissions);
+  return requested
+    .filter((r) => {
+      const id = withoutLocalPrefix(r.streamId);
+      return !granted.some((g) => {
+        const grantedId = withoutLocalPrefix(g.streamId);
+        return (grantedId === id || grantedId === '*') && covers(g.level, r.level);
+      });
+    })
+    .map((r) => Object.assign({}, r));
+}
+
+/**
+ * A short stable fingerprint of the stream permissions of a request: the
+ * same for the same `streamId` + `level` pairs in any order; other fields
+ * (`defaultName`, ...) and feature permissions are ignored.
+ * @param {Array<Object>} requestedPermissions
+ * @returns {string} 8 hexadecimal characters
+ */
+function permissionsFingerprint (requestedPermissions) {
+  const entries = streamPermissions(requestedPermissions)
+    .map((p) => JSON.stringify([p.streamId, p.level]))
+    .sort();
+  return fnv1a(entries.join(','));
+}
+
+/**
+ * A stream id without its local store prefix, as the core canonicalises a
+ * permission's stream id: `:local:diary` is `diary`, the store root
+ * `:local:` is `*`, a repeated prefix is removed again. Other stores'
+ * prefixes are kept.
+ */
+function withoutLocalPrefix (streamId) {
+  const PREFIX = ':local:';
+  let id = streamId;
+  for (let i = 0; i < 8 && id.startsWith(PREFIX); i++) {
+    id = id.slice(PREFIX.length);
+    if (id === '') return '*';
+  }
+  return id;
+}
+
+function covers (grantedLevel, requestedLevel) {
+  const coveredBy = COVERED_BY[requestedLevel] ?? [requestedLevel];
+  return coveredBy.includes(grantedLevel);
+}
+
+/** The stream permissions of a list (feature permissions left out). */
+function streamPermissions (permissions) {
+  if (!Array.isArray(permissions)) return [];
+  return permissions.filter((p) => p != null && typeof p === 'object' && p.feature == null && typeof p.streamId === 'string');
+}
+
+/** 32-bit FNV-1a hash of a string, as 8 hex characters. */
+function fnv1a (str) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 
@@ -12480,7 +12706,10 @@ class LoginButton {
         }
       }
       if (body?.status === AuthStates.AUTHORIZED && typeof body.username === 'string') {
-        body.profile = ProfileStore.fromAccepted(body);
+        // stored with the sign-in: the request it answered
+        body.profile = ProfileStore.fromAccepted(body, typeof authController._requestedPermissionsFingerprint === 'function'
+          ? authController._requestedPermissionsFingerprint()
+          : undefined);
         // the auth page of this sign-in locates the account app
         if (typeof flow.authUrl === 'string') authController._authUrl = flow.authUrl;
       } else if (signedIn) {
@@ -12504,23 +12733,38 @@ class LoginButton {
         window.history.replaceState(null, '', utils.cleanURLFromPrYvParams(url));
       }
     }
-
-    /** The key of the returning auth request, or null when the URL is not a return. */
-    function retrieveKey (url) {
-      // Modern lowercase form (pryvKey / pryvPoll) is preferred; the
-      // capital-Y form (prYvkey / prYvpoll) is accepted for back-compat
-      // with apps emitting the legacy URL contract — see
-      // [DEPRECATED] notes on cleanURLFromPrYvParams.
-      const params = utils.getQueryParamsFromURL(url);
-      const key = params.pryvKey || params.prYvkey;
-      if (key) return key;
-      const poll = params.pryvPoll || params.prYvpoll;
-      // the poll URL ends with the key (`<access>/<key>`); only the key is
-      // used, the poll URL fetched is the one stored when the flow started
-      if (poll) return poll.split(/[?#]/)[0].split('/').filter(Boolean).pop() || null;
-      return null;
-    }
   }
+
+  /**
+   * Whether this page is the return of a sign-in by redirection that this
+   * page started (its key matches the stored flow): the auth controller then
+   * leaves the stored sign-in unchecked, `finishAuthProcessAfterRedirection`
+   * replaces it.
+   * @returns {boolean}
+   */
+  hasAuthReturn () {
+    if (!utils.isBrowser()) return false;
+    const key = retrieveKey(window.location.href);
+    if (key == null) return false;
+    const flow = readAuthFlow(this._cookieKey);
+    return flow != null && flow.key === key;
+  }
+}
+
+/** The key of the returning auth request, or null when the URL is not a return. */
+function retrieveKey (url) {
+  // Modern lowercase form (pryvKey / pryvPoll) is preferred; the
+  // capital-Y form (prYvkey / prYvpoll) is accepted for back-compat
+  // with apps emitting the legacy URL contract — see
+  // [DEPRECATED] notes on cleanURLFromPrYvParams.
+  const params = utils.getQueryParamsFromURL(url);
+  const key = params.pryvKey || params.prYvkey;
+  if (key) return key;
+  const poll = params.pryvPoll || params.prYvpoll;
+  // the poll URL ends with the key (`<access>/<key>`); only the key is
+  // used, the poll URL fetched is the one stored when the flow started
+  if (poll) return poll.split(/[?#]/)[0].split('/').filter(Boolean).pop() || null;
+  return null;
 }
 
 // ---- the auth request started by this page, kept across the redirect ----
@@ -46681,7 +46925,7 @@ const validate = validate10;/* harmony default export */ const __WEBPACK_DEFAULT
 (module) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.18.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.19.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
 
 /***/ }
 
