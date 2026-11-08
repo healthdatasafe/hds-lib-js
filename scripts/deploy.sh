@@ -131,4 +131,7 @@ fi
 git -C dist commit -m "deploy $COMMIT_SHORT ($COMMIT_FULL)"
 git -C dist push
 
+# A push is not a deploy: wait until the site serves it (B-2026-11-06-12).
+"$scriptsFolder/verify-pages.sh" healthdatasafe/hds-lib-js healthdatasafe.github.io/hds-lib-js "$(git -C dist rev-parse HEAD)" "$COMMIT_FULL"
+
 echo "Deployed $COMMIT_SHORT to gh-pages (root + v$VERSION)."
