@@ -292,12 +292,56 @@ export async function manifestPointerOfAccess (connection: ConnectionLike, acces
  * Person-side, at accept: mirror the invite's `requesterMeta.hdsApp` (read before consent, e.g. through
  * `cmcFormSpec.readOfferWithFormSpec(...).content.requesterMeta`) onto her `consent/accept-cmc` event as
  * `content.hdsApp`, as `mirrorFormSpecOnAcceptEvent` does for the data set. Writes nothing (and returns false) when
- * the invite carries no valid pointer.
+ * the invite carries no valid pointer. Prefer `mirrorRequesterMetaOnAcceptEvent`, which also keeps a pointerless
+ * requester's own name.
  */
 export async function mirrorAppPointerOnAcceptEvent (connection: ConnectionLike, acceptEventId: string, requesterMeta: unknown): Promise<boolean> {
   const manifest = manifestPointerOf(requesterMeta);
   if (!manifest) return false;
   const current = await connection.apiOne('events.getOne', { id: acceptEventId }, 'event') as { content?: Record<string, unknown> } | null;
   await connection.apiOne('events.update', { id: acceptEventId, update: { content: { ...(current?.content ?? {}), hdsApp: { manifest } } } }, 'event');
+  return true;
+}
+
+const MAX_NAME = 100;
+
+/** A self-given name, cleaned: control and format characters (bidi overrides, zero-width) become spaces, whitespace is collapsed; null when empty or over 100 code points */
+function personName (raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const name = raw.replace(/\p{C}/gu, ' ').replace(/\s+/g, ' ').trim();
+  return name && Array.from(name).length <= MAX_NAME ? name : null;
+}
+
+/**
+ * The requester's own name on her accept event (`content.requesterName`, written by `mirrorRequesterMetaOnAcceptEvent`),
+ * cleaned, or null. Self-given: it names the requester behind a relationship in place of the counterparty username
+ * (APP-DESCRIPTION.md § The requester behind a relationship), never an app, and never vouches for anything.
+ */
+export function requesterNameOfAccept (content: unknown): string | null {
+  return personName((content as { requesterName?: unknown } | null | undefined)?.requesterName);
+}
+
+/**
+ * Person-side, at accept: mirror what the invite's `requesterMeta` tells about the requester onto her
+ * `consent/accept-cmc` event, in one read and one write. An invite with an `hdsApp` (an app) gets `content.hdsApp` when
+ * the pointer is valid, and never a name (no self-asserted app name is kept); an invite without one gets
+ * `content.requesterName` from `requesterMeta.displayName`, cleaned (APP-DESCRIPTION.md § The requester behind a
+ * relationship). Writes nothing (and returns false) when there is nothing to keep. Supersedes
+ * `mirrorAppPointerOnAcceptEvent`.
+ */
+export async function mirrorRequesterMetaOnAcceptEvent (connection: ConnectionLike, acceptEventId: string, requesterMeta: unknown): Promise<boolean> {
+  const meta = requesterMeta as { hdsApp?: unknown; displayName?: unknown } | null | undefined;
+  let add: Record<string, unknown>;
+  if (meta?.hdsApp != null) {
+    const manifest = manifestPointerOf(meta);
+    if (!manifest) return false;
+    add = { hdsApp: { manifest } };
+  } else {
+    const requesterName = personName(meta?.displayName);
+    if (!requesterName) return false;
+    add = { requesterName };
+  }
+  const current = await connection.apiOne('events.getOne', { id: acceptEventId }, 'event') as { content?: Record<string, unknown> } | null;
+  await connection.apiOne('events.update', { id: acceptEventId, update: { content: { ...(current?.content ?? {}), ...add } } }, 'event');
   return true;
 }

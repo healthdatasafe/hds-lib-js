@@ -1,6 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [2.44.0] - 2026-11-08
+
+A CMC contact is named by the requester's own name, not its username (B-2026-11-02-15; data-model 3.47.2,
+APP-DESCRIPTION.md § The requester behind a relationship).
+
+### Added
+- **`appDescription.mirrorRequesterMetaOnAcceptEvent(connection, acceptEventId, requesterMeta)`**: at accept, mirrors
+  the invite's `requesterMeta` onto her `consent/accept-cmc` event in one read and one write: an invite with an
+  `hdsApp` (an app) gets `content.hdsApp` when the pointer is valid and never a name; one without gets
+  `content.requesterName` from `requesterMeta.displayName`. Control and format characters (bidi overrides,
+  zero-width) become spaces, whitespace is collapsed; empty or over 100 code points, nothing is written. Supersedes
+  `mirrorAppPointerOnAcceptEvent` (kept, unchanged).
+- **`appDescription.requesterNameOfAccept(content)`**: the mirrored name on an accept event, cleaned the same way, or
+  null. `CmcAcceptedRelationship.requesterName` and `CmcRelationship.requesterName` (optional) carry it.
+
+### Changed
+- **`Contact.aggregateCmc`** names a contact by the `requesterName` on the most recent of its accepts carrying one
+  (`acceptedAt`, so it follows a rename and does not depend on access order), else by the counterparty username as
+  before (`remoteUsername` is unchanged). Relationships accepted before an app mirrors the name keep the username.
 
 ### Fixed
 

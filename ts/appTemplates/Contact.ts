@@ -59,6 +59,8 @@ export interface CmcAcceptedRelationship {
   backChannelAccessId?: string | null;
   dataGrantAccessId?: string | null;
   hdsFormSpec?: FormSpec | null;
+  /** The requester's own name, mirrored at accept (`appDescription.requesterNameOfAccept(content)`) */
+  requesterName?: string | null;
 }
 
 /**
@@ -95,6 +97,8 @@ export interface CmcRelationship {
   acceptedAt: number | null;
   /** FormSpec snapshot mirrored onto the accept event content. Null until the resolver lands (FormSpec brief step 5). */
   hdsFormSpec: FormSpec | null;
+  /** The requester's own name mirrored on the accept event; null when none was mirrored (older accepts, app invites) */
+  requesterName?: string | null;
 }
 
 /**
@@ -130,7 +134,11 @@ function refBase (ref: string | null | undefined): string | null {
 export class Contact {
   /** Remote user's Pryv username. null for bridge/service contacts. */
   remoteUsername: string | null;
-  /** Display name (derived from counterparty username, can be overridden) */
+  /**
+   * Display name: for a CMC contact, the requester's own name mirrored on its most recent accept carrying one, else
+   * the counterparty username (APP-DESCRIPTION.md § The requester behind a relationship). Self-given: apps override it
+   * with an app's name where they have one, and show `remoteUsername` alongside it where identity matters.
+   */
   displayName: string;
   /** Raw Pryv counterparty access objects backing the relationships */
   accessObjects: any[];
@@ -597,10 +605,22 @@ export class Contact {
         features,
         grantedPermissions: access.permissions ?? [],
         acceptedAt: matchingAccept?.acceptedAt ?? null,
-        hdsFormSpec: matchingAccept?.hdsFormSpec ?? null
+        hdsFormSpec: matchingAccept?.hdsFormSpec ?? null,
+        requesterName: matchingAccept?.requesterName ?? null
       };
       contact.cmcRelationships.push(rel);
       contact.addAccessObject(access);
+    }
+
+    // Named by the requester's own name on the most recent accept carrying one (it follows a rename), else by the
+    // username (APP-DESCRIPTION.md § The requester behind a relationship, B-2026-11-02-15).
+    for (const contact of byCounterparty.values()) {
+      let latest: CmcRelationship | null = null;
+      for (const rel of contact.cmcRelationships) {
+        if (!rel.requesterName) continue;
+        if (latest == null || (rel.acceptedAt ?? -Infinity) > (latest.acceptedAt ?? -Infinity)) latest = rel;
+      }
+      if (latest) contact.displayName = latest.requesterName!;
     }
 
     return Array.from(byCounterparty.values());
