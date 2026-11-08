@@ -305,6 +305,21 @@ describe('[CTCT] Contact class', function () {
       assert.equal(Contact.aggregateCmc([legacy], [named, old], SCOPE)[0].cmcRelationships[0].acceptEventId, 'evt-old');
     });
 
+    it('[CTM6n] a contact is named by the requester\'s name on its most recent accept carrying one, else by the username (B-2026-11-02-15)', () => {
+      const a1 = counterpartyAccess({ id: 'acc-cp-1', cmcOverrides: { acceptEventId: 'evt-accept-1' } });
+      const a2 = counterpartyAccess({ id: 'acc-cp-2', cmcOverrides: { acceptEventId: 'evt-accept-2' } });
+      const a3 = counterpartyAccess({ id: 'acc-cp-3', cmcOverrides: { acceptEventId: 'evt-accept-3' } });
+      const unnamed = acceptEvent({ acceptEventId: 'evt-accept-1', acceptedAt: 1716900000 });
+      const newer = { ...acceptEvent({ acceptEventId: 'evt-accept-2', acceptedAt: 1716500000 }), requesterName: 'Dr Andy' };
+      const older = { ...acceptEvent({ acceptEventId: 'evt-accept-3', acceptedAt: 1716000000 }), requesterName: 'Andy (clinic)' };
+      assert.equal(Contact.aggregateCmc([a1], [unnamed], SCOPE)[0].displayName, 'drandy');
+      for (const order of [[a1, a2, a3], [a3, a2, a1]]) {
+        const c = Contact.aggregateCmc(order, [unnamed, newer, older], SCOPE)[0];
+        assert.equal(c.displayName, 'Dr Andy');
+        assert.equal(c.remoteUsername, 'drandy');
+      }
+    });
+
     it('[CTM7] aggregateCmc puts different counterparties into different Contacts', () => {
       const a1 = counterpartyAccess({ id: 'acc-cp-1' });
       const a2 = counterpartyAccess({

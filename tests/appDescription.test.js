@@ -9,7 +9,9 @@ import {
   describeApp,
   appIdentityOfAccess,
   manifestPointerOfAccess,
-  mirrorAppPointerOnAcceptEvent
+  mirrorAppPointerOnAcceptEvent,
+  mirrorRequesterMetaOnAcceptEvent,
+  requesterNameOfAccept
 } from '../ts/appDescription.ts';
 
 // The rule every HDS app names an app by (data-model APP-DESCRIPTION.md).
@@ -227,6 +229,42 @@ describe('[APPD] appDescription', () => {
       calls.length = 0;
       assert.equal(await mirrorAppPointerOnAcceptEvent(connection, 'accept1', { appId: 'x', hdsApp: { manifest: 'http://bad' } }), false);
       assert.equal(calls.length, 0);
+    });
+
+    it('[APPD-A4] mirrorRequesterMetaOnAcceptEvent: an app gets its pointer and never a name; a pointerless requester its own name, in one write', async () => {
+      const calls = [];
+      const connection = {
+        apiOne: async (method, params) => {
+          calls.push([method, params]);
+          return method === 'events.getOne' ? { content: { hdsFormSpec: { title: 'x' } } } : {};
+        }
+      };
+      assert.equal(await mirrorRequesterMetaOnAcceptEvent(connection, 'accept1', { appId: 'hds-collector', displayName: '  Dr\nJane ‮Smith​ ' }), true);
+      assert.deepEqual(calls, [
+        ['events.getOne', { id: 'accept1' }],
+        ['events.update', { id: 'accept1', update: { content: { hdsFormSpec: { title: 'x' }, requesterName: 'Dr Jane Smith' } } }]
+      ]);
+      calls.length = 0;
+      assert.equal(await mirrorRequesterMetaOnAcceptEvent(connection, 'accept1', { appId: 'dysnet-registry', displayName: 'DysNet', hdsApp: { manifest: URL_DYSNET } }), true);
+      assert.deepEqual(calls[1][1].update.content, { hdsFormSpec: { title: 'x' }, hdsApp: { manifest: URL_DYSNET } });
+      calls.length = 0;
+      // an invite that tried to point at a manifest is an app: no pointer kept, and no self-given name either
+      assert.equal(await mirrorRequesterMetaOnAcceptEvent(connection, 'accept1', { appId: 'x', displayName: 'DysNet', hdsApp: { manifest: 'http://bad' } }), false);
+      assert.equal(await mirrorRequesterMetaOnAcceptEvent(connection, 'accept1', { appId: 'hds-collector', displayName: '' }), false);
+      assert.equal(await mirrorRequesterMetaOnAcceptEvent(connection, 'accept1', { appId: 'hds-collector', displayName: 'é'.repeat(101) }), false);
+      assert.equal(await mirrorRequesterMetaOnAcceptEvent(connection, 'accept1', { displayName: '\u0000\u0007‍' }), false);
+      assert.equal(await mirrorRequesterMetaOnAcceptEvent(connection, 'accept1', null), false);
+      assert.equal(calls.length, 0);
+      assert.equal(await mirrorRequesterMetaOnAcceptEvent(connection, 'accept1', { displayName: '🩺'.repeat(100) }), true);
+    });
+
+    it('[APPD-A5] requesterNameOfAccept reads the mirrored name, cleaned, or null', () => {
+      assert.equal(requesterNameOfAccept({ requesterName: 'Dr Jane Smith' }), 'Dr Jane Smith');
+      assert.equal(requesterNameOfAccept({ requesterName: ' Dr\tJane⁦ ' }), 'Dr Jane');
+      assert.equal(requesterNameOfAccept({ requesterName: 42 }), null);
+      assert.equal(requesterNameOfAccept({ requesterName: '   ' }), null);
+      assert.equal(requesterNameOfAccept({}), null);
+      assert.equal(requesterNameOfAccept(null), null);
     });
   });
 });
