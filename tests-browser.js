@@ -18584,7 +18584,7 @@ function validateOverload(modelData, overload) {
             if (!base)
                 continue;
             for (const field of Object.keys(overlay)) {
-                if (SETTING_IMMUTABLE_FIELDS.has(field)) {
+                if (SETTING_IMMUTABLE_FIELDS.has(field) && !sameValue(overlay[field], base[field])) {
                     errors.push(`settings["${key}"]: cannot override immutable field "${field}"`);
                 }
             }
@@ -18597,7 +18597,7 @@ function validateOverload(modelData, overload) {
             if (!base)
                 continue;
             for (const field of Object.keys(overlay)) {
-                if (DATASOURCE_IMMUTABLE_FIELDS.has(field)) {
+                if (DATASOURCE_IMMUTABLE_FIELDS.has(field) && !sameValue(overlay[field], base[field])) {
                     errors.push(`datasources["${key}"]: cannot override immutable field "${field}"`);
                 }
             }
@@ -18778,7 +18778,7 @@ function mergeStreamForest(overlayNodes, baseRoots, baseById, parentIdFromTreePo
     }
 }
 /**
- * Equality used for restated immutable fields (items and streams alike): the JSON serializations must match,
+ * Equality used for restated immutable fields (items, streams, settings and datasources): the JSON serializations must match,
  * so object key order counts and a restatement must carry the base value exactly.
  */
 function sameValue(a, b) {
@@ -26167,8 +26167,10 @@ exports.APP_PRIVATE_PURPOSE = 'app-private';
  * `cmcAccessProvisionAppScopeHook` post-hook on `accesses.create` /
  * `accesses.update`, whenever the access references a matching
  * `:_cmc:apps:<appCode>:*` permission (deployed 2026-05-26, plan-61
- * upstream fix). Callers therefore do not need to `streams.create` the
- * leaf — this helper returns its id directly.
+ * upstream fix). A caller that never went through such an access (a
+ * personal token on a fresh account) finds no leaf: when the sub-scope
+ * create reports its parent unknown, this helper creates the leaf under
+ * `:_cmc:apps` (which user code may do) and retries (B-2026-10-26-23).
  *
  * Sub-scopes (`:_cmc:apps:<appCode>:<subPath>`) are NOT auto-provisioned
  * and still require a `streams.create` here.
@@ -26202,14 +26204,25 @@ async function ensureAppScope(connection, appCode, subPath) {
         return appScope;
     const sub = appScope + ':' + subPath;
     try {
-        await connection.apiOne('streams.create', { id: sub, parentId: appScope, name: subPath });
+        await createTolerant(connection, sub, appScope, subPath);
     }
     catch (e) {
-        const code = pryvErrorCode(e);
-        if (code !== 'item-already-exists')
+        if (pryvErrorCode(e) !== 'unknown-referenced-resource')
             throw e;
+        await createTolerant(connection, appScope, ':_cmc:apps', appCode);
+        await createTolerant(connection, sub, appScope, subPath);
     }
     return sub;
+}
+/** `streams.create`, treating an existing stream as success. */
+async function createTolerant(connection, id, parentId, name) {
+    try {
+        await connection.apiOne('streams.create', { id, parentId, name });
+    }
+    catch (e) {
+        if (pryvErrorCode(e) !== 'item-already-exists')
+            throw e;
+    }
 }
 
 
@@ -36753,6 +36766,3101 @@ Emitter.prototype.hasListeners = function(event){
 
 /***/ },
 
+/***/ "./node_modules/js-yaml/dist/js-yaml.mjs"
+/*!***********************************************!*\
+  !*** ./node_modules/js-yaml/dist/js-yaml.mjs ***!
+  \***********************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   CORE_SCHEMA: () => (/* binding */ CORE_SCHEMA),
+/* harmony export */   DEFAULT_SCHEMA: () => (/* binding */ DEFAULT_SCHEMA),
+/* harmony export */   FAILSAFE_SCHEMA: () => (/* binding */ FAILSAFE_SCHEMA),
+/* harmony export */   JSON_SCHEMA: () => (/* binding */ JSON_SCHEMA),
+/* harmony export */   Schema: () => (/* binding */ Schema),
+/* harmony export */   Type: () => (/* binding */ Type),
+/* harmony export */   YAMLException: () => (/* binding */ YAMLException),
+/* harmony export */   "default": () => (/* binding */ yaml),
+/* harmony export */   dump: () => (/* binding */ dump),
+/* harmony export */   load: () => (/* binding */ load),
+/* harmony export */   loadAll: () => (/* binding */ loadAll),
+/* harmony export */   safeDump: () => (/* binding */ safeDump),
+/* harmony export */   safeLoad: () => (/* binding */ safeLoad),
+/* harmony export */   safeLoadAll: () => (/* binding */ safeLoadAll),
+/* harmony export */   types: () => (/* binding */ types)
+/* harmony export */ });
+function getDefaultExportFromCjs(x) {
+  return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, "default") ? x["default"] : x;
+}
+var jsYaml = {};
+var loader = {};
+var common = {};
+var hasRequiredCommon;
+function requireCommon() {
+  if (hasRequiredCommon) return common;
+  hasRequiredCommon = 1;
+  function isNothing(subject) {
+    return typeof subject === "undefined" || subject === null;
+  }
+  function isObject(subject) {
+    return typeof subject === "object" && subject !== null;
+  }
+  function toArray(sequence) {
+    if (Array.isArray(sequence)) return sequence;
+    else if (isNothing(sequence)) return [];
+    return [sequence];
+  }
+  function extend(target, source) {
+    if (source) {
+      const sourceKeys = Object.keys(source);
+      for (let index = 0, length = sourceKeys.length; index < length; index += 1) {
+        const key = sourceKeys[index];
+        target[key] = source[key];
+      }
+    }
+    return target;
+  }
+  function repeat(string, count) {
+    let result = "";
+    for (let cycle = 0; cycle < count; cycle += 1) {
+      result += string;
+    }
+    return result;
+  }
+  function isNegativeZero(number) {
+    return number === 0 && Number.NEGATIVE_INFINITY === 1 / number;
+  }
+  common.isNothing = isNothing;
+  common.isObject = isObject;
+  common.toArray = toArray;
+  common.repeat = repeat;
+  common.isNegativeZero = isNegativeZero;
+  common.extend = extend;
+  return common;
+}
+var exception;
+var hasRequiredException;
+function requireException() {
+  if (hasRequiredException) return exception;
+  hasRequiredException = 1;
+  function formatError(exception2, compact) {
+    let where = "";
+    const message = exception2.reason || "(unknown reason)";
+    if (!exception2.mark) return message;
+    if (exception2.mark.name) {
+      where += 'in "' + exception2.mark.name + '" ';
+    }
+    where += "(" + (exception2.mark.line + 1) + ":" + (exception2.mark.column + 1) + ")";
+    if (!compact && exception2.mark.snippet) {
+      where += "\n\n" + exception2.mark.snippet;
+    }
+    return message + " " + where;
+  }
+  function YAMLException2(reason, mark) {
+    Error.call(this);
+    this.name = "YAMLException";
+    this.reason = reason;
+    this.mark = mark;
+    this.message = formatError(this, false);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    } else {
+      this.stack = new Error().stack || "";
+    }
+  }
+  YAMLException2.prototype = Object.create(Error.prototype);
+  YAMLException2.prototype.constructor = YAMLException2;
+  YAMLException2.prototype.toString = function toString(compact) {
+    return this.name + ": " + formatError(this, compact);
+  };
+  exception = YAMLException2;
+  return exception;
+}
+var snippet;
+var hasRequiredSnippet;
+function requireSnippet() {
+  if (hasRequiredSnippet) return snippet;
+  hasRequiredSnippet = 1;
+  const common2 = requireCommon();
+  function getLine(buffer, lineStart, lineEnd, position, maxLineLength) {
+    let head = "";
+    let tail = "";
+    const maxHalfLength = Math.floor(maxLineLength / 2) - 1;
+    if (position - lineStart > maxHalfLength) {
+      head = " ... ";
+      lineStart = position - maxHalfLength + head.length;
+    }
+    if (lineEnd - position > maxHalfLength) {
+      tail = " ...";
+      lineEnd = position + maxHalfLength - tail.length;
+    }
+    return {
+      str: head + buffer.slice(lineStart, lineEnd).replace(/\t/g, "→") + tail,
+      pos: position - lineStart + head.length
+      // relative position
+    };
+  }
+  function padStart(string, max) {
+    return common2.repeat(" ", max - string.length) + string;
+  }
+  function makeSnippet(mark, options) {
+    options = Object.create(options || null);
+    if (!mark.buffer) return null;
+    if (!options.maxLength) options.maxLength = 79;
+    if (typeof options.indent !== "number") options.indent = 1;
+    if (typeof options.linesBefore !== "number") options.linesBefore = 3;
+    if (typeof options.linesAfter !== "number") options.linesAfter = 2;
+    const re = /\r?\n|\r|\0/g;
+    const lineStarts = [0];
+    const lineEnds = [];
+    let match;
+    let foundLineNo = -1;
+    while (match = re.exec(mark.buffer)) {
+      lineEnds.push(match.index);
+      lineStarts.push(match.index + match[0].length);
+      if (mark.position <= match.index && foundLineNo < 0) {
+        foundLineNo = lineStarts.length - 2;
+      }
+    }
+    if (foundLineNo < 0) foundLineNo = lineStarts.length - 1;
+    let result = "";
+    const lineNoLength = Math.min(mark.line + options.linesAfter, lineEnds.length).toString().length;
+    const maxLineLength = options.maxLength - (options.indent + lineNoLength + 3);
+    for (let i = 1; i <= options.linesBefore; i++) {
+      if (foundLineNo - i < 0) break;
+      const line2 = getLine(
+        mark.buffer,
+        lineStarts[foundLineNo - i],
+        lineEnds[foundLineNo - i],
+        mark.position - (lineStarts[foundLineNo] - lineStarts[foundLineNo - i]),
+        maxLineLength
+      );
+      result = common2.repeat(" ", options.indent) + padStart((mark.line - i + 1).toString(), lineNoLength) + " | " + line2.str + "\n" + result;
+    }
+    const line = getLine(mark.buffer, lineStarts[foundLineNo], lineEnds[foundLineNo], mark.position, maxLineLength);
+    result += common2.repeat(" ", options.indent) + padStart((mark.line + 1).toString(), lineNoLength) + " | " + line.str + "\n";
+    result += common2.repeat("-", options.indent + lineNoLength + 3 + line.pos) + "^\n";
+    for (let i = 1; i <= options.linesAfter; i++) {
+      if (foundLineNo + i >= lineEnds.length) break;
+      const line2 = getLine(
+        mark.buffer,
+        lineStarts[foundLineNo + i],
+        lineEnds[foundLineNo + i],
+        mark.position - (lineStarts[foundLineNo] - lineStarts[foundLineNo + i]),
+        maxLineLength
+      );
+      result += common2.repeat(" ", options.indent) + padStart((mark.line + i + 1).toString(), lineNoLength) + " | " + line2.str + "\n";
+    }
+    return result.replace(/\n$/, "");
+  }
+  snippet = makeSnippet;
+  return snippet;
+}
+var type;
+var hasRequiredType;
+function requireType() {
+  if (hasRequiredType) return type;
+  hasRequiredType = 1;
+  const YAMLException2 = requireException();
+  const TYPE_CONSTRUCTOR_OPTIONS = [
+    "kind",
+    "multi",
+    "resolve",
+    "construct",
+    "instanceOf",
+    "predicate",
+    "represent",
+    "representName",
+    "defaultStyle",
+    "styleAliases"
+  ];
+  const YAML_NODE_KINDS = [
+    "scalar",
+    "sequence",
+    "mapping"
+  ];
+  function compileStyleAliases(map2) {
+    const result = {};
+    if (map2 !== null) {
+      Object.keys(map2).forEach(function(style) {
+        map2[style].forEach(function(alias) {
+          result[String(alias)] = style;
+        });
+      });
+    }
+    return result;
+  }
+  function Type2(tag, options) {
+    options = options || {};
+    Object.keys(options).forEach(function(name) {
+      if (TYPE_CONSTRUCTOR_OPTIONS.indexOf(name) === -1) {
+        throw new YAMLException2('Unknown option "' + name + '" is met in definition of "' + tag + '" YAML type.');
+      }
+    });
+    this.options = options;
+    this.tag = tag;
+    this.kind = options["kind"] || null;
+    this.resolve = options["resolve"] || function() {
+      return true;
+    };
+    this.construct = options["construct"] || function(data) {
+      return data;
+    };
+    this.instanceOf = options["instanceOf"] || null;
+    this.predicate = options["predicate"] || null;
+    this.represent = options["represent"] || null;
+    this.representName = options["representName"] || null;
+    this.defaultStyle = options["defaultStyle"] || null;
+    this.multi = options["multi"] || false;
+    this.styleAliases = compileStyleAliases(options["styleAliases"] || null);
+    if (YAML_NODE_KINDS.indexOf(this.kind) === -1) {
+      throw new YAMLException2('Unknown kind "' + this.kind + '" is specified for "' + tag + '" YAML type.');
+    }
+  }
+  type = Type2;
+  return type;
+}
+var schema;
+var hasRequiredSchema;
+function requireSchema() {
+  if (hasRequiredSchema) return schema;
+  hasRequiredSchema = 1;
+  const YAMLException2 = requireException();
+  const Type2 = requireType();
+  function compileList(schema2, name) {
+    const result = [];
+    schema2[name].forEach(function(currentType) {
+      let newIndex = result.length;
+      result.forEach(function(previousType, previousIndex) {
+        if (previousType.tag === currentType.tag && previousType.kind === currentType.kind && previousType.multi === currentType.multi) {
+          newIndex = previousIndex;
+        }
+      });
+      result[newIndex] = currentType;
+    });
+    return result;
+  }
+  function compileMap() {
+    const result = {
+      scalar: {},
+      sequence: {},
+      mapping: {},
+      fallback: {},
+      multi: {
+        scalar: [],
+        sequence: [],
+        mapping: [],
+        fallback: []
+      }
+    };
+    function collectType(type2) {
+      if (type2.multi) {
+        result.multi[type2.kind].push(type2);
+        result.multi["fallback"].push(type2);
+      } else {
+        result[type2.kind][type2.tag] = result["fallback"][type2.tag] = type2;
+      }
+    }
+    for (let index = 0, length = arguments.length; index < length; index += 1) {
+      arguments[index].forEach(collectType);
+    }
+    return result;
+  }
+  function Schema2(definition) {
+    return this.extend(definition);
+  }
+  Schema2.prototype.extend = function extend(definition) {
+    let implicit = [];
+    let explicit = [];
+    if (definition instanceof Type2) {
+      explicit.push(definition);
+    } else if (Array.isArray(definition)) {
+      explicit = explicit.concat(definition);
+    } else if (definition && (Array.isArray(definition.implicit) || Array.isArray(definition.explicit))) {
+      if (definition.implicit) implicit = implicit.concat(definition.implicit);
+      if (definition.explicit) explicit = explicit.concat(definition.explicit);
+    } else {
+      throw new YAMLException2("Schema.extend argument should be a Type, [ Type ], or a schema definition ({ implicit: [...], explicit: [...] })");
+    }
+    implicit.forEach(function(type2) {
+      if (!(type2 instanceof Type2)) {
+        throw new YAMLException2("Specified list of YAML types (or a single Type object) contains a non-Type object.");
+      }
+      if (type2.loadKind && type2.loadKind !== "scalar") {
+        throw new YAMLException2("There is a non-scalar type in the implicit list of a schema. Implicit resolving of such types is not supported.");
+      }
+      if (type2.multi) {
+        throw new YAMLException2("There is a multi type in the implicit list of a schema. Multi tags can only be listed as explicit.");
+      }
+    });
+    explicit.forEach(function(type2) {
+      if (!(type2 instanceof Type2)) {
+        throw new YAMLException2("Specified list of YAML types (or a single Type object) contains a non-Type object.");
+      }
+    });
+    const result = Object.create(Schema2.prototype);
+    result.implicit = (this.implicit || []).concat(implicit);
+    result.explicit = (this.explicit || []).concat(explicit);
+    result.compiledImplicit = compileList(result, "implicit");
+    result.compiledExplicit = compileList(result, "explicit");
+    result.compiledTypeMap = compileMap(result.compiledImplicit, result.compiledExplicit);
+    return result;
+  };
+  schema = Schema2;
+  return schema;
+}
+var str;
+var hasRequiredStr;
+function requireStr() {
+  if (hasRequiredStr) return str;
+  hasRequiredStr = 1;
+  const Type2 = requireType();
+  str = new Type2("tag:yaml.org,2002:str", {
+    kind: "scalar",
+    construct: function(data) {
+      return data !== null ? data : "";
+    }
+  });
+  return str;
+}
+var seq;
+var hasRequiredSeq;
+function requireSeq() {
+  if (hasRequiredSeq) return seq;
+  hasRequiredSeq = 1;
+  const Type2 = requireType();
+  seq = new Type2("tag:yaml.org,2002:seq", {
+    kind: "sequence",
+    construct: function(data) {
+      return data !== null ? data : [];
+    }
+  });
+  return seq;
+}
+var map;
+var hasRequiredMap;
+function requireMap() {
+  if (hasRequiredMap) return map;
+  hasRequiredMap = 1;
+  const Type2 = requireType();
+  map = new Type2("tag:yaml.org,2002:map", {
+    kind: "mapping",
+    construct: function(data) {
+      return data !== null ? data : {};
+    }
+  });
+  return map;
+}
+var failsafe;
+var hasRequiredFailsafe;
+function requireFailsafe() {
+  if (hasRequiredFailsafe) return failsafe;
+  hasRequiredFailsafe = 1;
+  const Schema2 = requireSchema();
+  failsafe = new Schema2({
+    explicit: [
+      requireStr(),
+      requireSeq(),
+      requireMap()
+    ]
+  });
+  return failsafe;
+}
+var _null;
+var hasRequired_null;
+function require_null() {
+  if (hasRequired_null) return _null;
+  hasRequired_null = 1;
+  const Type2 = requireType();
+  function resolveYamlNull(data) {
+    if (data === null) return true;
+    const max = data.length;
+    return max === 1 && data === "~" || max === 4 && (data === "null" || data === "Null" || data === "NULL");
+  }
+  function constructYamlNull() {
+    return null;
+  }
+  function isNull(object) {
+    return object === null;
+  }
+  _null = new Type2("tag:yaml.org,2002:null", {
+    kind: "scalar",
+    resolve: resolveYamlNull,
+    construct: constructYamlNull,
+    predicate: isNull,
+    represent: {
+      canonical: function() {
+        return "~";
+      },
+      lowercase: function() {
+        return "null";
+      },
+      uppercase: function() {
+        return "NULL";
+      },
+      camelcase: function() {
+        return "Null";
+      },
+      empty: function() {
+        return "";
+      }
+    },
+    defaultStyle: "lowercase"
+  });
+  return _null;
+}
+var bool;
+var hasRequiredBool;
+function requireBool() {
+  if (hasRequiredBool) return bool;
+  hasRequiredBool = 1;
+  const Type2 = requireType();
+  function resolveYamlBoolean(data) {
+    if (data === null) return false;
+    const max = data.length;
+    return max === 4 && (data === "true" || data === "True" || data === "TRUE") || max === 5 && (data === "false" || data === "False" || data === "FALSE");
+  }
+  function constructYamlBoolean(data) {
+    return data === "true" || data === "True" || data === "TRUE";
+  }
+  function isBoolean(object) {
+    return Object.prototype.toString.call(object) === "[object Boolean]";
+  }
+  bool = new Type2("tag:yaml.org,2002:bool", {
+    kind: "scalar",
+    resolve: resolveYamlBoolean,
+    construct: constructYamlBoolean,
+    predicate: isBoolean,
+    represent: {
+      lowercase: function(object) {
+        return object ? "true" : "false";
+      },
+      uppercase: function(object) {
+        return object ? "TRUE" : "FALSE";
+      },
+      camelcase: function(object) {
+        return object ? "True" : "False";
+      }
+    },
+    defaultStyle: "lowercase"
+  });
+  return bool;
+}
+var int;
+var hasRequiredInt;
+function requireInt() {
+  if (hasRequiredInt) return int;
+  hasRequiredInt = 1;
+  const common2 = requireCommon();
+  const Type2 = requireType();
+  function isHexCode(c) {
+    return c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102;
+  }
+  function isOctCode(c) {
+    return c >= 48 && c <= 55;
+  }
+  function isDecCode(c) {
+    return c >= 48 && c <= 57;
+  }
+  function resolveYamlInteger(data) {
+    if (data === null) return false;
+    const max = data.length;
+    let index = 0;
+    let hasDigits = false;
+    if (!max) return false;
+    let ch = data[index];
+    if (ch === "-" || ch === "+") {
+      ch = data[++index];
+    }
+    if (ch === "0") {
+      if (index + 1 === max) return true;
+      ch = data[++index];
+      if (ch === "b") {
+        index++;
+        for (; index < max; index++) {
+          ch = data[index];
+          if (ch !== "0" && ch !== "1") return false;
+          hasDigits = true;
+        }
+        return hasDigits && isFinite(parseYamlInteger(data));
+      }
+      if (ch === "x") {
+        index++;
+        for (; index < max; index++) {
+          if (!isHexCode(data.charCodeAt(index))) return false;
+          hasDigits = true;
+        }
+        return hasDigits && isFinite(parseYamlInteger(data));
+      }
+      if (ch === "o") {
+        index++;
+        for (; index < max; index++) {
+          if (!isOctCode(data.charCodeAt(index))) return false;
+          hasDigits = true;
+        }
+        return hasDigits && isFinite(parseYamlInteger(data));
+      }
+    }
+    for (; index < max; index++) {
+      if (!isDecCode(data.charCodeAt(index))) {
+        return false;
+      }
+      hasDigits = true;
+    }
+    if (!hasDigits) return false;
+    return isFinite(parseYamlInteger(data));
+  }
+  function parseYamlInteger(data) {
+    let value = data;
+    let sign = 1;
+    let ch = value[0];
+    if (ch === "-" || ch === "+") {
+      if (ch === "-") sign = -1;
+      value = value.slice(1);
+      ch = value[0];
+    }
+    if (value === "0") return 0;
+    if (ch === "0") {
+      if (value[1] === "b") return sign * parseInt(value.slice(2), 2);
+      if (value[1] === "x") return sign * parseInt(value.slice(2), 16);
+      if (value[1] === "o") return sign * parseInt(value.slice(2), 8);
+    }
+    return sign * parseInt(value, 10);
+  }
+  function constructYamlInteger(data) {
+    return parseYamlInteger(data);
+  }
+  function isInteger(object) {
+    return Object.prototype.toString.call(object) === "[object Number]" && (object % 1 === 0 && !common2.isNegativeZero(object));
+  }
+  int = new Type2("tag:yaml.org,2002:int", {
+    kind: "scalar",
+    resolve: resolveYamlInteger,
+    construct: constructYamlInteger,
+    predicate: isInteger,
+    represent: {
+      binary: function(obj) {
+        return obj >= 0 ? "0b" + obj.toString(2) : "-0b" + obj.toString(2).slice(1);
+      },
+      octal: function(obj) {
+        return obj >= 0 ? "0o" + obj.toString(8) : "-0o" + obj.toString(8).slice(1);
+      },
+      decimal: function(obj) {
+        return obj.toString(10);
+      },
+      hexadecimal: function(obj) {
+        return obj >= 0 ? "0x" + obj.toString(16).toUpperCase() : "-0x" + obj.toString(16).toUpperCase().slice(1);
+      }
+    },
+    defaultStyle: "decimal",
+    styleAliases: {
+      binary: [2, "bin"],
+      octal: [8, "oct"],
+      decimal: [10, "dec"],
+      hexadecimal: [16, "hex"]
+    }
+  });
+  return int;
+}
+var float;
+var hasRequiredFloat;
+function requireFloat() {
+  if (hasRequiredFloat) return float;
+  hasRequiredFloat = 1;
+  const common2 = requireCommon();
+  const Type2 = requireType();
+  const YAML_FLOAT_PATTERN = new RegExp(
+    // 2.5e4, 2.5 and integers
+    "^(?:[-+]?(?:[0-9]+)(?:\\.[0-9]*)?(?:[eE][-+]?[0-9]+)?|\\.[0-9]+(?:[eE][-+]?[0-9]+)?|[-+]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN))$"
+  );
+  const YAML_FLOAT_SPECIAL_PATTERN = new RegExp(
+    "^(?:[-+]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN))$"
+  );
+  function resolveYamlFloat(data) {
+    if (data === null) return false;
+    if (!YAML_FLOAT_PATTERN.test(data)) {
+      return false;
+    }
+    if (isFinite(parseFloat(data, 10))) {
+      return true;
+    }
+    return YAML_FLOAT_SPECIAL_PATTERN.test(data);
+  }
+  function constructYamlFloat(data) {
+    let value = data.toLowerCase();
+    const sign = value[0] === "-" ? -1 : 1;
+    if ("+-".indexOf(value[0]) >= 0) {
+      value = value.slice(1);
+    }
+    if (value === ".inf") {
+      return sign === 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+    } else if (value === ".nan") {
+      return NaN;
+    }
+    return sign * parseFloat(value, 10);
+  }
+  const SCIENTIFIC_WITHOUT_DOT = /^[-+]?[0-9]+e/;
+  function representYamlFloat(object, style) {
+    if (isNaN(object)) {
+      switch (style) {
+        case "lowercase":
+          return ".nan";
+        case "uppercase":
+          return ".NAN";
+        case "camelcase":
+          return ".NaN";
+      }
+    } else if (Number.POSITIVE_INFINITY === object) {
+      switch (style) {
+        case "lowercase":
+          return ".inf";
+        case "uppercase":
+          return ".INF";
+        case "camelcase":
+          return ".Inf";
+      }
+    } else if (Number.NEGATIVE_INFINITY === object) {
+      switch (style) {
+        case "lowercase":
+          return "-.inf";
+        case "uppercase":
+          return "-.INF";
+        case "camelcase":
+          return "-.Inf";
+      }
+    } else if (common2.isNegativeZero(object)) {
+      return "-0.0";
+    }
+    const res = object.toString(10);
+    return SCIENTIFIC_WITHOUT_DOT.test(res) ? res.replace("e", ".e") : res;
+  }
+  function isFloat(object) {
+    return Object.prototype.toString.call(object) === "[object Number]" && (object % 1 !== 0 || common2.isNegativeZero(object));
+  }
+  float = new Type2("tag:yaml.org,2002:float", {
+    kind: "scalar",
+    resolve: resolveYamlFloat,
+    construct: constructYamlFloat,
+    predicate: isFloat,
+    represent: representYamlFloat,
+    defaultStyle: "lowercase"
+  });
+  return float;
+}
+var json;
+var hasRequiredJson;
+function requireJson() {
+  if (hasRequiredJson) return json;
+  hasRequiredJson = 1;
+  json = requireFailsafe().extend({
+    implicit: [
+      require_null(),
+      requireBool(),
+      requireInt(),
+      requireFloat()
+    ]
+  });
+  return json;
+}
+var core;
+var hasRequiredCore;
+function requireCore() {
+  if (hasRequiredCore) return core;
+  hasRequiredCore = 1;
+  core = requireJson();
+  return core;
+}
+var timestamp;
+var hasRequiredTimestamp;
+function requireTimestamp() {
+  if (hasRequiredTimestamp) return timestamp;
+  hasRequiredTimestamp = 1;
+  const Type2 = requireType();
+  const YAML_DATE_REGEXP = new RegExp(
+    "^([0-9][0-9][0-9][0-9])-([0-9][0-9])-([0-9][0-9])$"
+  );
+  const YAML_TIMESTAMP_REGEXP = new RegExp(
+    "^([0-9][0-9][0-9][0-9])-([0-9][0-9]?)-([0-9][0-9]?)(?:[Tt]|[ \\t]+)([0-9][0-9]?):([0-9][0-9]):([0-9][0-9])(?:\\.([0-9]*))?(?:[ \\t]*(Z|([-+])([0-9][0-9]?)(?::([0-9][0-9]))?))?$"
+  );
+  function resolveYamlTimestamp(data) {
+    if (data === null) return false;
+    if (YAML_DATE_REGEXP.exec(data) !== null) return true;
+    if (YAML_TIMESTAMP_REGEXP.exec(data) !== null) return true;
+    return false;
+  }
+  function constructYamlTimestamp(data) {
+    let fraction = 0;
+    let delta = null;
+    let match = YAML_DATE_REGEXP.exec(data);
+    if (match === null) match = YAML_TIMESTAMP_REGEXP.exec(data);
+    if (match === null) throw new Error("Date resolve error");
+    const year = +match[1];
+    const month = +match[2] - 1;
+    const day = +match[3];
+    if (!match[4]) {
+      return new Date(Date.UTC(year, month, day));
+    }
+    const hour = +match[4];
+    const minute = +match[5];
+    const second = +match[6];
+    if (match[7]) {
+      fraction = match[7].slice(0, 3);
+      while (fraction.length < 3) {
+        fraction += "0";
+      }
+      fraction = +fraction;
+    }
+    if (match[9]) {
+      const tzHour = +match[10];
+      const tzMinute = +(match[11] || 0);
+      delta = (tzHour * 60 + tzMinute) * 6e4;
+      if (match[9] === "-") delta = -delta;
+    }
+    const date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction));
+    if (delta) date.setTime(date.getTime() - delta);
+    return date;
+  }
+  function representYamlTimestamp(object) {
+    return object.toISOString();
+  }
+  timestamp = new Type2("tag:yaml.org,2002:timestamp", {
+    kind: "scalar",
+    resolve: resolveYamlTimestamp,
+    construct: constructYamlTimestamp,
+    instanceOf: Date,
+    represent: representYamlTimestamp
+  });
+  return timestamp;
+}
+var merge;
+var hasRequiredMerge;
+function requireMerge() {
+  if (hasRequiredMerge) return merge;
+  hasRequiredMerge = 1;
+  const Type2 = requireType();
+  function resolveYamlMerge(data) {
+    return data === "<<" || data === null;
+  }
+  merge = new Type2("tag:yaml.org,2002:merge", {
+    kind: "scalar",
+    resolve: resolveYamlMerge
+  });
+  return merge;
+}
+var binary;
+var hasRequiredBinary;
+function requireBinary() {
+  if (hasRequiredBinary) return binary;
+  hasRequiredBinary = 1;
+  const Type2 = requireType();
+  const BASE64_MAP = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n\r";
+  function resolveYamlBinary(data) {
+    if (data === null) return false;
+    let bitlen = 0;
+    const max = data.length;
+    const map2 = BASE64_MAP;
+    for (let idx = 0; idx < max; idx++) {
+      const code = map2.indexOf(data.charAt(idx));
+      if (code > 64) continue;
+      if (code < 0) return false;
+      bitlen += 6;
+    }
+    return bitlen % 8 === 0;
+  }
+  function constructYamlBinary(data) {
+    const input = data.replace(/[\r\n=]/g, "");
+    const max = input.length;
+    const map2 = BASE64_MAP;
+    let bits = 0;
+    const result = [];
+    for (let idx = 0; idx < max; idx++) {
+      if (idx % 4 === 0 && idx) {
+        result.push(bits >> 16 & 255);
+        result.push(bits >> 8 & 255);
+        result.push(bits & 255);
+      }
+      bits = bits << 6 | map2.indexOf(input.charAt(idx));
+    }
+    const tailbits = max % 4 * 6;
+    if (tailbits === 0) {
+      result.push(bits >> 16 & 255);
+      result.push(bits >> 8 & 255);
+      result.push(bits & 255);
+    } else if (tailbits === 18) {
+      result.push(bits >> 10 & 255);
+      result.push(bits >> 2 & 255);
+    } else if (tailbits === 12) {
+      result.push(bits >> 4 & 255);
+    }
+    return new Uint8Array(result);
+  }
+  function representYamlBinary(object) {
+    let result = "";
+    let bits = 0;
+    const max = object.length;
+    const map2 = BASE64_MAP;
+    for (let idx = 0; idx < max; idx++) {
+      if (idx % 3 === 0 && idx) {
+        result += map2[bits >> 18 & 63];
+        result += map2[bits >> 12 & 63];
+        result += map2[bits >> 6 & 63];
+        result += map2[bits & 63];
+      }
+      bits = (bits << 8) + object[idx];
+    }
+    const tail = max % 3;
+    if (tail === 0) {
+      result += map2[bits >> 18 & 63];
+      result += map2[bits >> 12 & 63];
+      result += map2[bits >> 6 & 63];
+      result += map2[bits & 63];
+    } else if (tail === 2) {
+      result += map2[bits >> 10 & 63];
+      result += map2[bits >> 4 & 63];
+      result += map2[bits << 2 & 63];
+      result += map2[64];
+    } else if (tail === 1) {
+      result += map2[bits >> 2 & 63];
+      result += map2[bits << 4 & 63];
+      result += map2[64];
+      result += map2[64];
+    }
+    return result;
+  }
+  function isBinary(obj) {
+    return Object.prototype.toString.call(obj) === "[object Uint8Array]";
+  }
+  binary = new Type2("tag:yaml.org,2002:binary", {
+    kind: "scalar",
+    resolve: resolveYamlBinary,
+    construct: constructYamlBinary,
+    predicate: isBinary,
+    represent: representYamlBinary
+  });
+  return binary;
+}
+var omap;
+var hasRequiredOmap;
+function requireOmap() {
+  if (hasRequiredOmap) return omap;
+  hasRequiredOmap = 1;
+  const Type2 = requireType();
+  const _hasOwnProperty = Object.prototype.hasOwnProperty;
+  const _toString = Object.prototype.toString;
+  function resolveYamlOmap(data) {
+    if (data === null) return true;
+    const objectKeys = {};
+    const object = data;
+    for (let index = 0, length = object.length; index < length; index += 1) {
+      const pair = object[index];
+      let pairHasKey = false;
+      if (_toString.call(pair) !== "[object Object]") return false;
+      let pairKey;
+      for (pairKey in pair) {
+        if (_hasOwnProperty.call(pair, pairKey)) {
+          if (!pairHasKey) pairHasKey = true;
+          else return false;
+        }
+      }
+      if (!pairHasKey) return false;
+      if (_hasOwnProperty.call(objectKeys, pairKey)) return false;
+      Object.defineProperty(objectKeys, pairKey, { value: true });
+    }
+    return true;
+  }
+  function constructYamlOmap(data) {
+    return data !== null ? data : [];
+  }
+  omap = new Type2("tag:yaml.org,2002:omap", {
+    kind: "sequence",
+    resolve: resolveYamlOmap,
+    construct: constructYamlOmap
+  });
+  return omap;
+}
+var pairs;
+var hasRequiredPairs;
+function requirePairs() {
+  if (hasRequiredPairs) return pairs;
+  hasRequiredPairs = 1;
+  const Type2 = requireType();
+  const _toString = Object.prototype.toString;
+  function resolveYamlPairs(data) {
+    if (data === null) return true;
+    const object = data;
+    const result = new Array(object.length);
+    for (let index = 0, length = object.length; index < length; index += 1) {
+      const pair = object[index];
+      if (_toString.call(pair) !== "[object Object]") return false;
+      const keys = Object.keys(pair);
+      if (keys.length !== 1) return false;
+      result[index] = [keys[0], pair[keys[0]]];
+    }
+    return true;
+  }
+  function constructYamlPairs(data) {
+    if (data === null) return [];
+    const object = data;
+    const result = new Array(object.length);
+    for (let index = 0, length = object.length; index < length; index += 1) {
+      const pair = object[index];
+      const keys = Object.keys(pair);
+      result[index] = [keys[0], pair[keys[0]]];
+    }
+    return result;
+  }
+  pairs = new Type2("tag:yaml.org,2002:pairs", {
+    kind: "sequence",
+    resolve: resolveYamlPairs,
+    construct: constructYamlPairs
+  });
+  return pairs;
+}
+var set;
+var hasRequiredSet;
+function requireSet() {
+  if (hasRequiredSet) return set;
+  hasRequiredSet = 1;
+  const Type2 = requireType();
+  const _hasOwnProperty = Object.prototype.hasOwnProperty;
+  function resolveYamlSet(data) {
+    if (data === null) return true;
+    const object = data;
+    for (const key in object) {
+      if (_hasOwnProperty.call(object, key)) {
+        if (object[key] !== null) return false;
+      }
+    }
+    return true;
+  }
+  function constructYamlSet(data) {
+    return data !== null ? data : {};
+  }
+  set = new Type2("tag:yaml.org,2002:set", {
+    kind: "mapping",
+    resolve: resolveYamlSet,
+    construct: constructYamlSet
+  });
+  return set;
+}
+var _default;
+var hasRequired_default;
+function require_default() {
+  if (hasRequired_default) return _default;
+  hasRequired_default = 1;
+  _default = requireCore().extend({
+    implicit: [
+      requireTimestamp(),
+      requireMerge()
+    ],
+    explicit: [
+      requireBinary(),
+      requireOmap(),
+      requirePairs(),
+      requireSet()
+    ]
+  });
+  return _default;
+}
+var hasRequiredLoader;
+function requireLoader() {
+  if (hasRequiredLoader) return loader;
+  hasRequiredLoader = 1;
+  const common2 = requireCommon();
+  const YAMLException2 = requireException();
+  const makeSnippet = requireSnippet();
+  const DEFAULT_SCHEMA2 = require_default();
+  const _hasOwnProperty = Object.prototype.hasOwnProperty;
+  const CONTEXT_FLOW_IN = 1;
+  const CONTEXT_FLOW_OUT = 2;
+  const CONTEXT_BLOCK_IN = 3;
+  const CONTEXT_BLOCK_OUT = 4;
+  const CHOMPING_CLIP = 1;
+  const CHOMPING_STRIP = 2;
+  const CHOMPING_KEEP = 3;
+  const PATTERN_NON_PRINTABLE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x84\x86-\x9F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/;
+  const PATTERN_NON_ASCII_LINE_BREAKS = /[\x85\u2028\u2029]/;
+  const PATTERN_FLOW_INDICATORS = /[,\[\]{}]/;
+  const PATTERN_TAG_HANDLE = /^(?:!|!!|![0-9A-Za-z-]+!)$/;
+  const PATTERN_TAG_URI = /^(?:!|[^,\[\]{}])(?:%[0-9a-f]{2}|[0-9a-z\-#;/?:@&=+$,_.!~*'()\[\]])*$/i;
+  function _class(obj) {
+    return Object.prototype.toString.call(obj);
+  }
+  function isEol(c) {
+    return c === 10 || c === 13;
+  }
+  function isWhiteSpace(c) {
+    return c === 9 || c === 32;
+  }
+  function isWsOrEol(c) {
+    return c === 9 || c === 32 || c === 10 || c === 13;
+  }
+  function isFlowIndicator(c) {
+    return c === 44 || c === 91 || c === 93 || c === 123 || c === 125;
+  }
+  function fromHexCode(c) {
+    if (c >= 48 && c <= 57) {
+      return c - 48;
+    }
+    const lc = c | 32;
+    if (lc >= 97 && lc <= 102) {
+      return lc - 97 + 10;
+    }
+    return -1;
+  }
+  function escapedHexLen(c) {
+    if (c === 120) {
+      return 2;
+    }
+    if (c === 117) {
+      return 4;
+    }
+    if (c === 85) {
+      return 8;
+    }
+    return 0;
+  }
+  function fromDecimalCode(c) {
+    if (c >= 48 && c <= 57) {
+      return c - 48;
+    }
+    return -1;
+  }
+  function simpleEscapeSequence(c) {
+    switch (c) {
+      case 48:
+        return "\0";
+      case 97:
+        return "\x07";
+      case 98:
+        return "\b";
+      case 116:
+        return "	";
+      case 9:
+        return "	";
+      case 110:
+        return "\n";
+      case 118:
+        return "\v";
+      case 102:
+        return "\f";
+      case 114:
+        return "\r";
+      case 101:
+        return "\x1B";
+      case 32:
+        return " ";
+      case 34:
+        return '"';
+      case 47:
+        return "/";
+      case 92:
+        return "\\";
+      case 78:
+        return "";
+      case 95:
+        return " ";
+      case 76:
+        return "\u2028";
+      case 80:
+        return "\u2029";
+      default:
+        return "";
+    }
+  }
+  function charFromCodepoint(c) {
+    if (c <= 65535) {
+      return String.fromCharCode(c);
+    }
+    return String.fromCharCode(
+      (c - 65536 >> 10) + 55296,
+      (c - 65536 & 1023) + 56320
+    );
+  }
+  function setProperty(object, key, value) {
+    if (key === "__proto__") {
+      Object.defineProperty(object, key, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value
+      });
+    } else {
+      object[key] = value;
+    }
+  }
+  const simpleEscapeCheck = new Array(256);
+  const simpleEscapeMap = new Array(256);
+  for (let i = 0; i < 256; i++) {
+    simpleEscapeCheck[i] = simpleEscapeSequence(i) ? 1 : 0;
+    simpleEscapeMap[i] = simpleEscapeSequence(i);
+  }
+  function State(input, options) {
+    this.input = input;
+    this.filename = options["filename"] || null;
+    this.schema = options["schema"] || DEFAULT_SCHEMA2;
+    this.onWarning = options["onWarning"] || null;
+    this.legacy = options["legacy"] || false;
+    this.json = options["json"] || false;
+    this.listener = options["listener"] || null;
+    this.maxDepth = typeof options["maxDepth"] === "number" ? options["maxDepth"] : 100;
+    this.maxTotalMergeKeys = typeof options["maxTotalMergeKeys"] === "number" ? options["maxTotalMergeKeys"] : 1e4;
+    this.implicitTypes = this.schema.compiledImplicit;
+    this.typeMap = this.schema.compiledTypeMap;
+    this.length = input.length;
+    this.position = 0;
+    this.line = 0;
+    this.lineStart = 0;
+    this.lineIndent = 0;
+    this.depth = 0;
+    this.totalMergeKeys = 0;
+    this.firstTabInLine = -1;
+    this.documents = [];
+    this.anchorMapTransactions = [];
+  }
+  function generateError(state, message) {
+    const mark = {
+      name: state.filename,
+      buffer: state.input.slice(0, -1),
+      // omit trailing \0
+      position: state.position,
+      line: state.line,
+      column: state.position - state.lineStart
+    };
+    mark.snippet = makeSnippet(mark);
+    return new YAMLException2(message, mark);
+  }
+  function throwError(state, message) {
+    throw generateError(state, message);
+  }
+  function throwWarning(state, message) {
+    if (state.onWarning) {
+      state.onWarning.call(null, generateError(state, message));
+    }
+  }
+  function storeAnchor(state, name, value) {
+    const transactions = state.anchorMapTransactions;
+    if (transactions.length !== 0) {
+      const transaction = transactions[transactions.length - 1];
+      if (!_hasOwnProperty.call(transaction, name)) {
+        transaction[name] = {
+          existed: _hasOwnProperty.call(state.anchorMap, name),
+          value: state.anchorMap[name]
+        };
+      }
+    }
+    state.anchorMap[name] = value;
+  }
+  function beginAnchorTransaction(state) {
+    state.anchorMapTransactions.push(/* @__PURE__ */ Object.create(null));
+  }
+  function commitAnchorTransaction(state) {
+    const transaction = state.anchorMapTransactions.pop();
+    const transactions = state.anchorMapTransactions;
+    if (transactions.length === 0) return;
+    const parent = transactions[transactions.length - 1];
+    const names = Object.keys(transaction);
+    for (let index = 0, length = names.length; index < length; index += 1) {
+      const name = names[index];
+      if (!_hasOwnProperty.call(parent, name)) {
+        parent[name] = transaction[name];
+      }
+    }
+  }
+  function rollbackAnchorTransaction(state) {
+    const transaction = state.anchorMapTransactions.pop();
+    const names = Object.keys(transaction);
+    for (let index = names.length - 1; index >= 0; index -= 1) {
+      const entry = transaction[names[index]];
+      if (entry.existed) {
+        state.anchorMap[names[index]] = entry.value;
+      } else {
+        delete state.anchorMap[names[index]];
+      }
+    }
+  }
+  function snapshotState(state) {
+    return {
+      position: state.position,
+      line: state.line,
+      lineStart: state.lineStart,
+      lineIndent: state.lineIndent,
+      firstTabInLine: state.firstTabInLine,
+      tag: state.tag,
+      anchor: state.anchor,
+      kind: state.kind,
+      result: state.result
+    };
+  }
+  function restoreState(state, snapshot) {
+    state.position = snapshot.position;
+    state.line = snapshot.line;
+    state.lineStart = snapshot.lineStart;
+    state.lineIndent = snapshot.lineIndent;
+    state.firstTabInLine = snapshot.firstTabInLine;
+    state.tag = snapshot.tag;
+    state.anchor = snapshot.anchor;
+    state.kind = snapshot.kind;
+    state.result = snapshot.result;
+  }
+  const directiveHandlers = {
+    YAML: function handleYamlDirective(state, name, args) {
+      if (state.version !== null) {
+        throwError(state, "duplication of %YAML directive");
+      }
+      if (args.length !== 1) {
+        throwError(state, "YAML directive accepts exactly one argument");
+      }
+      const match = /^([0-9]+)\.([0-9]+)$/.exec(args[0]);
+      if (match === null) {
+        throwError(state, "ill-formed argument of the YAML directive");
+      }
+      const major = parseInt(match[1], 10);
+      const minor = parseInt(match[2], 10);
+      if (major !== 1) {
+        throwError(state, "unacceptable YAML version of the document");
+      }
+      state.version = args[0];
+      state.checkLineBreaks = minor < 2;
+      if (minor !== 1 && minor !== 2) {
+        throwWarning(state, "unsupported YAML version of the document");
+      }
+    },
+    TAG: function handleTagDirective(state, name, args) {
+      let prefix;
+      if (args.length !== 2) {
+        throwError(state, "TAG directive accepts exactly two arguments");
+      }
+      const handle = args[0];
+      prefix = args[1];
+      if (!PATTERN_TAG_HANDLE.test(handle)) {
+        throwError(state, "ill-formed tag handle (first argument) of the TAG directive");
+      }
+      if (_hasOwnProperty.call(state.tagMap, handle)) {
+        throwError(state, 'there is a previously declared suffix for "' + handle + '" tag handle');
+      }
+      if (!PATTERN_TAG_URI.test(prefix)) {
+        throwError(state, "ill-formed tag prefix (second argument) of the TAG directive");
+      }
+      try {
+        prefix = decodeURIComponent(prefix);
+      } catch (err) {
+        throwError(state, "tag prefix is malformed: " + prefix);
+      }
+      state.tagMap[handle] = prefix;
+    }
+  };
+  function captureSegment(state, start, end, checkJson) {
+    if (start < end) {
+      const _result = state.input.slice(start, end);
+      if (checkJson) {
+        for (let _position = 0, _length = _result.length; _position < _length; _position += 1) {
+          const _character = _result.charCodeAt(_position);
+          if (!(_character === 9 || _character >= 32 && _character <= 1114111)) {
+            throwError(state, "expected valid JSON character");
+          }
+        }
+      } else if (PATTERN_NON_PRINTABLE.test(_result)) {
+        throwError(state, "the stream contains non-printable characters");
+      }
+      state.result += _result;
+    }
+  }
+  function chargeMergeWork(state) {
+    state.totalMergeKeys++;
+    if (state.maxTotalMergeKeys !== -1 && state.totalMergeKeys > state.maxTotalMergeKeys) {
+      throwError(state, "merge keys exceeded maxTotalMergeKeys (" + state.maxTotalMergeKeys + ")");
+    }
+  }
+  function mergeMappings(state, destination, source, overridableKeys) {
+    if (!common2.isObject(source)) {
+      throwError(state, "cannot merge mappings; the provided source object is unacceptable");
+    }
+    chargeMergeWork(state);
+    const sourceKeys = Object.keys(source);
+    for (let index = 0, quantity = sourceKeys.length; index < quantity; index += 1) {
+      const key = sourceKeys[index];
+      chargeMergeWork(state);
+      if (!_hasOwnProperty.call(destination, key)) {
+        setProperty(destination, key, source[key]);
+        overridableKeys[key] = true;
+      }
+    }
+  }
+  function storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, startLine, startLineStart, startPos) {
+    if (Array.isArray(keyNode)) {
+      keyNode = Array.prototype.slice.call(keyNode);
+      for (let index = 0, quantity = keyNode.length; index < quantity; index += 1) {
+        if (Array.isArray(keyNode[index])) {
+          throwError(state, "nested arrays are not supported inside keys");
+        }
+        if (typeof keyNode === "object" && _class(keyNode[index]) === "[object Object]") {
+          keyNode[index] = "[object Object]";
+        }
+      }
+    }
+    if (typeof keyNode === "object" && _class(keyNode) === "[object Object]") {
+      keyNode = "[object Object]";
+    }
+    keyNode = String(keyNode);
+    if (_result === null) {
+      _result = {};
+    }
+    if (keyTag === "tag:yaml.org,2002:merge") {
+      if (Array.isArray(valueNode)) {
+        if (valueNode.length > 100) {
+          throwError(state, "abnormal merge sequence size");
+        }
+        for (let index = 0, quantity = valueNode.length; index < quantity; index += 1) {
+          mergeMappings(state, _result, valueNode[index], overridableKeys);
+        }
+      } else {
+        mergeMappings(state, _result, valueNode, overridableKeys);
+      }
+    } else {
+      if (!state.json && !_hasOwnProperty.call(overridableKeys, keyNode) && _hasOwnProperty.call(_result, keyNode)) {
+        state.line = startLine || state.line;
+        state.lineStart = startLineStart || state.lineStart;
+        state.position = startPos || state.position;
+        throwError(state, "duplicated mapping key");
+      }
+      setProperty(_result, keyNode, valueNode);
+      delete overridableKeys[keyNode];
+    }
+    return _result;
+  }
+  function readLineBreak(state) {
+    const ch = state.input.charCodeAt(state.position);
+    if (ch === 10) {
+      state.position++;
+    } else if (ch === 13) {
+      state.position++;
+      if (state.input.charCodeAt(state.position) === 10) {
+        state.position++;
+      }
+    } else {
+      throwError(state, "a line break is expected");
+    }
+    state.line += 1;
+    state.lineStart = state.position;
+    state.firstTabInLine = -1;
+  }
+  function skipSeparationSpace(state, allowComments, checkIndent) {
+    let lineBreaks = 0;
+    let ch = state.input.charCodeAt(state.position);
+    while (ch !== 0) {
+      while (isWhiteSpace(ch)) {
+        if (ch === 9 && state.firstTabInLine === -1) {
+          state.firstTabInLine = state.position;
+        }
+        ch = state.input.charCodeAt(++state.position);
+      }
+      if (allowComments && ch === 35) {
+        do {
+          ch = state.input.charCodeAt(++state.position);
+        } while (ch !== 10 && ch !== 13 && ch !== 0);
+      }
+      if (isEol(ch)) {
+        readLineBreak(state);
+        ch = state.input.charCodeAt(state.position);
+        lineBreaks++;
+        state.lineIndent = 0;
+        while (ch === 32) {
+          state.lineIndent++;
+          ch = state.input.charCodeAt(++state.position);
+        }
+      } else {
+        break;
+      }
+    }
+    if (checkIndent !== -1 && lineBreaks !== 0 && state.lineIndent < checkIndent) {
+      throwWarning(state, "deficient indentation");
+    }
+    return lineBreaks;
+  }
+  function testDocumentSeparator(state) {
+    let _position = state.position;
+    let ch = state.input.charCodeAt(_position);
+    if ((ch === 45 || ch === 46) && ch === state.input.charCodeAt(_position + 1) && ch === state.input.charCodeAt(_position + 2)) {
+      _position += 3;
+      ch = state.input.charCodeAt(_position);
+      if (ch === 0 || isWsOrEol(ch)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function writeFoldedLines(state, count) {
+    if (count === 1) {
+      state.result += " ";
+    } else if (count > 1) {
+      state.result += common2.repeat("\n", count - 1);
+    }
+  }
+  function readPlainScalar(state, nodeIndent, withinFlowCollection) {
+    let captureStart;
+    let captureEnd;
+    let hasPendingContent;
+    let _line;
+    let _lineStart;
+    let _lineIndent;
+    const _kind = state.kind;
+    const _result = state.result;
+    let ch = state.input.charCodeAt(state.position);
+    if (isWsOrEol(ch) || isFlowIndicator(ch) || ch === 35 || ch === 38 || ch === 42 || ch === 33 || ch === 124 || ch === 62 || ch === 39 || ch === 34 || ch === 37 || ch === 64 || ch === 96) {
+      return false;
+    }
+    if (ch === 63 || ch === 45) {
+      const following = state.input.charCodeAt(state.position + 1);
+      if (isWsOrEol(following) || withinFlowCollection && isFlowIndicator(following)) {
+        return false;
+      }
+    }
+    state.kind = "scalar";
+    state.result = "";
+    captureStart = captureEnd = state.position;
+    hasPendingContent = false;
+    while (ch !== 0) {
+      if (ch === 58) {
+        const following = state.input.charCodeAt(state.position + 1);
+        if (isWsOrEol(following) || withinFlowCollection && isFlowIndicator(following)) {
+          break;
+        }
+      } else if (ch === 35) {
+        const preceding = state.input.charCodeAt(state.position - 1);
+        if (isWsOrEol(preceding)) {
+          break;
+        }
+      } else if (state.position === state.lineStart && testDocumentSeparator(state) || withinFlowCollection && isFlowIndicator(ch)) {
+        break;
+      } else if (isEol(ch)) {
+        _line = state.line;
+        _lineStart = state.lineStart;
+        _lineIndent = state.lineIndent;
+        skipSeparationSpace(state, false, -1);
+        if (state.lineIndent >= nodeIndent) {
+          hasPendingContent = true;
+          ch = state.input.charCodeAt(state.position);
+          continue;
+        } else {
+          state.position = captureEnd;
+          state.line = _line;
+          state.lineStart = _lineStart;
+          state.lineIndent = _lineIndent;
+          break;
+        }
+      }
+      if (hasPendingContent) {
+        captureSegment(state, captureStart, captureEnd, false);
+        writeFoldedLines(state, state.line - _line);
+        captureStart = captureEnd = state.position;
+        hasPendingContent = false;
+      }
+      if (!isWhiteSpace(ch)) {
+        captureEnd = state.position + 1;
+      }
+      ch = state.input.charCodeAt(++state.position);
+    }
+    captureSegment(state, captureStart, captureEnd, false);
+    if (state.result) {
+      return true;
+    }
+    state.kind = _kind;
+    state.result = _result;
+    return false;
+  }
+  function readSingleQuotedScalar(state, nodeIndent) {
+    let captureStart;
+    let captureEnd;
+    let ch = state.input.charCodeAt(state.position);
+    if (ch !== 39) {
+      return false;
+    }
+    state.kind = "scalar";
+    state.result = "";
+    state.position++;
+    captureStart = captureEnd = state.position;
+    while ((ch = state.input.charCodeAt(state.position)) !== 0) {
+      if (ch === 39) {
+        captureSegment(state, captureStart, state.position, true);
+        ch = state.input.charCodeAt(++state.position);
+        if (ch === 39) {
+          captureStart = state.position;
+          state.position++;
+          captureEnd = state.position;
+        } else {
+          return true;
+        }
+      } else if (isEol(ch)) {
+        captureSegment(state, captureStart, captureEnd, true);
+        writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent));
+        captureStart = captureEnd = state.position;
+      } else if (state.position === state.lineStart && testDocumentSeparator(state)) {
+        throwError(state, "unexpected end of the document within a single quoted scalar");
+      } else {
+        state.position++;
+        if (!isWhiteSpace(ch)) {
+          captureEnd = state.position;
+        }
+      }
+    }
+    throwError(state, "unexpected end of the stream within a single quoted scalar");
+  }
+  function readDoubleQuotedScalar(state, nodeIndent) {
+    let captureStart;
+    let captureEnd;
+    let tmp;
+    let ch = state.input.charCodeAt(state.position);
+    if (ch !== 34) {
+      return false;
+    }
+    state.kind = "scalar";
+    state.result = "";
+    state.position++;
+    captureStart = captureEnd = state.position;
+    while ((ch = state.input.charCodeAt(state.position)) !== 0) {
+      if (ch === 34) {
+        captureSegment(state, captureStart, state.position, true);
+        state.position++;
+        return true;
+      } else if (ch === 92) {
+        captureSegment(state, captureStart, state.position, true);
+        ch = state.input.charCodeAt(++state.position);
+        if (isEol(ch)) {
+          skipSeparationSpace(state, false, nodeIndent);
+        } else if (ch < 256 && simpleEscapeCheck[ch]) {
+          state.result += simpleEscapeMap[ch];
+          state.position++;
+        } else if ((tmp = escapedHexLen(ch)) > 0) {
+          let hexLength = tmp;
+          let hexResult = 0;
+          for (; hexLength > 0; hexLength--) {
+            ch = state.input.charCodeAt(++state.position);
+            if ((tmp = fromHexCode(ch)) >= 0) {
+              hexResult = (hexResult << 4) + tmp;
+            } else {
+              throwError(state, "expected hexadecimal character");
+            }
+          }
+          state.result += charFromCodepoint(hexResult);
+          state.position++;
+        } else {
+          throwError(state, "unknown escape sequence");
+        }
+        captureStart = captureEnd = state.position;
+      } else if (isEol(ch)) {
+        captureSegment(state, captureStart, captureEnd, true);
+        writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent));
+        captureStart = captureEnd = state.position;
+      } else if (state.position === state.lineStart && testDocumentSeparator(state)) {
+        throwError(state, "unexpected end of the document within a double quoted scalar");
+      } else {
+        state.position++;
+        if (!isWhiteSpace(ch)) {
+          captureEnd = state.position;
+        }
+      }
+    }
+    throwError(state, "unexpected end of the stream within a double quoted scalar");
+  }
+  function readFlowCollection(state, nodeIndent) {
+    let readNext = true;
+    let _line;
+    let _lineStart;
+    let _pos;
+    const _tag = state.tag;
+    let _result;
+    const _anchor = state.anchor;
+    let terminator;
+    let isPair;
+    let isExplicitPair;
+    let isMapping;
+    const overridableKeys = /* @__PURE__ */ Object.create(null);
+    let keyNode;
+    let keyTag;
+    let valueNode;
+    let ch = state.input.charCodeAt(state.position);
+    if (ch === 91) {
+      terminator = 93;
+      isMapping = false;
+      _result = [];
+    } else if (ch === 123) {
+      terminator = 125;
+      isMapping = true;
+      _result = {};
+    } else {
+      return false;
+    }
+    if (state.anchor !== null) {
+      storeAnchor(state, state.anchor, _result);
+    }
+    ch = state.input.charCodeAt(++state.position);
+    while (ch !== 0) {
+      skipSeparationSpace(state, true, nodeIndent);
+      ch = state.input.charCodeAt(state.position);
+      if (ch === terminator) {
+        state.position++;
+        state.tag = _tag;
+        state.anchor = _anchor;
+        state.kind = isMapping ? "mapping" : "sequence";
+        state.result = _result;
+        return true;
+      } else if (!readNext) {
+        throwError(state, "missed comma between flow collection entries");
+      } else if (ch === 44) {
+        throwError(state, "expected the node content, but found ','");
+      }
+      keyTag = keyNode = valueNode = null;
+      isPair = isExplicitPair = false;
+      if (ch === 63) {
+        const following = state.input.charCodeAt(state.position + 1);
+        if (isWsOrEol(following)) {
+          isPair = isExplicitPair = true;
+          state.position++;
+          skipSeparationSpace(state, true, nodeIndent);
+        }
+      }
+      _line = state.line;
+      _lineStart = state.lineStart;
+      _pos = state.position;
+      composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true);
+      keyTag = state.tag;
+      keyNode = state.result;
+      skipSeparationSpace(state, true, nodeIndent);
+      ch = state.input.charCodeAt(state.position);
+      if ((isExplicitPair || state.line === _line) && ch === 58) {
+        isPair = true;
+        ch = state.input.charCodeAt(++state.position);
+        skipSeparationSpace(state, true, nodeIndent);
+        composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true);
+        valueNode = state.result;
+      }
+      if (isMapping) {
+        storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos);
+      } else if (isPair) {
+        _result.push(storeMappingPair(state, null, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos));
+      } else {
+        _result.push(keyNode);
+      }
+      skipSeparationSpace(state, true, nodeIndent);
+      ch = state.input.charCodeAt(state.position);
+      if (ch === 44) {
+        readNext = true;
+        ch = state.input.charCodeAt(++state.position);
+      } else {
+        readNext = false;
+      }
+    }
+    throwError(state, "unexpected end of the stream within a flow collection");
+  }
+  function readBlockScalar(state, nodeIndent) {
+    let folding;
+    let chomping = CHOMPING_CLIP;
+    let didReadContent = false;
+    let detectedIndent = false;
+    let textIndent = nodeIndent;
+    let emptyLines = 0;
+    let atMoreIndented = false;
+    let tmp;
+    let ch = state.input.charCodeAt(state.position);
+    if (ch === 124) {
+      folding = false;
+    } else if (ch === 62) {
+      folding = true;
+    } else {
+      return false;
+    }
+    state.kind = "scalar";
+    state.result = "";
+    while (ch !== 0) {
+      ch = state.input.charCodeAt(++state.position);
+      if (ch === 43 || ch === 45) {
+        if (CHOMPING_CLIP === chomping) {
+          chomping = ch === 43 ? CHOMPING_KEEP : CHOMPING_STRIP;
+        } else {
+          throwError(state, "repeat of a chomping mode identifier");
+        }
+      } else if ((tmp = fromDecimalCode(ch)) >= 0) {
+        if (tmp === 0) {
+          throwError(state, "bad explicit indentation width of a block scalar; it cannot be less than one");
+        } else if (!detectedIndent) {
+          textIndent = nodeIndent + tmp - 1;
+          detectedIndent = true;
+        } else {
+          throwError(state, "repeat of an indentation width identifier");
+        }
+      } else {
+        break;
+      }
+    }
+    if (isWhiteSpace(ch)) {
+      do {
+        ch = state.input.charCodeAt(++state.position);
+      } while (isWhiteSpace(ch));
+      if (ch === 35) {
+        do {
+          ch = state.input.charCodeAt(++state.position);
+        } while (!isEol(ch) && ch !== 0);
+      }
+    }
+    while (ch !== 0) {
+      readLineBreak(state);
+      state.lineIndent = 0;
+      ch = state.input.charCodeAt(state.position);
+      while ((!detectedIndent || state.lineIndent < textIndent) && ch === 32) {
+        state.lineIndent++;
+        ch = state.input.charCodeAt(++state.position);
+      }
+      if (!detectedIndent && state.lineIndent > textIndent) {
+        textIndent = state.lineIndent;
+      }
+      if (isEol(ch)) {
+        emptyLines++;
+        continue;
+      }
+      if (!detectedIndent && textIndent === 0) {
+        throwError(state, "missing indentation for block scalar");
+      }
+      if (state.lineIndent < textIndent) {
+        if (chomping === CHOMPING_KEEP) {
+          state.result += common2.repeat("\n", didReadContent ? 1 + emptyLines : emptyLines);
+        } else if (chomping === CHOMPING_CLIP) {
+          if (didReadContent) {
+            state.result += "\n";
+          }
+        }
+        break;
+      }
+      if (folding) {
+        if (isWhiteSpace(ch)) {
+          atMoreIndented = true;
+          state.result += common2.repeat("\n", didReadContent ? 1 + emptyLines : emptyLines);
+        } else if (atMoreIndented) {
+          atMoreIndented = false;
+          state.result += common2.repeat("\n", emptyLines + 1);
+        } else if (emptyLines === 0) {
+          if (didReadContent) {
+            state.result += " ";
+          }
+        } else {
+          state.result += common2.repeat("\n", emptyLines);
+        }
+      } else {
+        state.result += common2.repeat("\n", didReadContent ? 1 + emptyLines : emptyLines);
+      }
+      didReadContent = true;
+      detectedIndent = true;
+      emptyLines = 0;
+      const captureStart = state.position;
+      while (!isEol(ch) && ch !== 0) {
+        ch = state.input.charCodeAt(++state.position);
+      }
+      captureSegment(state, captureStart, state.position, false);
+    }
+    return true;
+  }
+  function readBlockSequence(state, nodeIndent) {
+    const _tag = state.tag;
+    const _anchor = state.anchor;
+    const _result = [];
+    let detected = false;
+    if (state.firstTabInLine !== -1) return false;
+    if (state.anchor !== null) {
+      storeAnchor(state, state.anchor, _result);
+    }
+    let ch = state.input.charCodeAt(state.position);
+    while (ch !== 0) {
+      if (state.firstTabInLine !== -1) {
+        state.position = state.firstTabInLine;
+        throwError(state, "tab characters must not be used in indentation");
+      }
+      if (ch !== 45) {
+        break;
+      }
+      const following = state.input.charCodeAt(state.position + 1);
+      if (!isWsOrEol(following)) {
+        break;
+      }
+      detected = true;
+      state.position++;
+      if (skipSeparationSpace(state, true, -1)) {
+        if (state.lineIndent <= nodeIndent) {
+          _result.push(null);
+          ch = state.input.charCodeAt(state.position);
+          continue;
+        }
+      }
+      const _line = state.line;
+      composeNode(state, nodeIndent, CONTEXT_BLOCK_IN, false, true);
+      _result.push(state.result);
+      skipSeparationSpace(state, true, -1);
+      ch = state.input.charCodeAt(state.position);
+      if ((state.line === _line || state.lineIndent > nodeIndent) && ch !== 0) {
+        throwError(state, "bad indentation of a sequence entry");
+      } else if (state.lineIndent < nodeIndent) {
+        break;
+      }
+    }
+    if (detected) {
+      state.tag = _tag;
+      state.anchor = _anchor;
+      state.kind = "sequence";
+      state.result = _result;
+      return true;
+    }
+    return false;
+  }
+  function readBlockMapping(state, nodeIndent, flowIndent) {
+    let allowCompact;
+    let _keyLine;
+    let _keyLineStart;
+    let _keyPos;
+    const _tag = state.tag;
+    const _anchor = state.anchor;
+    const _result = {};
+    const overridableKeys = /* @__PURE__ */ Object.create(null);
+    let keyTag = null;
+    let keyNode = null;
+    let valueNode = null;
+    let atExplicitKey = false;
+    let detected = false;
+    if (state.firstTabInLine !== -1) return false;
+    if (state.anchor !== null) {
+      storeAnchor(state, state.anchor, _result);
+    }
+    let ch = state.input.charCodeAt(state.position);
+    while (ch !== 0) {
+      if (!atExplicitKey && state.firstTabInLine !== -1) {
+        state.position = state.firstTabInLine;
+        throwError(state, "tab characters must not be used in indentation");
+      }
+      const following = state.input.charCodeAt(state.position + 1);
+      const _line = state.line;
+      if ((ch === 63 || ch === 58) && isWsOrEol(following)) {
+        if (ch === 63) {
+          if (atExplicitKey) {
+            storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
+            keyTag = keyNode = valueNode = null;
+          }
+          detected = true;
+          atExplicitKey = true;
+          allowCompact = true;
+        } else if (atExplicitKey) {
+          atExplicitKey = false;
+          allowCompact = true;
+        } else {
+          throwError(state, "incomplete explicit mapping pair; a key node is missed; or followed by a non-tabulated empty line");
+        }
+        state.position += 1;
+        ch = following;
+      } else {
+        _keyLine = state.line;
+        _keyLineStart = state.lineStart;
+        _keyPos = state.position;
+        if (!composeNode(state, flowIndent, CONTEXT_FLOW_OUT, false, true)) {
+          break;
+        }
+        if (state.line === _line) {
+          ch = state.input.charCodeAt(state.position);
+          while (isWhiteSpace(ch)) {
+            ch = state.input.charCodeAt(++state.position);
+          }
+          if (ch === 58) {
+            ch = state.input.charCodeAt(++state.position);
+            if (!isWsOrEol(ch)) {
+              throwError(state, "a whitespace character is expected after the key-value separator within a block mapping");
+            }
+            if (atExplicitKey) {
+              storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
+              keyTag = keyNode = valueNode = null;
+            }
+            detected = true;
+            atExplicitKey = false;
+            allowCompact = false;
+            keyTag = state.tag;
+            keyNode = state.result;
+          } else if (detected) {
+            throwError(state, "can not read an implicit mapping pair; a colon is missed");
+          } else {
+            state.tag = _tag;
+            state.anchor = _anchor;
+            return true;
+          }
+        } else if (detected) {
+          throwError(state, "can not read a block mapping entry; a multiline key may not be an implicit key");
+        } else {
+          state.tag = _tag;
+          state.anchor = _anchor;
+          return true;
+        }
+      }
+      if (state.line === _line || state.lineIndent > nodeIndent) {
+        if (atExplicitKey) {
+          _keyLine = state.line;
+          _keyLineStart = state.lineStart;
+          _keyPos = state.position;
+        }
+        if (composeNode(state, nodeIndent, CONTEXT_BLOCK_OUT, true, allowCompact)) {
+          if (atExplicitKey) {
+            keyNode = state.result;
+          } else {
+            valueNode = state.result;
+          }
+        }
+        if (!atExplicitKey) {
+          storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _keyLine, _keyLineStart, _keyPos);
+          keyTag = keyNode = valueNode = null;
+        }
+        skipSeparationSpace(state, true, -1);
+        ch = state.input.charCodeAt(state.position);
+      }
+      if ((state.line === _line || state.lineIndent > nodeIndent) && ch !== 0) {
+        throwError(state, "bad indentation of a mapping entry");
+      } else if (state.lineIndent < nodeIndent) {
+        break;
+      }
+    }
+    if (atExplicitKey) {
+      storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
+    }
+    if (detected) {
+      state.tag = _tag;
+      state.anchor = _anchor;
+      state.kind = "mapping";
+      state.result = _result;
+    }
+    return detected;
+  }
+  function readTagProperty(state) {
+    let isVerbatim = false;
+    let isNamed = false;
+    let tagHandle;
+    let tagName;
+    let ch = state.input.charCodeAt(state.position);
+    if (ch !== 33) return false;
+    if (state.tag !== null) {
+      throwError(state, "duplication of a tag property");
+    }
+    ch = state.input.charCodeAt(++state.position);
+    if (ch === 60) {
+      isVerbatim = true;
+      ch = state.input.charCodeAt(++state.position);
+    } else if (ch === 33) {
+      isNamed = true;
+      tagHandle = "!!";
+      ch = state.input.charCodeAt(++state.position);
+    } else {
+      tagHandle = "!";
+    }
+    let _position = state.position;
+    if (isVerbatim) {
+      do {
+        ch = state.input.charCodeAt(++state.position);
+      } while (ch !== 0 && ch !== 62);
+      if (state.position < state.length) {
+        tagName = state.input.slice(_position, state.position);
+        ch = state.input.charCodeAt(++state.position);
+      } else {
+        throwError(state, "unexpected end of the stream within a verbatim tag");
+      }
+    } else {
+      while (ch !== 0 && !isWsOrEol(ch)) {
+        if (ch === 33) {
+          if (!isNamed) {
+            tagHandle = state.input.slice(_position - 1, state.position + 1);
+            if (!PATTERN_TAG_HANDLE.test(tagHandle)) {
+              throwError(state, "named tag handle cannot contain such characters");
+            }
+            isNamed = true;
+            _position = state.position + 1;
+          } else {
+            throwError(state, "tag suffix cannot contain exclamation marks");
+          }
+        }
+        ch = state.input.charCodeAt(++state.position);
+      }
+      tagName = state.input.slice(_position, state.position);
+      if (PATTERN_FLOW_INDICATORS.test(tagName)) {
+        throwError(state, "tag suffix cannot contain flow indicator characters");
+      }
+    }
+    if (tagName && !PATTERN_TAG_URI.test(tagName)) {
+      throwError(state, "tag name cannot contain such characters: " + tagName);
+    }
+    try {
+      tagName = decodeURIComponent(tagName);
+    } catch (err) {
+      throwError(state, "tag name is malformed: " + tagName);
+    }
+    if (isVerbatim) {
+      state.tag = tagName;
+    } else if (_hasOwnProperty.call(state.tagMap, tagHandle)) {
+      state.tag = state.tagMap[tagHandle] + tagName;
+    } else if (tagHandle === "!") {
+      state.tag = "!" + tagName;
+    } else if (tagHandle === "!!") {
+      state.tag = "tag:yaml.org,2002:" + tagName;
+    } else {
+      throwError(state, 'undeclared tag handle "' + tagHandle + '"');
+    }
+    return true;
+  }
+  function readAnchorProperty(state) {
+    let ch = state.input.charCodeAt(state.position);
+    if (ch !== 38) return false;
+    if (state.anchor !== null) {
+      throwError(state, "duplication of an anchor property");
+    }
+    ch = state.input.charCodeAt(++state.position);
+    const _position = state.position;
+    while (ch !== 0 && !isWsOrEol(ch) && !isFlowIndicator(ch)) {
+      ch = state.input.charCodeAt(++state.position);
+    }
+    if (state.position === _position) {
+      throwError(state, "name of an anchor node must contain at least one character");
+    }
+    state.anchor = state.input.slice(_position, state.position);
+    return true;
+  }
+  function readAlias(state) {
+    let ch = state.input.charCodeAt(state.position);
+    if (ch !== 42) return false;
+    ch = state.input.charCodeAt(++state.position);
+    const _position = state.position;
+    while (ch !== 0 && !isWsOrEol(ch) && !isFlowIndicator(ch)) {
+      ch = state.input.charCodeAt(++state.position);
+    }
+    if (state.position === _position) {
+      throwError(state, "name of an alias node must contain at least one character");
+    }
+    const alias = state.input.slice(_position, state.position);
+    if (!_hasOwnProperty.call(state.anchorMap, alias)) {
+      throwError(state, 'unidentified alias "' + alias + '"');
+    }
+    state.result = state.anchorMap[alias];
+    skipSeparationSpace(state, true, -1);
+    return true;
+  }
+  function tryReadBlockMappingFromProperty(state, propertyStart, nodeIndent, flowIndent) {
+    const fallbackState = snapshotState(state);
+    beginAnchorTransaction(state);
+    restoreState(state, propertyStart);
+    state.tag = null;
+    state.anchor = null;
+    state.kind = null;
+    state.result = null;
+    if (readBlockMapping(state, nodeIndent, flowIndent) && state.kind === "mapping") {
+      commitAnchorTransaction(state);
+      return true;
+    }
+    rollbackAnchorTransaction(state);
+    restoreState(state, fallbackState);
+    return false;
+  }
+  function composeNode(state, parentIndent, nodeContext, allowToSeek, allowCompact) {
+    let allowBlockScalars;
+    let allowBlockCollections;
+    let indentStatus = 1;
+    let atNewLine = false;
+    let hasContent = false;
+    let propertyStart = null;
+    let type2;
+    let flowIndent;
+    let blockIndent;
+    if (state.depth >= state.maxDepth) {
+      throwError(state, "nesting exceeded maxDepth (" + state.maxDepth + ")");
+    }
+    state.depth += 1;
+    if (state.listener !== null) {
+      state.listener("open", state);
+    }
+    state.tag = null;
+    state.anchor = null;
+    state.kind = null;
+    state.result = null;
+    const allowBlockStyles = allowBlockScalars = allowBlockCollections = CONTEXT_BLOCK_OUT === nodeContext || CONTEXT_BLOCK_IN === nodeContext;
+    if (allowToSeek) {
+      if (skipSeparationSpace(state, true, -1)) {
+        atNewLine = true;
+        if (state.lineIndent > parentIndent) {
+          indentStatus = 1;
+        } else if (state.lineIndent === parentIndent) {
+          indentStatus = 0;
+        } else if (state.lineIndent < parentIndent) {
+          indentStatus = -1;
+        }
+      }
+    }
+    if (indentStatus === 1) {
+      while (true) {
+        const ch = state.input.charCodeAt(state.position);
+        const propertyState = snapshotState(state);
+        if (atNewLine && (ch === 33 && state.tag !== null || ch === 38 && state.anchor !== null)) {
+          break;
+        }
+        if (!readTagProperty(state) && !readAnchorProperty(state)) {
+          break;
+        }
+        if (propertyStart === null) {
+          propertyStart = propertyState;
+        }
+        if (skipSeparationSpace(state, true, -1)) {
+          atNewLine = true;
+          allowBlockCollections = allowBlockStyles;
+          if (state.lineIndent > parentIndent) {
+            indentStatus = 1;
+          } else if (state.lineIndent === parentIndent) {
+            indentStatus = 0;
+          } else if (state.lineIndent < parentIndent) {
+            indentStatus = -1;
+          }
+        } else {
+          allowBlockCollections = false;
+        }
+      }
+    }
+    if (allowBlockCollections) {
+      allowBlockCollections = atNewLine || allowCompact;
+    }
+    if (indentStatus === 1 || CONTEXT_BLOCK_OUT === nodeContext) {
+      if (CONTEXT_FLOW_IN === nodeContext || CONTEXT_FLOW_OUT === nodeContext) {
+        flowIndent = parentIndent;
+      } else {
+        flowIndent = parentIndent + 1;
+      }
+      blockIndent = state.position - state.lineStart;
+      if (indentStatus === 1) {
+        if (allowBlockCollections && (readBlockSequence(state, blockIndent) || readBlockMapping(state, blockIndent, flowIndent)) || readFlowCollection(state, flowIndent)) {
+          hasContent = true;
+        } else {
+          const ch = state.input.charCodeAt(state.position);
+          if (propertyStart !== null && allowBlockStyles && !allowBlockCollections && ch !== 124 && ch !== 62 && tryReadBlockMappingFromProperty(
+            state,
+            propertyStart,
+            propertyStart.position - propertyStart.lineStart,
+            flowIndent
+          )) {
+            hasContent = true;
+          } else if (allowBlockScalars && readBlockScalar(state, flowIndent) || readSingleQuotedScalar(state, flowIndent) || readDoubleQuotedScalar(state, flowIndent)) {
+            hasContent = true;
+          } else if (readAlias(state)) {
+            hasContent = true;
+            if (state.tag !== null || state.anchor !== null) {
+              throwError(state, "alias node should not have any properties");
+            }
+          } else if (readPlainScalar(state, flowIndent, CONTEXT_FLOW_IN === nodeContext)) {
+            hasContent = true;
+            if (state.tag === null) {
+              state.tag = "?";
+            }
+          }
+          if (state.anchor !== null) {
+            storeAnchor(state, state.anchor, state.result);
+          }
+        }
+      } else if (indentStatus === 0) {
+        hasContent = allowBlockCollections && readBlockSequence(state, blockIndent);
+      }
+    }
+    if (state.tag === null) {
+      if (state.anchor !== null) {
+        storeAnchor(state, state.anchor, state.result);
+      }
+    } else if (state.tag === "?") {
+      if (state.result !== null && state.kind !== "scalar") {
+        throwError(state, 'unacceptable node kind for !<?> tag; it should be "scalar", not "' + state.kind + '"');
+      }
+      for (let typeIndex = 0, typeQuantity = state.implicitTypes.length; typeIndex < typeQuantity; typeIndex += 1) {
+        type2 = state.implicitTypes[typeIndex];
+        if (type2.resolve(state.result)) {
+          state.result = type2.construct(state.result);
+          state.tag = type2.tag;
+          if (state.anchor !== null) {
+            storeAnchor(state, state.anchor, state.result);
+          }
+          break;
+        }
+      }
+    } else if (state.tag !== "!") {
+      if (_hasOwnProperty.call(state.typeMap[state.kind || "fallback"], state.tag)) {
+        type2 = state.typeMap[state.kind || "fallback"][state.tag];
+      } else {
+        type2 = null;
+        const typeList = state.typeMap.multi[state.kind || "fallback"];
+        for (let typeIndex = 0, typeQuantity = typeList.length; typeIndex < typeQuantity; typeIndex += 1) {
+          if (state.tag.slice(0, typeList[typeIndex].tag.length) === typeList[typeIndex].tag) {
+            type2 = typeList[typeIndex];
+            break;
+          }
+        }
+      }
+      if (!type2) {
+        throwError(state, "unknown tag !<" + state.tag + ">");
+      }
+      if (state.result !== null && type2.kind !== state.kind) {
+        throwError(state, "unacceptable node kind for !<" + state.tag + '> tag; it should be "' + type2.kind + '", not "' + state.kind + '"');
+      }
+      if (!type2.resolve(state.result, state.tag)) {
+        throwError(state, "cannot resolve a node with !<" + state.tag + "> explicit tag");
+      } else {
+        state.result = type2.construct(state.result, state.tag);
+        if (state.anchor !== null) {
+          storeAnchor(state, state.anchor, state.result);
+        }
+      }
+    }
+    if (state.listener !== null) {
+      state.listener("close", state);
+    }
+    state.depth -= 1;
+    return state.tag !== null || state.anchor !== null || hasContent;
+  }
+  function readDocument(state) {
+    const documentStart = state.position;
+    let hasDirectives = false;
+    let ch;
+    state.version = null;
+    state.checkLineBreaks = state.legacy;
+    state.tagMap = /* @__PURE__ */ Object.create(null);
+    state.anchorMap = /* @__PURE__ */ Object.create(null);
+    while ((ch = state.input.charCodeAt(state.position)) !== 0) {
+      skipSeparationSpace(state, true, -1);
+      ch = state.input.charCodeAt(state.position);
+      if (state.lineIndent > 0 || ch !== 37) {
+        break;
+      }
+      hasDirectives = true;
+      ch = state.input.charCodeAt(++state.position);
+      let _position = state.position;
+      while (ch !== 0 && !isWsOrEol(ch)) {
+        ch = state.input.charCodeAt(++state.position);
+      }
+      const directiveName = state.input.slice(_position, state.position);
+      const directiveArgs = [];
+      if (directiveName.length < 1) {
+        throwError(state, "directive name must not be less than one character in length");
+      }
+      while (ch !== 0) {
+        while (isWhiteSpace(ch)) {
+          ch = state.input.charCodeAt(++state.position);
+        }
+        if (ch === 35) {
+          do {
+            ch = state.input.charCodeAt(++state.position);
+          } while (ch !== 0 && !isEol(ch));
+          break;
+        }
+        if (isEol(ch)) break;
+        _position = state.position;
+        while (ch !== 0 && !isWsOrEol(ch)) {
+          ch = state.input.charCodeAt(++state.position);
+        }
+        directiveArgs.push(state.input.slice(_position, state.position));
+      }
+      if (ch !== 0) readLineBreak(state);
+      if (_hasOwnProperty.call(directiveHandlers, directiveName)) {
+        directiveHandlers[directiveName](state, directiveName, directiveArgs);
+      } else {
+        throwWarning(state, 'unknown document directive "' + directiveName + '"');
+      }
+    }
+    skipSeparationSpace(state, true, -1);
+    if (state.lineIndent === 0 && state.input.charCodeAt(state.position) === 45 && state.input.charCodeAt(state.position + 1) === 45 && state.input.charCodeAt(state.position + 2) === 45) {
+      state.position += 3;
+      skipSeparationSpace(state, true, -1);
+    } else if (hasDirectives) {
+      throwError(state, "directives end mark is expected");
+    }
+    composeNode(state, state.lineIndent - 1, CONTEXT_BLOCK_OUT, false, true);
+    skipSeparationSpace(state, true, -1);
+    if (state.checkLineBreaks && PATTERN_NON_ASCII_LINE_BREAKS.test(state.input.slice(documentStart, state.position))) {
+      throwWarning(state, "non-ASCII line breaks are interpreted as content");
+    }
+    state.documents.push(state.result);
+    if (state.position === state.lineStart && testDocumentSeparator(state)) {
+      if (state.input.charCodeAt(state.position) === 46) {
+        state.position += 3;
+        skipSeparationSpace(state, true, -1);
+      }
+      return;
+    }
+    if (state.position < state.length - 1) {
+      throwError(state, "end of the stream or a document separator is expected");
+    }
+  }
+  function loadDocuments(input, options) {
+    input = String(input);
+    options = options || {};
+    if (input.length !== 0) {
+      if (input.charCodeAt(input.length - 1) !== 10 && input.charCodeAt(input.length - 1) !== 13) {
+        input += "\n";
+      }
+      if (input.charCodeAt(0) === 65279) {
+        input = input.slice(1);
+      }
+    }
+    const state = new State(input, options);
+    const nullpos = input.indexOf("\0");
+    if (nullpos !== -1) {
+      state.position = nullpos;
+      throwError(state, "null byte is not allowed in input");
+    }
+    state.input += "\0";
+    while (state.input.charCodeAt(state.position) === 32) {
+      state.lineIndent += 1;
+      state.position += 1;
+    }
+    while (state.position < state.length - 1) {
+      readDocument(state);
+    }
+    return state.documents;
+  }
+  function loadAll2(input, iterator, options) {
+    if (iterator !== null && typeof iterator === "object" && typeof options === "undefined") {
+      options = iterator;
+      iterator = null;
+    }
+    const documents = loadDocuments(input, options);
+    if (typeof iterator !== "function") {
+      return documents;
+    }
+    for (let index = 0, length = documents.length; index < length; index += 1) {
+      iterator(documents[index]);
+    }
+  }
+  function load2(input, options) {
+    const documents = loadDocuments(input, options);
+    if (documents.length === 0) {
+      return void 0;
+    } else if (documents.length === 1) {
+      return documents[0];
+    }
+    throw new YAMLException2("expected a single document in the stream, but found more");
+  }
+  loader.loadAll = loadAll2;
+  loader.load = load2;
+  return loader;
+}
+var dumper = {};
+var hasRequiredDumper;
+function requireDumper() {
+  if (hasRequiredDumper) return dumper;
+  hasRequiredDumper = 1;
+  const common2 = requireCommon();
+  const YAMLException2 = requireException();
+  const DEFAULT_SCHEMA2 = require_default();
+  const _toString = Object.prototype.toString;
+  const _hasOwnProperty = Object.prototype.hasOwnProperty;
+  const CHAR_BOM = 65279;
+  const CHAR_TAB = 9;
+  const CHAR_LINE_FEED = 10;
+  const CHAR_CARRIAGE_RETURN = 13;
+  const CHAR_SPACE = 32;
+  const CHAR_EXCLAMATION = 33;
+  const CHAR_DOUBLE_QUOTE = 34;
+  const CHAR_SHARP = 35;
+  const CHAR_PERCENT = 37;
+  const CHAR_AMPERSAND = 38;
+  const CHAR_SINGLE_QUOTE = 39;
+  const CHAR_ASTERISK = 42;
+  const CHAR_COMMA = 44;
+  const CHAR_MINUS = 45;
+  const CHAR_COLON = 58;
+  const CHAR_EQUALS = 61;
+  const CHAR_GREATER_THAN = 62;
+  const CHAR_QUESTION = 63;
+  const CHAR_COMMERCIAL_AT = 64;
+  const CHAR_LEFT_SQUARE_BRACKET = 91;
+  const CHAR_RIGHT_SQUARE_BRACKET = 93;
+  const CHAR_GRAVE_ACCENT = 96;
+  const CHAR_LEFT_CURLY_BRACKET = 123;
+  const CHAR_VERTICAL_LINE = 124;
+  const CHAR_RIGHT_CURLY_BRACKET = 125;
+  const ESCAPE_SEQUENCES = {};
+  ESCAPE_SEQUENCES[0] = "\\0";
+  ESCAPE_SEQUENCES[7] = "\\a";
+  ESCAPE_SEQUENCES[8] = "\\b";
+  ESCAPE_SEQUENCES[9] = "\\t";
+  ESCAPE_SEQUENCES[10] = "\\n";
+  ESCAPE_SEQUENCES[11] = "\\v";
+  ESCAPE_SEQUENCES[12] = "\\f";
+  ESCAPE_SEQUENCES[13] = "\\r";
+  ESCAPE_SEQUENCES[27] = "\\e";
+  ESCAPE_SEQUENCES[34] = '\\"';
+  ESCAPE_SEQUENCES[92] = "\\\\";
+  ESCAPE_SEQUENCES[133] = "\\N";
+  ESCAPE_SEQUENCES[160] = "\\_";
+  ESCAPE_SEQUENCES[8232] = "\\L";
+  ESCAPE_SEQUENCES[8233] = "\\P";
+  const DEPRECATED_BOOLEANS_SYNTAX = [
+    "y",
+    "Y",
+    "yes",
+    "Yes",
+    "YES",
+    "on",
+    "On",
+    "ON",
+    "n",
+    "N",
+    "no",
+    "No",
+    "NO",
+    "off",
+    "Off",
+    "OFF"
+  ];
+  const DEPRECATED_BASE60_SYNTAX = /^[-+]?[0-9_]+(?::[0-9_]+)+(?:\.[0-9_]*)?$/;
+  function compileStyleMap(schema2, map2) {
+    if (map2 === null) return {};
+    const result = {};
+    const keys = Object.keys(map2);
+    for (let index = 0, length = keys.length; index < length; index += 1) {
+      let tag = keys[index];
+      let style = String(map2[tag]);
+      if (tag.slice(0, 2) === "!!") {
+        tag = "tag:yaml.org,2002:" + tag.slice(2);
+      }
+      const type2 = schema2.compiledTypeMap["fallback"][tag];
+      if (type2 && _hasOwnProperty.call(type2.styleAliases, style)) {
+        style = type2.styleAliases[style];
+      }
+      result[tag] = style;
+    }
+    return result;
+  }
+  function encodeHex(character) {
+    let handle;
+    let length;
+    const string = character.toString(16).toUpperCase();
+    if (character <= 255) {
+      handle = "x";
+      length = 2;
+    } else if (character <= 65535) {
+      handle = "u";
+      length = 4;
+    } else if (character <= 4294967295) {
+      handle = "U";
+      length = 8;
+    } else {
+      throw new YAMLException2("code point within a string may not be greater than 0xFFFFFFFF");
+    }
+    return "\\" + handle + common2.repeat("0", length - string.length) + string;
+  }
+  const QUOTING_TYPE_SINGLE = 1;
+  const QUOTING_TYPE_DOUBLE = 2;
+  function State(options) {
+    this.schema = options["schema"] || DEFAULT_SCHEMA2;
+    this.indent = Math.max(1, options["indent"] || 2);
+    this.noArrayIndent = options["noArrayIndent"] || false;
+    this.skipInvalid = options["skipInvalid"] || false;
+    this.flowLevel = common2.isNothing(options["flowLevel"]) ? -1 : options["flowLevel"];
+    this.styleMap = compileStyleMap(this.schema, options["styles"] || null);
+    this.sortKeys = options["sortKeys"] || false;
+    this.lineWidth = options["lineWidth"] || 80;
+    this.noRefs = options["noRefs"] || false;
+    this.noCompatMode = options["noCompatMode"] || false;
+    this.condenseFlow = options["condenseFlow"] || false;
+    this.quotingType = options["quotingType"] === '"' ? QUOTING_TYPE_DOUBLE : QUOTING_TYPE_SINGLE;
+    this.forceQuotes = options["forceQuotes"] || false;
+    this.replacer = typeof options["replacer"] === "function" ? options["replacer"] : null;
+    this.implicitTypes = this.schema.compiledImplicit;
+    this.explicitTypes = this.schema.compiledExplicit;
+    this.tag = null;
+    this.result = "";
+    this.duplicates = [];
+    this.usedDuplicates = null;
+  }
+  function indentString(string, spaces) {
+    const ind = common2.repeat(" ", spaces);
+    let position = 0;
+    let result = "";
+    const length = string.length;
+    while (position < length) {
+      let line;
+      const next = string.indexOf("\n", position);
+      if (next === -1) {
+        line = string.slice(position);
+        position = length;
+      } else {
+        line = string.slice(position, next + 1);
+        position = next + 1;
+      }
+      if (line.length && line !== "\n") result += ind;
+      result += line;
+    }
+    return result;
+  }
+  function generateNextLine(state, level) {
+    return "\n" + common2.repeat(" ", state.indent * level);
+  }
+  function testImplicitResolving(state, str2) {
+    for (let index = 0, length = state.implicitTypes.length; index < length; index += 1) {
+      const type2 = state.implicitTypes[index];
+      if (type2.resolve(str2)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function isWhitespace(c) {
+    return c === CHAR_SPACE || c === CHAR_TAB;
+  }
+  function isPrintable(c) {
+    return c >= 32 && c <= 126 || c >= 161 && c <= 55295 && c !== 8232 && c !== 8233 || c >= 57344 && c <= 65533 && c !== CHAR_BOM || c >= 65536 && c <= 1114111;
+  }
+  function isNsCharOrWhitespace(c) {
+    return isPrintable(c) && c !== CHAR_BOM && // - b-char
+    c !== CHAR_CARRIAGE_RETURN && c !== CHAR_LINE_FEED;
+  }
+  function isPlainSafe(c, prev, inblock) {
+    const cIsNsCharOrWhitespace = isNsCharOrWhitespace(c);
+    const cIsNsChar = cIsNsCharOrWhitespace && !isWhitespace(c);
+    return (
+      // ns-plain-safe
+      (inblock ? cIsNsCharOrWhitespace : cIsNsCharOrWhitespace && // - c-flow-indicator
+      c !== CHAR_COMMA && c !== CHAR_LEFT_SQUARE_BRACKET && c !== CHAR_RIGHT_SQUARE_BRACKET && c !== CHAR_LEFT_CURLY_BRACKET && c !== CHAR_RIGHT_CURLY_BRACKET) && // ns-plain-char
+      c !== CHAR_SHARP && // false on '#'
+      !(prev === CHAR_COLON && !cIsNsChar) || // false on ': '
+      isNsCharOrWhitespace(prev) && !isWhitespace(prev) && c === CHAR_SHARP || // change to true on '[^ ]#'
+      prev === CHAR_COLON && cIsNsChar
+    );
+  }
+  function isPlainSafeFirst(c) {
+    return isPrintable(c) && c !== CHAR_BOM && !isWhitespace(c) && // - s-white
+    // - (c-indicator ::=
+    // “-” | “?” | “:” | “,” | “[” | “]” | “{” | “}”
+    c !== CHAR_MINUS && c !== CHAR_QUESTION && c !== CHAR_COLON && c !== CHAR_COMMA && c !== CHAR_LEFT_SQUARE_BRACKET && c !== CHAR_RIGHT_SQUARE_BRACKET && c !== CHAR_LEFT_CURLY_BRACKET && c !== CHAR_RIGHT_CURLY_BRACKET && // | “#” | “&” | “*” | “!” | “|” | “=” | “>” | “'” | “"”
+    c !== CHAR_SHARP && c !== CHAR_AMPERSAND && c !== CHAR_ASTERISK && c !== CHAR_EXCLAMATION && c !== CHAR_VERTICAL_LINE && c !== CHAR_EQUALS && c !== CHAR_GREATER_THAN && c !== CHAR_SINGLE_QUOTE && c !== CHAR_DOUBLE_QUOTE && // | “%” | “@” | “`”)
+    c !== CHAR_PERCENT && c !== CHAR_COMMERCIAL_AT && c !== CHAR_GRAVE_ACCENT;
+  }
+  function isPlainSafeLast(c) {
+    return !isWhitespace(c) && c !== CHAR_COLON;
+  }
+  function codePointAt(string, pos) {
+    const first = string.charCodeAt(pos);
+    let second;
+    if (first >= 55296 && first <= 56319 && pos + 1 < string.length) {
+      second = string.charCodeAt(pos + 1);
+      if (second >= 56320 && second <= 57343) {
+        return (first - 55296) * 1024 + second - 56320 + 65536;
+      }
+    }
+    return first;
+  }
+  function needIndentIndicator(string) {
+    const leadingSpaceRe = /^\n* /;
+    return leadingSpaceRe.test(string);
+  }
+  const STYLE_PLAIN = 1;
+  const STYLE_SINGLE = 2;
+  const STYLE_LITERAL = 3;
+  const STYLE_FOLDED = 4;
+  const STYLE_DOUBLE = 5;
+  function chooseScalarStyle(string, singleLineOnly, indentPerLevel, lineWidth, testAmbiguousType, quotingType, forceQuotes, inblock) {
+    let i;
+    let char = 0;
+    let prevChar = null;
+    let hasLineBreak = false;
+    let hasFoldableLine = false;
+    const shouldTrackWidth = lineWidth !== -1;
+    let previousLineBreak = -1;
+    let plain = isPlainSafeFirst(codePointAt(string, 0)) && isPlainSafeLast(codePointAt(string, string.length - 1));
+    if (singleLineOnly || forceQuotes) {
+      for (i = 0; i < string.length; char >= 65536 ? i += 2 : i++) {
+        char = codePointAt(string, i);
+        if (!isPrintable(char)) {
+          return STYLE_DOUBLE;
+        }
+        plain = plain && isPlainSafe(char, prevChar, inblock);
+        prevChar = char;
+      }
+    } else {
+      for (i = 0; i < string.length; char >= 65536 ? i += 2 : i++) {
+        char = codePointAt(string, i);
+        if (char === CHAR_LINE_FEED) {
+          hasLineBreak = true;
+          if (shouldTrackWidth) {
+            hasFoldableLine = hasFoldableLine || // Foldable line = too long, and not more-indented.
+            i - previousLineBreak - 1 > lineWidth && string[previousLineBreak + 1] !== " ";
+            previousLineBreak = i;
+          }
+        } else if (!isPrintable(char)) {
+          return STYLE_DOUBLE;
+        }
+        plain = plain && isPlainSafe(char, prevChar, inblock);
+        prevChar = char;
+      }
+      hasFoldableLine = hasFoldableLine || shouldTrackWidth && (i - previousLineBreak - 1 > lineWidth && string[previousLineBreak + 1] !== " ");
+    }
+    if (!hasLineBreak && !hasFoldableLine) {
+      if (plain && !forceQuotes && !testAmbiguousType(string)) {
+        return STYLE_PLAIN;
+      }
+      return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE;
+    }
+    if (indentPerLevel > 9 && needIndentIndicator(string)) {
+      return STYLE_DOUBLE;
+    }
+    if (!forceQuotes) {
+      return hasFoldableLine ? STYLE_FOLDED : STYLE_LITERAL;
+    }
+    return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE;
+  }
+  function writeScalar(state, string, level, iskey, inblock) {
+    state.dump = (function() {
+      if (string.length === 0) {
+        return state.quotingType === QUOTING_TYPE_DOUBLE ? '""' : "''";
+      }
+      if (!state.noCompatMode) {
+        if (DEPRECATED_BOOLEANS_SYNTAX.indexOf(string) !== -1 || DEPRECATED_BASE60_SYNTAX.test(string)) {
+          return state.quotingType === QUOTING_TYPE_DOUBLE ? '"' + string + '"' : "'" + string + "'";
+        }
+      }
+      const indent = state.indent * Math.max(1, level);
+      const lineWidth = state.lineWidth === -1 ? -1 : Math.max(Math.min(state.lineWidth, 40), state.lineWidth - indent);
+      const singleLineOnly = iskey || // No block styles in flow mode.
+      state.flowLevel > -1 && level >= state.flowLevel;
+      function testAmbiguity(string2) {
+        return testImplicitResolving(state, string2);
+      }
+      switch (chooseScalarStyle(
+        string,
+        singleLineOnly,
+        state.indent,
+        lineWidth,
+        testAmbiguity,
+        state.quotingType,
+        state.forceQuotes && !iskey,
+        inblock
+      )) {
+        case STYLE_PLAIN:
+          return string;
+        case STYLE_SINGLE:
+          return "'" + string.replace(/'/g, "''") + "'";
+        case STYLE_LITERAL:
+          return "|" + blockHeader(string, state.indent) + dropEndingNewline(indentString(string, indent));
+        case STYLE_FOLDED:
+          return ">" + blockHeader(string, state.indent) + dropEndingNewline(indentString(foldString(string, lineWidth), indent));
+        case STYLE_DOUBLE:
+          return '"' + escapeString(string) + '"';
+        default:
+          throw new YAMLException2("impossible error: invalid scalar style");
+      }
+    })();
+  }
+  function blockHeader(string, indentPerLevel) {
+    const indentIndicator = needIndentIndicator(string) ? String(indentPerLevel) : "";
+    const clip = string[string.length - 1] === "\n";
+    const keep = clip && (string[string.length - 2] === "\n" || string === "\n");
+    const chomp = keep ? "+" : clip ? "" : "-";
+    return indentIndicator + chomp + "\n";
+  }
+  function dropEndingNewline(string) {
+    return string[string.length - 1] === "\n" ? string.slice(0, -1) : string;
+  }
+  function foldString(string, width) {
+    const lineRe = /(\n+)([^\n]*)/g;
+    let result = (function() {
+      let nextLF = string.indexOf("\n");
+      nextLF = nextLF !== -1 ? nextLF : string.length;
+      lineRe.lastIndex = nextLF;
+      return foldLine(string.slice(0, nextLF), width);
+    })();
+    let prevMoreIndented = string[0] === "\n" || string[0] === " ";
+    let moreIndented;
+    let match;
+    while (match = lineRe.exec(string)) {
+      const prefix = match[1];
+      const line = match[2];
+      moreIndented = line[0] === " ";
+      result += prefix + (!prevMoreIndented && !moreIndented && line !== "" ? "\n" : "") + foldLine(line, width);
+      prevMoreIndented = moreIndented;
+    }
+    return result;
+  }
+  function foldLine(line, width) {
+    if (line === "" || line[0] === " ") return line;
+    const breakRe = / [^ ]/g;
+    let match;
+    let start = 0;
+    let end;
+    let curr = 0;
+    let next = 0;
+    let result = "";
+    while (match = breakRe.exec(line)) {
+      next = match.index;
+      if (next - start > width) {
+        end = curr > start ? curr : next;
+        result += "\n" + line.slice(start, end);
+        start = end + 1;
+      }
+      curr = next;
+    }
+    result += "\n";
+    if (line.length - start > width && curr > start) {
+      result += line.slice(start, curr) + "\n" + line.slice(curr + 1);
+    } else {
+      result += line.slice(start);
+    }
+    return result.slice(1);
+  }
+  function escapeString(string) {
+    let result = "";
+    let char = 0;
+    for (let i = 0; i < string.length; char >= 65536 ? i += 2 : i++) {
+      char = codePointAt(string, i);
+      const escapeSeq = ESCAPE_SEQUENCES[char];
+      if (!escapeSeq && isPrintable(char)) {
+        result += string[i];
+        if (char >= 65536) result += string[i + 1];
+      } else {
+        result += escapeSeq || encodeHex(char);
+      }
+    }
+    return result;
+  }
+  function writeFlowSequence(state, level, object) {
+    let _result = "";
+    const _tag = state.tag;
+    for (let index = 0, length = object.length; index < length; index += 1) {
+      let value = object[index];
+      if (state.replacer) {
+        value = state.replacer.call(object, String(index), value);
+      }
+      if (writeNode(state, level, value, false, false) || typeof value === "undefined" && writeNode(state, level, null, false, false)) {
+        if (_result !== "") _result += "," + (!state.condenseFlow ? " " : "");
+        _result += state.dump;
+      }
+    }
+    state.tag = _tag;
+    state.dump = "[" + _result + "]";
+  }
+  function writeBlockSequence(state, level, object, compact) {
+    let _result = "";
+    const _tag = state.tag;
+    for (let index = 0, length = object.length; index < length; index += 1) {
+      let value = object[index];
+      if (state.replacer) {
+        value = state.replacer.call(object, String(index), value);
+      }
+      if (writeNode(state, level + 1, value, true, true, false, true) || typeof value === "undefined" && writeNode(state, level + 1, null, true, true, false, true)) {
+        if (!compact || _result !== "") {
+          _result += generateNextLine(state, level);
+        }
+        if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
+          _result += "-";
+        } else {
+          _result += "- ";
+        }
+        _result += state.dump;
+      }
+    }
+    state.tag = _tag;
+    state.dump = _result || "[]";
+  }
+  function writeFlowMapping(state, level, object) {
+    let _result = "";
+    const _tag = state.tag;
+    const objectKeyList = Object.keys(object);
+    for (let index = 0, length = objectKeyList.length; index < length; index += 1) {
+      let pairBuffer = "";
+      if (_result !== "") pairBuffer += ", ";
+      if (state.condenseFlow) pairBuffer += '"';
+      const objectKey = objectKeyList[index];
+      let objectValue = object[objectKey];
+      if (state.replacer) {
+        objectValue = state.replacer.call(object, objectKey, objectValue);
+      }
+      if (!writeNode(state, level, objectKey, false, false)) {
+        continue;
+      }
+      if (state.dump.length > 1024) pairBuffer += "? ";
+      pairBuffer += state.dump + (state.condenseFlow ? '"' : "") + ":" + (state.condenseFlow ? "" : " ");
+      if (!writeNode(state, level, objectValue, false, false)) {
+        continue;
+      }
+      pairBuffer += state.dump;
+      _result += pairBuffer;
+    }
+    state.tag = _tag;
+    state.dump = "{" + _result + "}";
+  }
+  function writeBlockMapping(state, level, object, compact) {
+    let _result = "";
+    const _tag = state.tag;
+    const objectKeyList = Object.keys(object);
+    if (state.sortKeys === true) {
+      objectKeyList.sort();
+    } else if (typeof state.sortKeys === "function") {
+      objectKeyList.sort(state.sortKeys);
+    } else if (state.sortKeys) {
+      throw new YAMLException2("sortKeys must be a boolean or a function");
+    }
+    for (let index = 0, length = objectKeyList.length; index < length; index += 1) {
+      let pairBuffer = "";
+      if (!compact || _result !== "") {
+        pairBuffer += generateNextLine(state, level);
+      }
+      const objectKey = objectKeyList[index];
+      let objectValue = object[objectKey];
+      if (state.replacer) {
+        objectValue = state.replacer.call(object, objectKey, objectValue);
+      }
+      if (!writeNode(state, level + 1, objectKey, true, true, true)) {
+        continue;
+      }
+      const explicitPair = state.tag !== null && state.tag !== "?" || state.dump && state.dump.length > 1024;
+      if (explicitPair) {
+        if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
+          pairBuffer += "?";
+        } else {
+          pairBuffer += "? ";
+        }
+      }
+      pairBuffer += state.dump;
+      if (explicitPair) {
+        pairBuffer += generateNextLine(state, level);
+      }
+      if (!writeNode(state, level + 1, objectValue, true, explicitPair)) {
+        continue;
+      }
+      if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
+        pairBuffer += ":";
+      } else {
+        pairBuffer += ": ";
+      }
+      pairBuffer += state.dump;
+      _result += pairBuffer;
+    }
+    state.tag = _tag;
+    state.dump = _result || "{}";
+  }
+  function detectType(state, object, explicit) {
+    const typeList = explicit ? state.explicitTypes : state.implicitTypes;
+    for (let index = 0, length = typeList.length; index < length; index += 1) {
+      const type2 = typeList[index];
+      if ((type2.instanceOf || type2.predicate) && (!type2.instanceOf || typeof object === "object" && object instanceof type2.instanceOf) && (!type2.predicate || type2.predicate(object))) {
+        if (explicit) {
+          if (type2.multi && type2.representName) {
+            state.tag = type2.representName(object);
+          } else {
+            state.tag = type2.tag;
+          }
+        } else {
+          state.tag = "?";
+        }
+        if (type2.represent) {
+          const style = state.styleMap[type2.tag] || type2.defaultStyle;
+          let _result;
+          if (_toString.call(type2.represent) === "[object Function]") {
+            _result = type2.represent(object, style);
+          } else if (_hasOwnProperty.call(type2.represent, style)) {
+            _result = type2.represent[style](object, style);
+          } else {
+            throw new YAMLException2("!<" + type2.tag + '> tag resolver accepts not "' + style + '" style');
+          }
+          state.dump = _result;
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+  function writeNode(state, level, object, block, compact, iskey, isblockseq) {
+    state.tag = null;
+    state.dump = object;
+    if (!detectType(state, object, false)) {
+      detectType(state, object, true);
+    }
+    const type2 = _toString.call(state.dump);
+    const inblock = block;
+    if (block) {
+      block = state.flowLevel < 0 || state.flowLevel > level;
+    }
+    const objectOrArray = type2 === "[object Object]" || type2 === "[object Array]";
+    let duplicateIndex;
+    let duplicate;
+    if (objectOrArray) {
+      duplicateIndex = state.duplicates.indexOf(object);
+      duplicate = duplicateIndex !== -1;
+    }
+    if (state.tag !== null && state.tag !== "?" || duplicate || state.indent !== 2 && level > 0) {
+      compact = false;
+    }
+    if (duplicate && state.usedDuplicates[duplicateIndex]) {
+      state.dump = "*ref_" + duplicateIndex;
+    } else {
+      if (objectOrArray && duplicate && !state.usedDuplicates[duplicateIndex]) {
+        state.usedDuplicates[duplicateIndex] = true;
+      }
+      if (type2 === "[object Object]") {
+        if (block && Object.keys(state.dump).length !== 0) {
+          writeBlockMapping(state, level, state.dump, compact);
+          if (duplicate) {
+            state.dump = "&ref_" + duplicateIndex + state.dump;
+          }
+        } else {
+          writeFlowMapping(state, level, state.dump);
+          if (duplicate) {
+            state.dump = "&ref_" + duplicateIndex + " " + state.dump;
+          }
+        }
+      } else if (type2 === "[object Array]") {
+        if (block && state.dump.length !== 0) {
+          if (state.noArrayIndent && !isblockseq && level > 0) {
+            writeBlockSequence(state, level - 1, state.dump, compact);
+          } else {
+            writeBlockSequence(state, level, state.dump, compact);
+          }
+          if (duplicate) {
+            state.dump = "&ref_" + duplicateIndex + state.dump;
+          }
+        } else {
+          writeFlowSequence(state, level, state.dump);
+          if (duplicate) {
+            state.dump = "&ref_" + duplicateIndex + " " + state.dump;
+          }
+        }
+      } else if (type2 === "[object String]") {
+        if (state.tag !== "?") {
+          writeScalar(state, state.dump, level, iskey, inblock);
+        }
+      } else if (type2 === "[object Undefined]") {
+        return false;
+      } else {
+        if (state.skipInvalid) return false;
+        throw new YAMLException2("unacceptable kind of an object to dump " + type2);
+      }
+      if (state.tag !== null && state.tag !== "?") {
+        let tagStr = encodeURI(
+          state.tag[0] === "!" ? state.tag.slice(1) : state.tag
+        ).replace(/!/g, "%21");
+        if (state.tag[0] === "!") {
+          tagStr = "!" + tagStr;
+        } else if (tagStr.slice(0, 18) === "tag:yaml.org,2002:") {
+          tagStr = "!!" + tagStr.slice(18);
+        } else {
+          tagStr = "!<" + tagStr + ">";
+        }
+        state.dump = tagStr + " " + state.dump;
+      }
+    }
+    return true;
+  }
+  function getDuplicateReferences(object, state) {
+    const objects = [];
+    const duplicatesIndexes = [];
+    inspectNode(object, objects, duplicatesIndexes);
+    const length = duplicatesIndexes.length;
+    for (let index = 0; index < length; index += 1) {
+      state.duplicates.push(objects[duplicatesIndexes[index]]);
+    }
+    state.usedDuplicates = new Array(length);
+  }
+  function inspectNode(object, objects, duplicatesIndexes) {
+    if (object !== null && typeof object === "object") {
+      const index = objects.indexOf(object);
+      if (index !== -1) {
+        if (duplicatesIndexes.indexOf(index) === -1) {
+          duplicatesIndexes.push(index);
+        }
+      } else {
+        objects.push(object);
+        if (Array.isArray(object)) {
+          for (let i = 0, length = object.length; i < length; i += 1) {
+            inspectNode(object[i], objects, duplicatesIndexes);
+          }
+        } else {
+          const objectKeyList = Object.keys(object);
+          for (let i = 0, length = objectKeyList.length; i < length; i += 1) {
+            inspectNode(object[objectKeyList[i]], objects, duplicatesIndexes);
+          }
+        }
+      }
+    }
+  }
+  function dump2(input, options) {
+    options = options || {};
+    const state = new State(options);
+    if (!state.noRefs) getDuplicateReferences(input, state);
+    let value = input;
+    if (state.replacer) {
+      value = state.replacer.call({ "": value }, "", value);
+    }
+    if (writeNode(state, 0, value, true, true)) return state.dump + "\n";
+    return "";
+  }
+  dumper.dump = dump2;
+  return dumper;
+}
+var hasRequiredJsYaml;
+function requireJsYaml() {
+  if (hasRequiredJsYaml) return jsYaml;
+  hasRequiredJsYaml = 1;
+  const loader2 = requireLoader();
+  const dumper2 = requireDumper();
+  function renamed(from, to) {
+    return function() {
+      throw new Error("Function yaml." + from + " is removed in js-yaml 4. Use yaml." + to + " instead, which is now safe by default.");
+    };
+  }
+  jsYaml.Type = requireType();
+  jsYaml.Schema = requireSchema();
+  jsYaml.FAILSAFE_SCHEMA = requireFailsafe();
+  jsYaml.JSON_SCHEMA = requireJson();
+  jsYaml.CORE_SCHEMA = requireCore();
+  jsYaml.DEFAULT_SCHEMA = require_default();
+  jsYaml.load = loader2.load;
+  jsYaml.loadAll = loader2.loadAll;
+  jsYaml.dump = dumper2.dump;
+  jsYaml.YAMLException = requireException();
+  jsYaml.types = {
+    binary: requireBinary(),
+    float: requireFloat(),
+    map: requireMap(),
+    null: require_null(),
+    pairs: requirePairs(),
+    set: requireSet(),
+    timestamp: requireTimestamp(),
+    bool: requireBool(),
+    int: requireInt(),
+    merge: requireMerge(),
+    omap: requireOmap(),
+    seq: requireSeq(),
+    str: requireStr()
+  };
+  jsYaml.safeLoad = renamed("safeLoad", "load");
+  jsYaml.safeLoadAll = renamed("safeLoadAll", "loadAll");
+  jsYaml.safeDump = renamed("safeDump", "dump");
+  return jsYaml;
+}
+var jsYamlExports = requireJsYaml();
+const yaml = /* @__PURE__ */ getDefaultExportFromCjs(jsYamlExports);
+const {
+  Type,
+  Schema,
+  FAILSAFE_SCHEMA,
+  JSON_SCHEMA,
+  CORE_SCHEMA,
+  DEFAULT_SCHEMA,
+  load,
+  loadAll,
+  dump,
+  YAMLException,
+  types,
+  safeLoad,
+  safeLoadAll,
+  safeDump
+} = yaml;
+
+//# sourceMappingURL=js-yaml.mjs.map
+
+
+/***/ },
+
 /***/ "./node_modules/oauth4webapi/build/index.js"
 /*!**************************************************!*\
   !*** ./node_modules/oauth4webapi/build/index.js ***!
@@ -39367,6 +42475,547 @@ const _expectedIssuer = Symbol();
 
 /***/ },
 
+/***/ "./tests/HDSModel-Overload.test.js"
+/*!*****************************************!*\
+  !*** ./tests/HDSModel-Overload.test.js ***!
+  \*****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel-Overload.ts */ "./ts/HDSModel/HDSModel-Overload.ts");
+/* harmony import */ var _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/errors.ts */ "./ts/errors.ts");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+/* harmony import */ var _ts_HDSModel_overloadExtract_ts__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../ts/HDSModel/overloadExtract.ts */ "./ts/HDSModel/overloadExtract.ts");
+/* harmony import */ var js_yaml__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! js-yaml */ "./node_modules/js-yaml/dist/js-yaml.mjs");
+
+
+
+
+
+
+
+/** Build a tiny base model that mirrors the real pack.json shape. */
+function makeBaseModel () {
+  return {
+    items: {
+      'body-weight': {
+        version: 'v1',
+        label: { en: 'Body weight' },
+        description: { en: 'Measured body weight' },
+        streamId: 'body-weight',
+        type: 'number',
+        eventType: 'mass/kg',
+        repeatable: 'unlimited'
+      },
+      'activity-yoga': {
+        version: 'v1',
+        label: { en: 'Yoga' },
+        description: { en: 'Yoga session.' },
+        streamId: 'activity-yoga',
+        eventType: 'activity/plain',
+        type: 'checkbox',
+        repeatable: 'unlimited'
+      }
+    },
+    streams: [
+      {
+        id: 'body',
+        name: 'Body',
+        parentId: null,
+        children: [
+          { id: 'body-weight', name: 'Body Weight', parentId: 'body' }
+        ]
+      },
+      {
+        id: 'activity',
+        name: 'Activity',
+        parentId: null,
+        children: [
+          { id: 'activity-yoga', name: 'Yoga', parentId: 'activity' }
+        ]
+      }
+    ],
+    eventTypes: {
+      types: {
+        'mass/kg': { type: 'number', minimum: 0 },
+        'activity/plain': { type: 'string' }
+      },
+      extras: {
+        'mass/kg': { symbol: 'kg' }
+      }
+    },
+    settings: {
+      theme: { eventType: 'settings/theme', default: 'light', type: 'enum', options: ['light', 'dark'] }
+    },
+    datasources: {
+      medication: { endpoint: 'datasets://medication', queryParam: 'search', resultKey: 'medications', label: { en: 'Medications' } }
+    },
+    appStreams: {}
+  };
+}
+
+/**
+ * `fertility-monitor-lh-marquette` as data-model ships it once it is canonical (definitions/items/fertility.yaml).
+ * Cycle Intelligence wrote it first as an overlay item; its overlay restates the same key, streamId, eventType,
+ * type and options.
+ */
+function marquetteItem () {
+  return {
+    version: 'v1',
+    label: { en: 'Fertility monitor reading', fr: 'Lecture du moniteur de fertilité' },
+    description: { en: 'Low, High or Peak, as your fertility monitor shows it.' },
+    streamId: 'fertility-monitor-lh-marquette',
+    eventType: 'ratio/generic',
+    type: 'select',
+    options: [
+      { value: 0, label: { en: 'Low', fr: 'Bas' } },
+      { value: 1, label: { en: 'High', fr: 'Haut' } },
+      { value: 2, label: { en: 'Peak', fr: 'Pic' } }
+    ],
+    repeatable: 'P1D'
+  };
+}
+
+/** Base model in which the Marquette item is canonical. */
+function makeBaseModelWithMarquette () {
+  const m = makeBaseModel();
+  m.items['fertility-monitor-lh-marquette'] = marquetteItem();
+  m.streams.push({
+    id: 'fertility',
+    name: 'Fertility',
+    parentId: null,
+    children: [{
+      id: 'fertility-monitor',
+      name: 'Fertility monitor',
+      parentId: 'fertility',
+      children: [{ id: 'fertility-monitor-lh-marquette', name: 'Fertility monitor reading', parentId: 'fertility-monitor' }]
+    }]
+  });
+  m.eventTypes.types['ratio/generic'] = { type: 'object' };
+  return m;
+}
+
+/** The app overlay that still carries the item as its own, restating every field with the canonical values. */
+function marquetteRestatementOverlay () {
+  return {
+    items: {
+      'fertility-monitor-lh-marquette': {
+        ...marquetteItem(),
+        label: { en: 'LH monitor reading', fr: 'Lecture du moniteur LH', es: 'Lectura del monitor LH' },
+        repeatable: 'unlimited'
+      }
+    },
+    streams: [{
+      id: 'fertility',
+      children: [{ id: 'fertility-monitor', children: [{ id: 'fertility-monitor-lh-marquette', name: 'LH monitor reading' }] }]
+    }]
+  };
+}
+
+describe('[OVRX] HDSModel overload', () => {
+  // ---------- validateOverload ----------
+  describe('[OVRA] validateOverload — allowed', () => {
+    it('[OVAA] accepts a brand new item', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { items: { 'symptom-headache': { version: 'v1', label: { en: 'Headache' }, description: { en: 'Head pain' }, streamId: 'symptom', eventType: 'activity/plain', type: 'checkbox', repeatable: 'unlimited' } } });
+    });
+    it('[OVAB] accepts overloading translations + repeatable on existing item', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { items: { 'body-weight': { label: { fr: 'Poids', en: 'Weight' }, repeatable: 'P1D' } } });
+    });
+    it('[OVAC] accepts a new stream under an existing parent', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { streams: [{ id: 'body', children: [{ id: 'body-bmi', name: 'BMI', parentId: 'body' }] }] });
+    });
+    it('[OVAD] accepts a new eventType', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { eventTypes: { types: { 'mass/lb': { type: 'number' } } } });
+    });
+    it('[OVAE] accepts updating eventType extras', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { eventTypes: { extras: { 'mass/kg': { color: '#fff' } } } });
+    });
+    it('[OVAF] accepts adding a new setting', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { settings: { fontSize: { eventType: 'settings/font-size', type: 'number', default: 14 } } });
+    });
+    it('[OVAG] accepts changing default of an existing setting', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { settings: { theme: { default: 'dark' } } });
+    });
+    it('[OVAH] accepts a new stream carrying role and clientData', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { streams: [{ id: 'body-weight-scale', name: 'Scale', parentId: 'body-weight', role: 'context', clientData: { app: 'x' } }] });
+    });
+    it('[OVAI] accepts restating the base role / clientData of an existing stream', () => {
+      const m = makeBaseModel();
+      m.streams[0].children[0].role = 'context';
+      m.streams[0].children[0].clientData = { a: 1 };
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { streams: [{ id: 'body-weight', name: 'Weight', role: 'context', clientData: { a: 1 } }] });
+    });
+    it('[OVAJ] accepts an overlay that restates a canonical item\'s immutable fields identically (B-2026-10-28-4)', () => {
+      const m = makeBaseModelWithMarquette();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, marquetteRestatementOverlay());
+    });
+    it('[OVAK] accepts an identical restatement of each immutable item field on its own', () => {
+      const m = makeBaseModel();
+      m.items['body-weight'].unitConversions = [{ unit: 'lb', factor: 2.20462 }];
+      for (const field of ['type', 'streamId', 'eventType', 'unitConversions']) {
+        (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { items: { 'body-weight': { [field]: structuredClone(m.items['body-weight'][field]) } } });
+      }
+    });
+    it('[OVAL] accepts an identical restatement of a setting\'s and a datasource\'s immutable fields (B-2026-10-28-9)', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, {
+        settings: { theme: { ...structuredClone(m.settings.theme), default: 'dark' } },
+        datasources: { medication: structuredClone(m.datasources.medication) }
+      });
+    });
+  });
+
+  describe('[OVRB] validateOverload — forbidden', () => {
+    it('[OVBA] rejects changing existing item type', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { items: { 'body-weight': { type: 'text' } } }), _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError);
+    });
+    it('[OVBB] rejects changing existing item streamId', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { items: { 'body-weight': { streamId: 'something-else' } } }), _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError);
+    });
+    it('[OVBC] rejects changing existing item eventType', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { items: { 'body-weight': { eventType: 'mass/lb' } } }), _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError);
+    });
+    it('[OVBD] rejects changing existing stream parentId', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { streams: [{ id: 'body-weight', parentId: 'activity' }] }),
+        _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError
+      );
+    });
+    it('[OVBE] rejects overriding an existing eventType schema', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { eventTypes: { types: { 'mass/kg': { type: 'string' } } } }),
+        _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError
+      );
+    });
+    it('[OVBF] rejects changing existing setting type', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { settings: { theme: { type: 'string' } } }), _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError);
+    });
+    it('[OVBG] rejects changing existing datasource endpoint', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { datasources: { medication: { endpoint: 'http://other' } } }), _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError);
+    });
+    it('[OVBH] a divergent restatement of a setting or datasource is still refused, naming each field (B-2026-10-28-9)', () => {
+      const m = makeBaseModel();
+      try {
+        (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, {
+          settings: { theme: { ...structuredClone(m.settings.theme), eventType: 'settings/other' } },
+          datasources: { medication: { ...structuredClone(m.datasources.medication), resultKey: 'drugs' } }
+        });
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.fail('should have thrown');
+      } catch (err) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(err instanceof _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(err.innerObject.errors, [
+          'settings["theme"]: cannot override immutable field "eventType"',
+          'datasources["medication"]: cannot override immutable field "resultKey"'
+        ]);
+      }
+    });
+    it('[OVBI] rejects changing existing item unitConversions as an immutable field (B-2026-10-27-8)', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { items: { 'body-weight': { unitConversions: [] } } }),
+        /cannot override immutable field "unitConversions"/
+      );
+    });
+    it('[OVBJ] rejects setting or changing role on an existing stream (site-agents#34)', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { streams: [{ id: 'body-weight', role: 'context' }] }),
+        /streams\["body-weight"\]: cannot override immutable field "role"/
+      );
+    });
+    it('[OVBK] rejects changing clientData on an existing stream', () => {
+      const m = makeBaseModel();
+      m.streams[0].children[0].clientData = { a: 1 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { streams: [{ id: 'body', children: [{ id: 'body-weight', clientData: { a: 2 } }] }] }),
+        /streams\["body-weight"\]: cannot override immutable field "clientData"/
+      );
+    });
+    it('[OVBL] rejects a divergent restatement of a canonical item\'s options (B-2026-10-28-4)', () => {
+      const m = makeBaseModelWithMarquette();
+      const overlay = marquetteRestatementOverlay();
+      overlay.items['fertility-monitor-lh-marquette'].options[2].label = { en: 'Peak', fr: 'Pic', es: 'Pico' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, overlay),
+        /item "fertility-monitor-lh-marquette": cannot override immutable field "options"/
+      );
+    });
+    it('[OVBM] rejects a restatement whose only difference is one immutable field, naming that field only', () => {
+      const m = makeBaseModelWithMarquette();
+      const overlay = marquetteRestatementOverlay();
+      overlay.items['fertility-monitor-lh-marquette'].eventType = 'ratio/proportion';
+      try {
+        (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, overlay);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.fail('should have thrown');
+      } catch (err) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(err instanceof _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(err.innerObject.errors, ['item "fertility-monitor-lh-marquette": cannot override immutable field "eventType"']);
+      }
+    });
+    it('[OVBN] a key-order difference counts as divergent, for items as for streams', () => {
+      const m = makeBaseModelWithMarquette();
+      const overlay = marquetteRestatementOverlay();
+      overlay.items['fertility-monitor-lh-marquette'].options[0] = { label: { en: 'Low', fr: 'Bas' }, value: 0 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, overlay), /cannot override immutable field "options"/);
+      m.streams[0].children[0].clientData = { a: 1, b: 2 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { streams: [{ id: 'body-weight', clientData: { b: 2, a: 1 } }] }),
+        /cannot override immutable field "clientData"/
+      );
+    });
+    it('[OVBO] rejects an immutable item field stated as undefined', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, { items: { 'body-weight': { type: undefined } } }), /immutable field "type"/);
+    });
+    it('[OVBH] aggregates multiple errors in one throw', () => {
+      const m = makeBaseModel();
+      try {
+        (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.validateOverload)(m, {
+          items: { 'body-weight': { type: 'text', streamId: 'x' } },
+          settings: { theme: { type: 'string' } }
+        });
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.fail('should have thrown');
+      } catch (err) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(err instanceof _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(err.innerObject.errors.length, 3);
+      }
+    });
+  });
+
+  // ---------- applyOverload ----------
+  describe('[OVRC] applyOverload', () => {
+    it('[OVCA] adds a brand new item', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { items: { 'symptom-headache': { version: 'v1', label: { en: 'Headache' }, streamId: 'symptom', eventType: 'activity/plain', type: 'checkbox', repeatable: 'unlimited' } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.items['symptom-headache'].label.en, 'Headache');
+    });
+    it('[OVCB] deep-merges localized labels (overload wins per language, base preserved)', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { items: { 'body-weight': { label: { fr: 'Poids', en: 'Weight' } } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.items['body-weight'].label.en, 'Weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.items['body-weight'].label.fr, 'Poids');
+    });
+    it('[OVCC] adds a new fr translation while preserving the base en', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { items: { 'activity-yoga': { description: { fr: 'Séance de yoga.' } } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.items['activity-yoga'].description.en, 'Yoga session.');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.items['activity-yoga'].description.fr, 'Séance de yoga.');
+    });
+    it('[OVCD] overrides repeatable on an existing item', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { items: { 'body-weight': { repeatable: 'P1D' } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.items['body-weight'].repeatable, 'P1D');
+    });
+    it('[OVCE] adds a new child stream under an existing parent (via tree position)', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { streams: [{ id: 'body', children: [{ id: 'body-bmi', name: 'BMI' }] }] });
+      const body = m.streams.find(s => s.id === 'body');
+      const bmi = body.children.find(s => s.id === 'body-bmi');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(bmi);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bmi.parentId, 'body');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bmi.name, 'BMI');
+    });
+    it('[OVCF] adds a new child stream via explicit parentId at root level', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { streams: [{ id: 'body-bmi', name: 'BMI', parentId: 'body' }] });
+      const bmi = m.streams.find(s => s.id === 'body').children.find(s => s.id === 'body-bmi');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(bmi);
+    });
+    it('[OVCG] adds a new root stream when parentId is null', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { streams: [{ id: 'mood', name: 'Mood', parentId: null }] });
+      const mood = m.streams.find(s => s.id === 'mood');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(mood);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(mood.parentId, null);
+    });
+    it('[OVCL] a new stream keeps its role and clientData (site-agents#34)', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, {
+        streams: [
+          { id: 'body-weight', children: [{ id: 'body-weight-scale', name: 'Scale', role: 'context', clientData: { app: 'x' } }] },
+          { id: 'plain', name: 'Plain', parentId: null }
+        ]
+      });
+      const scale = m.streams[0].children[0].children.find(s => s.id === 'body-weight-scale');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(scale.role, 'context');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(scale.clientData, { app: 'x' });
+      const plain = m.streams.find(s => s.id === 'plain');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('role' in plain));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('clientData' in plain));
+    });
+    it('[OVCH] throws when adding a stream under an unknown parent', () => {
+      const m = makeBaseModel();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { streams: [{ id: 'orphan', name: 'Orphan', parentId: 'no-such-parent' }] }),
+        _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError
+      );
+    });
+    it('[OVCI] adds a new eventType but does not overwrite existing one', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { eventTypes: { types: { 'mass/lb': { type: 'number' } } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.eventTypes.types['mass/lb'].type, 'number');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.eventTypes.types['mass/kg'].minimum, 0); // untouched
+    });
+    it('[OVCJ] merges eventType extras', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { eventTypes: { extras: { 'mass/kg': { color: '#fff' } } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.eventTypes.extras['mass/kg'].symbol, 'kg');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.eventTypes.extras['mass/kg'].color, '#fff');
+    });
+    it('[OVCK] changes setting default while preserving other fields', () => {
+      const m = makeBaseModel();
+      (0,_ts_HDSModel_HDSModel_Overload_ts__WEBPACK_IMPORTED_MODULE_1__.applyOverload)(m, { settings: { theme: { default: 'dark' } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.settings.theme.default, 'dark');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.settings.theme.type, 'enum');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(m.settings.theme.options, ['light', 'dark']);
+    });
+  });
+
+  // ---------- HDSModel.load() integration ----------
+  describe('[OVRD] HDSModel.load() with overload', () => {
+    let originalFetch;
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = async () => ({
+        text: async () => JSON.stringify(makeBaseModel())
+      });
+    });
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('[OVDA] loads + freezes a model with overload applied', async () => {
+      const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_3__.HDSModel('http://fake/pack.json');
+      await model.load(null, {
+        items: { 'body-weight': { label: { fr: 'Poids' }, repeatable: 'P1D' } },
+        streams: [{ id: 'body', children: [{ id: 'body-bmi', name: 'BMI' }] }]
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forKey('body-weight').repeatable, 'P1D');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.modelData.items['body-weight'].label.fr, 'Poids');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.modelData.items['body-weight'].label.en, 'Body weight');
+      const bmi = model.streams.getDataById('body-bmi');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bmi.parentId, 'body');
+      // model is frozen
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => { model.modelData.items['body-weight'].repeatable = 'unlimited'; }, TypeError);
+    });
+
+    it('[OVDD] a context stream declared in an overload reports isContext() (site-agents#34)', async () => {
+      const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_3__.HDSModel('http://fake/pack.json');
+      await model.load(null, {
+        streams: [{ id: 'body-weight', children: [{ id: 'body-weight-scale', name: 'Scale', role: 'context' }] }]
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.streams.isContext('body-weight-scale'), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.streams.isContext('body-weight'), false);
+    });
+
+    it('[OVDE] loads a model whose overlay restates a now-canonical item identically (B-2026-10-28-4)', async () => {
+      const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_3__.HDSModel('http://fake/pack.json');
+      model.loadFromObject(makeBaseModelWithMarquette(), marquetteRestatementOverlay());
+      const item = model.itemsDefs.forKey('fertility-monitor-lh-marquette');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(item.eventTypes, ['ratio/generic']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(model.modelData.items['fertility-monitor-lh-marquette'].options, marquetteItem().options);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.modelData.items['fertility-monitor-lh-marquette'].label.es, 'Lectura del monitor LH');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.modelData.items['fertility-monitor-lh-marquette'].repeatable, 'unlimited');
+    });
+
+    it('[OVDB] surfaces validation errors before merging', async () => {
+      const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_3__.HDSModel('http://fake/pack.json');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        () => model.load(null, { items: { 'body-weight': { type: 'text' } } }),
+        _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError
+      );
+    });
+
+    it('[OVDC] adding a stream with unknown parent throws during load()', async () => {
+      const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_3__.HDSModel('http://fake/pack.json');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        () => model.load(null, { streams: [{ id: 'orphan', name: 'Orphan', parentId: 'no-such' }] }),
+        _ts_errors_ts__WEBPACK_IMPORTED_MODULE_2__.HDSLibError
+      );
+    });
+  });
+
+  // ---------- extractOverloadAsDefinitions ----------
+  describe('[OVRE] extractOverloadAsDefinitions', () => {
+    it('[OVEA] groups items by streamId prefix into items/<group>.yaml', () => {
+      const out = (0,_ts_HDSModel_overloadExtract_ts__WEBPACK_IMPORTED_MODULE_4__.extractOverloadAsDefinitions)({
+        items: {
+          'symptom-headache': { version: 'v1', label: { en: 'Headache' }, streamId: 'symptom-headache', eventType: 'activity/plain', type: 'checkbox', repeatable: 'unlimited' },
+          'symptom-nausea': { version: 'v1', label: { en: 'Nausea' }, streamId: 'symptom-nausea', eventType: 'activity/plain', type: 'checkbox', repeatable: 'unlimited' },
+          'mood-happy': { version: 'v1', label: { en: 'Happy' }, streamId: 'mood-happy', eventType: 'activity/plain', type: 'checkbox', repeatable: 'unlimited' }
+        }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(out['items/symptom.yaml']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(out['items/mood.yaml']);
+      const parsed = js_yaml__WEBPACK_IMPORTED_MODULE_5__["default"].load(out['items/symptom.yaml']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parsed['symptom-headache'].label.en, 'Headache');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parsed['symptom-nausea'].streamId, 'symptom-nausea');
+    });
+
+    it('[OVEB] emits one stream file per top-level overload node and round-trips via yaml', () => {
+      const overload = {
+        streams: [
+          { id: 'mood', name: 'Mood', parentId: null, children: [{ id: 'mood-happy', name: 'Happy', parentId: 'mood' }] }
+        ]
+      };
+      const out = (0,_ts_HDSModel_overloadExtract_ts__WEBPACK_IMPORTED_MODULE_4__.extractOverloadAsDefinitions)(overload);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(out['streams/mood.yaml']);
+      const parsed = js_yaml__WEBPACK_IMPORTED_MODULE_5__["default"].load(out['streams/mood.yaml']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(parsed, overload.streams[0]);
+    });
+
+    it('[OVEC] emits eventTypes as JSON', () => {
+      const out = (0,_ts_HDSModel_overloadExtract_ts__WEBPACK_IMPORTED_MODULE_4__.extractOverloadAsDefinitions)({ eventTypes: { types: { 'mass/lb': { type: 'number' } } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(out['eventTypes/eventTypes-overload.json']);
+      const parsed = JSON.parse(out['eventTypes/eventTypes-overload.json']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parsed.types['mass/lb'].type, 'number');
+    });
+
+    it('[OVED] emits settings.yaml and round-trips', () => {
+      const overload = { settings: { fontSize: { eventType: 'settings/font-size', type: 'number', default: 14 } } };
+      const out = (0,_ts_HDSModel_overloadExtract_ts__WEBPACK_IMPORTED_MODULE_4__.extractOverloadAsDefinitions)(overload);
+      const parsed = js_yaml__WEBPACK_IMPORTED_MODULE_5__["default"].load(out['settings/settings.yaml']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(parsed, overload.settings);
+    });
+
+    it('[OVEE] emits one datasource file per key', () => {
+      const out = (0,_ts_HDSModel_overloadExtract_ts__WEBPACK_IMPORTED_MODULE_4__.extractOverloadAsDefinitions)({
+        datasources: {
+          foods: { endpoint: 'datasets://foods', queryParam: 'q', resultKey: 'foods', label: { en: 'Foods' } }
+        }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(out['datasources/foods.yaml']);
+      const parsed = js_yaml__WEBPACK_IMPORTED_MODULE_5__["default"].load(out['datasources/foods.yaml']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parsed.foods.endpoint, 'datasets://foods');
+    });
+
+    it('[OVEF] omits sections that are empty / undefined', () => {
+      const out = (0,_ts_HDSModel_overloadExtract_ts__WEBPACK_IMPORTED_MODULE_4__.extractOverloadAsDefinitions)({ items: {} });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(Object.keys(out), []);
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/HDSProfile.test.js"
 /*!**********************************!*\
   !*** ./tests/HDSProfile.test.js ***!
@@ -39825,6 +43474,134 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.surname, null, 'Should not see surname');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(profile.avatar, null, 'Should not see avatar');
     });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/HDSProfileLocale.test.js"
+/*!****************************************!*\
+  !*** ./tests/HDSProfileLocale.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+/**
+ * L1 regression (plan 78) — HDSProfile must apply its locale to the localizer ONLY when the
+ * value is genuinely stored. An unstored profile applying its default `['en']` silently
+ * clobbered a legacy per-app language: consumers hook HDSProfile *after* HDSSettings, and
+ * `setPreferredLocales` prepends, so the last writer wins the front slot. A user who picked
+ * Français in the old per-app selector (stored in HDSSettings; profile empty) flipped to
+ * English on next load.
+ *
+ * These drive the real `load()` side-effect path with a fake connection — no pryv service.
+ */
+function fakeConnection (events, { throwOnGet = false } = {}) {
+  return {
+    apiOne: async () => {
+      if (throwOnGet) throw new Error('no profile access');
+      return events;
+    },
+  };
+}
+
+const localeEvent = (locales) => ({
+  type: 'settings/preferred-locales',
+  streamIds: ['profile-preferences'],
+  content: locales,
+});
+
+describe('[HDSPL] HDSProfile locale side effect (L1)', () => {
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+  });
+
+  it('[HDSPL1] an UNstored profile does not clobber a legacy per-app locale', async () => {
+    // Simulate the legacy path: HDSSettings applied Français to the localizer.
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.getPreferredLocales)()[0], 'fr');
+
+    // Profile has nothing stored (empty events) — it must NOT assert its default.
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(fakeConnection([]));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('preferredLocales'), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.getPreferredLocales)()[0], 'fr',
+      'unstored profile must leave the legacy per-app locale in front'
+    );
+  });
+
+  it('[HDSPL2] a STORED profile locale is applied (profile is the account source of truth)', async () => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notStrictEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.getPreferredLocales)()[0], 'fr'); // starts at the default
+
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(fakeConnection([localeEvent(['fr'])]));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('preferredLocales'), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.getPreferredLocales)()[0], 'fr',
+      'a stored profile locale must be applied to the localizer'
+    );
+  });
+
+  it('[HDSPL3] no profile access (load throws) does not clobber a legacy locale', async () => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(fakeConnection([], { throwOnGet: true }));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isHooked, true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.getPreferredLocales)()[0], 'fr',
+      'the no-access branch must not assert a default locale either'
+    );
+  });
+});
+
+/**
+ * P1 regression (plan 78) — a *failed reload* must not transiently un-store account values.
+ * `load()` used to reset `_values`/`_cache` to defaults BEFORE the fetch, so a network blip
+ * on `reload()` silently dropped displayName / preferences to defaults (and `isStored` → false).
+ */
+function flakyConnection (events) {
+  let calls = 0;
+  return {
+    apiOne: async () => {
+      calls += 1;
+      if (calls > 1) throw new Error('transient network error');
+      return events;
+    },
+  };
+}
+
+describe('[HDSPP] HDSProfile.reload robustness (P1)', () => {
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.unhook();
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+  });
+
+  it('[HDSPP1] a failed reload preserves the previously-loaded stored values', async () => {
+    const events = [
+      { type: 'contact/display-name', streamIds: ['profile-display-name'], content: 'Dr. Smith' },
+      localeEvent(['fr']),
+    ];
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(flakyConnection(events)); // first load succeeds
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), 'Dr. Smith');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('displayName'), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('preferredLocales'), ['fr']);
+
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.reload(); // second load throws — must NOT wipe to defaults
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('displayName'), 'Dr. Smith', 'value must survive a failed reload');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.isStored('displayName'), true, 'isStored must survive a failed reload');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('preferredLocales'), ['fr']);
   });
 });
 
@@ -40753,6 +44530,420 @@ describe('[ACCLL] saveLanguage (dev API)', function () {
 
 /***/ },
 
+/***/ "./tests/appDescription.test.js"
+/*!**************************************!*\
+  !*** ./tests/appDescription.test.js ***!
+  \**************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/appDescription.ts */ "./ts/appDescription.ts");
+
+
+
+// The rule every HDS app names an app by (data-model APP-DESCRIPTION.md).
+
+const URL_DYSNET = 'https://dysnet.org/hds/app-manifest.json';
+const manifestBody = (over = {}) => ({
+  format: 'hds-app-manifest',
+  formatVersion: 1,
+  appCode: 'dysnet-registry',
+  name: { en: 'DysNet', fr: 'DysNet' },
+  description: { en: 'The online dysmelia community' },
+  icon: 'https://dysnet.org/hds/icon.png',
+  provider: { name: { en: 'DysNet (dysnet.org)' }, url: 'https://dysnet.org/' },
+  open: { web: 'https://dev.dysnet.org/', ios: 'http://insecure.example/app' },
+  privacy: { en: 'https://dysnet.org/privacy', fr: 'javascript:alert(1)' },
+  support: 'https://dysnet.org/contact',
+  ...over
+});
+const entry = (over = {}) => ({
+  id: 'dysnet-registry',
+  appCode: 'dysnet-registry',
+  manifest: URL_DYSNET,
+  counterparty: { host: 'dysnet.hds.ngo' },
+  name: 'DysNet',
+  description: { en: 'Registry', fr: 'Registre' },
+  icon: { type: 'base64', value: 'data:image/png;base64,AAAA' },
+  urls: { web: 'https://dev.dysnet.org/' },
+  provider: 'DysNet (dysnet.org)',
+  ...over
+});
+const CMC = { appCode: 'dysnet-registry', counterparty: { username: 'dysnet', host: 'dysnet.hds.ngo' } };
+
+describe('[APPD] appDescription', () => {
+  describe('[APPD-P] pointer and manifest', () => {
+    it('[APPD-P1] reads hdsApp.manifest: https only, normalized, no credentials or fragment', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOf)({ hdsApp: { manifest: 'https://DysNet.org/hds/app-manifest.json' } }), URL_DYSNET);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOf)({ hdsApp: { manifest: 'http://dysnet.org/m.json' } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOf)({ hdsApp: { manifest: 'https://u:p@dysnet.org/m.json' } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOf)({ hdsApp: { manifest: 'https://dysnet.org/m.json#x' } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOf)({ hdsApp: 'https://dysnet.org/m.json' }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOf)(null), null);
+    });
+
+    it('[APPD-P2] parses a manifest, dropping bad optional fields, never the whole manifest', () => {
+      const m = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)(manifestBody());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(m.open, { web: 'https://dev.dysnet.org/' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(m.privacy, { en: 'https://dysnet.org/privacy' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(m.icon, 'https://dysnet.org/hds/icon.png');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(m.provider, { name: { en: 'DysNet (dysnet.org)' }, url: 'https://dysnet.org/' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)(manifestBody({ icon: 'http://x/i.png' })).icon, undefined);
+    });
+
+    it('[APPD-P3] format, formatVersion 1, appCode and an English name are required', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)(manifestBody({ format: 'hds-legal-manifest' })), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)(manifestBody({ formatVersion: 2 })), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)(manifestBody({ appCode: '' })), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)(manifestBody({ name: { fr: 'DysNet' } })), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)('{}'), null);
+    });
+  });
+
+  describe('[APPD-L] loading', () => {
+    const response = (body, headers = { 'content-type': 'application/json' }, ok = true) => ({
+      ok,
+      headers: { get: (k) => headers[k.toLowerCase()] ?? null },
+      text: async () => (typeof body === 'string' ? body : JSON.stringify(body))
+    });
+    beforeEach(() => (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.clearAppManifests)());
+
+    it('[APPD-L1] fetches once, without credentials, referrer or redirect', async () => {
+      const calls = [];
+      const fetchImpl = async (url, opts) => { calls.push([url, opts]); return response(manifestBody()); };
+      const a = await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.loadAppManifest)(URL_DYSNET, fetchImpl);
+      const b = await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.loadAppManifest)(URL_DYSNET, fetchImpl);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a.appCode, 'dysnet-registry');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a, b);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0][1].credentials, 'omit');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0][1].referrerPolicy, 'no-referrer');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0][1].redirect, 'error');
+    });
+
+    it('[APPD-L2] never throws; a failure is retried on the next call', async () => {
+      let n = 0;
+      const failing = async () => { n++; throw new Error('cors'); };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.loadAppManifest)(URL_DYSNET, failing), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.loadAppManifest)(URL_DYSNET, failing), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(n, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.loadAppManifest)(URL_DYSNET, async () => response(manifestBody(), { 'content-type': 'text/html' })), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.loadAppManifest)(URL_DYSNET, async () => response('x'.repeat(70 * 1024))), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.loadAppManifest)(URL_DYSNET, async () => response('not json')), null);
+    });
+  });
+
+  describe('[APPD-R] the rule', () => {
+    const manifest = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)(manifestBody());
+
+    it('[APPD-R1] vouched: the catalogue entry\'s words; no fetch needed when it has name, description and icon', () => {
+      const input = { ...CMC, pointer: URL_DYSNET, catalogue: [entry()] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.needsManifest)(input), false);
+      const d = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)(input);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.trust, 'vouched');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.name, { en: 'DysNet' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.description, { en: 'Registry', fr: 'Registre' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.icon.type, 'base64');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.open, { web: 'https://dev.dysnet.org/' });
+    });
+
+    it('[APPD-R2] vouched whatever the pointer: a listed app never falls to unvouched', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ ...CMC, pointer: 'https://elsewhere.example/m.json', catalogue: [entry()] }).trust, 'vouched');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ ...CMC, catalogue: [entry()] }).trust, 'vouched');
+    });
+
+    it('[APPD-R3] gaps are taken from the manifest only when the pointer is the vouched one', () => {
+      const bare = entry({ name: undefined, description: undefined, icon: undefined, urls: undefined, provider: undefined });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.needsManifest)({ ...CMC, pointer: URL_DYSNET, catalogue: [bare] }), true);
+      const d = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ ...CMC, pointer: URL_DYSNET, manifest, catalogue: [bare] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.name, manifest.name);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.icon, { type: 'url', value: 'https://dysnet.org/hds/icon.png' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.host, 'dysnet.org');
+      const other = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ ...CMC, pointer: 'https://elsewhere.example/m.json', manifest, catalogue: [bare] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(other.trust, 'vouched');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(other.name, null);
+    });
+
+    it('[APPD-R4] CMC vouching is bound to the counterparty', () => {
+      const elsewhere = { appCode: 'dysnet-registry', counterparty: { username: 'mallory', host: 'evil.example' }, pointer: URL_DYSNET, manifest, catalogue: [entry()] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.vouchingEntry)(elsewhere), null);
+      const d = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)(elsewhere);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.trust, 'unvouched');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.icon, undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ appCode: 'dysnet-registry', pointer: URL_DYSNET, catalogue: [entry()] }).trust, 'none');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.vouchingEntry)({ ...CMC, catalogue: [entry({ counterparty: { host: 'dysnet.hds.ngo', username: 'other' } })] }), null);
+    });
+
+    it('[APPD-R4b] an entry without counterparty never vouches for a CMC relationship: its app code is a claim', () => {
+      const plain = entry({ id: 'cycle-intelligence', appCode: 'cycle-intelligence', counterparty: undefined });
+      // a plain access (requestingAppId) is vouched by the entry, as before
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.vouchingEntry)({ appCode: 'cycle-intelligence', catalogue: [plain] }), plain);
+      // any account sending a CMC invite under that app code is not
+      const claimed = { appCode: 'cycle-intelligence', counterparty: { username: 'mallory', host: 'evil.example' }, catalogue: [plain] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.vouchingEntry)(claimed), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)(claimed).trust, 'none');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.vouchingEntry)({ appCode: 'cycle-intelligence', cmc: true, catalogue: [plain] }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.vouchingEntry)({ ...(0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.appIdentityOfAccess)({ clientData: { cmc: { appCode: 'cycle-intelligence' } } }), catalogue: [plain] }), null);
+    });
+
+    it('[APPD-R4c] a practitioner app used by many accounts is unvouched, named from its own manifest', () => {
+      const plain = entry({ id: 'cycle-intelligence-monitor', appCode: 'cycle-intelligence-monitor', counterparty: undefined });
+      const pointer = 'https://healthdatasafe.github.io/ci/hds-app-manifest-monitor.json';
+      const own = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.parseAppManifest)(manifestBody({ appCode: 'cycle-intelligence-monitor', name: { en: 'Cycle Intelligence Monitor' } }));
+      const input = { appCode: 'cycle-intelligence-monitor', counterparty: { username: 'dr-a', host: 'api.datasafe.dev' }, cmc: true, pointer, catalogue: [plain] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.needsManifest)(input), true);
+      const d = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ ...input, manifest: own });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.trust, 'unvouched');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.name, { en: 'Cycle Intelligence Monitor' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.icon, undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.host, 'healthdatasafe.github.io');
+    });
+
+    it('[APPD-R5] registered: an OAuth client\'s registration, before any manifest', () => {
+      const d = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ appCode: 'some-client', oauthClient: { clientName: 'Some Client', logoUri: 'https://c.example/l.png', clientUri: 'https://c.example/' } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.trust, 'registered');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.name, { en: 'Some Client' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.open, { web: 'https://c.example/' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.needsManifest)({ appCode: 'some-client', pointer: URL_DYSNET, oauthClient: { clientName: 'Some Client' } }), false);
+    });
+
+    it('[APPD-R6] unvouched: the manifest\'s name and host, no icon; a manifest for another app is ignored', () => {
+      const d = (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ appCode: 'dysnet-registry', pointer: URL_DYSNET, manifest });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.trust, 'unvouched');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.name, manifest.name);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.host, 'dysnet.org');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(d.icon, undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(d.provider, { en: 'DysNet (dysnet.org)' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ appCode: 'cycle-intelligence', pointer: URL_DYSNET, manifest }).trust, 'none');
+    });
+
+    it('[APPD-R7] none: nothing readable', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.describeApp)({ appCode: 'x' }), { trust: 'none', appCode: 'x', name: null, open: {} });
+    });
+  });
+
+  describe('[APPD-A] accesses', () => {
+    it('[APPD-A1] identity: cmc.appCode, else the access name (requestingAppId)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.appIdentityOfAccess)({ name: 'cmc:dysnet-registry:dysnet@dysnet.hds.ngo', clientData: { cmc: CMC } }), { ...CMC, cmc: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.appIdentityOfAccess)({ name: 'cycle-intelligence', clientData: {} }), { appCode: 'cycle-intelligence', counterparty: null, cmc: false });
+      // a CMC grant without a stamped counterparty is still a CMC relationship
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.appIdentityOfAccess)({ name: 'x', clientData: { cmc: { appCode: 'cycle-intelligence' } } }), { appCode: 'cycle-intelligence', counterparty: null, cmc: true });
+    });
+
+    it('[APPD-A2] the pointer: on the access, else on the CMC accept event', async () => {
+      const connection = {
+        apiOne: async (method, params) => {
+          _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(method, 'events.getOne');
+          return params.id === 'accept1' ? { content: { hdsFormSpec: {}, hdsApp: { manifest: URL_DYSNET } } } : null;
+        }
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOfAccess)(connection, { clientData: { hdsApp: { manifest: 'https://ci.example/m.json' } } }), 'https://ci.example/m.json');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOfAccess)(connection, { clientData: { cmc: { acceptEventId: 'accept1', offerEventId: 'offer-on-their-core' } } }), URL_DYSNET);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOfAccess)(connection, { clientData: { cmc: { acceptEventId: 'gone' } } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.manifestPointerOfAccess)({ apiOne: async () => { throw new Error('forbidden'); } }, { clientData: { cmc: { acceptEventId: 'accept1' } } }), null);
+    });
+
+    it('[APPD-A3] at accept, the invite\'s pointer is mirrored onto her accept event, keeping its content', async () => {
+      const calls = [];
+      const connection = {
+        apiOne: async (method, params) => {
+          calls.push([method, params]);
+          return method === 'events.getOne' ? { content: { hdsFormSpec: { title: 'x' } } } : {};
+        }
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorAppPointerOnAcceptEvent)(connection, 'accept1', { appId: 'dysnet-registry', hdsApp: { manifest: URL_DYSNET } }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[1], ['events.update', { id: 'accept1', update: { content: { hdsFormSpec: { title: 'x' }, hdsApp: { manifest: URL_DYSNET } } } }]);
+      calls.length = 0;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorAppPointerOnAcceptEvent)(connection, 'accept1', { appId: 'x', hdsApp: { manifest: 'http://bad' } }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls.length, 0);
+    });
+
+    it('[APPD-A4] mirrorRequesterMetaOnAcceptEvent: an app gets its pointer and never a name; a pointerless requester its own name, in one write', async () => {
+      const calls = [];
+      const connection = {
+        apiOne: async (method, params) => {
+          calls.push([method, params]);
+          return method === 'events.getOne' ? { content: { hdsFormSpec: { title: 'x' } } } : {};
+        }
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorRequesterMetaOnAcceptEvent)(connection, 'accept1', { appId: 'hds-collector', displayName: '  Dr\nJane ‮Smith​ ' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls, [
+        ['events.getOne', { id: 'accept1' }],
+        ['events.update', { id: 'accept1', update: { content: { hdsFormSpec: { title: 'x' }, requesterName: 'Dr Jane Smith' } } }]
+      ]);
+      calls.length = 0;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorRequesterMetaOnAcceptEvent)(connection, 'accept1', { appId: 'dysnet-registry', displayName: 'DysNet', hdsApp: { manifest: URL_DYSNET } }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[1][1].update.content, { hdsFormSpec: { title: 'x' }, hdsApp: { manifest: URL_DYSNET } });
+      calls.length = 0;
+      // an invite that tried to point at a manifest is an app: no pointer kept, and no self-given name either
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorRequesterMetaOnAcceptEvent)(connection, 'accept1', { appId: 'x', displayName: 'DysNet', hdsApp: { manifest: 'http://bad' } }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorRequesterMetaOnAcceptEvent)(connection, 'accept1', { appId: 'hds-collector', displayName: '' }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorRequesterMetaOnAcceptEvent)(connection, 'accept1', { appId: 'hds-collector', displayName: 'é'.repeat(101) }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorRequesterMetaOnAcceptEvent)(connection, 'accept1', { displayName: '\u0000\u0007‍' }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorRequesterMetaOnAcceptEvent)(connection, 'accept1', null), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls.length, 0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.mirrorRequesterMetaOnAcceptEvent)(connection, 'accept1', { displayName: '🩺'.repeat(100) }), true);
+    });
+
+    it('[APPD-A5] requesterNameOfAccept reads the mirrored name, cleaned, or null', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.requesterNameOfAccept)({ requesterName: 'Dr Jane Smith' }), 'Dr Jane Smith');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.requesterNameOfAccept)({ requesterName: ' Dr\tJane⁦ ' }), 'Dr Jane');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.requesterNameOfAccept)({ requesterName: 42 }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.requesterNameOfAccept)({ requesterName: '   ' }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.requesterNameOfAccept)({}), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appDescription_ts__WEBPACK_IMPORTED_MODULE_1__.requesterNameOfAccept)(null), null);
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/appScope.test.js"
+/*!********************************!*\
+  !*** ./tests/appScope.test.js ***!
+  \********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/cmc/appScope.ts */ "./ts/cmc/appScope.ts");
+
+
+
+/**
+ * Unit tests for `cmcAppScope.ensureAppScope`.
+ *
+ * Behaviour post-2026-05-26 plan-61 upstream fix: the per-app leaf
+ * `:_cmc:apps:<appCode>` is auto-provisioned by the CMC plugin's
+ * `cmcAccessProvisionAppScopeHook` on `accesses.create` / `accesses.update`.
+ * So this helper only does the sub-scope `streams.create` — the no-subPath
+ * case returns the leaf id without any API call — unless the leaf is
+ * missing, in which case it creates it and retries (B-2026-10-26-23).
+ */
+
+const APP_CODE = 'hds-collector';
+const EXPECTED_APP_SCOPE = ':_cmc:apps:' + APP_CODE;
+
+function makeConn (responder) {
+  const calls = [];
+  return {
+    calls,
+    async apiOne (method, params) {
+      calls.push({ method, params });
+      return responder(method, params, calls.length - 1);
+    }
+  };
+}
+
+function pryvError (id) {
+  const e = new Error('pryv-api: ' + id);
+  e.innerObject = { id };
+  return e;
+}
+
+describe('[CAS] cmcAppScope.ensureAppScope', function () {
+  describe('[CASE] pryvErrorCode', function () {
+    it('[CAS01] reads innerObject.id when present', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.pryvErrorCode)(pryvError('item-already-exists')), 'item-already-exists');
+    });
+    it('[CAS02] falls back to top-level id when no innerObject', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.pryvErrorCode)({ id: 'forbidden' }), 'forbidden');
+    });
+    it('[CAS03] returns undefined for unrelated values', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.pryvErrorCode)(new Error('x')), undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.pryvErrorCode)(null), undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.pryvErrorCode)(undefined), undefined);
+    });
+  });
+
+  describe('[CASH] happy paths', function () {
+    it('[CAS10] no-subPath returns appScope id without any API call', async () => {
+      const conn = makeConn(() => { throw new Error('should not be called'); });
+      const out = await (0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.ensureAppScope)(conn, APP_CODE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out, EXPECTED_APP_SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls.length, 0);
+    });
+
+    it('[CAS11] subPath provisions sub-scope only (no leaf call)', async () => {
+      const conn = makeConn(() => ({ stream: {} }));
+      const out = await (0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.ensureAppScope)(conn, APP_CODE, 'abc123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out, EXPECTED_APP_SCOPE + ':abc123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls[0].method, 'streams.create');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[0].params, {
+        id: EXPECTED_APP_SCOPE + ':abc123',
+        parentId: EXPECTED_APP_SCOPE,
+        name: 'abc123'
+      });
+    });
+  });
+
+  describe('[CAST] tolerated errors', function () {
+    it('[CAS22] tolerates item-already-exists on subPath', async () => {
+      const conn = makeConn(() => { throw pryvError('item-already-exists'); });
+      const out = await (0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.ensureAppScope)(conn, APP_CODE, 'abc123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out, EXPECTED_APP_SCOPE + ':abc123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls.length, 1);
+    });
+  });
+
+  describe('[CASL] missing leaf (B-2026-10-26-23)', function () {
+    it('[CAS40] creates the leaf under :_cmc:apps and retries the sub-scope', async () => {
+      const conn = makeConn((method, params, i) => {
+        if (i === 0) throw pryvError('unknown-referenced-resource');
+        return { stream: {} };
+      });
+      const out = await (0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.ensureAppScope)(conn, APP_CODE, 'abc123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out, EXPECTED_APP_SCOPE + ':abc123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls.map(c => c.params), [
+        { id: EXPECTED_APP_SCOPE + ':abc123', parentId: EXPECTED_APP_SCOPE, name: 'abc123' },
+        { id: EXPECTED_APP_SCOPE, parentId: ':_cmc:apps', name: APP_CODE },
+        { id: EXPECTED_APP_SCOPE + ':abc123', parentId: EXPECTED_APP_SCOPE, name: 'abc123' }
+      ]);
+    });
+
+    it('[CAS41] tolerates a leaf created concurrently', async () => {
+      const conn = makeConn((method, params, i) => {
+        if (i === 0) throw pryvError('unknown-referenced-resource');
+        if (i === 1) throw pryvError('item-already-exists');
+        return { stream: {} };
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.ensureAppScope)(conn, APP_CODE, 'abc123'), EXPECTED_APP_SCOPE + ':abc123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls.length, 3);
+    });
+
+    it('[CAS42] rethrows when the leaf cannot be created', async () => {
+      const conn = makeConn((method, params, i) => {
+        throw pryvError(i === 0 ? 'unknown-referenced-resource' : 'forbidden');
+      });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.ensureAppScope)(conn, APP_CODE, 'abc123'), (e) => e.innerObject?.id === 'forbidden');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls.length, 2);
+    });
+  });
+
+  describe('[CASR] rethrows on unrelated errors', function () {
+    it('[CAS31] rethrows forbidden on subPath', async () => {
+      const conn = makeConn(() => { throw pryvError('forbidden'); });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+        (0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.ensureAppScope)(conn, APP_CODE, 'abc123'),
+        (e) => e.innerObject?.id === 'forbidden'
+      );
+    });
+
+    it('[CAS32] rethrows plain Errors with no pryv id', async () => {
+      const conn = makeConn(() => { throw new Error('boom'); });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_cmc_appScope_ts__WEBPACK_IMPORTED_MODULE_1__.ensureAppScope)(conn, APP_CODE, 'abc123'), /boom/);
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/applicationClass.test.js"
 /*!****************************************!*\
   !*** ./tests/applicationClass.test.js ***!
@@ -41541,6 +45732,95 @@ describe('[APRX] appTemplates Requests', function () {
 
 /***/ },
 
+/***/ "./tests/attachmentsItems.test.js"
+/*!****************************************!*\
+  !*** ./tests/attachmentsItems.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+
+
+
+/**
+ * Document items (`type: attachments`, data-model 3.25.0): files carried as Pryv attachments, metadata as content
+ * (`file/xds-v1`). Resolvable and shown like any item, never offered in pickers.
+ */
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+/** Minimal pack.json-shaped model: one regular item and one document item */
+function makeModel () {
+  return {
+    items: {
+      'body-weight': {
+        version: 'v1',
+        label: { en: 'Body weight' },
+        description: { en: 'Your weight.' },
+        streamId: 'body-weight',
+        eventType: 'mass/kg',
+        type: 'number',
+        repeatable: 'any'
+      },
+      document: {
+        version: 'v1',
+        label: { en: 'Medical document' },
+        description: { en: 'A medical document you keep.' },
+        streamId: 'documents',
+        eventType: 'file/xds-v1',
+        type: 'attachments',
+        repeatable: 'any'
+      }
+    },
+    streams: [
+      { id: 'body-weight', name: 'Body weight', parentId: null },
+      { id: 'documents', name: 'Documents', parentId: null }
+    ]
+  };
+}
+
+describe('[ATTX] document items', () => {
+  let model;
+  before(() => {
+    // eventToShortText reads the singleton: give it this small model, and the published one back after
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)();
+    model.loadFromObject(makeModel());
+  });
+  after(async () => {
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+  });
+
+  it('[ATT1] isAttachments is true for type: attachments only', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forKey('document').isAttachments, true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forKey('document').isSystem, false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forKey('body-weight').isAttachments, false);
+  });
+
+  it('[ATT2] getAllActive leaves document items out, getAll and forEvent keep them', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-weight']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.getAll().length, 2);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forEvent({ streamIds: ['documents'], type: 'file/xds-v1' }).key, 'document');
+  });
+
+  it('[ATT3] a document reads as its title, else its first file\'s name', () => {
+    const base = { streamIds: ['documents'], type: 'file/xds-v1' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...base, content: { title: 'Bilan sanguin', language: 'fr' }, attachments: [{ fileName: 'scan.pdf' }] }), 'Bilan sanguin');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...base, content: { language: 'fr' }, attachments: [{ fileName: 'scan.pdf' }] }), 'scan.pdf');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...base, content: null, attachments: [{ fileName: 'letter.jpg' }] }), 'letter.jpg');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...base, content: null }), null);
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/bridgeAccess.test.js"
 /*!************************************!*\
   !*** ./tests/bridgeAccess.test.js ***!
@@ -41834,6 +46114,1249 @@ describe('[BAU] Bridge access update — missing permission streams', function (
       }
     );
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.updates.length, 0);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcConstants.test.js"
+/*!************************************!*\
+  !*** ./tests/cmcConstants.test.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/cmc/constants.ts */ "./ts/cmc/constants.ts");
+
+
+
+/**
+ * Unit tests for the Plan 60 B2 shared CMC constants + scope helpers.
+ *
+ * The constants are locked per Plan 59 Decisions; tests assert the exact
+ * values so any drift becomes a deliberate change with an explicit diff.
+ */
+
+describe('[CCST] cmcConstants', function () {
+  describe('[CCSA] CMC_APP_CODES', function () {
+    it('[CCS01] PATIENT, COLLECTOR, BRIDGE_MIRA, BRIDGE_ATHENA match locked values', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.PATIENT, 'hds-patient');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.COLLECTOR, 'hds-collector');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_MIRA, 'hds-bridge-mira');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_ATHENA, 'hds-bridge-athena');
+    });
+  });
+
+  describe('[CCSE] CMC_EVENT_TYPES', function () {
+    it('[CCS10] INVITE_TRIGGER + ACCEPT match the CMC plugin convention', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_EVENT_TYPES.INVITE_TRIGGER, 'consent/request-cmc');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_EVENT_TYPES.ACCEPT, 'consent/accept-cmc');
+    });
+  });
+
+  describe('[CCSB] appSubScope', function () {
+    it('[CCS20] builds the canonical sub-scope id', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(
+        (0,_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.appSubScope)(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.COLLECTOR, 'abc123'),
+        ':_cmc:apps:hds-collector:abc123'
+      );
+    });
+    it('[CCS21] composes deeper paths via colon-joined sub', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(
+        (0,_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.appSubScope)(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.PATIENT, 'chats:dr-smith'),
+        ':_cmc:apps:hds-patient:chats:dr-smith'
+      );
+    });
+  });
+
+  describe('[CCSX] extractAppSubScopeSuffix', function () {
+    it('[CCS30] strips the appScope prefix', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(
+        (0,_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.extractAppSubScopeSuffix)(':_cmc:apps:hds-collector:abc123', _ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.COLLECTOR),
+        'abc123'
+      );
+    });
+    it('[CCS31] tolerates leading prefix (matches original .*? regex behavior)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(
+        (0,_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.extractAppSubScopeSuffix)('peer:_cmc:apps:hds-collector:abc123', _ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.COLLECTOR),
+        'abc123'
+      );
+    });
+    it('[CCS32] returns streamId unchanged when prefix absent', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(
+        (0,_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.extractAppSubScopeSuffix)(':some-other-stream', _ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.COLLECTOR),
+        ':some-other-stream'
+      );
+    });
+    it('[CCS33] does not cross-match a different appCode', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(
+        (0,_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.extractAppSubScopeSuffix)(':_cmc:apps:hds-collector:abc', _ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.PATIENT),
+        ':_cmc:apps:hds-collector:abc'
+      );
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcDataExport.test.js"
+/*!*************************************!*\
+  !*** ./tests/cmcDataExport.test.js ***!
+  \*************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+function fakeConnection (getResult = []) {
+  const calls = [];
+  return {
+    calls,
+    async apiOne (method, params, resultKey) {
+      calls.push({ method, params, resultKey });
+      if (method === 'events.create') return { id: 'ev-' + calls.length, ...params };
+      if (method === 'events.get') return getResult;
+      throw new Error('unexpected ' + method);
+    }
+  };
+}
+
+describe('[CDE] cmcDataExport', function () {
+  describe('[CDE-BUILD] buildDataExportRequestContent', function () {
+    it('[CDE01] carries the typed hds block and a plugin-valid alert envelope', () => {
+      const c = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.buildDataExportRequestContent({ requestedAt: 1000, dueAt: 2000, note: 'PDF please', locale: 'fr' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.level, 'info');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.ackRequired, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(c.ackId.startsWith(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.DATA_EXPORT_ACK_PREFIX));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof c.title.fr, 'string');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(c.body.fr.includes('PDF please'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.hds, { kind: 'data-export-request', requestedAt: 1000, dueAt: 2000, note: 'PDF please' });
+    });
+
+    it('[CDE02] falls back to English and omits absent optionals', () => {
+      const c = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.buildDataExportRequestContent({ requestedAt: 5, locale: 'de' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof c.title.de, 'string');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.hds, { kind: 'data-export-request', requestedAt: 5 });
+    });
+  });
+
+  describe('[CDE-SEND] requestDataExport / fulfillDataExportRequest', function () {
+    it('[CDE10] posts the alert on the given collectors stream', async () => {
+      const conn = fakeConnection();
+      const r = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.requestDataExport(conn, { collectorStreamId: ':_cmc:apps:hds-collector:f1:collectors:dr--api-x', note: 'n' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls[0].method, 'events.create');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[0].params.streamIds, [':_cmc:apps:hds-collector:f1:collectors:dr--api-x']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls[0].params.type, 'notification/alert-cmc');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.ackId, conn.calls[0].params.content.ackId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.alertEventId, 'ev-1');
+    });
+
+    it('[CDE11] posts the ack with alertEventId + ackId and refuses incomplete params', async () => {
+      const conn = fakeConnection();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.fulfillDataExportRequest(conn, { collectorStreamId: 's', alertEventId: 'a1', ackId: 'k1' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(conn.calls[0].params.type, 'notification/ack-cmc');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[0].params.content, { alertEventId: 'a1', ackId: 'k1' });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.fulfillDataExportRequest(conn, { collectorStreamId: 's', alertEventId: 'a1' }));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.requestDataExport(conn, {}));
+    });
+  });
+
+  describe('[CDE-LIST] parseDataExportEvents / listDataExportRequests', function () {
+    const alertA = { id: 'a1', type: 'notification/alert-cmc', time: 100, content: { level: 'info', title: { en: 't' }, body: { en: 'b' }, ackRequired: true, ackId: 'hds-data-export:x1', hds: { kind: 'data-export-request', requestedAt: 100, dueAt: 900, note: 'soon' }, from: { username: 'pat', host: 'api.x' } } };
+    const alertB = { id: 'a2', type: 'notification/alert-cmc', time: 200, content: { level: 'info', title: { en: 't' }, body: { en: 'b' }, ackRequired: true, ackId: 'hds-data-export:x2', hds: { kind: 'data-export-request', requestedAt: 200 } } };
+    const otherAlert = { id: 'a3', type: 'notification/alert-cmc', time: 300, content: { level: 'warning', title: { en: 'peer down' }, body: { en: '...' } } };
+    const ackA = { id: 'k1', type: 'notification/ack-cmc', time: 150, content: { alertEventId: 'a1', ackId: 'hds-data-export:x1', from: { username: 'dr', host: 'api.x' } } };
+
+    it('[CDE20] joins acks to their requests, ignores unrelated alerts, newest first', () => {
+      const out = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.parseDataExportEvents([ackA, otherAlert, alertB, alertA]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out.map(r => r.alertEventId), ['a2', 'a1']);
+      const a = out[1];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a.status, 'fulfilled');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a.fulfilledAt, 150);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a.ackEventId, 'k1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a.direction, 'received');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(a.from, { username: 'pat', host: 'api.x' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a.dueAt, 900);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a.note, 'soon');
+      const b = out[0];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(b.status, 'pending');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(b.direction, 'sent');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(b.from, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(b.dueAt, null);
+    });
+
+    it('[CDE21] matches an ack by alertEventId when the ackId was not echoed', () => {
+      const ackByEvent = { id: 'k2', type: 'notification/ack-cmc', time: 250, content: { alertEventId: 'a2', ackId: 'something-else' } };
+      const out = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.parseDataExportEvents([alertB, ackByEvent]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].status, 'fulfilled');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].ackEventId, 'k2');
+    });
+
+    it('[CDE22] listDataExportRequests reads alerts + acks from the stream', async () => {
+      const conn = fakeConnection([alertA, ackA]);
+      const out = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.listDataExportRequests(conn, 'stream-x');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[0].params.streams, ['stream-x']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[0].params.types, ['notification/alert-cmc', 'notification/ack-cmc']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].status, 'fulfilled');
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcDocuments.test.js"
+/*!************************************!*\
+  !*** ./tests/cmcDocuments.test.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+const COLLECTORS = ':_cmc:apps:hds-patient:collectors:dr--api-x';
+const CHANNEL = [
+  { streamId: ':_cmc:inbox', level: 'create-only' },
+  { streamId: COLLECTORS, level: 'contribute' }
+];
+const { DOCUMENT_ALERT_KINDS: K } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments;
+
+function apiError (id) {
+  const e = new Error(id);
+  e.innerObject = { id };
+  return e;
+}
+
+/**
+ * An account as the platform keeps it: streams, events, and scope updates settled as applied
+ * (the grant changes to `newPermissions`, kept on `grant`).
+ */
+function account ({ streams = [], events = [] } = {}) {
+  const state = { streams: [...streams], events: new Map(events.map(e => [e.id, { ...e }])), calls: [], grant: null, n: 0 };
+  const children = (parentId) => state.streams.filter(s => s.parentId === parentId);
+  state.apiOne = async function (method, params, key) {
+    state.calls.push({ method, params });
+    const out = (k, v) => key ? v : { [k]: v };
+    switch (method) {
+      case 'streams.get':
+        if (params.parentId && !state.streams.find(s => s.id === params.parentId)) throw apiError('unknown-referenced-resource');
+        return out('streams', children(params.parentId ?? null).filter(s => params.state === 'all' || !s.trashed));
+      case 'streams.create': {
+        if (state.streams.find(s => s.id === params.id)) throw apiError('item-already-exists');
+        const s = { parentId: null, ...params };
+        state.streams.push(s);
+        return out('stream', s);
+      }
+      case 'streams.delete': {
+        const s = state.streams.find(x => x.id === params.id);
+        if (!s) throw apiError('unknown-resource');
+        if (!s.trashed) { s.trashed = true; return out('stream', s); }
+        state.streams = state.streams.filter(x => x.id !== params.id);
+        for (const [id, e] of state.events) {
+          if (!e.streamIds.includes(params.id)) continue;
+          e.streamIds = e.streamIds.filter(x => x !== params.id);
+          if (e.streamIds.length === 0) state.events.delete(id);
+        }
+        return out('streamDeletion', { id: params.id });
+      }
+      case 'events.create': {
+        const e = { id: 'ev-' + (++state.n), time: state.n, ...params };
+        state.events.set(e.id, e);
+        return out('event', e);
+      }
+      case 'events.getOne': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        if (e.type === 'consent/scope-update-cmc' && e.content.applied == null) {
+          e.content = { ...e.content, applied: true, status: 'completed' };
+          state.grant = e.content.newPermissions;
+        }
+        return out('event', structuredClone(e));
+      }
+      case 'events.update': {
+        const e = state.events.get(params.id);
+        Object.assign(e, params.update);
+        return out('event', e);
+      }
+      case 'events.get':
+        return out('events', [...state.events.values()].filter(e =>
+          (params.state === 'all' || (!e.trashed && params.streams.every(id => !state.streams.find(s => s.id === id)?.trashed))) &&
+          e.streamIds.some(s => params.streams.includes(s)) && (!params.types || params.types.includes(e.type))).slice(0, params.limit ?? Infinity));
+      default:
+        throw new Error('unexpected ' + method);
+    }
+  };
+  state.createEventWithFileFromBuffer = async function (event, file, filename) {
+    state.calls.push({ method: 'createEventWithFileFromBuffer', params: { event, filename } });
+    const e = { id: 'ev-' + (++state.n), time: state.n, ...event, attachments: [{ id: 'att-1', fileName: filename, size: 1200 }] };
+    state.events.set(e.id, e);
+    return { event: e };
+  };
+  return state;
+}
+
+const tree = () => [
+  { id: 'document-shares', parentId: null, name: 'Shared documents' },
+  { id: 'share-ssssssssssss', parentId: 'document-shares', name: 'share-ssssssssssss', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } },
+  { id: 'share-rrrrrrrrrrrr', parentId: 'document-shares', name: 'share-rrrrrrrrrrrr', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'received' } } },
+  { id: 'share-oooooooooooo', parentId: 'document-shares', name: 'share-oooooooooooo', clientData: { hdsDocumentShare: { relationship: 'acc-2', direction: 'shared' } } }
+];
+const doc = (id, streamIds = ['documents']) => ({ id, type: 'file/xds-v1', streamIds, content: { title: 'Bilan' }, attachments: [{ id: 'a', size: 100 }] });
+const relWith = (perms) => ({ accessId: 'acc-1:2', localCollectorStreamId: COLLECTORS, grantedPermissions: [...perms, ...CHANNEL] });
+const alerts = (conn) => [...conn.events.values()].filter(e => e.type === 'notification/alert-cmc');
+
+describe('[CDOC] cmcDocuments', function () {
+  before(async () => {
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.streamsCheck.delayMs = 0;
+  });
+
+  describe('[CDOC-P] pure helpers', () => {
+    it('[CDOC1] share ids are share- and 12 lowercase base36, random', () => {
+      const a = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.newShareStreamId();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(a, /^share-[a-z0-9]{12}$/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notStrictEqual(a, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.newShareStreamId());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.isShareStreamId(a));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.isShareStreamId('share-dr-x'));
+    });
+
+    it('[CDOC2] the relationship is the base of the access id', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.relationshipIdOf('acc-1:3'), 'acc-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.relationshipIdOf('acc-1'), 'acc-1');
+    });
+
+    it('[CDOC3] shareStreamsOf reads the share children of a grant; sharesAllDocuments sees documents or *', () => {
+      const perms = [{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }, { streamId: 'share-bbbbbbbbbbbb', level: 'create-only' }, { streamId: 'body-weight', level: 'read' }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsOf(perms), { shared: 'share-aaaaaaaaaaaa', received: 'share-bbbbbbbbbbbb' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sharesAllDocuments(perms), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sharesAllDocuments([{ streamId: 'documents', level: 'read' }]), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sharesAllDocuments([{ streamId: '*', level: 'contribute' }]), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sharesAllDocuments([{ streamId: 'documents', level: 'create-only' }]), false);
+    });
+
+    it('[CDOC4] alert content: fixed localised text, code, hds block; unknown locale falls back to English', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.buildDocumentAlertContent(K.SHARED, 'ev-9', 'fr'), {
+        level: 'info',
+        title: { fr: 'Document partagé' },
+        body: { fr: 'Un document a été partagé avec vous dans cette conversation.' },
+        code: 'hds-document-shared',
+        hds: { kind: 'document-shared', eventId: 'ev-9' }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.buildDocumentAlertContent(K.SENT, 'ev-9', 'de').title, { en: 'Document received' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.buildDocumentAlertContent('document-other', 'ev-9'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.buildDocumentAlertContent(K.SHARED, ''));
+    });
+
+    it('[CDOC5] parseDocumentAlerts: one per (kind, eventId), the later of shared / unshared wins, other alerts ignored', () => {
+      const a = (id, time, kind, eventId, from) => ({ id, time, type: 'notification/alert-cmc', content: { hds: { kind, eventId }, ...(from ? { from: { username: 'anna', host: 'x' } } : {}) } });
+      const parsed = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.parseDocumentAlerts([
+        a('a3', 3, K.UNSHARED, 'd1'),
+        a('a1', 1, K.SHARED, 'd1'),
+        a('a2', 2, K.SHARED, 'd1'), // second device
+        a('a4', 4, K.SHARED, 'd2', true),
+        a('a5', 5, 'data-export-request', 'd3'),
+        { id: 'c1', time: 6, type: 'message/hds-chat-v1', content: { hds: { kind: K.SHARED, eventId: 'd4' } } }
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.kind, p.eventId, p.current, p.direction]), [
+        ['a1', K.SHARED, 'd1', false, 'sent'],
+        ['a3', K.UNSHARED, 'd1', true, 'sent'],
+        ['a4', K.SHARED, 'd2', true, 'received']
+      ]);
+    });
+  });
+
+  describe('[CDOC-S] the person shares one document', () => {
+    it('[CDOC10] first share: root and child created, read granted, id added to the document, then the alert', async () => {
+      const conn = account({ events: [doc('d1')] });
+      const rel = relWith([{ streamId: 'body-weight', level: 'read' }]);
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, rel, 'd1', { locale: 'en' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.mode, 'shared');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(res.shareStreamId, /^share-[a-z0-9]{12}$/);
+      const child = conn.streams.find(s => s.id === res.shareStreamId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(child, { parentId: 'document-shares', id: res.shareStreamId, name: res.shareStreamId, clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.streams.find(s => s.id === 'document-shares'), { parentId: null, id: 'document-shares', name: 'Shared documents' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant, [{ streamId: 'body-weight', level: 'read' }, { streamId: res.shareStreamId, level: 'read' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', res.shareStreamId]);
+      const order = conn.calls.map(c => c.method + (c.params?.type ? ' ' + c.params.type : ''));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(order.indexOf('events.create consent/scope-update-cmc') < order.indexOf('events.update'), 'grant before the document');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(order.at(-1), 'events.create notification/alert-cmc', 'alert last');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(alerts(conn)[0].content.hds, { kind: 'document-shared', eventId: 'd1' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(alerts(conn)[0].streamIds, [COLLECTORS]);
+    });
+
+    it('[CDOC11] child already granted: no scope update, no new stream', async () => {
+      const conn = account({ events: [doc('d1')] });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.shareStreamId, 'share-aaaaaaaaaaaa');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.scopeUpdate, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.calls.some(c => c.method === 'streams.create'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', 'share-aaaaaaaaaaaa']);
+    });
+
+    it('[CDOC12] an existing ungranted child of the relationship is reused; another relationship\'s is not', async () => {
+      const streams = [
+        { id: 'document-shares', parentId: null, name: 'Shared documents' },
+        { id: 'share-other0000000', parentId: 'document-shares', name: 'x', clientData: { hdsDocumentShare: { relationship: 'acc-9', direction: 'shared' } } },
+        { id: 'share-mine00000000', parentId: 'document-shares', name: 'x', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } }
+      ];
+      const conn = account({ streams, events: [doc('d1')] });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.shareStreamId, 'share-mine00000000');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.calls.some(c => c.method === 'streams.create'));
+    });
+
+    it('[CDOC13] the contact already reads every document: only the alert', async () => {
+      const conn = account({ events: [doc('d1')] });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'documents', level: 'read' }]), 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([res.mode, res.shareStreamId, res.scopeUpdate], ['all', null, null]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(alerts(conn).length, 1);
+    });
+
+    it('[CDOC14] another device changed the streams meanwhile: concurrent-update, no alert', async () => {
+      const conn = account({ events: [doc('d1')] });
+      const apiOne = conn.apiOne;
+      let reads = 0;
+      conn.apiOne = async (method, params, key) => {
+        const r = await apiOne(method, params, key);
+        if (method === 'events.getOne' && params.id === 'd1' && ++reads === 2) r.streamIds = ['documents', 'share-zzzzzzzzzzzz'];
+        return r;
+      };
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), 'd1'),
+        (e) => e.innerObject?.reason === 'concurrent-update');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(alerts(conn).length, 0);
+    });
+
+    it('[CDOC15] no collectors stream: refused before anything is written', async () => {
+      const conn = account({ events: [doc('d1')] });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, { ...relWith([]), localCollectorStreamId: null }, 'd1'),
+        (e) => e.innerObject?.reason === 'no-collector-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.calls.length, 0);
+    });
+  });
+
+  describe('[CDOC-U] taking back, stopping all', () => {
+    it('[CDOC20] unshareDocument removes the relationship\'s share id only, then posts the alert', async () => {
+      const conn = account({ events: [doc('d1', ['documents', 'share-aaaaaaaaaaaa', 'share-bbbbbbbbbbbb'])] });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.unshareDocument(conn, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), 'd1', { locale: 'es' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', 'share-bbbbbbbbbbbb']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(alerts(conn)[0].content.hds, { kind: 'document-unshared', eventId: 'd1' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(alerts(conn)[0].content.title, { es: 'Documento retirado' });
+    });
+
+    it('[CDOC21] stopSharingDocuments removes the share child, a chat-only remainder accepted', async () => {
+      const conn = account();
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.stopSharingDocuments(conn, relWith([{ streamId: 'hds-noop', level: 'read' }, { streamId: 'share-aaaaaaaaaaaa', level: 'read' }]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.applied, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant, [{ streamId: 'hds-noop', level: 'read' }]);
+      const update = [...conn.events.values()].find(e => e.type === 'consent/scope-update-cmc');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(update.content.hds, { removed: ['share-aaaaaaaaaaaa'] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.calls.some(c => c.method === 'streams.create'), 'hds-noop already granted: nothing provisioned');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.stopSharingDocuments(conn, relWith([{ streamId: 'body-weight', level: 'read' }])),
+        (e) => e.innerObject?.reason === 'not-shared');
+    });
+
+    it('[CDOC22] nothing else shared: hds-noop provisioned and granted, the conversation goes on', async () => {
+      const conn = account();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.stopSharingDocuments(conn, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(conn.streams.find(s => s.id === 'hds-noop'), 'hds-noop provisioned');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant, [{ streamId: 'hds-noop', level: 'read' }]);
+    });
+
+    it('[CDOC23] other streams keep their meaning: without allowChatOnly the last one is still refused', async () => {
+      const { cmcScope } = await Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! ../ts/index.ts */ "./ts/index.ts", 19));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(cmcScope.planStopSharing([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }], 'share-aaaaaaaaaaaa'), { ok: false, reason: 'nothing-left' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(cmcScope.planStopSharing([{ streamId: 'document-shares', level: 'read' }, { streamId: 'body-weight', level: 'read' }], 'share-aaaaaaaaaaaa', { parentIds: ['document-shares'] }),
+        { ok: false, reason: 'shared-through-parent' });
+    });
+  });
+
+  describe('[CDOC-R] receiving (Route B)', () => {
+    it('[CDOC30] allowDocumentsFrom grants create-only on a received child, once', async () => {
+      const conn = account();
+      const { receiveStreamId, scopeUpdate } = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(conn, relWith([{ streamId: 'body-weight', level: 'read' }]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(scopeUpdate.applied);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.streams.find(s => s.id === receiveStreamId).clientData, { hdsDocumentShare: { relationship: 'acc-1', direction: 'received' } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant.at(-1), { streamId: receiveStreamId, level: 'create-only' });
+      const again = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(conn, relWith([{ streamId: receiveStreamId, level: 'create-only' }]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(again, { receiveStreamId, scopeUpdate: null });
+    });
+
+    it('[CDOC31] the contact sends: one multipart create on the receive child, then the alert on its own stream', async () => {
+      const person = account();
+      const own = account();
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sendDocument(person, own, {
+        receiveStreamId: 'share-rrrrrrrrrrrr',
+        collectorStreamId: ':_cmc:apps:hds-collector:collectors:anna',
+        content: { title: 'Ordonnance' },
+        file: new Uint8Array([1, 2, 3]),
+        filename: 'ordonnance.pdf'
+      });
+      const created = person.events.get(res.eventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([created.type, created.streamIds], ['file/xds-v1', ['share-rrrrrrrrrrrr']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(own.events.get(res.alertEventId).content.hds, { kind: 'document-sent', eventId: res.eventId });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sendDocument(person, own, { receiveStreamId: 'documents', collectorStreamId: 'x', content: {}, file: new Uint8Array(), filename: 'a' }),
+        (e) => e.innerObject?.reason === 'not-a-share-stream');
+    });
+
+    it('[CDOC32] receiveDocument moves a valid document to documents, refuses the rest unchanged', async () => {
+      const conn = account({
+        streams: tree(),
+        events: [
+          doc('ok', ['share-rrrrrrrrrrrr']),
+          { ...doc('note', ['share-rrrrrrrrrrrr']), type: 'note/txt' },
+          { ...doc('empty', ['share-rrrrrrrrrrrr']), attachments: [] },
+          { ...doc('big', ['share-rrrrrrrrrrrr']), attachments: [{ size: 5000 }] },
+          doc('mine')
+        ]
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'ok', { maxBytes: 1000 }), { ok: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('ok').streamIds, ['documents']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'note'), { ok: false, reason: 'not-a-document' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'empty'), { ok: false, reason: 'no-attachment' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'big', { maxBytes: 1000 }), { ok: false, reason: 'too-large' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'mine'), { ok: false, reason: 'not-received' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('note').streamIds, ['share-rrrrrrrrrrrr']);
+    });
+
+    it('[CDOC33] a shared document, or one sent through another relationship, is never "received": its shares stay', async () => {
+      const conn = account({
+        streams: tree(),
+        events: [doc('shared', ['documents', 'share-ssssssssssss']), doc('onShared', ['share-ssssssssssss']), doc('sent', ['share-rrrrrrrrrrrr'])]
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'shared'), { ok: false, reason: 'not-received' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('shared').streamIds, ['documents', 'share-ssssssssssss']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'onShared'), { ok: false, reason: 'not-received' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'sent', { relationship: 'acc-2' }), { ok: false, reason: 'not-received' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'sent', { relationship: 'acc-1:4' }), { ok: true });
+    });
+  });
+
+  describe('[CDOC-C] cleanup', () => {
+    it('[CDOC40] full revoke: the receive child processed first, both children deleted, documents kept', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', ['documents', 'share-ssssssssssss']), doc('r1', ['share-rrrrrrrrrrrr'])] });
+      const deleted = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupDocumentShares(conn, 'acc-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(deleted.sort(), ['share-rrrrrrrrrrrr', 'share-ssssssssssss']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('r1').streamIds, ['documents'], 'the received document survives');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.streams.map(s => s.id), ['document-shares', 'share-oooooooooooo']);
+      for (const c of conn.calls.filter(c => c.method === 'streams.delete')) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.params.mergeEventsWithParent, false);
+    });
+
+    it('[CDOC42] children trashed by an interrupted cleanup are still found and drained (trashed events too), then deleted; several pages', async () => {
+      const streams = tree();
+      streams[1].trashed = true;
+      streams[2].trashed = true;
+      const received = Array.from({ length: 1200 }, (_, i) => doc('r' + i, ['share-rrrrrrrrrrrr']));
+      received[0].trashed = true;
+      const conn = account({ streams, events: received });
+      const deleted = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupDocumentShares(conn, 'acc-1:3');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(deleted.sort(), ['share-rrrrrrrrrrrr', 'share-ssssssssssss']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.events.size, 1200, 'every received document survives');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok([...conn.events.values()].every(e => e.streamIds.length === 1 && e.streamIds[0] === 'documents'));
+    });
+
+    it('[CDOC41] after a restore: children of relationships that no longer exist are cleaned up', async () => {
+      const conn = account({ streams: tree() });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(conn, ['acc-1:2']), ['share-oooooooooooo']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.listShareStreams(account()), [], 'no root yet: no share child');
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcFormSpec.test.js"
+/*!***********************************!*\
+  !*** ./tests/cmcFormSpec.test.js ***!
+  \***********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/cmc/formSpec.ts */ "./ts/cmc/formSpec.ts");
+/* harmony import */ var _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/Contact.ts */ "./ts/appTemplates/Contact.ts");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+
+
+
+
+
+/**
+ * Unit tests for the Plan 59 Phase 5a FormSpec helpers + the
+ * `hdsFormSpec` pass-through on Contact.aggregateCmc.
+ *
+ * I/O paths (saveFormSpec / loadFormSpec / mirror) are integration-tested
+ * against a live api-server in the Phase 6 demo iteration loop.
+ */
+
+describe('[CFSP] cmcFormSpec helpers', function () {
+  function basicSpec (overrides = {}) {
+    return {
+      version: 1,
+      title: { en: 'Hello World' },
+      description: { en: 'desc' },
+      consent: { en: 'I consent' },
+      permissions: [{ streamId: 'health', level: 'read' }],
+      sections: [{ key: 'sleep-section', type: 'recurring', name: { en: 'Sleep' }, itemKeys: ['sleep-duration'] }],
+      ...overrides
+    };
+  }
+
+  describe('[CFSC] constants', function () {
+    it('[CFS01] FORM_SPEC_EVENT_TYPE is `hds-form-spec/v1` (slash-form per Pryv events.get regex)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.FORM_SPEC_EVENT_TYPE, 'hds-form-spec/v1');
+    });
+
+    it('[CFS02] HDS_NOOP_STREAM_ID + permission match the brief', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.HDS_NOOP_STREAM_ID, 'hds-noop');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.HDS_NOOP_PERMISSION, { streamId: 'hds-noop', level: 'read' });
+    });
+  });
+
+  describe('[CFSD] deriveCmcPermissions', function () {
+    it('[CFS10] returns the FormSpec permissions when non-empty', () => {
+      const spec = basicSpec();
+      const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.deriveCmcPermissions(spec);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, [{ streamId: 'health', level: 'read' }]);
+    });
+
+    it('[CFS11] injects :hds:noop placeholder when permissions empty', () => {
+      const spec = basicSpec({ permissions: [] });
+      const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.deriveCmcPermissions(spec);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].streamId, 'hds-noop');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].level, 'read');
+    });
+
+    it('[CFS12] filters out malformed permission entries before deciding empty', () => {
+      const spec = basicSpec({ permissions: [{ streamId: '', level: 'read' }, null, { streamId: 'x' /* no level */ }] });
+      const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.deriveCmcPermissions(spec);
+      // All filtered → placeholder injected
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].streamId, 'hds-noop');
+    });
+  });
+
+  describe('[CFSI] isChatOnlyFormSpec', function () {
+    it('[CFS20] true on empty / placeholder-only specs', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.isChatOnlyFormSpec(basicSpec({ permissions: [] })), true);
+    });
+    it('[CFS21] false when real permissions present', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.isChatOnlyFormSpec(basicSpec()), false);
+    });
+    it('[CFS22] false for null / undefined input', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.isChatOnlyFormSpec(null), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.isChatOnlyFormSpec(undefined), false);
+    });
+  });
+
+  describe('[CFSR] eventToFormSpecRecord (pure helper)', function () {
+    function eventOn (streamId, content = basicSpec()) {
+      return { id: 'evt-' + streamId, streamIds: [streamId], content };
+    }
+
+    it('[CFS30] extracts collectorId from a hds-collector sub-scope', () => {
+      const rec = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.eventToFormSpecRecord(eventOn(':_cmc:apps:hds-collector:abc123'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.collectorId, 'abc123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.formSpec.title.en, 'Hello World');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.event.id, 'evt-:_cmc:apps:hds-collector:abc123');
+    });
+
+    it('[CFS31] honors a custom appCode parameter', () => {
+      const rec = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.eventToFormSpecRecord(
+        eventOn(':_cmc:apps:hds-patient:xyz'),
+        'hds-patient'
+      );
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.collectorId, 'xyz');
+    });
+
+    it('[CFS32] picks the matching stream when an event has multiple streamIds', () => {
+      const ev = { id: 'evt', streamIds: ['other-stream', ':_cmc:apps:hds-collector:formA'], content: basicSpec() };
+      const rec = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.eventToFormSpecRecord(ev);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.collectorId, 'formA');
+    });
+
+    it('[CFS33] returns the raw streamId when no matching scope marker is found (fallback)', () => {
+      const ev = { id: 'evt', streamIds: ['orphan'], content: basicSpec() };
+      const rec = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.eventToFormSpecRecord(ev);
+      // extractAppSubScopeSuffix returns the input unchanged when the prefix is missing.
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.collectorId, 'orphan');
+    });
+
+    it('[CFS34] tolerates a missing streamIds array', () => {
+      const ev = { id: 'evt', content: basicSpec() };
+      const rec = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.eventToFormSpecRecord(ev);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.collectorId, '');
+    });
+  });
+
+  describe('[CFSL] listFormSpecs', function () {
+    function fakeConnection (events) {
+      const calls = [];
+      const conn = {
+        apiOne (method, params, resultKey) {
+          calls.push({ method, params, resultKey });
+          if (method === 'events.get') return events;
+          throw new Error('unexpected apiOne method ' + method);
+        }
+      };
+      return { conn, calls };
+    }
+
+    it('[CFS40] queries the :_cmc:apps:hds-collector parent stream filtered to hds-form-spec/v1', async () => {
+      const { conn, calls } = fakeConnection([]);
+      await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.listFormSpecs(conn);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0].method, 'events.get');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[0].params.streams, [':_cmc:apps:hds-collector']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[0].params.types, ['hds-form-spec/v1']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0].params.limit, 1000);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0].resultKey, 'events');
+    });
+
+    it('[CFS41] maps every returned event to a FormSpecRecord with collectorId set', async () => {
+      const events = [
+        { id: 'e1', streamIds: [':_cmc:apps:hds-collector:form-a'], content: basicSpec({ title: { en: 'Form A' } }) },
+        { id: 'e2', streamIds: [':_cmc:apps:hds-collector:form-b'], content: basicSpec({ title: { en: 'Form B' } }) }
+      ];
+      const { conn } = fakeConnection(events);
+      const records = await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.listFormSpecs(conn);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(records.length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(records.map(r => r.collectorId), ['form-a', 'form-b']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(records[0].formSpec.title.en, 'Form A');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(records[1].event.id, 'e2');
+    });
+
+    it('[CFS42] returns [] when the api returns null/undefined', async () => {
+      const { conn } = fakeConnection(null);
+      const records = await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.listFormSpecs(conn);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(records, []);
+    });
+
+    it('[CFS43] honors a custom appCode opt', async () => {
+      const { conn, calls } = fakeConnection([]);
+      await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.listFormSpecs(conn, { appCode: 'hds-patient' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[0].params.streams, [':_cmc:apps:hds-patient']);
+    });
+
+    it('[CFS44] honors a custom limit opt', async () => {
+      const { conn, calls } = fakeConnection([]);
+      await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.listFormSpecs(conn, { limit: 50 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0].params.limit, 50);
+    });
+  });
+
+  describe('[CFSG] getFormSpecById', function () {
+    it('[CFS50] returns null when loadFormSpec finds nothing', async () => {
+      const conn = { apiOne: async () => [] };
+      const rec = await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.getFormSpecById(conn, 'missing');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec, null);
+    });
+
+    it('[CFS51] returns a FormSpecRecord with the requested collectorId when found', async () => {
+      const event = { id: 'evt-xyz', streamIds: [':_cmc:apps:hds-collector:xyz'], content: basicSpec({ title: { en: 'XYZ' } }) };
+      const calls = [];
+      const conn = {
+        apiOne (method, params, resultKey) {
+          calls.push({ method, params, resultKey });
+          return [event];
+        }
+      };
+      const rec = await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.getFormSpecById(conn, 'xyz');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(rec);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.collectorId, 'xyz');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rec.formSpec.title.en, 'XYZ');
+      // Verify the underlying loadFormSpec was scoped to the exact sub-scope stream
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[0].params.streams, [':_cmc:apps:hds-collector:xyz']);
+    });
+
+    it('[CFS52] honors a custom appCode opt', async () => {
+      const calls = [];
+      const conn = {
+        apiOne (method, params) {
+          calls.push(params);
+          return [];
+        }
+      };
+      await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.getFormSpecById(conn, 'foo', { appCode: 'hds-patient' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[0].streams, [':_cmc:apps:hds-patient:foo']);
+    });
+  });
+
+  describe('[CFSN] createInviteWithFormSpec request building', function () {
+    function inviteParams (overrides = {}) {
+      return {
+        appCode: 'hds-collector',
+        scopeStreamId: ':_cmc:apps:hds-collector:abc',
+        displayName: 'Dr Demo',
+        requestedPermissions: [{ streamId: 'health', level: 'read' }],
+        formSpec: basicSpec(),
+        ...overrides
+      };
+    }
+
+    function captureConn (calls) {
+      return {
+        apiOne (method, params, resultKey) {
+          calls.push({ method, params, resultKey });
+          return { id: 'evt-invite', content: { capabilityUrl: 'https://cap' } };
+        }
+      };
+    }
+
+    it('[CFS60] forwards accessType to the CMC request (issue #11)', async () => {
+      const calls = [];
+      await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.createInviteWithFormSpec(captureConn(calls), inviteParams({ accessType: 'app' }));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0].method, 'events.create');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0].params.content.request.accessType, 'app');
+    });
+
+    it('[CFS61] omits accessType from the request when not given (plugin default: shared)', async () => {
+      const calls = [];
+      await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.createInviteWithFormSpec(captureConn(calls), inviteParams());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('accessType' in calls[0].params.content.request));
+    });
+
+    it('[CFS62] the snapshot sent to the patient carries no openLink (its capability URL)', async () => {
+      const calls = [];
+      const openLink = { inviteEventId: 'inv', capabilityUrl: 'https://cap@x/', createdAt: 1, expiresAt: null };
+      const formSpec = { ...basicSpec(), openLink };
+      await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.createInviteWithFormSpec(captureConn(calls), inviteParams({ formSpec }));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('openLink' in calls[0].params.content.hdsFormSpec));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(formSpec.openLink, openLink, 'the doctor\'s data set keeps it');
+    });
+  });
+});
+
+describe('[CTFS] Contact.aggregateCmc hdsFormSpec pass-through', function () {
+  const SCOPE = ':_cmc:apps:hds-patient';
+
+  function counterpartyAccess (overrides = {}) {
+    const cp = {
+      username: 'drandy',
+      host: 'demo.datasafe.dev',
+      apiEndpoint: 'https://abctoken@drandy.demo.datasafe.dev/',
+      remoteChatStreamId: 'r1',
+      remoteCollectorStreamId: 'c1'
+    };
+    return {
+      id: overrides.id || 'acc-1',
+      permissions: [{ streamId: 'health', level: 'read' }],
+      clientData: {
+        cmc: {
+          role: 'counterparty',
+          appCode: 'hds-collector',
+          features: { chat: true, systemMessaging: true },
+          counterparty: cp
+        }
+      },
+      ...overrides
+    };
+  }
+
+  function acceptEvent (overrides = {}) {
+    return {
+      acceptEventId: overrides.acceptEventId || 'evt-1',
+      counterparty: { username: 'drandy', host: 'demo.datasafe.dev' },
+      appCode: 'hds-collector',
+      scopeStreamId: SCOPE,
+      acceptedAt: 1716000000,
+      features: { chat: true, systemMessaging: true },
+      ...overrides
+    };
+  }
+
+  it('[CTFS1] surfaces hdsFormSpec from the matching accept event', () => {
+    const spec = {
+      version: 1,
+      title: { en: 'Hello World' },
+      description: { en: '' },
+      permissions: [{ streamId: 'health', level: 'read' }],
+      sections: []
+    };
+    const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_2__.Contact.aggregateCmc(
+      [counterpartyAccess()],
+      [acceptEvent({ hdsFormSpec: spec })],
+      SCOPE
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcRelationships[0].hdsFormSpec, spec);
+  });
+
+  it('[CTFS2] hdsFormSpec defaults to null when accept event has none', () => {
+    const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_2__.Contact.aggregateCmc(
+      [counterpartyAccess()],
+      [acceptEvent()],
+      SCOPE
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcRelationships[0].hdsFormSpec, null);
+  });
+
+  it('[CTFS3] cmcFormSpecs getter returns specs from all chat-enabled relationships', () => {
+    const spec = { version: 1, title: { en: 'A' }, description: { en: '' }, permissions: [], sections: [{ key: 's', type: 'recurring', name: { en: 'S' }, itemKeys: [] }] };
+    const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_2__.Contact.aggregateCmc(
+      [counterpartyAccess()],
+      [acceptEvent({ hdsFormSpec: spec })],
+      SCOPE
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out[0].cmcFormSpecs, [spec]);
+  });
+
+  it('[CTFS4] cmcFormSections aggregates sections across relationships', () => {
+    const spec1 = { version: 1, title: { en: 'A' }, description: { en: '' }, permissions: [], sections: [{ key: 's1', type: 'recurring', name: { en: 'S1' }, itemKeys: ['a'] }] };
+    const spec2 = { version: 1, title: { en: 'B' }, description: { en: '' }, permissions: [], sections: [{ key: 's2', type: 'recurring', name: { en: 'S2' }, itemKeys: ['b'] }] };
+    const a1 = counterpartyAccess({ id: 'a1' });
+    const a2 = counterpartyAccess({ id: 'a2' });
+    const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_2__.Contact.aggregateCmc(
+      [a1, a2],
+      [
+        acceptEvent({ acceptEventId: 'e1', hdsFormSpec: spec1 }),
+        acceptEvent({ acceptEventId: 'e2', hdsFormSpec: spec2 })
+      ],
+      SCOPE
+    );
+    // Both relationships share the same counterparty → one Contact, two relationships.
+    // Both accept events match the same (counterparty, appCode) pair so both
+    // relationships get the FIRST matching spec. That's the documented
+    // behaviour — `matchingAccept` is `accepts.find(...)` (first match).
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcRelationships.length, 2);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcFormSections.length, 2);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out[0].cmcFormSections.map(s => s.key), ['s1', 's1']);
+  });
+});
+
+/**
+ * [CFSV] validateFormSpecItemKeys — the guard for the failure mode behind
+ * `B-2026-09-03-4`.
+ *
+ * A FormSpec names item keys directly, while events resolve through
+ * `forEvent(streamId + eventType)`. So a rename that preserves streamId and
+ * eventType orphans no stored event and reads as safe, while silently
+ * stranding every spec that named the old key. data-model 2.3.0 withdrew the
+ * `fertility-hormone-{fsh,hcg,pdg,e3g}` aliases on exactly that reasoning.
+ *
+ * The model fixtures below mirror the real published pack, so the expectations
+ * are the real ones: `fertility-hormone-lh` resolves but is deprecated onto the
+ * legacy `concentration/mg-l` unit, and its active twin
+ * `body-urine-hormones-lh` is on `concentration/iu-l`.
+ */
+describe('[CFSV] validateFormSpecItemKeys', function () {
+  function load (data) {
+    const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_3__.HDSModel('http://fake/pack.json');
+    model.loadFromObject(data);
+    return model;
+  }
+
+  function basicSpec (overrides = {}) {
+    return {
+      version: 1,
+      title: { en: 'Fertility Tracking' },
+      description: { en: 'desc' },
+      permissions: [],
+      sections: [],
+      ...overrides
+    };
+  }
+
+  function urineHormoneModel () {
+    return load({
+      items: {
+        'body-urine-hormones-e3g': {
+          version: 'v2',
+          label: { en: 'E3G (urine)' },
+          streamId: 'body-urine-hormones-e3g',
+          eventType: 'concentration/ug-l',
+          type: 'number',
+          repeatable: 'any'
+        },
+        'body-urine-hormones-lh': {
+          version: 'v2',
+          label: { en: 'LH (urine)' },
+          streamId: 'body-urine-hormones-lh',
+          eventType: 'concentration/iu-l',
+          type: 'number',
+          repeatable: 'any'
+        },
+        // Permanently kept: the rename also changed the unit, so historical
+        // mg-l events still resolve here. Shares a streamId with the active
+        // item above but NOT its eventType.
+        'fertility-hormone-lh': {
+          version: 'v1',
+          deprecated: true,
+          label: { en: 'LH (urine, legacy)' },
+          streamId: 'body-urine-hormones-lh',
+          eventType: 'concentration/mg-l',
+          type: 'number',
+          repeatable: 'any'
+        }
+      },
+      streams: [
+        { id: 'body-urine-hormones-e3g', name: 'E3G' },
+        { id: 'body-urine-hormones-lh', name: 'LH' }
+      ]
+    });
+  }
+
+  function specWithKeys (itemKeys, sectionKey = 'fertility-recurring') {
+    return basicSpec({
+      sections: [{ key: sectionKey, type: 'recurring', name: { en: 'Fertility' }, itemKeys }]
+    });
+  }
+
+  it('[CFSV1] returns [] for a spec whose keys all resolve to active items', () => {
+    const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.validateFormSpecItemKeys(
+      specWithKeys(['body-urine-hormones-e3g', 'body-urine-hormones-lh']),
+      urineHormoneModel()
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, []);
+  });
+
+  it('[CFSV2] flags a withdrawn key as `unknown` and offers no replacement', () => {
+    // The real B-2026-09-03-4 case: the pack defines nothing under this key, so
+    // there is no streamId to trace a replacement from.
+    const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.validateFormSpecItemKeys(
+      specWithKeys(['fertility-hormone-e3g']),
+      urineHormoneModel()
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out[0], { sectionKey: 'fertility-recurring', itemKey: 'fertility-hormone-e3g', reason: 'unknown' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].replacement, undefined);
+  });
+
+  it('[CFSV3] flags a deprecated key that still resolves, and names its replacement', () => {
+    // `fertility-hormone-lh` is NOT missing — it resolves, which is why an
+    // unknown-key check alone would pass this spec while the subject records
+    // LH in mg/L instead of IU/L.
+    const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.validateFormSpecItemKeys(
+      specWithKeys(['fertility-hormone-lh']),
+      urineHormoneModel()
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].reason, 'deprecated');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].itemKey, 'fertility-hormone-lh');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].replacement, 'body-urine-hormones-lh');
+  });
+
+  it('[CFSV4] withholds a replacement when several active items share the streamId', () => {
+    // Picking one would be a guess that silently changes the unit data lands in.
+    const model = load({
+      items: {
+        'urine-lh-iu': { version: 'v2', label: { en: 'a' }, streamId: 's', eventType: 'concentration/iu-l', type: 'number', repeatable: 'any' },
+        'urine-lh-ug': { version: 'v2', label: { en: 'b' }, streamId: 's', eventType: 'concentration/ug-l', type: 'number', repeatable: 'any' },
+        'legacy-lh': { version: 'v1', deprecated: true, label: { en: 'c' }, streamId: 's', eventType: 'concentration/mg-l', type: 'number', repeatable: 'any' }
+      },
+      streams: [{ id: 's', name: 'S' }]
+    });
+    const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.validateFormSpecItemKeys(specWithKeys(['legacy-lh']), model);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].reason, 'deprecated');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].replacement, undefined);
+  });
+
+  it('[CFSV5] reports every offending key, across every section, with its section key', () => {
+    // The prod spec behind B-2026-09-03-4 carried four dead keys in one
+    // section, not the single one the bug was originally filed for.
+    const spec = basicSpec({
+      sections: [
+        { key: 'fertility-recurring', type: 'recurring', name: { en: 'F' }, itemKeys: ['fertility-hormone-e3g', 'body-urine-hormones-e3g', 'fertility-hormone-lh'] },
+        { key: 'body-recurring', type: 'recurring', name: { en: 'B' }, itemKeys: ['fertility-hormone-pdg'] }
+      ]
+    });
+    const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.validateFormSpecItemKeys(spec, urineHormoneModel());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out.map(i => `${i.sectionKey}/${i.itemKey}:${i.reason}`), [
+      'fertility-recurring/fertility-hormone-e3g:unknown',
+      'fertility-recurring/fertility-hormone-lh:deprecated',
+      'body-recurring/fertility-hormone-pdg:unknown'
+    ]);
+  });
+
+  it('[CFSV7] flags a system item key as `system`, never as a renderable field', () => {
+    // `type: system` (data-model 3.13.0, e.g. `sync-status`) resolves like any
+    // item but is state written by software, so a form must skip it.
+    const model = load({
+      items: {
+        'body-weight': { version: 'v1', label: { en: 'w' }, streamId: 'body-weight', eventType: 'mass/kg', type: 'number', repeatable: 'any' },
+        'sync-status': { version: 'v1', label: { en: 's' }, streamId: 'sync-status', eventType: 'sync-status/connector-v1', type: 'system', repeatable: 'once' }
+      },
+      streams: [{ id: 'body-weight', name: 'W' }, { id: 'sync-status', name: 'S' }]
+    });
+    const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.validateFormSpecItemKeys(specWithKeys(['body-weight', 'sync-status']), model);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, [{ sectionKey: 'fertility-recurring', itemKey: 'sync-status', reason: 'system' }]);
+  });
+
+  it('[CFSV6] tolerates a spec with no sections and a section with no itemKeys', () => {
+    const model = urineHormoneModel();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.validateFormSpecItemKeys(basicSpec({ sections: [] }), model), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.validateFormSpecItemKeys(
+      basicSpec({ sections: [{ key: 's', type: 'recurring', name: { en: 'S' } }] }), model), []);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcItemReminders.test.js"
+/*!****************************************!*\
+  !*** ./tests/cmcItemReminders.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+const COLLECTORS = ':_cmc:apps:hds-collector:app-dr-x:collectors:anna--api-x';
+const SECTIONS = [
+  { key: 'profile', type: 'permanent', itemKeys: ['profile-name'] },
+  { key: 'daily', type: 'recurring', itemKeys: ['body-weight', 'treatment-basic'], itemCustomizations: { 'treatment-basic': { context: 'treatment-fertility' } } }
+];
+
+/** An account that keeps what is created, and answers events.get with it. */
+function account (events = []) {
+  const state = { events: [...events], n: 0 };
+  state.apiOne = async function (method, params) {
+    if (method === 'events.create') {
+      const e = { id: 'ev-' + (++state.n), time: 100 + state.n, ...params };
+      state.events.push(e);
+      return e;
+    }
+    if (method === 'events.get') return state.events.filter(e => params.types.includes(e.type) && e.streamIds?.some(s => params.streams.includes(s)));
+    throw new Error('unexpected ' + method);
+  };
+  return state;
+}
+
+const alert = (id, time, hds, from) => ({ id, time, type: 'notification/alert-cmc', streamIds: [COLLECTORS], content: { level: 'info', hds, ...(from ? { from } : {}) } });
+
+describe('[CREM] cmcItemReminders', function () {
+  before(async () => {
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+  });
+
+  describe('[CREM-P] pure helpers', () => {
+    it('[CREM1] content: fixed localised title and body, code, hds block; unknown locale falls back to en', () => {
+      const fr = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.buildItemReminderContent('body-weight', 'fr');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(fr.hds, { kind: 'item-reminder', itemKey: 'body-weight' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(fr.code, 'hds-item-reminder');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(fr.level, 'info');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(fr.title), ['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!JSON.stringify(fr).includes('Poids'), 'the item is never named in the event');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.buildItemReminderContent('body-weight', 'xx').body), ['en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.buildItemReminderContent(''), _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSLibError);
+    });
+
+    it('[CREM2] writer rule: an enterable item of a section of the request', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.checkItemReminder('body-weight', SECTIONS), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.checkItemReminder('body-height', SECTIONS), 'not-in-request');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.checkItemReminder('no-such-item', SECTIONS), 'unknown-item');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.checkItemReminder('sync-status', [{ itemKeys: ['sync-status'] }]), 'not-enterable');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.checkItemReminder('document', [{ itemKeys: ['document'] }]), 'not-enterable');
+    });
+
+    it('[CREM3] the entry stream is the section context when set, else the item stream; a context the form cannot write to is null', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.entryStreamOf('treatment-basic', SECTIONS[1]), 'treatment-fertility');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.entryStreamOf('treatment-basic', null), 'treatment');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.entryStreamOf('no-such-item'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.entryStreamOf('treatment-basic', { itemCustomizations: { 'treatment-basic': { context: 'body-weight' } } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.entryStreamOf('treatment-basic', { itemCustomizations: { 'treatment-basic': { context: 'no-such-stream' } } }), null);
+    });
+
+    it('[CREM4] grantCovers: the stream, a model parent, or *, at a read level', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.grantCovers([{ streamId: 'treatment-fertility', level: 'read' }], 'treatment-fertility'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.grantCovers([{ streamId: 'treatment', level: 'contribute' }], 'treatment-fertility'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.grantCovers([{ streamId: '*', level: 'read' }], 'body-weight'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.grantCovers([{ streamId: 'treatment-fertility', level: 'read' }], 'treatment'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.grantCovers([{ streamId: 'body-weight', level: 'create-only' }], 'body-weight'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.grantCovers([], 'body-weight'));
+    });
+
+    it('[CREM5] reminderAction: the section to open, or why not', () => {
+      const ctxOnly = [{ streamId: 'treatment-fertility', level: 'read' }];
+      const ok = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('treatment-basic', SECTIONS, ctxOnly);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual({ ok: ok.ok, sectionIndex: ok.sectionIndex, streamId: ok.streamId }, { ok: true, sectionIndex: 1, streamId: 'treatment-fertility' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('body-weight', SECTIONS, ctxOnly), { ok: false, reason: 'not-covered' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('body-height', SECTIONS, [{ streamId: '*', level: 'read' }]), { ok: false, reason: 'not-in-request' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('no-such-item', SECTIONS, ctxOnly), { ok: false, reason: 'unknown-item' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('body-weight', null, ctxOnly), { ok: false, reason: 'not-in-request' });
+    });
+
+    it('[CREM5b] every section listing the item is tried; a context the form cannot write to is skipped', () => {
+      const bad = { itemKeys: ['treatment-basic'], itemCustomizations: { 'treatment-basic': { context: 'body-weight' } } };
+      const plain = { itemKeys: ['treatment-basic'] };
+      const both = [bad, SECTIONS[1], plain];
+      const onlyTreatment = [{ streamId: 'treatment', level: 'read' }];
+      const ok = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('treatment-basic', both, onlyTreatment);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual({ ok: ok.ok, sectionIndex: ok.sectionIndex, streamId: ok.streamId }, { ok: true, sectionIndex: 1, streamId: 'treatment-fertility' });
+      const notFertility = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('treatment-basic', [bad, plain], onlyTreatment);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(notFertility.sectionIndex, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('treatment-basic', [bad], onlyTreatment), { ok: false, reason: 'not-enterable' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.reminderAction('treatment-basic', [bad, plain], [{ streamId: 'mood', level: 'read' }]), { ok: false, reason: 'not-covered' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.buildItemReminderContent('body-weight', 'constructor').title.en, 'Reminder');
+    });
+
+    it('[CREM6] parse: every reminder oldest first, direction from content.from; other alerts and bad ones left out', () => {
+      const from = { username: 'drx', host: 'api.x' };
+      const list = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.parseItemReminders([
+        alert('a3', 30, { kind: 'item-reminder', itemKey: 'body-weight' }, from),
+        alert('a1', 10, { kind: 'item-reminder', itemKey: 'body-weight' }),
+        alert('a2', 20, { kind: 'document-shared', eventId: 'e1' }, from),
+        alert('a4', 40, { kind: 'item-reminder', itemKey: '' }, from),
+        alert('a5', 50, { kind: 'item-reminder', itemKey: 'body-weight' }, from),
+        { id: 'm1', time: 5, type: 'message/hds-chat-v1', content: { hds: { kind: 'item-reminder', itemKey: 'body-weight' } } }
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(list.map(r => [r.alertEventId, r.direction]), [['a1', 'sent'], ['a3', 'received'], ['a5', 'received']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(list[1].from, from);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.lastRemindedAt([...list, { alertEventId: 'a0', itemKey: 'body-weight', time: 2, direction: 'sent', from: null }]), { 'body-weight': 10 });
+    });
+  });
+
+  describe('[CREM-W] posting and listing', () => {
+    it('[CREM7] postItemReminder writes the alert on the own collectors stream; listItemReminders reads it back as sent', async () => {
+      const conn = account();
+      const { alertEventId } = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.postItemReminder(conn, COLLECTORS, 'body-weight', { sections: SECTIONS, locale: 'fr' });
+      const e = conn.events.find(x => x.id === alertEventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(e.streamIds, [COLLECTORS]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(e.type, 'notification/alert-cmc');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(e.content.hds, { kind: 'item-reminder', itemKey: 'body-weight' });
+      const list = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.listItemReminders(conn, COLLECTORS);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(list.map(r => [r.itemKey, r.direction]), [['body-weight', 'sent']]);
+    });
+
+    it('[CREM8] postItemReminder refuses what the writer rule refuses, and a missing stream, without writing', async () => {
+      const conn = account();
+      for (const [key, reason] of [['body-height', 'not-in-request'], ['no-such-item', 'unknown-item']]) {
+        await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.postItemReminder(conn, COLLECTORS, key, { sections: SECTIONS }), e => e instanceof _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSLibError && e.innerObject?.reason === reason);
+      }
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcItemReminders.postItemReminder(conn, '', 'body-weight', { sections: SECTIONS }), _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSLibError);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.events.length, 0);
+    });
   });
 });
 
@@ -42191,6 +47714,1036 @@ describe('[CSCP] cmcScope', function () {
 
 /***/ },
 
+/***/ "./tests/codedMedicationTemplate.test.js"
+/*!***********************************************!*\
+  !*** ./tests/codedMedicationTemplate.test.js ***!
+  \***********************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/CollectorRequest.ts */ "./ts/appTemplates/CollectorRequest.ts");
+
+
+
+
+/**
+ * Self-contained integration test for CollectorRequest + Questionnaire parsing
+ * of a template that bundles a coded-medication questionnaire.
+ *
+ * The fixture below is synthetic and lives entirely in this file — no external
+ * or workspace files are read, so the suite is hermetic and CI-safe. ATC codes
+ * are public WHO classification reference data.
+ */
+
+const TRIMESTER_SUBFIELD = {
+  type: 'select-segmented',
+  label: { en: 'Trimester', fr: 'Trimestre' },
+  options: [
+    { value: 'T1', label: { en: 'T1' } },
+    { value: 'T2', label: { en: 'T2' } },
+    { value: 'T3', label: { en: 'T3' } },
+    { value: '9', label: { en: 'Unknown', fr: 'Inconnu' } }
+  ]
+};
+
+// Question key → ATC code (public WHO reference data).
+const ATC = {
+  progesterone: 'G03DA04',
+  metformin: 'A10BA02',
+  aspirin: 'B01AC06'
+};
+
+function drugQuestion (label, atc) {
+  return {
+    label: { en: label },
+    itemRef: 'medication-intake-coded',
+    params: { drug: { codes: [{ system: 'ATC', code: atc }] } },
+    scope: { type: 'ever' },
+    subField: TRIMESTER_SUBFIELD
+  };
+}
+
+function makeTemplate () {
+  return {
+    id: 'sample-coded-meds',
+    title: { en: 'Sample Coded Medication Cohort', fr: 'Cohorte médication codée (exemple)' },
+    description: { en: 'Synthetic template exercising coded-medication questionnaire parsing.' },
+    chat: true,
+    sections: [
+      { key: 'daily', type: 'recurring', name: { en: 'Daily chart' }, itemKeys: ['fertility-cycles-start'] },
+      { key: 'baseline', type: 'permanent', name: { en: 'Baseline' }, itemKeys: ['fertility-cycles-peak-day'] }
+    ],
+    questionnaires: [
+      {
+        title: { en: 'Medications taken' },
+        description: { en: 'Which of these medications have you taken?' },
+        questions: {
+          progesterone: drugQuestion('Progesterone', ATC.progesterone),
+          metformin: drugQuestion('Metformin', ATC.metformin),
+          aspirin: drugQuestion('Aspirin', ATC.aspirin)
+        }
+      }
+    ]
+  };
+}
+
+describe('[CMQT] coded-medication questionnaire template', function () {
+  this.timeout(8000);
+
+  before(async () => {
+    await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_0__.initHDSModel)();
+  });
+
+  it('[CMQT-1] template loads as a valid CollectorRequest', () => {
+    const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(makeTemplate());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.title.en, 'Sample Coded Medication Cohort');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.sections.length, 2);
+  });
+
+  it('[CMQT-2] bundles exactly one questionnaire', () => {
+    const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(makeTemplate());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r.questionnaires.length, 1);
+  });
+
+  it('[CMQT-3] questionnaire exposes the expected drug questions with stable keys', () => {
+    const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(makeTemplate());
+    const q = r.getQuestionnaire(0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(q.questionKeys.sort(), ['aspirin', 'metformin', 'progesterone']);
+  });
+
+  it('[CMQT-4] each question targets medication-intake-coded with an ATC code', () => {
+    const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(makeTemplate());
+    const q = r.getQuestionnaire(0);
+    for (const key of q.questionKeys) {
+      const def = q.getQuestion(key);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(def.itemRef, 'medication-intake-coded', `${key} itemRef`);
+      const codes = def.params?.drug?.codes;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(Array.isArray(codes) && codes.length === 1, `${key} has one code`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(codes[0].system, 'ATC', `${key} ATC system`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(codes[0].code, /^[A-Z][0-9A-Z]+$/, `${key} ATC pattern`);
+    }
+  });
+
+  it('[CMQT-5] each question carries the T1/T2/T3/9 sub-field', () => {
+    const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(makeTemplate());
+    const q = r.getQuestionnaire(0);
+    for (const key of q.questionKeys) {
+      const def = q.getQuestion(key);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(def.subField.type, 'select-segmented');
+      const vals = def.subField.options.map(o => String(o.value)).sort();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(vals, ['9', 'T1', 'T2', 'T3'], `${key} options`);
+    }
+  });
+
+  it('[CMQT-6] scope is ever', () => {
+    const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(makeTemplate());
+    const q = r.getQuestionnaire(0);
+    for (const key of q.questionKeys) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(q.getQuestion(key).scope, { type: 'ever' });
+    }
+  });
+
+  it('[CMQT-7] full content roundtrip preserves the questionnaire', () => {
+    const r1 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(makeTemplate());
+    const c = r1.content;
+    const r2 = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(c);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r2.questionnaires.length, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(r2.getQuestionnaire(0).questionKeys.length, 3);
+  });
+
+  it('[CMQT-8] ATC codes survive a content roundtrip per question key', () => {
+    const r = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(makeTemplate());
+    const q = new _ts_appTemplates_CollectorRequest_ts__WEBPACK_IMPORTED_MODULE_2__.CollectorRequest(r.content).getQuestionnaire(0);
+    for (const [key, atc] of Object.entries(ATC)) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(q.getQuestion(key).params.drug.codes[0].code, atc, key);
+    }
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/connectors.test.js"
+/*!**********************************!*\
+  !*** ./tests/connectors.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/appTemplates/connectors.ts */ "./ts/appTemplates/connectors.ts");
+/* harmony import */ var _ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/hookExecutor.ts */ "./ts/appTemplates/hookExecutor.ts");
+/* harmony import */ var _ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/appTemplates/offerStreams.ts */ "./ts/appTemplates/offerStreams.ts");
+/* eslint-disable no-template-curly-in-string */
+
+
+
+
+
+const NOW = 1_800_000_000;
+
+/** Connection stub: answers each call with `handler(method, params)`, records the calls. */
+function fakeConnection (handler) {
+  const calls = [];
+  return {
+    calls,
+    endpoint: 'https://alice.core.test/',
+    async api (batch) {
+      return batch.map(({ method, params }) => {
+        calls.push({ method, params });
+        return handler(method, params);
+      });
+    }
+  };
+}
+
+describe('[CONN] connectors: matching rule', function () {
+  it('[CN01] maps catalogue ids and CMC app codes both ways', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorCmcAppCode)('bridge-mira'), 'hds-bridge-mira');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorCmcAppCode)('hds-webapp'), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorIdFromCmcAppCode)('hds-bridge-mira'), 'bridge-mira');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorIdFromCmcAppCode)('hds-collector'), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorIdFromCmcAppCode)(null), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorAccessName)('bridge-mira'), 'bridge-mira-connect');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.syncStatusLeafFor)('bridge-mira'), 'sync-status-mira');
+  });
+
+  it('[CN02b] a plain-access connector\'s access is `shared` (created without a type): it matches; personal never does', () => {
+    const found = (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.findConnectorAccesses)([
+      { id: 's1', type: 'shared', name: 'bridge-tempdrop', created: 10 },
+      { id: 'p1', type: 'personal', name: 'bridge-tempdrop', created: 20 },
+      { id: 's2', type: 'shared', name: 'bridge-tempdrop-connect', created: 30 }
+    ], 'bridge-tempdrop');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(found.map(f => [f.access.id, f.kind]), [['s1', 'legacy']]);
+  });
+
+  it('[CN02] finds CMC and legacy connections, newest first, skipping deleted, expired and others', () => {
+    const cmc = (id, appCode, extra = {}) => ({ id, type: 'shared', name: 'hds-webapp-' + id, created: extra.created ?? 1, clientData: { cmc: { role: 'counterparty', appCode } }, ...extra });
+    const accesses = [
+      cmc('a1', 'hds-bridge-mira', { created: 10 }),
+      cmc('a2', 'hds-bridge-mira', { created: 20 }),
+      cmc('a3', 'hds-bridge-mira', { deleted: 5 }),
+      cmc('a4', 'hds-bridge-mira', { expires: NOW - 1 }),
+      cmc('a5', 'hds-collector'),
+      cmc('a6', null),
+      { id: 'l1', type: 'app', name: 'bridge-mira', created: 15 },
+      { id: 'l2', type: 'shared', name: 'bridge-mira' },
+      { id: 'l3', type: 'app', name: 'bridge-mira-connect' },
+      // a counterparty access is never a legacy match, whatever its name
+      { id: 'l4', type: 'app', name: 'bridge-mira', clientData: { cmc: { role: 'counterparty', appCode: 'hds-collector' } } }
+    ];
+    const found = (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.findConnectorAccesses)(accesses, 'bridge-mira', NOW);
+    // l2: bridge accesses are created without a type, so the core makes them `shared` (2.9.1)
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(found.map(f => [f.access.id, f.kind]), [['a2', 'cmc'], ['l1', 'legacy'], ['a1', 'cmc'], ['l2', 'legacy']]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.findConnectorAccesses)(accesses, 'bridge-tempdrop', NOW), []);
+  });
+});
+
+describe('[CONA] connectors: connector access', function () {
+  const LEAF = 'sync-status-mira';
+
+  it('[CA01] refuses anything but exactly read on the leaf (core-injected entries ignored)', () => {
+    const ok = { id: 'x', type: 'app', permissions: [{ streamId: LEAF, level: 'read' }, { streamId: ':_system:account', level: 'none' }, { streamId: ':_audit:access-x', level: 'read' }, { feature: 'selfRevoke', setting: 'forbidden' }] };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorAccessRefusal)(ok, LEAF, NOW), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorAccessRefusal)({ ...ok, type: 'shared' }, LEAF, NOW), /type is shared/);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorAccessRefusal)({ ...ok, expires: NOW - 1 }, LEAF, NOW), 'expired');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.connectorAccessRefusal)({ ...ok, permissions: [{ streamId: LEAF, level: 'manage' }] }, LEAF, NOW), /not exactly read/);
+  });
+
+  it('[CA02] reuses an exact access, never a broader one, and creates beside a refused one', async () => {
+    const accesses = [
+      { id: 'b', type: 'app', name: 'bridge-mira-connect', token: 'broad', permissions: [{ streamId: '*', level: 'manage' }] }
+    ];
+    const conn = fakeConnection((method, params) => {
+      if (method === 'accesses.get') return { accesses };
+      if (method === 'accesses.create') return { access: { id: 'n', name: params.name, token: 'fresh' } };
+      throw new Error('unexpected ' + method);
+    });
+    const endpoint = await (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.getOrCreateConnectorAccess)(conn, 'bridge-mira', LEAF);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(endpoint, 'https://fresh@alice.core.test/');
+    const create = conn.calls.find(c => c.method === 'accesses.create');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(create.params.name, /^bridge-mira-connect-[0-9a-f]{4}$/);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(create.params.permissions, [{ streamId: LEAF, level: 'read' }]);
+
+    accesses.push({ id: 'e', type: 'app', name: 'bridge-mira-connect-00ff', apiEndpoint: 'https://exact@alice.core.test/', permissions: [{ streamId: LEAF, level: 'read' }] });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.getOrCreateConnectorAccess)(conn, 'bridge-mira', LEAF), 'https://exact@alice.core.test/');
+  });
+});
+
+describe('[CONS] connectors: disconnected status', function () {
+  const LEAF = 'sync-status-mira';
+
+  it('[CS01] carries the schema fields only', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.disconnectedStatusContent)(null), { status: 'disconnected' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.disconnectedStatusContent)({ status: 'bogus', connectedAt: 1 }), { status: 'disconnected' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.disconnectedStatusContent)({
+      status: 'active',
+      connectedAt: 1.5,
+      lastRunAt: 2,
+      lastSuccessAt: 3,
+      syncedUntil: 4,
+      stray: 'x',
+      lastError: { class: 'upstream', code: 'Bad Code', at: 5 }
+    }), { status: 'disconnected', connectedAt: 1, lastRunAt: 2, lastSuccessAt: 3, syncedUntil: 4, lastError: { class: 'upstream', at: 5 } });
+  });
+
+  it('[CS02] updates the latest event in place and trashes duplicates', async () => {
+    const conn = fakeConnection((method) => {
+      if (method === 'events.get') return { events: [{ id: 'e2', content: { status: 'active', connectedAt: 7 } }, { id: 'e1', content: {} }] };
+      return {};
+    });
+    const content = await (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.markConnectorDisconnected)(conn, LEAF);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(content, { status: 'disconnected', connectedAt: 7 });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[0].params, { streams: [LEAF], types: [_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.CONNECTOR_STATUS_TYPE], limit: 10 });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[1], { method: 'events.update', params: { id: 'e2', update: { content } } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[2], { method: 'events.delete', params: { id: 'e1' } });
+  });
+
+  it('[CS03] creates the event when there is none, and throws on an API error', async () => {
+    const conn = fakeConnection((method) => (method === 'events.get' ? { events: [] } : { event: { id: 'n' } }));
+    await (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.markConnectorDisconnected)(conn, LEAF);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(conn.calls[1], { method: 'events.create', params: { streamIds: [LEAF], type: _ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.CONNECTOR_STATUS_TYPE, content: { status: 'disconnected' } } });
+
+    const failing = fakeConnection(() => ({ error: { id: 'forbidden' } }));
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_1__.markConnectorDisconnected)(failing, LEAF), (e) => e.id === 'forbidden');
+  });
+});
+
+describe('[CONH] connectors: hook executor', function () {
+  const API_ENDPOINT = 'https://token-abc@alice.core.test/';
+  const RETURN_URL = 'https://account.test/connect/return?nonce=abc';
+  const miraHook = {
+    initiate: { method: 'POST', url: 'https://bridge.test/mira/initiate', auth: 'ApiEndpoint ${apiEndpoint}', body: { returnUrl: '${returnUrl}', fixed: 1 }, openUrlField: 'openUrl' },
+    open: { url: '${openUrl}', embed: false },
+    resync: { initiate: { method: 'POST', url: 'https://bridge.test/mira/resync', auth: 'ApiEndpoint ${apiEndpoint}', body: { returnUrl: '${returnUrl}' } }, url: '${openUrl}', embed: false },
+    disconnect: { method: 'POST', url: 'https://bridge.test/mira/revoke', auth: 'ApiEndpoint ${apiEndpoint}' }
+  };
+  const embedHook = { open: { url: 'https://files.test/cyclefem', embed: true, params: { apiEndpoint: '${apiEndpoint}', return: '${returnUrl}' } } };
+  const ctx = (o = {}) => ({ apiEndpoint: API_ENDPOINT, returnUrl: RETURN_URL, mode: 'connect', embeddable: true, ...o });
+
+  let realFetch;
+  let fetched;
+  function stubFetch (respond) {
+    fetched = [];
+    globalThis.fetch = async (url, init) => {
+      fetched.push({ url, init });
+      return respond(url, init);
+    };
+  }
+  beforeEach(() => { realFetch = globalThis.fetch; });
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it('[CH01] expand substitutes variables and names an unknown one', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.expand)('${a}/${b}', { a: 'x', b: 'y' }), 'x/y');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.expand)('${nope}', {}), (e) => e instanceof _ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.UnresolvedVariableError && e.variable === 'nope');
+  });
+
+  it('[CH02] embeds with expanded params, or redirects when not embeddable', async () => {
+    const embedded = await (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(embedHook, ctx());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(embedded.mode, 'iframe');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(embedded.allowedOrigin, 'https://files.test');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(new URL(embedded.finalUrl).searchParams.get('apiEndpoint'), API_ENDPOINT);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((await (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(embedHook, ctx({ embeddable: false }))).mode, 'redirect');
+  });
+
+  it('[CH03] runs initiate (auth + expanded body) and opens the returned URL', async () => {
+    stubFetch(() => new Response(JSON.stringify({ openUrl: 'https://partner.test/oauth?x=1' }), { status: 200 }));
+    const res = await (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(fetched[0].url, 'https://bridge.test/mira/initiate');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(fetched[0].init.headers.Authorization, 'ApiEndpoint ' + API_ENDPOINT);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(JSON.parse(fetched[0].init.body), { returnUrl: RETURN_URL, fixed: 1 });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.finalUrl, 'https://partner.test/oauth?x=1');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.mode, 'redirect');
+  });
+
+  it('[CH04] resync mode runs the resync initiate', async () => {
+    stubFetch(() => new Response(JSON.stringify({ openUrl: 'https://partner.test/re' }), { status: 200 }));
+    const res = await (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx({ mode: 'resync' }));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(fetched[0].url, 'https://bridge.test/mira/resync');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.finalUrl, 'https://partner.test/re');
+  });
+
+  it('[CH05] initiate failures are HookInitiateError', async () => {
+    stubFetch(() => new Response('boom', { status: 500 }));
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx()), _ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.HookInitiateError);
+    stubFetch(() => { throw new Error('connect refused'); });
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx()), (e) => e instanceof _ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.HookInitiateError && /connect refused/.test(e.reason));
+    stubFetch(() => new Response(JSON.stringify({ other: 1 }), { status: 200 }));
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx()), /openUrl missing/);
+  });
+
+  it('[CH06] disconnect is best-effort: posts with auth, swallows HTTP and network errors, no-op without a step', async () => {
+    stubFetch(() => new Response('', { status: 503 }));
+    await (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeDisconnect)(miraHook, ctx());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(fetched[0].url, 'https://bridge.test/mira/revoke');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(fetched[0].init.method, 'POST');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(fetched[0].init.headers.Authorization, 'ApiEndpoint ' + API_ENDPOINT);
+    stubFetch(() => { throw new Error('down'); });
+    await (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeDisconnect)(miraHook, ctx());
+    stubFetch(() => { throw new Error('must not be called'); });
+    await (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeDisconnect)(embedHook, ctx());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(fetched.length, 0);
+  });
+});
+
+describe('[CONO] connectors: offer streams', function () {
+  const model = {
+    data: {
+      body: { name: 'Body', parentId: null },
+      'body-temperature': { name: 'Temperature', parentId: 'body' },
+      'body-temperature-basal': { name: 'Basal', parentId: 'body-temperature' },
+      'sync-status': { name: 'Sync status', parentId: null },
+      'sync-status-mira': { name: 'Mira', parentId: 'sync-status' }
+    },
+    getDataById (id) { return this.data[id] ?? null; },
+    getParentsIds (id) {
+      const out = [];
+      let p = this.data[id]?.parentId;
+      while (p != null) { out.unshift(p); p = this.data[p]?.parentId; }
+      return out;
+    }
+  };
+
+  it('[CO01] creates ancestors first, keeps granted unknown roots, skips system streams', () => {
+    const streams = (0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToCreate)([
+      { streamId: 'body-temperature-basal' },
+      { streamId: 'sync-status-mira' },
+      { streamId: 'bridge-mira' },
+      { streamId: ':_cmc:apps:hds-patient' }
+    ], model);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(streams.map(s => s.id), ['body', 'body-temperature', 'body-temperature-basal', 'sync-status', 'sync-status-mira', 'bridge-mira']);
+    const calls = (0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToApiCalls)(streams);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[0], { method: 'streams.create', params: { id: 'body', name: 'Body' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[1].params, { id: 'body-temperature', name: 'Temperature', parentId: 'body' });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/contact.test.js"
+/*!*******************************!*\
+  !*** ./tests/contact.test.js ***!
+  \*******************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/appTemplates/Contact.ts */ "./ts/appTemplates/Contact.ts");
+
+
+
+/**
+ * Unit tests for the post-plan-61 CMC-only Contact class.
+ *
+ * Surfaces under test:
+ * - constructor + addAccessObject (raw access tracking)
+ * - initStreamCache + eventIsAccessible (access-permission-derived stream cache)
+ * - eventIsFromContact (modifiedBy attribution including replaced-access chain
+ *   and Plan 66 composite ids)
+ * - aggregateCmc + cmc* getters (Plan 59 Phase 5a)
+ */
+
+describe('[CTCT] Contact class', function () {
+  describe('[CTCS] constructor', function () {
+    it('[CTA1] should create an empty contact', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('dr-alice', 'Dr. Alice');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.remoteUsername, 'dr-alice');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.displayName, 'Dr. Alice');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.accessObjects, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.cmcRelationships, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.counterparty, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.kind, 'unknown');
+    });
+
+    it('[CTA2] isPerson reflects remoteUsername presence', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U').isPerson, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact(null, 'bridge').isPerson, false);
+    });
+  });
+
+  describe('[CTAO] addAccessObject', function () {
+    it('[CTAB] adds access objects and dedups by id', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [] });
+      c.addAccessObject({ id: 'a1', permissions: [] });
+      c.addAccessObject({ id: 'a2', permissions: [] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.accessObjects.length, 2);
+    });
+
+    it('[CTAC] accessIds is derived from accessObjects', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1' });
+      c.addAccessObject({ id: 'a2' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.accessIds.sort(), ['a1', 'a2']);
+    });
+  });
+
+  describe('[CTSC] initStreamCache & eventIsAccessible', function () {
+    const streamsById = {
+      health: { id: 'health', children: [{ id: 'health-bp', children: [] }] },
+      diary: { id: 'diary', children: [] },
+      'health-bp': { id: 'health-bp', children: [] }
+    };
+
+    it('[CTAL] eventIsAccessible returns false before initStreamCache', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['health'] }), false);
+    });
+
+    it('[CTAM] matches events in permitted streams and children', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'health', level: 'read' }] });
+      c.initStreamCache(streamsById);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['health'] }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['health-bp'] }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['diary'] }), false);
+    });
+
+    it('[CTAN] wildcard permission matches everything', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: '*', level: 'manage' }] });
+      c.initStreamCache(streamsById);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['anything'] }), true);
+    });
+
+    it('[CTAO2] skips deleted accesses', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', deleted: true, permissions: [{ streamId: 'health', level: 'read' }] });
+      c.initStreamCache(streamsById);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['health'] }), false);
+    });
+
+    it('[CTAP2] handles events with no streamIds', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'health', level: 'read' }] });
+      c.initStreamCache(streamsById);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({}), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: null }), false);
+    });
+
+    it('[CTAP3] granted root is accessible even when the stream does not exist yet (B-2026-07-02)', () => {
+      // Item streams are auto-created on first entry, AFTER the cache is
+      // built — the granted root must still match or first entries are
+      // invisible until the next contact rebuild.
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'body-weight', level: 'read' }] });
+      c.initStreamCache(streamsById); // 'body-weight' absent from streamsById
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['body-weight'] }), true);
+    });
+  });
+
+  describe('[CTEF] eventIsFromContact', function () {
+    it('[CTAQ] matches events modified by contact access', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1' });
+      c.addAccessObject({ id: 'a2' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a2' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'other' }), false);
+    });
+
+    it('[CTAQ2] matches events from previous (replaced) accesses via clientData chain', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({
+        id: 'a3-new',
+        clientData: {
+          hdsCollectorClient: {
+            version: 0,
+            previousAccessIds: ['a1-old', 'a2-older']
+          }
+        }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a3-new' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1-old' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a2-older' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'unknown' }), false);
+    });
+
+    it('[CTAQ3] matches across Plan 66 composite ids (base-only equality)', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1:2' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1:1' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1:2' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'b1:0' }), false);
+    });
+
+    it('[CTAR] matches across legacy bridge-access recreate chain (clientData.previousAccessIds)', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact(null, 'bridge');
+      c.addAccessObject({
+        id: 'b2',
+        clientData: { previousAccessIds: ['b1', 'b0'] }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'b0' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'b1' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'b2' }), true);
+    });
+  });
+
+  describe('[CTCM] CMC Contact aggregator', function () {
+    const SCOPE = ':_cmc:apps:hds-patient';
+
+    function counterpartyAccess (overrides = {}) {
+      const cp = {
+        username: 'drandy',
+        host: 'demo.datasafe.dev',
+        apiEndpoint: 'https://abctoken@drandy.demo.datasafe.dev/',
+        remoteChatStreamId: ':_cmc:apps:hds-collector:foo:chats:pthdstest--demo-datasafe-dev',
+        remoteCollectorStreamId: ':_cmc:apps:hds-collector:foo:collectors:pthdstest--demo-datasafe-dev',
+        ...(overrides.counterpartyOverrides || {})
+      };
+      const cmc = {
+        role: 'counterparty',
+        appCode: 'hds-collector',
+        features: { chat: true, systemMessaging: true },
+        counterparty: cp,
+        ...(overrides.cmcOverrides || {})
+      };
+      return {
+        id: overrides.id || 'acc-cp-1',
+        apiEndpoint: 'irrelevant',
+        permissions: overrides.permissions ?? [{ streamId: 'health', level: 'read' }],
+        deleted: overrides.deleted ?? null,
+        clientData: { cmc }
+      };
+    }
+
+    function acceptEvent (overrides = {}) {
+      return {
+        acceptEventId: overrides.acceptEventId || 'evt-accept-1',
+        counterparty: overrides.counterparty || { username: 'drandy', host: 'demo.datasafe.dev' },
+        appCode: overrides.appCode || 'hds-collector',
+        scopeStreamId: SCOPE,
+        acceptedAt: overrides.acceptedAt ?? 1716000000,
+        features: overrides.features || { chat: true, systemMessaging: true },
+        backChannelAccessId: overrides.backChannelAccessId || 'acc-cp-1'
+      };
+    }
+
+    it('[CTM1] cmcDetectKind splits person vs service by hds-bridge- prefix', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.cmcDetectKind('hds-collector'), 'person');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.cmcDetectKind('hds-patient'), 'person');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.cmcDetectKind('hds-bridge-mira'), 'service');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.cmcDetectKind('hds-bridge-athenahealth'), 'service');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.cmcDetectKind(null), 'unknown');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.cmcDetectKind(undefined), 'unknown');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.cmcDetectKind(''), 'unknown');
+    });
+
+    it('[CTM2] aggregateCmc returns empty when no counterparty accesses', () => {
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([], [], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, []);
+    });
+
+    it('[CTM3] aggregateCmc skips deleted accesses', () => {
+      const a = counterpartyAccess({ deleted: { reason: 'revoked' } });
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a], [acceptEvent()], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, []);
+    });
+
+    it('[CTM4] aggregateCmc skips accesses without cmc.role === counterparty', () => {
+      const a = counterpartyAccess({ cmcOverrides: { role: 'requester' } });
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a], [], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, []);
+    });
+
+    it('[CTM5] aggregateCmc builds one Contact + one relationship from one access', () => {
+      const a = counterpartyAccess();
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a], [acceptEvent()], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+      const c = out[0];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.counterparty.username, 'drandy');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.counterparty.host, 'demo.datasafe.dev');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.kind, 'person');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.cmcRelationships.length, 1);
+      const rel = c.cmcRelationships[0];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rel.accessId, 'acc-cp-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rel.acceptEventId, 'evt-accept-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rel.counterpartyApiEndpoint, 'https://abctoken@drandy.demo.datasafe.dev/');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rel.appCode, 'hds-collector');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(rel.features, { chat: true, systemMessaging: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rel.acceptedAt, 1716000000);
+      // localChatStreamId derives from the relationship's real scope (the
+      // remote chat stream's scope), not the generic patient app scope.
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rel.localChatStreamId, ':_cmc:apps:hds-collector:foo:chats:drandy--demo-datasafe-dev');
+      // aggregator populates accessObjects too
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.accessObjects.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.accessObjects[0].id, 'acc-cp-1');
+    });
+
+    it('[CTM5b] localChatStreamId prefers the server-granted :chats: contribute permission', () => {
+      const granted = ':_cmc:apps:hds-collector:app-x:chats:drandy--demo-datasafe-dev';
+      const a = counterpartyAccess({
+        permissions: [
+          { streamId: 'health', level: 'read' },
+          { streamId: granted, level: 'contribute' }
+        ]
+      });
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a], [acceptEvent()], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcRelationships[0].localChatStreamId, granted);
+    });
+
+    it('[CTM5c] chatEventInfos classifies by content.from within the local chat stream', () => {
+      const a = counterpartyAccess();
+      const c = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a], [acceptEvent()], SCOPE)[0];
+      const local = c.cmcRelationships[0].localChatStreamId;
+      // outgoing trigger: no `from` → me
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.chatEventInfos({ streamIds: [local], content: { content: 'hi' } }), { source: 'me' });
+      // delivered incoming: plugin-stamped `from` → contact
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.chatEventInfos({ streamIds: [local], content: { from: { username: 'drandy' }, content: 'hi' } }), { source: 'contact' });
+      // unrelated stream → unknown
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.chatEventInfos({ streamIds: ['other'], content: {} }), { source: 'unknown' });
+    });
+
+    it('[CTM6] aggregateCmc groups multiple accesses from the same counterparty into one Contact', () => {
+      const a1 = counterpartyAccess({ id: 'acc-cp-1' });
+      const a2 = counterpartyAccess({ id: 'acc-cp-2', permissions: [{ streamId: 'sleep', level: 'read' }] });
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a1, a2], [acceptEvent()], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcRelationships.length, 2);
+    });
+
+    // B-2026-10-14-1: two data sets from the same doctor each keep their own accept.
+    it('[CTM6b] two data sets from one counterparty match their own accept (clientData.cmc.acceptEventId)', () => {
+      const a1 = counterpartyAccess({ id: 'acc-cp-1', cmcOverrides: { acceptEventId: 'evt-accept-1' } });
+      const a2 = counterpartyAccess({ id: 'acc-cp-2', cmcOverrides: { acceptEventId: 'evt-accept-2' } });
+      const e1 = { ...acceptEvent({ acceptEventId: 'evt-accept-1', acceptedAt: 1716000000 }), dataGrantAccessId: 'acc-cp-1', hdsFormSpec: { title: 'first' } };
+      const e2 = { ...acceptEvent({ acceptEventId: 'evt-accept-2', acceptedAt: 1717000000 }), dataGrantAccessId: 'acc-cp-2', hdsFormSpec: { title: 'second' } };
+      const rels = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a1, a2], [e1, e2], SCOPE)[0].cmcRelationships;
+      const byId = Object.fromEntries(rels.map(r => [r.accessId, r]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(byId['acc-cp-1'].acceptEventId, 'evt-accept-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(byId['acc-cp-1'].hdsFormSpec.title, 'first');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(byId['acc-cp-2'].acceptEventId, 'evt-accept-2');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(byId['acc-cp-2'].hdsFormSpec.title, 'second');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(byId['acc-cp-2'].acceptedAt, 1717000000);
+    });
+
+    it('[CTM6c] without the access stamp, matches on dataGrantAccessId (Plan 66 composite ids)', () => {
+      const a1 = counterpartyAccess({ id: 'acc-cp-1:2' });
+      const a2 = counterpartyAccess({ id: 'acc-cp-2' });
+      const e1 = { ...acceptEvent({ acceptEventId: 'evt-accept-1' }), dataGrantAccessId: 'acc-cp-1' };
+      const e2 = { ...acceptEvent({ acceptEventId: 'evt-accept-2' }), dataGrantAccessId: 'acc-cp-2' };
+      const rels = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a1, a2], [e2, e1], SCOPE)[0].cmcRelationships;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rels.find(r => r.accessId === 'acc-cp-1:2').acceptEventId, 'evt-accept-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(rels.find(r => r.accessId === 'acc-cp-2').acceptEventId, 'evt-accept-2');
+    });
+
+    it('[CTM6d] the (counterparty, appCode) fallback never borrows an accept that names another grant', () => {
+      const legacy = counterpartyAccess({ id: 'acc-cp-legacy' });
+      const named = { ...acceptEvent({ acceptEventId: 'evt-other' }), dataGrantAccessId: 'acc-cp-other' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([legacy], [named], SCOPE)[0].cmcRelationships[0].acceptEventId, null);
+      const old = acceptEvent({ acceptEventId: 'evt-old' }); // older accept: no dataGrantAccessId
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([legacy], [named, old], SCOPE)[0].cmcRelationships[0].acceptEventId, 'evt-old');
+    });
+
+    it('[CTM6n] a contact is named by the requester\'s name on its most recent accept carrying one, else by the username (B-2026-11-02-15)', () => {
+      const a1 = counterpartyAccess({ id: 'acc-cp-1', cmcOverrides: { acceptEventId: 'evt-accept-1' } });
+      const a2 = counterpartyAccess({ id: 'acc-cp-2', cmcOverrides: { acceptEventId: 'evt-accept-2' } });
+      const a3 = counterpartyAccess({ id: 'acc-cp-3', cmcOverrides: { acceptEventId: 'evt-accept-3' } });
+      const unnamed = acceptEvent({ acceptEventId: 'evt-accept-1', acceptedAt: 1716900000 });
+      const newer = { ...acceptEvent({ acceptEventId: 'evt-accept-2', acceptedAt: 1716500000 }), requesterName: 'Dr Andy' };
+      const older = { ...acceptEvent({ acceptEventId: 'evt-accept-3', acceptedAt: 1716000000 }), requesterName: 'Andy (clinic)' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a1], [unnamed], SCOPE)[0].displayName, 'drandy');
+      for (const order of [[a1, a2, a3], [a3, a2, a1]]) {
+        const c = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc(order, [unnamed, newer, older], SCOPE)[0];
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.displayName, 'Dr Andy');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.remoteUsername, 'drandy');
+      }
+    });
+
+    it('[CTM7] aggregateCmc puts different counterparties into different Contacts', () => {
+      const a1 = counterpartyAccess({ id: 'acc-cp-1' });
+      const a2 = counterpartyAccess({
+        id: 'acc-cp-2',
+        counterpartyOverrides: { username: 'drother', host: 'demo.datasafe.dev' }
+      });
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a1, a2], [], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 2);
+    });
+
+    it('[CTM8] aggregateCmc marks bridge contacts as kind=service', () => {
+      const a = counterpartyAccess({
+        cmcOverrides: { appCode: 'hds-bridge-mira', features: { chat: false } },
+        counterpartyOverrides: { username: 'bridgemiratest', host: 'demo.datasafe.dev' }
+      });
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a], [], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].kind, 'service');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].counterparty.username, 'bridgemiratest');
+    });
+
+    it('[CTM9] aggregateCmc tolerates missing accept events (acceptedAt: null)', () => {
+      const a = counterpartyAccess();
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a], [], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcRelationships[0].acceptedAt, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcRelationships[0].acceptEventId, null);
+    });
+
+    it('[CTMA] aggregateCmc drops ghost accept events (Q-C2): accepts without matching access', () => {
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([], [acceptEvent()], SCOPE);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, []);
+    });
+
+    it('[CTMB] cmcAllPermissions dedupes across relationships', () => {
+      const a1 = counterpartyAccess({
+        id: 'a1',
+        permissions: [{ streamId: 'health', level: 'read' }, { streamId: 'sleep', level: 'read' }]
+      });
+      const a2 = counterpartyAccess({
+        id: 'a2',
+        permissions: [{ streamId: 'sleep', level: 'read' }, { streamId: 'mood', level: 'contribute' }]
+      });
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a1, a2], [], SCOPE);
+      const perms = out[0].cmcAllPermissions;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(perms.length, 3);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(perms.map(p => p.streamId).sort(), ['health', 'mood', 'sleep']);
+    });
+
+    it('[CTMC] cmcChatStreams only includes chat-enabled relationships', () => {
+      const a1 = counterpartyAccess({
+        id: 'a1',
+        cmcOverrides: { role: 'counterparty', appCode: 'hds-collector', features: { chat: true, systemMessaging: false }, counterparty: { username: 'drandy', host: 'demo.datasafe.dev', apiEndpoint: 'https://t@drandy.x/', remoteChatStreamId: 'r1', remoteCollectorStreamId: 'c1' } }
+      });
+      const a2 = counterpartyAccess({
+        id: 'a2',
+        cmcOverrides: { role: 'counterparty', appCode: 'hds-collector', features: { chat: false }, counterparty: { username: 'drandy', host: 'demo.datasafe.dev', apiEndpoint: 'https://t@drandy.x/', remoteChatStreamId: null, remoteCollectorStreamId: null } }
+      });
+      const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact.aggregateCmc([a1, a2], [], SCOPE);
+      const streams = out[0].cmcChatStreams;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(streams.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(streams[0].read, 'r1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(streams[0].accessId, 'a1');
+    });
+  });
+
+  describe('[CTDE] Derived CMC-only getters', function () {
+    function bareContact (relsCount = 1, acceptedAt = 1700000000, appCode = 'hds-collector', chat = false) {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      for (let i = 0; i < relsCount; i++) {
+        c.cmcRelationships.push({
+          accessId: 'a' + i,
+          acceptEventId: 'evt' + i,
+          counterparty: { username: 'u', host: 'h' },
+          counterpartyApiEndpoint: null,
+          remoteChatStreamId: null,
+          remoteCollectorStreamId: null,
+          localChatStreamId: 'local',
+          appCode,
+          features: { chat, systemMessaging: false },
+          grantedPermissions: [{ streamId: 'health', level: 'read' }],
+          acceptedAt,
+          hdsFormSpec: null
+        });
+      }
+      return c;
+    }
+
+    it('[CTDS] status: Active when any acceptedAt, Incoming when relationships exist without acceptedAt, null otherwise', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bareContact(1, 1700000000).status, 'Active');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bareContact(1, null).status, 'Incoming');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bareContact(0).status, null);
+    });
+
+    it('[CTDH] hasChat reflects any chat-enabled relationship', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bareContact(1, 1700000000, 'hds-collector', true).hasChat, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bareContact(1, 1700000000, 'hds-collector', false).hasChat, false);
+    });
+
+    it('[CTDA] appStreamIds returns distinct appCodes', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.cmcRelationships.push({ appCode: 'hds-collector' });
+      c.cmcRelationships.push({ appCode: 'hds-collector' });
+      c.cmcRelationships.push({ appCode: 'hds-bridge-mira' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.appStreamIds.sort(), ['hds-bridge-mira', 'hds-collector']);
+    });
+
+    it('[CTDI] isActive ↔ any relationship has acceptedAt', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bareContact(1, 1700000000).isActive, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(bareContact(1, null).isActive, false);
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/contextResolution.test.js"
+/*!*****************************************!*\
+  !*** ./tests/contextResolution.test.js ***!
+  \*****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+describe('[CTXR] Context-via-substream (Plan 46 D3)', () => {
+  let model;
+  before(async () => {
+    model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel(modelURL);
+    await model.load();
+  });
+
+  describe('forEvent — walk-up resolution', () => {
+    it('[CTXR-A] direct (streamId, eventType) match still works', () => {
+      const itemDef = model.itemsDefs.forEvent({
+        type: 'treatment/basic',
+        streamIds: ['treatment']
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'treatment-basic');
+    });
+
+    it('[CTXR-B] descendant streamId resolves via parent walk-up', () => {
+      const itemDef = model.itemsDefs.forEvent({
+        type: 'treatment/basic',
+        streamIds: ['treatment-fertility']
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'treatment-basic');
+    });
+
+    it('[CTXR-C] coded variant resolves via walk-up from procedure-fertility', () => {
+      const itemDef = model.itemsDefs.forEvent({
+        type: 'procedure/coded-v1',
+        streamIds: ['procedure-fertility']
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'procedure-coded');
+    });
+
+    it('[CTXR-D] returns null when type+stream cross trees with no match', () => {
+      const itemDef = model.itemsDefs.forEvent(
+        { type: 'procedure/coded-v1', streamIds: ['treatment-fertility'] },
+        false
+      );
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef, null);
+    });
+
+    it('[CTXR-E] throws by default when nothing resolves', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => model.itemsDefs.forEvent({ type: 'no-such/type', streamIds: ['treatment'] }),
+        /Cannot find definition/
+      );
+    });
+  });
+
+  describe('eventTemplate({ context })', () => {
+    it('[CTXR-F] no context falls back to itemDef streamId', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      const tmpl = itemDef.eventTemplate();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(tmpl.streamIds, ['treatment']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tmpl.type, 'treatment/basic');
+    });
+
+    it('[CTXR-G] context equal to itemDef streamId emits same value', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      const tmpl = itemDef.eventTemplate({ context: 'treatment' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(tmpl.streamIds, ['treatment']);
+    });
+
+    it('[CTXR-H] descendant context produces length-1 streamIds with that context', () => {
+      const itemDef = model.itemsDefs.forKey('procedure-basic');
+      const tmpl = itemDef.eventTemplate({ context: 'procedure-fertility' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(tmpl.streamIds, ['procedure-fertility']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tmpl.type, 'procedure/basic');
+    });
+
+    it('[CTXR-I] context outside subtree throws', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => itemDef.eventTemplate({ context: 'procedure-fertility' }),
+        /not a descendant/
+      );
+    });
+
+    it('[CTXR-J] unknown context streamId throws', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => itemDef.eventTemplate({ context: 'no-such-stream' }),
+        /not a descendant/
+      );
+    });
+  });
+
+  describe('isContext() — Plan 53 role: context flag', () => {
+    it('[CTXR-P] treatment-fertility is flagged as context', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.streams.isContext('treatment-fertility'), true);
+    });
+
+    it('[CTXR-Q] procedure-fertility is flagged as context', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.streams.isContext('procedure-fertility'), true);
+    });
+
+    it('[CTXR-R] data-bearing parent streams are not context', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.streams.isContext('treatment'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.streams.isContext('procedure'), false);
+    });
+
+    it('[CTXR-S] unknown streamId returns false (no throw)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.streams.isContext('no-such-stream'), false);
+    });
+  });
+
+  describe('legacy multi-streamId resolution still works (no regression)', () => {
+    it('[CTXR-K] event with multiple streamIds resolves via direct match', () => {
+      // bridge-athenahealth pattern: streamIds carry both the canonical home
+      // and a secondary index stream. Resolution should succeed via direct
+      // match on either streamId, before walk-up triggers.
+      const itemDef = model.itemsDefs.forEvent({
+        type: 'treatment/basic',
+        streamIds: ['treatment-fertility', 'treatment']
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'treatment-basic');
+    });
+  });
+
+  describe('matchesEvent (D3-aware event matching)', () => {
+    it('[CTXR-L] direct (streamId, eventType) match returns true', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.matchesEvent({
+        type: 'treatment/basic',
+        streamIds: ['treatment']
+      }), true);
+    });
+
+    it('[CTXR-M] descendant context resolves via walk-up returns true', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-coded');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.matchesEvent({
+        type: 'treatment/coded-v1',
+        streamIds: ['treatment-fertility']
+      }), true);
+    });
+
+    it('[CTXR-N] cross-tree mismatch returns false', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.matchesEvent({
+        type: 'procedure/basic',
+        streamIds: ['procedure-fertility']
+      }), false);
+    });
+
+    it('[CTXR-O] missing streamIds or type returns false', () => {
+      const itemDef = model.itemsDefs.forKey('treatment-basic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.matchesEvent({}), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.matchesEvent({ type: 'treatment/basic' }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.matchesEvent({ streamIds: ['treatment'] }), false);
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/conversions.test.js"
 /*!***********************************!*\
   !*** ./tests/conversions.test.js ***!
@@ -42382,6 +48935,341 @@ describe('[CONV] HDSModel Conversions', function () {
         `Roundtrip: ${original} → ${toLb.value} → ${backToKg.value}`
       );
     });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/converterEngine.test.js"
+/*!***************************************!*\
+  !*** ./tests/converterEngine.test.js ***!
+  \***************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+const MODEL_BASE_URL = 'https://model.datasafe.dev';
+
+async function fetchPack (itemKey) {
+  const url = `${MODEL_BASE_URL}/converters/${itemKey}/pack-latest.json`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+  return res.json();
+}
+
+// Module-level packs — loaded once, shared across describes
+let cervicalFluidPack;
+let moodPack;
+
+before(async () => {
+  cervicalFluidPack = await fetchPack('cervical-fluid');
+  moodPack = await fetchPack('mood');
+});
+
+describe('[EDEX] EuclidianDistanceEngine', function () {
+  let cfEngine;
+  let moodEngine;
+
+  before(() => {
+    cfEngine = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.EuclidianDistanceEngine(cervicalFluidPack);
+    moodEngine = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.EuclidianDistanceEngine(moodPack);
+  });
+
+  describe('[EDEI] Engine initialization', () => {
+    it('[EDEI1] cervical-fluid engine loads the published methods', () => {
+      // The pack grows (data-model 3.24.0 added Sensiplan): check by id, not by count
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(cfEngine.methodIds.length >= 12, `expected at least 12 methods, got ${cfEngine.methodIds.length}`);
+      for (const id of ['billings', 'creighton', 'sympto-thermal', 'sensiplan']) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(cfEngine.methodIds.includes(id), `should include ${id}`);
+      }
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!cfEngine.methodIds.includes('_raw'), '_raw should not be in methodIds (auto-generated)');
+    });
+
+    it('[EDEI2] mood engine loads methods from pack (excludes _raw)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(moodEngine.methodIds.length >= 2, `expected at least 2 methods, got ${moodEngine.methodIds.length}`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(moodEngine.methodIds.includes('mira'), 'should include mira');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!moodEngine.methodIds.includes('_raw'), '_raw should not be in methodIds (auto-generated)');
+    });
+
+    it('[EDEI3] cervical-fluid has 9 dimensions', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(cfEngine.dimensionNames.length, 9);
+    });
+
+    it('[EDEI4] mood has 5 dimensions', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(moodEngine.dimensionNames.length, 5);
+    });
+
+    it('[EDEI5] weights sum to 1.0', () => {
+      let cfSum = 0;
+      for (const d of cfEngine.dimensionNames) cfSum += cfEngine.weights[d];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(Math.abs(cfSum - 1.0) < 0.01);
+
+      let moodSum = 0;
+      for (const d of moodEngine.dimensionNames) moodSum += moodEngine.weights[d];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(Math.abs(moodSum - 1.0) < 0.01);
+    });
+  });
+
+  describe('[EDEV] toVector / fromVector', () => {
+    it('[EDEV1] appleHealth eggWhite → vector with high values', () => {
+      const vec = cfEngine.toVector('appleHealth', 'eggWhite');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(vec.threadiness, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(vec.stretchability, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(vec.lubricative, 1);
+    });
+
+    it('[EDEV2] appleHealth dry → zero vector', () => {
+      const vec = cfEngine.toVector('appleHealth', 'dry');
+      let sum = 0;
+      for (const d of cfEngine.dimensionNames) sum += vec[d];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(sum, 0);
+    });
+
+    it('[EDEV3] fromVector round-trips appleHealth observations', () => {
+      for (const obs of ['dry', 'sticky', 'creamy', 'watery', 'eggWhite']) {
+        const vec = cfEngine.toVector('appleHealth', obs);
+        const result = cfEngine.fromVector('appleHealth', vec);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, obs, `round-trip failed for ${obs}`);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.matchDistance, 0, `distance should be 0 for exact match: ${obs}`);
+      }
+    });
+
+    it('[EDEV4] mira mood observations round-trip', () => {
+      for (const obs of ['Happy', 'Sad', 'Normal', 'Excited']) {
+        const vec = moodEngine.toVector('mira', obs);
+        const result = moodEngine.fromVector('mira', vec);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, obs, `round-trip failed for ${obs}`);
+      }
+    });
+
+    it('[EDEV5] case-insensitive matching for mira cervical-fluid', () => {
+      const vec = cfEngine.toVector('mira', 'raw egg white');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(vec.threadiness, 1);
+    });
+
+    it('[EDEV6] unknown observation throws', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => cfEngine.toVector('appleHealth', 'unknown'), /Unknown/);
+    });
+
+    it('[EDEV7] unknown method throws', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => cfEngine.toVector('nonexistent', 'dry'), /Unknown method/);
+    });
+  });
+
+  describe('[EDEC] Cross-method conversion', () => {
+    it('[EDEC1] mira Raw Egg White → appleHealth eggWhite', () => {
+      const result = cfEngine.convertMethodToMethod('mira', 'appleHealth', 'Raw Egg White');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, 'eggWhite');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.matchDistance, 0);
+    });
+
+    it('[EDEC2] mira Creamy → appleHealth creamy', () => {
+      const result = cfEngine.convertMethodToMethod('mira', 'appleHealth', 'Creamy');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, 'creamy');
+    });
+
+    it('[EDEC3] mira Dry → appleHealth dry', () => {
+      const result = cfEngine.convertMethodToMethod('mira', 'appleHealth', 'Dry');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, 'dry');
+    });
+
+    it('[EDEC4] creighton 10KL → appleHealth eggWhite', () => {
+      const result = cfEngine.convertMethodToMethod('creighton', 'appleHealth', '10KL');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, 'eggWhite');
+    });
+
+    it('[EDEC5] creighton 0 → appleHealth dry', () => {
+      const result = cfEngine.convertMethodToMethod('creighton', 'appleHealth', '0');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, 'dry');
+    });
+
+    it('[EDEC6] mira Clumpy white → appleHealth sticky (pathological)', () => {
+      const result = cfEngine.convertMethodToMethod('mira', 'appleHealth', 'Clumpy white');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(['dry', 'sticky'].includes(result.data), `expected dry or sticky, got ${result.data}`);
+    });
+
+    it('[EDEC7] mood mira Happy → _raw produces valid 5D vector', () => {
+      const vec = moodEngine.toVector('mira', 'Happy');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(vec.valence, 0.80);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(vec.arousal, 0.60);
+      const result = moodEngine.fromVector('_raw', vec);
+      // _raw is assembly — result should be an object with 5 fields
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.data, 'should have result data');
+    });
+  });
+
+  describe('[EDED] Distance calculations', () => {
+    it('[EDED1] distance between identical vectors is 0', () => {
+      const vec = cfEngine.toVector('appleHealth', 'creamy');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(cfEngine.distance(vec, vec), 0);
+    });
+
+    it('[EDED2] distance between dry and eggWhite is large', () => {
+      const dry = cfEngine.toVector('appleHealth', 'dry');
+      const egg = cfEngine.toVector('appleHealth', 'eggWhite');
+      const d = cfEngine.distance(dry, egg);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(d > 0.5, `expected large distance, got ${d}`);
+    });
+
+    it('[EDED3] distance between sticky and creamy is small', () => {
+      const sticky = cfEngine.toVector('appleHealth', 'sticky');
+      const creamy = cfEngine.toVector('appleHealth', 'creamy');
+      const d = cfEngine.distance(sticky, creamy);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(d < 0.2, `expected small distance, got ${d}`);
+    });
+
+    it('[EDED4] zeroVector has all zeros', () => {
+      const z = cfEngine.zeroVector();
+      for (const dim of cfEngine.dimensionNames) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(z[dim], 0);
+      }
+    });
+  });
+});
+
+describe('[MCVX] HDSModelConverters with loadPack', function () {
+  let converters;
+
+  before(() => {
+    // Create a minimal mock model
+    const mockModel = {
+      modelUrl: 'https://model.datasafe.dev/pack.json',
+      modelData: {
+        items: {
+          'body-vulva-mucus-inspect': {
+            key: 'body-vulva-mucus-inspect',
+            streamId: 'body-vulva-mucus-inspect',
+            eventType: 'vulva-mucus-inspect/9d-vector',
+            type: 'convertible',
+            'converter-engine': { key: 'euclidian-distance', version: 'v0', models: 'cervical-fluid' }
+          },
+          'wellbeing-mood': {
+            key: 'wellbeing-mood',
+            streamId: 'wellbeing-mood',
+            eventType: 'mood/5d-vectors',
+            type: 'convertible',
+            'converter-engine': { key: 'euclidian-distance', version: 'v0', models: 'mood' }
+          }
+        },
+        converters: {
+          'cervical-fluid': { latestVersion: 'v0' },
+          mood: { latestVersion: 'v0' }
+        }
+      }
+    };
+
+    converters = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModelConverters(mockModel);
+    converters.loadPack(cervicalFluidPack);
+    converters.loadPack(moodPack);
+  });
+
+  it('[MCVX1] lists loaded item keys', () => {
+    const keys = converters.loadedItemKeys.sort();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(keys, ['cervical-fluid', 'mood']);
+  });
+
+  it('[MCVX2] getEngine returns loaded engines', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(converters.getEngine('cervical-fluid'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(converters.getEngine('mood'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(converters.getEngine('unknown'), undefined);
+  });
+
+  it('[MCVX3] convertMethodToEvent produces valid event structure', async () => {
+    const event = await converters.convertMethodToEvent('cervical-fluid', 'mira', 'Creamy');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.type, 'vulva-mucus-inspect/9d-vector');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(event.streamIds, ['body-vulva-mucus-inspect']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(event.content.vectors, 'should have vectors');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.content.vectors.threadiness, 0.4);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(event.content.source, 'should have source');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.content.source.key, 'mira');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.content.source.sourceData, 'Creamy');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.content.source.engineVersion, 'v0');
+  });
+
+  it('[MCVX4] convertEventToMethod recovers source observation', async () => {
+    const event = await converters.convertMethodToEvent('cervical-fluid', 'appleHealth', 'eggWhite');
+    const result = await converters.convertEventToMethod(event, 'appleHealth');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, 'eggWhite');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.matchDistance, 0);
+  });
+
+  it('[MCVX5] convertEventToMethod cross-method', async () => {
+    const event = await converters.convertMethodToEvent('cervical-fluid', 'mira', 'Raw Egg White');
+    const result = await converters.convertEventToMethod(event, 'appleHealth');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, 'eggWhite');
+  });
+
+  it('[MCVX6] convertMethodToMethod works', async () => {
+    const result = await converters.convertMethodToMethod('mood', 'mira', '_raw', 'Happy');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.data, 'should have result');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.matchDistance >= 0, 'should have matchDistance');
+  });
+
+  it('[MCVX7] convertMethodToEvent for mood produces valid event', async () => {
+    const event = await converters.convertMethodToEvent('mood', 'mira', 'Sad');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.type, 'mood/5d-vectors');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(event.streamIds, ['wellbeing-mood']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.content.vectors.valence, 0.15);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.content.source.key, 'mira');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(event.content.source.sourceData, 'Sad');
+  });
+
+  it('[MCVX8] throws for unknown item key', async () => {
+    try {
+      await converters.convertMethodToEvent('unknown', 'mira', 'test');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.fail('should have thrown');
+    } catch (e) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(e.message.includes('Unknown converter item key'));
+    }
+  });
+
+  it('[MCVX9] loadPack rejects unknown engine', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => {
+      converters.loadPack({ engine: 'neural-network', itemKey: 'test', methods: [] });
+    }, /Unknown converter engine/);
+  });
+
+  it('[MCVX10] creighton→mira round-trip conversions', async () => {
+    const pairs = [
+      ['0', 'No discharge'], ['6', 'Sticky'], ['8P', 'Creamy'], ['10KL', 'Raw Egg White'],
+    ];
+    const engine = converters.getEngine('cervical-fluid');
+    for (const [cr, mira] of pairs) {
+      const event = await converters.convertMethodToEvent('cervical-fluid', 'creighton', cr);
+      const result = engine.fromVector('mira', event.content.vectors);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data, mira, `Creighton ${cr} → expected ${mira}, got ${result.data}`);
+    }
+  });
+
+  it('[MCVX11] _raw virtual method is auto-generated', async () => {
+    const moodEngine = converters.getEngine('mood');
+    const cfEngine = converters.getEngine('cervical-fluid');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(moodEngine.getMethodDef('_raw'), '_raw should exist for mood');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(cfEngine.getMethodDef('_raw'), '_raw should exist for cervical-fluid');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(moodEngine.getMethodDef('_raw').name.en, 'HDS Native');
+  });
+
+  it('[MCVX12] _raw fromVector returns object with stop labels', async () => {
+    const engine = converters.getEngine('mood');
+    const result = engine.fromVector('_raw', { valence: 0.5, arousal: 0.5, dominance: 0.5, socialOrientation: 0.5, temporalFocus: 0.5 });
+    // Exact stops → distance 0
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.matchDistance, 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(typeof result.data, 'object');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(result.data.valence, 0.5);
+  });
+
+  it('[MCVX13] _raw fromVector with non-exact values has non-zero distance', async () => {
+    const engine = converters.getEngine('mood');
+    const result = engine.fromVector('_raw', { valence: 0.8, arousal: 0.2, dominance: 0.7, socialOrientation: 0.5, temporalFocus: 0.3 });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.matchDistance > 0, `Expected non-zero distance, got ${result.matchDistance}`);
+    const confidence = Math.round((1 - result.matchDistance) * 100);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(confidence > 80 && confidence < 100, `Expected partial confidence, got ${confidence}%`);
   });
 });
 
@@ -43220,6 +50108,375 @@ describe('[DSTX] formSpecFingerprint', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(h, /^sha256:[0-9a-f]{64}$/);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await formSpecFingerprint(b), h);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(await formSpecFingerprint({ ...a, title: { en: 'other' } }), h);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/delegation.test.js"
+/*!**********************************!*\
+  !*** ./tests/delegation.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+
+/**
+ * The delegation client reaches consumers through hds-lib for one reason: a
+ * consumer that did `import Pryv from 'pryv'` alongside hds-lib would hold a
+ * SECOND, UNPATCHED pryv instance, with neither @pryv/monitor nor
+ * @pryv/socket.io applied. `Delegation.openControlled()` builds a Connection
+ * from whatever `pryv` it is handed, so that is exactly where an unpatched
+ * instance would leak in and silently cost the caller socket support.
+ *
+ * These tests pin the seam rather than the upstream library's behaviour.
+ */
+describe('[DLGX] Delegation re-export', () => {
+  it('[DLG1] is exported both named and on the default export', async () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation != null, 'named export missing');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation != null, 'default-export member missing');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation, 'the two exports must be the same object');
+  });
+
+  it('[DLG2] carries the client surface the account app depends on', async () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.Delegation, 'function', 'Delegation class missing');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.Delegation.fromConnection, 'function', 'fromConnection missing');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.DelegationError, 'function', 'DelegationError missing');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.errorIds != null, 'errorIds catalogue missing');
+    // The one error id the UI must react to rather than swallow: detaching a
+    // delegate is refused unless the caller holds a genuine login.
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.errorIds.GENUINE_LOGIN_REQUIRED,
+      'delegation-genuine-login-required'
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.STATUS.INVITE, 'invite');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.STATUS.ACTIVE, 'active');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.STATUS.STALE, 'stale');
+  });
+
+  it('[DLG3] binds to a connection and keeps it', async () => {
+    const fakeConnection = { apiEndpoint: 'https://token@user.example.com/' };
+    const d = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.delegation.Delegation.fromConnection(fakeConnection, { pryv: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(d.connection, fakeConnection);
+  });
+
+  it('[DLG4] the pryv handed to it is the PATCHED instance, not a bare one', async () => {
+    // socket.io and monitor are applied to the module object at import time by
+    // patchedPryv.ts. If a consumer ever passes a directly-imported `pryv`,
+    // these members are absent — which is the whole failure this seam prevents.
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(typeof _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection, 'function', 'patched pryv lost Connection');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Browser != null, 'patched pryv lost Browser');
+    const proto = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection.prototype;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(
+      typeof proto.addSocketIO === 'function' || 'socket' in proto || proto.socketIO !== undefined,
+      'the socket.io plugin does not appear to be applied to the pryv we re-export'
+    );
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/encounters.test.js"
+/*!**********************************!*\
+  !*** ./tests/encounters.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+
+/**
+ * Care encounters and providers (site-agents#24): event ids in content mirrored in `clientData.related`, provider
+ * GLN / ZSR mirrored in `clientData.hdsGln` / `hdsZsr`, short texts keyed on the eventType.
+ */
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+const XDS = 'file/xds-v1';
+
+const kindOptions = [
+  { value: 'consultation', label: { en: 'Consultation', fr: 'Consultation' } },
+  { value: 'hospital-stay', label: { en: 'Hospital stay', fr: 'Séjour hospitalier' } },
+  // differs from the built-in "Other", so a test can tell the item's label is read
+  { value: 'other', label: { en: 'Other care', fr: 'Autre soin' } }
+];
+
+function makeModel ({ withItems = true } = {}) {
+  const items = {
+    'encounter-visit': {
+      version: 'v1',
+      label: { en: 'Care visit' },
+      description: { en: 'A consultation, hospital stay or other time you received care.' },
+      streamId: 'encounter-visit',
+      eventType: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.ENCOUNTER_VISIT,
+      type: 'composite',
+      composite: {
+        kind: { type: 'select', label: { en: 'Type of visit', fr: 'Type de visite' }, options: kindOptions },
+        reason: { type: 'text', label: { en: 'Reason', fr: 'Motif' }, canBeNull: true },
+        notes: { type: 'text', label: { en: 'Notes', fr: 'Notes' }, canBeNull: true }
+      }
+    },
+    'encounter-provider-person': {
+      version: 'v1',
+      label: { en: 'Doctor or therapist' },
+      description: { en: 'A doctor, therapist or other person who cares for you.' },
+      streamId: 'encounter-provider-person',
+      eventType: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER,
+      type: 'composite',
+      composite: { name: { type: 'text', label: { en: 'Name', fr: 'Nom' } } }
+    },
+    'encounter-provider-organization': {
+      version: 'v1',
+      label: { en: 'Clinic, hospital or practice' },
+      description: { en: 'A practice, clinic, hospital or laboratory that cares for you.' },
+      streamId: 'encounter-provider-organization',
+      eventType: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION,
+      type: 'composite',
+      composite: { name: { type: 'text', label: { en: 'Name', fr: 'Nom' } } }
+    }
+  };
+  return {
+    items: withItems ? items : {},
+    streams: [
+      { id: 'encounter', name: 'Care encounters and providers', parentId: null },
+      { id: 'encounter-visit', name: 'Visits and stays', parentId: 'encounter' },
+      { id: 'encounter-provider', name: 'Care providers', parentId: 'encounter' },
+      { id: 'encounter-provider-person', name: 'Doctors and therapists', parentId: 'encounter-provider' },
+      { id: 'encounter-provider-organization', name: 'Clinics, hospitals and practices', parentId: 'encounter-provider' }
+    ]
+  };
+}
+
+const cardiology = { system: 'http://snomed.info/sct', code: '394579002', display: 'Cardiology' };
+const medregCardiology = { system: 'urn:oid:2.16.756.5.30.1.127.3.5', code: '1025', display: 'Cardiology' };
+const medregGeneral = { system: 'urn:oid:2.16.756.5.30.1.127.3.5', code: '1040', display: 'General medical practitioner' };
+const gln = (value) => ({ system: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.IDENTIFIER_SYSTEM_GLN, value });
+const zsr = (value) => ({ system: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.IDENTIFIER_SYSTEM_ZSR, value });
+
+const visit = (content, clientData, streamIds = ['encounter-visit']) => ({ streamIds, type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.ENCOUNTER_VISIT, content, clientData });
+const practitioner = (content, clientData) => ({ streamIds: ['encounter-provider-person'], type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER, content, clientData });
+const organization = (content, clientData) => ({ streamIds: ['encounter-provider-organization'], type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION, content, clientData });
+const xds = (content, clientData) => ({ streamIds: ['documents'], type: XDS, content, clientData });
+
+describe('[ENC-LIB] care encounters and providers', () => {
+  before(() => {
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().loadFromObject(makeModel());
+  });
+  after(async () => {
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+  });
+
+  it('[ENC-LIB-1] contentEventIds reads the six id fields, nothing on other types', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.contentEventIds)(xds({ title: 'Report', supersedes: ['d0'], authors: [{ name: 'Dr A', eventId: 'p1' }, { name: 'Lab' }], encounterId: 'v1' })), [
+      { field: 'supersedes', eventId: 'd0' },
+      { field: 'authors.eventId', eventId: 'p1' },
+      { field: 'encounterId', eventId: 'v1' }
+    ]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.contentEventIds)(visit({ kind: 'consultation', participants: [{ eventId: 'p1', role: 'attender' }, { name: 'Dr B' }], serviceProvider: { eventId: 'o1', name: 'HUG' } })), [
+      { field: 'participants.eventId', eventId: 'p1' },
+      { field: 'serviceProvider.eventId', eventId: 'o1' }
+    ]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.contentEventIds)(practitioner({ name: 'Dr A', organizations: [{ eventId: 'o1' }, { name: 'Cabinet' }] })), [
+      { field: 'organizations.eventId', eventId: 'o1' }
+    ]);
+    // a field is read only on the type that declares it
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.contentEventIds)(visit({ kind: 'other', encounterId: 'v0', organizations: [{ eventId: 'o1' }] })), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.contentEventIds)(organization({ name: 'HUG' })), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.contentEventIds)({ type: 'note/txt', content: 'hello' }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.contentEventIds)(visit(null)), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.contentEventIds)(null), []);
+  });
+
+  it('[ENC-LIB-2] withRelatedMirror adds content ids, keeps other keys, does not change the event', () => {
+    const event = visit({ kind: 'consultation', participants: [{ eventId: 'p1' }], serviceProvider: { eventId: 'o1' } }, { sourceKey: 'tool:visit:1', related: { doc1: true } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(event), { sourceKey: 'tool:visit:1', related: { doc1: true, p1: true, o1: true } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(event.clientData, { sourceKey: 'tool:visit:1', related: { doc1: true } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(xds({ supersedes: ['d0'], authors: [{ eventId: 'p1' }], encounterId: 'v1' })), { related: { d0: true, p1: true, v1: true } });
+    // no id, no previous content: clientData as it was, no empty `related` added
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(visit({ kind: 'other' })), {});
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(visit({ kind: 'other' }, { sourceKey: 'k' })), { sourceKey: 'k' });
+  });
+
+  it('[ENC-LIB-2b] withRelatedMirror on update removes only the ids that left content', () => {
+    const previous = { kind: 'consultation', participants: [{ eventId: 'p1' }, { eventId: 'p2' }], serviceProvider: { eventId: 'o1' } };
+    const updated = visit({ kind: 'consultation', participants: [{ eventId: 'p1' }, { eventId: 'o1' }] }, { related: { p1: true, p2: true, o1: true, doc1: true } });
+    // p2 left content; o1 moved from serviceProvider to participants and stays; doc1 was never in content and stays
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(updated, previous), { related: { p1: true, o1: true, doc1: true } });
+    // every id gone: `related` written whole, empty
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(visit({ kind: 'other' }, { related: { p1: true, p2: true, o1: true } }), previous), { related: {} });
+  });
+
+  it('[ENC-LIB-2c] withRelatedMirror sets and removes hdsGln / hdsZsr on providers', () => {
+    const identifiers = [gln('7601000000000'), zsr('A123456'), zsr('B654321')];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(practitioner({ name: 'Dr A', identifiers })), { hdsGln: '7601000000000', hdsZsr: 'A123456' });
+    // an existing value still among the identifiers is kept
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(practitioner({ name: 'Dr A', identifiers }, { hdsZsr: 'B654321' })), { hdsZsr: 'B654321', hdsGln: '7601000000000' });
+    // a stale value is replaced, a key whose identifier is gone removed
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(practitioner({ name: 'Dr A', identifiers: [zsr('A123456')] }, { hdsGln: '7601000000001', hdsZsr: 'Z000000', sourceKey: 'k' })),
+      { hdsZsr: 'A123456', sourceKey: 'k' });
+    // on an update (previousContent given) a removed key is null: events.update only deletes a clientData key on null
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(practitioner({ name: 'Dr A', identifiers: [zsr('A123456')] }, { hdsGln: '7601000000001', hdsZsr: 'A123456' }),
+      { name: 'Dr A', identifiers: [gln('7601000000001'), zsr('A123456')] }), { hdsGln: null, hdsZsr: 'A123456' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(organization({ name: 'HUG', identifiers: [gln('7601000000017'), { system: 'urn:oid:2.16.756.5.35', value: 'CHE123456789' }] })), { hdsGln: '7601000000017' });
+    // with organizations[] too
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(practitioner({ name: 'Dr A', organizations: [{ eventId: 'o1' }], identifiers: [gln('7601000000000')] })),
+      { related: { o1: true }, hdsGln: '7601000000000' });
+    // never on another type
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(visit({ kind: 'other', identifiers: [gln('7601000000000')] }, { hdsGln: 'x' })), { hdsGln: 'x' });
+  });
+
+  it('[ENC-LIB-3] checkRelatedMirror: missing-related', () => {
+    const event = visit({ kind: 'consultation', participants: [{ eventId: 'p1' }], serviceProvider: { eventId: 'o1' } }, { related: { o1: true } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(event), [{ code: 'missing-related', field: 'participants.eventId', eventId: 'p1' }]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)({ ...event, clientData: (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(event) }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(xds({ supersedes: ['d0'], encounterId: 'v1' })), [
+      { code: 'missing-related', field: 'supersedes', eventId: 'd0' },
+      { code: 'missing-related', field: 'encounterId', eventId: 'v1' }
+    ]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(visit({ kind: 'other' })), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)({ type: 'note/txt', content: 'x' }), []);
+  });
+
+  it('[ENC-LIB-3b] checkRelatedMirror: wrong-target-type, given the targets', () => {
+    const content = { kind: 'consultation', participants: [{ eventId: 'p1' }, { eventId: 'p2' }], serviceProvider: { eventId: 'o1' } };
+    const event = visit(content, (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(visit(content)));
+    const good = { p1: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER }, p2: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER }, o1: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION } };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(event, good), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(event, new Map(Object.entries(good))), []);
+    // an organization is never a participant (FHIR Encounter.participant.individual): it goes in serviceProvider
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(event, { ...good, p2: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION } }),
+      [{ code: 'wrong-target-type', field: 'participants.eventId', eventId: 'p2', targetType: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION, expectedTypes: [_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER] }]);
+    const bad = { p1: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.ENCOUNTER_VISIT }, o1: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER } };
+    const expected = [
+      { code: 'wrong-target-type', field: 'participants.eventId', eventId: 'p1', targetType: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.ENCOUNTER_VISIT, expectedTypes: [_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER] },
+      { code: 'wrong-target-type', field: 'serviceProvider.eventId', eventId: 'o1', targetType: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER, expectedTypes: [_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION] }
+    ];
+    // p2 is not among the targets (dangling or unreadable): not an issue
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(event, bad), expected);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(event, new Map(Object.entries(bad))), expected);
+
+    const doc = { supersedes: ['d0'], authors: [{ eventId: 'o1' }], encounterId: 'v1' };
+    const docEvent = xds(doc, (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(xds(doc)));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(docEvent, { d0: { type: XDS }, o1: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION }, v1: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.ENCOUNTER_VISIT } }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(docEvent, { d0: { type: 'note/txt' }, o1: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.ENCOUNTER_VISIT }, v1: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION } }).map((i) => [i.field, i.targetType]), [
+      ['supersedes', 'note/txt'],
+      ['authors.eventId', _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.ENCOUNTER_VISIT],
+      ['encounterId', _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION]
+    ]);
+
+    const person = { name: 'Dr A', organizations: [{ eventId: 'p9' }] };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(practitioner(person, { related: { p9: true } }), { p9: { type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER } }),
+      [{ code: 'wrong-target-type', field: 'organizations.eventId', eventId: 'p9', targetType: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_PRACTITIONER, expectedTypes: [_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.PROVIDER_ORGANIZATION] }]);
+  });
+
+  it('[ENC-LIB-3c] checkRelatedMirror: missing-provider-key', () => {
+    const identifiers = [gln('7601000000000'), zsr('A123456'), zsr('B654321')];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(practitioner({ name: 'Dr A', identifiers })), [
+      { code: 'missing-provider-key', key: 'hdsGln', value: '7601000000000' },
+      { code: 'missing-provider-key', key: 'hdsZsr', value: 'A123456' }
+    ]);
+    // any of its ZSR values mirrors it
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(practitioner({ name: 'Dr A', identifiers }, { hdsGln: '7601000000000', hdsZsr: 'B654321' })), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(organization({ name: 'HUG' })), []);
+    const filled = practitioner({ name: 'Dr A', identifiers });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)({ ...filled, clientData: (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(filled) }), []);
+  });
+
+  it('[ENC-LIB-3d] checkRelatedMirror: stale-provider-key, a key no identifier holds', () => {
+    // set to another GLN: another writer's lookup by 7601000000000 would land on this organization
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(organization({ name: 'HUG', identifiers: [gln('7601000000017')] }, { hdsGln: '7601000000000' })),
+      [{ code: 'stale-provider-key', key: 'hdsGln', value: '7601000000000' }]);
+    // the identifier left content, the key stayed
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(practitioner({ name: 'Dr A', identifiers: [zsr('A123456')] }, { hdsGln: '7601000000000', hdsZsr: 'A123456' })),
+      [{ code: 'stale-provider-key', key: 'hdsGln', value: '7601000000000' }]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(practitioner({ name: 'Dr A' }, { hdsZsr: 'B654321' })),
+      [{ code: 'stale-provider-key', key: 'hdsZsr', value: 'B654321' }]);
+    // null is a key being removed (withRelatedMirror on update): not stale
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(practitioner({ name: 'Dr A' }, { hdsGln: null })), []);
+    // withRelatedMirror fixes it
+    const stale = organization({ name: 'HUG', identifiers: [gln('7601000000017')] }, { hdsGln: '7601000000000' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)({ ...stale, clientData: (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(stale) }), []);
+    // never on another type
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(visit({ kind: 'other' }, { hdsGln: '7601000000000' })), []);
+  });
+
+  it('[ENC-LIB-4] eventToShortText with the items loaded', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'hospital-stay', specialty: cardiology })), 'Hospital stay · Cardiology');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'consultation', reason: 'Chest pain' })), 'Consultation');
+    // the item's option label wins over the built-in one, also on a stream no item resolves to
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'other' })), 'Other care');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'other' }, undefined, ['encounter'])), 'Other care');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'future-kind' })), 'future-kind');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'consultation', specialty: { system: cardiology.system, code: cardiology.code } })), 'Consultation');
+    // the first specialty as printed
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(practitioner({ name: 'Dr méd. Anne Muller', specialties: [medregCardiology, medregGeneral] })), 'Dr méd. Anne Muller · Cardiology');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(practitioner({ name: 'Dr méd. Anne Muller', specialties: [{ system: medregCardiology.system, code: medregCardiology.code }, medregGeneral] })), 'Dr méd. Anne Muller');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(practitioner({ name: 'Dr méd. Anne Muller', identifiers: [gln('7601000000000')] })), 'Dr méd. Anne Muller');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(organization({ name: 'HUG, Service de cardiologie', identifiers: [gln('7601000000017')] })), 'HUG, Service de cardiologie');
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+    try {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'hospital-stay', specialty: cardiology })), 'Séjour hospitalier · Cardiology');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'other' })), 'Autre soin');
+    } finally {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)();
+    }
+  });
+
+  describe('without the items', () => {
+    before(() => {
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().loadFromObject(makeModel({ withItems: false }));
+    });
+    after(() => {
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().loadFromObject(makeModel());
+    });
+
+    it('[ENC-LIB-4b] eventToShortText reads the same from the built-in labels, never [object Object]', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'hospital-stay', specialty: cardiology })), 'Hospital stay · Cardiology');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'day-case' })), 'Day hospital');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'other' })), 'Other');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'toString' })), 'toString');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ specialty: cardiology })), 'Cardiology');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(practitioner({ name: 'Dr méd. Anne Muller', specialties: [medregCardiology] })), 'Dr méd. Anne Muller · Cardiology');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(practitioner({ given: 'Anne Marie', family: 'Muller' })), 'Anne Marie Muller');
+      // a non-array specialties is not read
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(practitioner({ name: 'Dr A', specialties: medregCardiology })), 'Dr A');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(organization({ name: 'HUG' })), 'HUG');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      try {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'hospital-stay', specialty: cardiology })), 'Séjour hospitalier · Cardiology');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(visit({ kind: 'home-visit' })), 'Visite à domicile');
+      } finally {
+        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)();
+      }
+      for (const event of [
+        visit({ kind: 'consultation', participants: [{ name: 'Dr B' }], serviceProvider: { name: 'HUG' } }),
+        visit({ participants: [{ eventId: 'p1' }] }),
+        practitioner({ identifiers: [gln('7601000000000')] }),
+        organization({ identifiers: [gln('7601000000017')] })
+      ]) {
+        const text = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(text == null || !text.includes('[object'), String(text));
+      }
+    });
   });
 });
 
@@ -44447,6 +51704,177 @@ describe('[FED] formatEventDate', function () {
 
 /***/ },
 
+/***/ "./tests/genetics.test.js"
+/*!********************************!*\
+  !*** ./tests/genetics.test.js ***!
+  \********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+
+
+
+// Genetic test results (data-model 3.43.0, site-agents#37): the `explicitGrantOnly` marker on the `genetics` root,
+// the `level: 'none'` masks a contact's accesses carry (B-2026-11-03-9), and the short text.
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+const { Contact } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.appTemplates;
+
+describe('[GENX] genetic test results', function () {
+  before(async () => {
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+  });
+
+  describe('[GENX-M] the explicitGrantOnly marker', () => {
+    it('[GENX-M1] genetics is the marked root; its child is covered, other streams are not', () => {
+      const streams = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().streams;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(streams.explicitGrantOnlyRootIds(), ['genetics']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.isExplicitGrantOnly('genetics'), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.isExplicitGrantOnly('genetics-variant'), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.isExplicitGrantOnly('body'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.isExplicitGrantOnly('body-weight'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.isExplicitGrantOnly('not-a-model-stream'), false);
+    });
+
+    it('[GENX-M2] planStopSharing: * does not share a marked stream, so it can be stopped on its own', () => {
+      const perms = [{ streamId: '*', level: 'read' }, { streamId: 'genetics', level: 'read' }];
+      const plan = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing(perms, 'genetics');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(plan.ok, true, JSON.stringify(plan));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(plan.newPermissions, [{ streamId: '*', level: 'read' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing([{ streamId: '*', level: 'read' }, { streamId: 'body', level: 'read' }], 'body').reason, 'shared-through-parent');
+    });
+  });
+
+  describe('[GENX-C] Contact masks (B-2026-11-03-9)', () => {
+    const streamsById = {
+      genetics: { id: 'genetics', children: [{ id: 'genetics-variant', children: [] }] },
+      'genetics-variant': { id: 'genetics-variant', children: [] },
+      body: { id: 'body', children: [] }
+    };
+
+    it('[GENX-C1] a none entry is not shared, and masks its subtree under * on the same access', () => {
+      const c = new Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: '*', level: 'read' }, { streamId: 'genetics', level: 'none' }] });
+      c.initStreamCache(streamsById);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.eventIsAccessible({ streamIds: ['body'] }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.eventIsAccessible({ streamIds: ['genetics'] }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.eventIsAccessible({ streamIds: ['genetics-variant'] }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.eventIsAccessible({ streamIds: ['body', 'genetics-variant'] }), false, 'a masked stream refuses the event');
+    });
+
+    it('[GENX-C2] a none entry alone shares nothing', () => {
+      const c = new Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'genetics', level: 'none' }, { streamId: 'body', level: 'read' }] });
+      c.initStreamCache(streamsById);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.eventIsAccessible({ streamIds: ['genetics-variant'] }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.eventIsAccessible({ streamIds: ['body'] }), true);
+    });
+
+    it('[GENX-C3] a mask narrows its own access only: another access naming genetics still reads it', () => {
+      const c = new Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: '*', level: 'read' }, { streamId: 'genetics', level: 'none' }] });
+      c.addAccessObject({ id: 'a2', permissions: [{ streamId: 'genetics', level: 'read' }] });
+      c.initStreamCache(streamsById);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.eventIsAccessible({ streamIds: ['genetics-variant'] }), true);
+    });
+  });
+
+  describe('[GENX-T] short text', () => {
+    const content = (extra) => ({
+      gene: { label: 'MTHFR', codes: [{ system: 'http://www.genenames.org/geneId', code: 'HGNC:7436' }] },
+      variant: { label: 'C677T' },
+      result: 'present',
+      ...extra
+    });
+
+    it('[GENX-T1] gene and variant, then the result as printed, else the coded result and zygosity', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.geneticVariantText)(content({ zygosity: 'heterozygous' })), 'MTHFR C677T: present, heterozygous');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.geneticVariantText)(content({ resultText: 'C677T hétérozygote' })), 'MTHFR C677T: C677T hétérozygote');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.geneticVariantText)(content({ result: 'absent' })), 'MTHFR C677T: absent');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.geneticVariantText)(null), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.GENETIC_VARIANT_CODED, streamIds: ['genetics-variant'], content: content({ zygosity: 'homozygous' }) }), 'MTHFR C677T: present, homozygous');
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/getAttachmentUrl.test.js"
+/*!****************************************!*\
+  !*** ./tests/getAttachmentUrl.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_toolkit_getAttachmentUrl_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/toolkit/getAttachmentUrl.ts */ "./ts/toolkit/getAttachmentUrl.ts");
+
+
+
+describe('[GAU] getAttachmentUrl', function () {
+  const fakeConnection = {
+    endpoint: 'https://demo.datasafe.dev/testuser/',
+    apiEndpoint: 'https://token123@demo.datasafe.dev/testuser/',
+    token: 'token123'
+  };
+
+  const eventWithAttachment = {
+    id: 'evt123',
+    attachments: [
+      { id: 'att-001', fileName: 'photo.jpg', readToken: 'rt-abc-123' },
+      { id: 'att-002', fileName: 'thumb.jpg', readToken: 'rt-def-456' }
+    ]
+  };
+
+  it('[GAU1] builds URL with readToken from first attachment', function () {
+    const url = (0,_ts_toolkit_getAttachmentUrl_ts__WEBPACK_IMPORTED_MODULE_1__.getAttachmentUrl)(fakeConnection, eventWithAttachment);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(
+      url,
+      'https://demo.datasafe.dev/testuser/events/evt123/att-001?readToken=rt-abc-123'
+    );
+  });
+
+  it('[GAU2] builds URL for specific attachment index', function () {
+    const url = (0,_ts_toolkit_getAttachmentUrl_ts__WEBPACK_IMPORTED_MODULE_1__.getAttachmentUrl)(fakeConnection, eventWithAttachment, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(
+      url,
+      'https://demo.datasafe.dev/testuser/events/evt123/att-002?readToken=rt-def-456'
+    );
+  });
+
+  it('[GAU3] returns null when no attachments', function () {
+    const url = (0,_ts_toolkit_getAttachmentUrl_ts__WEBPACK_IMPORTED_MODULE_1__.getAttachmentUrl)(fakeConnection, { id: 'evt456' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(url, null);
+  });
+
+  it('[GAU4] returns null for out-of-range index', function () {
+    const url = (0,_ts_toolkit_getAttachmentUrl_ts__WEBPACK_IMPORTED_MODULE_1__.getAttachmentUrl)(fakeConnection, eventWithAttachment, 5);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(url, null);
+  });
+
+  it('[GAU5] strips trailing slash from endpoint', function () {
+    const url = (0,_ts_toolkit_getAttachmentUrl_ts__WEBPACK_IMPORTED_MODULE_1__.getAttachmentUrl)(fakeConnection, eventWithAttachment);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!url.includes('//events'), 'Should not have double slash before events');
+  });
+
+  it('[GAU6] uses connection.endpoint (no embedded credentials)', function () {
+    const url = (0,_ts_toolkit_getAttachmentUrl_ts__WEBPACK_IMPORTED_MODULE_1__.getAttachmentUrl)(fakeConnection, eventWithAttachment);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!url.includes('@'), 'URL should not contain embedded credentials');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!url.includes('auth='), 'URL should use readToken, not auth');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(url.includes('readToken='), 'URL should contain readToken');
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/hdsLib.test.js"
 /*!******************************!*\
   !*** ./tests/hdsLib.test.js ***!
@@ -45143,6 +52571,739 @@ describe('[MODX] Model', () => {
 
 /***/ },
 
+/***/ "./tests/initHDSModel.test.js"
+/*!************************************!*\
+  !*** ./tests/initHDSModel.test.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+
+
+
+describe('[IHM] initHDSModel', function () {
+  this.timeout(15000);
+
+  const originalInfo = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Service.prototype.info;
+
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Service.prototype.info = originalInfo;
+  });
+
+  after(async () => {
+    // leave the singleton loaded for the files that follow
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.initHDSModel)();
+  });
+
+  for (const [label, assets] of [['no assets', undefined], ['no hds-model asset', { definitions: 'x' }]]) {
+    it(`[IHM1] a service info with ${label} fails with an explicit error (B-2026-10-28-19)`, async () => {
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Service.prototype.info = async () => ({ assets });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.initHDSModel)(), (err) => {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(err.message, /service info has no "hds-model" asset/);
+        return true;
+      });
+    });
+  }
+});
+
+
+/***/ },
+
+/***/ "./tests/itemLabels.test.js"
+/*!**********************************!*\
+  !*** ./tests/itemLabels.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/appTemplates/itemLabels.ts */ "./ts/appTemplates/itemLabels.ts");
+
+
+
+describe('[ILBL] itemLabels', function () {
+  describe('getSectionItemLabels', function () {
+    it('returns labels for an itemKey present in section', function () {
+      const section = {
+        key: 's1',
+        type: 'permanent',
+        name: { en: 'Section 1' },
+        itemKeys: ['function-mobility'],
+        itemCustomizations: {
+          'function-mobility': {
+            labels: { question: { en: 'MOBILITY' } }
+          }
+        }
+      };
+      const labels = (0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.getSectionItemLabels)(section, 'function-mobility');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(labels, { question: { en: 'MOBILITY' } });
+    });
+
+    it('returns undefined when itemKey not in section', function () {
+      const section = { key: 's', type: 'permanent', name: { en: '' }, itemKeys: ['x'] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.getSectionItemLabels)(section, 'function-mobility'), undefined);
+    });
+
+    it('returns undefined when no customizations', function () {
+      const section = { key: 's', type: 'permanent', name: { en: '' }, itemKeys: ['function-mobility'] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.getSectionItemLabels)(section, 'function-mobility'), undefined);
+    });
+  });
+
+  describe('collectItemLabelsFromSections', function () {
+    const mkSection = (key, itemKeys, customs) => ({
+      key, type: 'permanent', name: { en: key }, itemKeys, itemCustomizations: customs
+    });
+
+    it('returns empty when no section uses the item', function () {
+      const sources = [{
+        section: mkSection('s', ['x'], {}),
+        source: { contactName: 'A' }
+      }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.collectItemLabelsFromSections)('function-mobility', sources), []);
+    });
+
+    it('returns one entry per section with non-empty labels and source attribution', function () {
+      const sources = [
+        {
+          section: mkSection('s1', ['function-mobility'], {
+            'function-mobility': { labels: { question: { en: 'MOBILITY' } } }
+          }),
+          source: { contactName: 'Dr. A', formTitle: { en: 'Form A' } }
+        },
+        {
+          section: mkSection('s2', ['function-mobility'], {
+            'function-mobility': { labels: { question: { en: 'Walking' } } }
+          }),
+          source: { contactName: 'Dr. B', formTitle: { en: 'Form B' } }
+        }
+      ];
+      const result = (0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.collectItemLabelsFromSections)('function-mobility', sources);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result[0].question, { en: 'MOBILITY' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].source.contactName, 'Dr. A');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result[1].question, { en: 'Walking' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[1].source.contactName, 'Dr. B');
+    });
+
+    it('skips sections with no labels when requireLabels=true (default)', function () {
+      const sources = [
+        {
+          section: mkSection('s1', ['function-mobility'], {}),
+          source: { contactName: 'A' }
+        },
+        {
+          section: mkSection('s2', ['function-mobility'], {
+            'function-mobility': { labels: { question: { en: 'M' } } }
+          }),
+          source: { contactName: 'B' }
+        }
+      ];
+      const result = (0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.collectItemLabelsFromSections)('function-mobility', sources);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].source.contactName, 'B');
+    });
+
+    it('includes empty-label sections when requireLabels=false', function () {
+      const sources = [
+        {
+          section: mkSection('s', ['function-mobility'], {}),
+          source: { contactName: 'A' }
+        }
+      ];
+      const result = (0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.collectItemLabelsFromSections)('function-mobility', sources, { requireLabels: false });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].source.contactName, 'A');
+    });
+
+    it('deduplicates identical label sets (default)', function () {
+      const sameLabels = { labels: { question: { en: 'MOBILITY' } } };
+      const sources = [
+        {
+          section: mkSection('s1', ['function-mobility'], { 'function-mobility': sameLabels }),
+          source: { contactName: 'Dr. A' }
+        },
+        {
+          section: mkSection('s2', ['function-mobility'], { 'function-mobility': sameLabels }),
+          source: { contactName: 'Dr. B' }
+        }
+      ];
+      const result = (0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.collectItemLabelsFromSections)('function-mobility', sources);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 1, 'identical labels collapse to one entry');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result[0].source.contactName, 'Dr. A', 'first occurrence wins');
+    });
+
+    it('keeps duplicates when deduplicate=false', function () {
+      const same = { labels: { question: { en: 'M' } } };
+      const sources = [
+        { section: mkSection('s1', ['m'], { m: same }), source: { contactName: 'A' } },
+        { section: mkSection('s2', ['m'], { m: same }), source: { contactName: 'B' } }
+      ];
+      const result = (0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.collectItemLabelsFromSections)('m', sources, { deduplicate: false });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 2);
+    });
+
+    it('preserves the options override map', function () {
+      const sources = [{
+        section: mkSection('s', ['function-mobility'], {
+          'function-mobility': {
+            labels: {
+              question: { en: 'MOBILITY' },
+              options: { 0: { en: 'No problems walking' }, 1: { en: 'Unable to walk' } }
+            }
+          }
+        }),
+        source: { contactName: 'Dr. A' }
+      }];
+      const result = (0,_ts_appTemplates_itemLabels_ts__WEBPACK_IMPORTED_MODULE_1__.collectItemLabelsFromSections)('function-mobility', sources);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result[0].options[0], { en: 'No problems walking' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result[0].options[1], { en: 'Unable to walk' });
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/itemsDefsAliases.test.js"
+/*!****************************************!*\
+  !*** ./tests/itemsDefsAliases.test.js ***!
+  \****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+
+
+
+/**
+ * Regression tests for the `streamId:eventType` index (site-agents#3).
+ *
+ * data-model renames an item key by keeping the old key as a **deprecated alias**
+ * carrying the *same* streamId + eventType. That is the documented rename procedure
+ * (data-model `AGENTS.md`), and it is what keeps consumers pinned to the old key
+ * working. `data-model/src/items.js` accepts it; this loader did not, so the whole
+ * live pack became unreadable — `initHDSModel()` resolved, then every `itemsDefs`
+ * access threw.
+ *
+ * The guard here used to carry the comment "should be tested with a faulty model".
+ * It never was. These are that test.
+ */
+
+/** Minimal pack.json-shaped model: one active item + its deprecated rename alias. */
+function makeModelWithAlias () {
+  return {
+    items: {
+      'body-urine-hormones-fsh': {
+        version: 'v2',
+        label: { en: 'FSH (urine)' },
+        description: { en: 'Follicle-stimulating hormone in your urine.' },
+        streamId: 'body-urine-hormones-fsh',
+        eventType: 'concentration/iu-l',
+        type: 'number',
+        repeatable: 'any'
+      },
+      'fertility-hormone-fsh': {
+        version: 'v1',
+        deprecated: true,
+        label: { en: 'FSH (urine, legacy key)' },
+        description: { en: 'Deprecated — use body-urine-hormones-fsh.' },
+        streamId: 'body-urine-hormones-fsh',
+        eventType: 'concentration/iu-l',
+        type: 'number',
+        repeatable: 'any'
+      }
+    },
+    streams: [{ id: 'body-urine-hormones-fsh', name: 'FSH' }]
+  };
+}
+
+function load (data) {
+  const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('http://fake/pack.json');
+  model.loadFromObject(data);
+  return model;
+}
+
+describe('[ALIX] itemsDefs streamId:eventType index', () => {
+  describe('[ALIA] active + deprecated on one pair', () => {
+    it('[ALIA1] loads without throwing', () => {
+      const model = load(makeModelWithAlias());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.getAll().length, 2);
+    });
+
+    it('[ALIA2] the deprecated alias stays resolvable by its old key', () => {
+      // This is the entire point of the alias: consumers hardcoding the old key
+      // (bridge-mira builds it by string concat) keep working through a rename.
+      const model = load(makeModelWithAlias());
+      const itemDef = model.itemsDefs.forKey('fertility-hormone-fsh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'fertility-hormone-fsh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef.isDeprecated);
+    });
+
+    it('[ALIA3] forEvent returns the ACTIVE item, never the alias', () => {
+      const model = load(makeModelWithAlias());
+      const itemDef = model.itemsDefs.forEvent({
+        streamIds: ['body-urine-hormones-fsh'],
+        type: 'concentration/iu-l'
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'body-urine-hormones-fsh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!itemDef.isDeprecated);
+    });
+
+    it('[ALIA4] active wins regardless of load order', () => {
+      // The alias is declared *first* here. Object key order decides iteration
+      // order, so a naive last-write-wins index would hand the pair to the alias.
+      const data = makeModelWithAlias();
+      const reordered = {
+        items: {
+          'fertility-hormone-fsh': data.items['fertility-hormone-fsh'],
+          'body-urine-hormones-fsh': data.items['body-urine-hormones-fsh']
+        },
+        streams: data.streams
+      };
+      const itemDef = load(reordered).itemsDefs.forEvent({
+        streamIds: ['body-urine-hormones-fsh'],
+        type: 'concentration/iu-l'
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'body-urine-hormones-fsh');
+    });
+
+    it('[ALIA5] getAllActive hides the alias, getAll keeps it', () => {
+      const model = load(makeModelWithAlias());
+      const active = model.itemsDefs.getAllActive().map((i) => i.key);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(active, ['body-urine-hormones-fsh']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.getAll().length, 2);
+    });
+  });
+
+  describe('[ALIB] genuinely ambiguous models still throw', () => {
+    it('[ALIB1] two ACTIVE items on one pair', () => {
+      const data = makeModelWithAlias();
+      delete data.items['fertility-hormone-fsh'].deprecated;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => load(data).itemsDefs, /Duplicate streamId \+ eventType/);
+    });
+
+    it('[ALIB2] two DEPRECATED items on one pair, no active owner', () => {
+      // Nothing could own the pair, so forEvent would be ambiguous.
+      const data = makeModelWithAlias();
+      data.items['body-urine-hormones-fsh'].deprecated = true;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => load(data).itemsDefs, /Two deprecated items share/);
+    });
+  });
+
+  describe('[ALIC] a deprecated item on a DIFFERENT eventType (the real LH shape)', () => {
+    // fertility-hormone-lh is deprecated on concentration/mg-l while the active
+    // body-urine-hormones-lh uses concentration/iu-l — they never collide (own map
+    // slots), and legacy mg-l events must keep resolving to the deprecated item.
+    // This is the other half of the deprecation contract, previously only covered
+    // indirectly via the live pack. (Review 2026-07-16, finding 4.)
+    function makeModelWithLh () {
+      return {
+        items: {
+          'body-urine-hormones-lh': {
+            version: 'v2',
+            label: { en: 'LH (urine)' },
+            description: { en: 'Luteinising hormone in your urine.' },
+            streamId: 'body-urine-hormones-lh',
+            eventType: 'concentration/iu-l',
+            type: 'number',
+            repeatable: 'any'
+          },
+          'fertility-hormone-lh': {
+            version: 'v1',
+            deprecated: true,
+            label: { en: 'LH (urine, legacy mg/L)' },
+            description: { en: 'Historical LH on the old unit.' },
+            streamId: 'body-urine-hormones-lh',
+            eventType: 'concentration/mg-l',
+            type: 'number',
+            repeatable: 'any'
+          }
+        },
+        streams: [{ id: 'body-urine-hormones-lh', name: 'LH' }]
+      };
+    }
+
+    it('[ALIC1] both items load; each pair keeps its own slot', () => {
+      const model = load(makeModelWithLh());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.getAll().length, 2);
+    });
+
+    it('[ALIC2] a legacy mg-l event resolves to the deprecated item', () => {
+      const model = load(makeModelWithLh());
+      const itemDef = model.itemsDefs.forEvent({
+        streamIds: ['body-urine-hormones-lh'],
+        type: 'concentration/mg-l'
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'fertility-hormone-lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef.isDeprecated);
+    });
+
+    it('[ALIC3] a new iu-l event resolves to the active item', () => {
+      const model = load(makeModelWithLh());
+      const itemDef = model.itemsDefs.forEvent({
+        streamIds: ['body-urine-hormones-lh'],
+        type: 'concentration/iu-l'
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'body-urine-hormones-lh');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!itemDef.isDeprecated);
+    });
+  });
+
+  describe('[ALID] malformed eventType shape is rejected (mirrors data-model)', () => {
+    it('[ALID1] an item mixing eventType and variations.eventType throws', () => {
+      const data = makeModelWithAlias();
+      data.items['body-urine-hormones-fsh'].variations = {
+        eventType: { options: [{ value: 'concentration/iu-l' }] }
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => load(data).itemsDefs, /mixes eventType and variations/);
+    });
+
+    it('[ALID2] an item with neither eventType nor variations throws (not a TypeError)', () => {
+      const data = makeModelWithAlias();
+      delete data.items['body-urine-hormones-fsh'].eventType;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => load(data).itemsDefs, /neither eventType nor variations/);
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/labResults.test.js"
+/*!**********************************!*\
+  !*** ./tests/labResults.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+
+
+
+/**
+ * Lab results (site-agents#22 #28, data-model 3.27.0): a printed limit (`hdsComparator` / `comparator`), coded
+ * results with no item of their own (`lab-result/coded-v1`), and `type: imported` items.
+ */
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+function makeModel () {
+  return {
+    items: {
+      'body-blood-serum-ferritin': {
+        version: 'v1',
+        label: { en: 'Ferritin' },
+        description: { en: 'Ferritin in serum.' },
+        streamId: 'body-blood-serum-ferritin',
+        type: 'number',
+        variations: { eventType: { options: [{ value: 'concentration/ug-l', label: { en: 'ng/mL' } }, { value: 'concentration/pmol-l', label: { en: 'pmol/L' } }] } },
+        references: { loinc: ['2276-4', '24373-3'] }
+      },
+      'body-blood-hba1c': {
+        version: 'v1',
+        label: { en: 'HbA1c' },
+        description: { en: 'Glycated hemoglobin.' },
+        streamId: 'body-blood-hba1c',
+        eventType: 'ratio/proportion',
+        type: 'number',
+        number: { display: { multiplier: 100, suffix: { en: '%' } } }
+      },
+      'body-blood-coded': {
+        version: 'v1',
+        label: { en: 'Other blood results' },
+        description: { en: 'Blood test results that have no field of their own.' },
+        streamId: 'body-blood-coded',
+        eventType: 'lab-result/coded-v1',
+        type: 'imported',
+        repeatable: 'unlimited'
+      },
+      'sync-status': {
+        version: 'v1',
+        label: { en: 'Sync status' },
+        description: { en: 'A connector status.' },
+        streamId: 'sync-status',
+        eventType: 'sync-status/v1',
+        type: 'system'
+      },
+      'future-thing': {
+        version: 'v1',
+        label: { en: 'Future thing' },
+        description: { en: 'A type this version does not know.' },
+        streamId: 'future-thing',
+        eventType: 'note/txt',
+        type: 'hologram'
+      },
+      'old-ferritin': {
+        version: 'v1',
+        label: { en: 'Old ferritin' },
+        description: { en: 'Deprecated.' },
+        streamId: 'old-ferritin',
+        eventType: 'concentration/ug-l',
+        type: 'number',
+        deprecated: true,
+        references: { loinc: '2947-0' }
+      },
+      'body-blood-serum-glucose-random': {
+        version: 'v1',
+        label: { en: 'Glucose (random)' },
+        description: { en: 'Blood sugar.' },
+        streamId: 'body-blood-serum-glucose-random',
+        type: 'number',
+        variations: {
+          eventType: {
+            options: [
+              { value: 'concentration/mg-dl', label: { en: 'mg/dL' }, loinc: '2345-7' },
+              { value: 'concentration/mmol-l', label: { en: 'mmol/L' }, loinc: '14749-6' },
+              { value: 'concentration/umol-l', label: { en: 'μmol/L' }, loinc: null }
+            ]
+          }
+        },
+        references: { loinc: ['2345-7', '14749-6'], loincMethod: ['41653-7'] }
+      },
+      'body-blood-coagulation-inr': {
+        version: 'v1',
+        label: { en: 'INR' },
+        description: { en: 'International normalized ratio.' },
+        streamId: 'body-blood-coagulation-inr',
+        eventType: 'ratio/generic',
+        type: 'number',
+        ratioRelativeTo: 1,
+        references: { loinc: ['6301-6'] }
+      },
+      'body-ratio-other': {
+        version: 'v1',
+        label: { en: 'Another ratio' },
+        description: { en: 'A number ratio without a UCUM code of its own.' },
+        streamId: 'body-ratio-other',
+        eventType: 'ratio/generic',
+        type: 'number',
+        ratioRelativeTo: 1
+      },
+      'fertility-ratio-scale': {
+        version: 'v1',
+        label: { en: 'A scale' },
+        description: { en: 'A select on ratio/generic.' },
+        streamId: 'fertility-ratio-scale',
+        eventType: 'ratio/generic',
+        type: 'select',
+        options: [{ value: 0, label: { en: 'none' } }, { value: 8, label: { en: 'max' } }],
+        ratioRelativeTo: 8
+      }
+    },
+    streams: [
+      { id: 'body', name: 'Body', parentId: null },
+      { id: 'body-blood', name: 'Blood', parentId: 'body' },
+      { id: 'body-blood-serum-ferritin', name: 'Ferritin', parentId: 'body-blood' },
+      { id: 'body-blood-hba1c', name: 'HbA1c', parentId: 'body-blood' },
+      { id: 'body-blood-coded', name: 'Other blood results', parentId: 'body-blood' },
+      { id: 'sync-status', name: 'Sync', parentId: null },
+      { id: 'future-thing', name: 'Future', parentId: null },
+      { id: 'old-ferritin', name: 'Old', parentId: null },
+      { id: 'body-blood-serum-glucose-random', name: 'Glucose (random)', parentId: 'body-blood' },
+      { id: 'body-blood-coagulation', name: 'Coagulation', parentId: 'body-blood' },
+      { id: 'body-blood-coagulation-inr', name: 'INR', parentId: 'body-blood-coagulation' },
+      { id: 'body-ratio-other', name: 'Another ratio', parentId: 'body' },
+      { id: 'fertility-ratio-scale', name: 'A scale', parentId: null }
+    ]
+  };
+}
+
+const hiv = {
+  label: { en: 'HIV-1 RNA (viral load)' },
+  codes: [{ system: 'http://loinc.org', code: '20447-9' }]
+};
+const coded = (content) => ({ streamIds: ['body-blood-coded'], type: 'lab-result/coded-v1', content });
+const ferritin = (content, clientData) => ({ streamIds: ['body-blood-serum-ferritin'], type: 'concentration/ug-l', content, clientData });
+
+describe('[LABR] lab results', () => {
+  let model;
+  before(() => {
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)();
+    model.loadFromObject(makeModel());
+  });
+  after(async () => {
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+  });
+
+  it('[LABR-1] labComparatorOf reads clientData on items, content on coded results', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labComparatorOf)(ferritin(1.5, { hdsComparator: '<' })), '<');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labComparatorOf)(ferritin(1.5)), null);
+    for (const bad of ['=', '≤', ' <']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labComparatorOf)(ferritin(1.5, { hdsComparator: bad })), 'unknown');
+    const c = coded({ analyte: hiv, value: 20, comparator: '<', unit: '{copies}/mL' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labComparatorOf)(c), '<');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labComparatorOf)({ ...coded({ analyte: hiv, value: 20, unit: '{copies}/mL' }), clientData: { hdsComparator: '>' } }), null);
+  });
+
+  it('[LABR-1b] isExactLabValue: false when censored, unknown or not a number', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isExactLabValue)(ferritin(30)), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isExactLabValue)(ferritin(1.5, { hdsComparator: '<' })), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isExactLabValue)(ferritin(1.5, { hdsComparator: '=' })), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isExactLabValue)(coded({ analyte: hiv, value: 20, unit: '{copies}/mL' })), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isExactLabValue)(coded({ analyte: hiv, valueText: 'not detected' })), false);
+  });
+
+  it('[LABR-2] eventToShortText shows the comparator and the coded result', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ferritin(1.5, { hdsComparator: '<' })), '< 1.5 ng/mL');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ferritin(1.5, { hdsComparator: '≤' })), '? 1.5 ng/mL');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(ferritin(30)), '30 ng/mL');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(coded({ analyte: hiv, value: 20, comparator: '<', unit: '{copies}/mL' })), 'HIV-1 RNA (viral load) < 20 copies/mL');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(coded({ analyte: { label: { en: 'HBsAg' }, codes: [{ system: 'http://loinc.org', code: '5196-1' }] }, valueText: 'negative' })), 'HBsAg: negative');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(coded({ analyte: { label: { en: 'Rubella IgG' }, codes: [{ system: 'urn:oid:1.2.3', code: 'RUB' }] }, value: 3.2, unit: '{index}', valueText: 'positive' })), 'Rubella IgG 3.2 index (positive)');
+    // shown the same on a stream with no item (the items ship one data-model release later)
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...coded({ analyte: hiv, value: 20, unit: '{copies}/mL' }), streamIds: ['body-blood'] }), 'HIV-1 RNA (viral load) 20 copies/mL');
+  });
+
+  // data-model 3.33.0: INR is a number item on ratio/generic, its content `{ value, relativeTo: 1 }`
+  const inr = (value, clientData) => ({ streamIds: ['body-blood-coagulation-inr'], type: 'ratio/generic', content: { value, relativeTo: 1 }, clientData });
+
+  it('[LABR-RGEN-1] a number item on ratio/generic reads content.value', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labNumberOf)(inr(2.5)), 2.5);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labNumberOf)(ferritin(30)), 30);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labNumberOf)(coded({ analyte: hiv, value: 20, unit: '{copies}/mL' })), 20);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labNumberOf)(coded({ analyte: hiv, valueText: 'not detected' })), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labNumberOf)({ ...inr(2.5), content: 2.5 }), null);
+    // a select's scale is a numerator over its denominator, not a lab figure
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labNumberOf)({ streamIds: ['fertility-ratio-scale'], type: 'ratio/generic', content: { value: 4, relativeTo: 8 } }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isExactLabValue)({ streamIds: ['fertility-ratio-scale'], type: 'ratio/generic', content: { value: 4, relativeTo: 8 } }), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labNumberOf)({ ...inr(2.5), content: { value: 2.5, relativeTo: 2 } }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isExactLabValue)(inr(2.5)), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isExactLabValue)(inr(8, { hdsComparator: '>' })), false);
+  });
+
+  it('[LABR-RGEN-2] eventToShortText: the value with its comparator, never [object Object]', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(inr(2.5)), '2.5');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(inr(8, { hdsComparator: '>' })), '> 8');
+    // a select on ratio/generic keeps its "value/relativeTo label" text
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ streamIds: ['fertility-ratio-scale'], type: 'ratio/generic', content: { value: 8, relativeTo: 8 } }), '8/8 max');
+  });
+
+  it('[LABR-RGEN-3] labValueToFhir: INR as UCUM {INR}, a select scale gives nothing', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(inr(2.5)), { valueQuantity: { value: 2.5, unit: 'INR', system: 'http://unitsofmeasure.org', code: '{INR}' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(inr(8, { hdsComparator: '>' })),
+      { valueQuantity: { value: 8, comparator: '>', unit: 'INR', system: 'http://unitsofmeasure.org', code: '{INR}' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(inr(8, { hdsComparator: '=' })), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)({ streamIds: ['body-ratio-other'], type: 'ratio/generic', content: { value: 1.4, relativeTo: 1 } }),
+      { valueQuantity: { value: 1.4, system: 'http://unitsofmeasure.org', code: '1' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)({ streamIds: ['fertility-ratio-scale'], type: 'ratio/generic', content: { value: 8, relativeTo: 8 } }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)({ ...inr(2.5), content: { value: 2.5, relativeTo: 2 } }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)(inr(2.5)), '6301-6');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labSeriesKey)(inr(2.5)), 'body-blood-coagulation-inr');
+  });
+
+  it('[LABR-2b] labUnitText prefers unitText, else a readable UCUM code', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: 'umol/L', unitText: 'µmol/l' }), 'µmol/l');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: 'umol/L' }), 'µmol/L');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: 'u[IU]/mL' }), 'µIU/mL');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: '[IU]/L' }), 'IU/L');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: '10*9/L' }), '10^9/L');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: 'U/L' }), 'U/L');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: '/uL' }), '/µL');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: 'mmol/mol{creat}' }), 'mmol/mol');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: '10*3{cells}/uL' }), '10^3/µL');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: 'mL/min/{1.73_m2}' }), 'mL/min/1.73 m2');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: 'Cel' }), '°C');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: '%' }), '%');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labUnitText)({ unit: '1' }), null);
+  });
+
+  it('[LABR-3] labValueToFhir: comparator only when censored, UCUM only on coded', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(ferritin(1.5, { hdsComparator: '<' })), { valueQuantity: { value: 1.5, comparator: '<', unit: 'ng/mL' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(ferritin(30)), { valueQuantity: { value: 30, unit: 'ng/mL' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(ferritin(1.5, { hdsComparator: '=' })), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, value: 20, comparator: '<', unit: '{copies}/mL' })),
+      { valueQuantity: { value: 20, comparator: '<', unit: 'copies/mL', system: 'http://unitsofmeasure.org', code: '{copies}/mL' } });
+    const negative = { system: 'http://snomed.info/sct', version: 'http://snomed.info/sct/900000000000207008', code: '260385009', display: 'Negative' };
+    const labCode = { system: 'urn:oid:1.2.3', code: 'NEG' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, valueText: 'négatif', valueCodes: [negative, labCode] })),
+      { valueCodeableConcept: { coding: [negative, labCode], text: 'négatif' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, valueText: '1:160' })), { valueString: '1:160' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, value: 3.2, unit: '{index}', valueText: 'positive' })),
+      { valueQuantity: { value: 3.2, unit: 'index', system: 'http://unitsofmeasure.org', code: '{index}' }, note: 'positive' });
+    // an item event reads as it displays: a fraction stored 0..1 exports as a percentage
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)({ streamIds: ['body-blood-hba1c'], type: 'ratio/proportion', content: 0.057, clientData: { hdsComparator: '<' } }),
+      { valueQuantity: { value: 5.7, comparator: '<', unit: '%' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)({ streamIds: ['x'], type: 'note/txt', content: 'hello' }), null);
+  });
+
+  it('[LABR-4] labSeriesKey never merges analytes or units', () => {
+    // an item with several units: one series per unit
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labSeriesKey)(ferritin(30)), 'body-blood-serum-ferritin|concentration/ug-l');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labSeriesKey)({ ...ferritin(67), type: 'concentration/pmol-l' }), 'body-blood-serum-ferritin|concentration/pmol-l');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labSeriesKey)({ streamIds: ['body-blood-hba1c'], type: 'ratio/proportion', content: 0.057 }), 'body-blood-hba1c');
+    const a = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labSeriesKey)(coded({ analyte: hiv, value: 20, unit: '{copies}/mL' }));
+    const b = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labSeriesKey)(coded({ analyte: { label: { en: 'Vancomycin' }, codes: [{ system: 'http://loinc.org', code: '20578-1' }] }, value: 12, unit: 'mg/L' }));
+    const c = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labSeriesKey)(coded({ analyte: hiv, value: 1.3, unit: '{log_copies}/mL' }));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(a, 'body-blood-coded|http://loinc.org|20447-9|{copies}/mL');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(a, b);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(a, c);
+  });
+
+  it('[LABR-5] forLoinc / checkLabResultCoded', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forLoinc('24373-3').key, 'body-blood-serum-ferritin');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forLoinc('2947-0'), null, 'deprecated items own nothing');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forLoinc('20447-9'), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkLabResultCoded)(coded({ analyte: { label: { en: 'Ferritin' }, codes: [{ system: 'http://loinc.org', code: '2276-4' }] }, value: 30, unit: 'ug/L' })),
+      [{ code: 'owned-by-item', itemKey: 'body-blood-serum-ferritin', loinc: '2276-4' }]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkLabResultCoded)(coded({ analyte: { label: { en: 'X' }, codes: [{ system: 'urn:oid:1.2.3', code: 'X' }] }, valueText: 'x' })), [{ code: 'no-loinc' }]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkLabResultCoded)(coded({ analyte: { label: { en: 'X' }, codes: [{ system: 'http://loinc.org', code: '20447-8' }] }, valueText: 'x' })), [{ code: 'invalid-loinc', loinc: '20447-8' }]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkLabResultCoded)(coded({ analyte: hiv, value: 20, unit: '{copies}/mL' })), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkLabResultCoded)(ferritin(30)), []);
+  });
+
+  it('[LABR-5c] forLoinc reads method codes; labLoincOf gives the code an event stores (data-model 3.32.0)', () => {
+    const glucose = (type) => ({ streamIds: ['body-blood-serum-glucose-random'], type, content: 5 });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forLoinc('41653-7').key, 'body-blood-serum-glucose-random', 'a method code owns');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forLoinc('14749-6').key, 'body-blood-serum-glucose-random');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkLabResultCoded)(coded({ analyte: { label: { en: 'Glucose' }, codes: [{ system: 'http://loinc.org', code: '41653-7' }] }, value: 5, unit: 'mmol/L' })),
+      [{ code: 'owned-by-item', itemKey: 'body-blood-serum-glucose-random', loinc: '41653-7' }]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)(glucose('concentration/mg-dl')), '2345-7');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)(glucose('concentration/mmol-l')), '14749-6');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)(glucose('concentration/umol-l')), null, 'an option without a code');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)(ferritin(30)), null, 'unit options without a stated code: never inherited');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)({ streamIds: ['old-ferritin'], type: 'concentration/ug-l', content: 30 }), '2947-0', 'one unit, one code');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)(coded({ analyte: hiv, value: 20, unit: '{copies}/mL' })), '20447-9');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)(coded({ analyte: { label: { en: 'X' }, codes: [{ system: 'urn:oid:1.2.3', code: 'X' }] }, valueText: 'x' })), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labLoincOf)({ streamIds: ['body-blood-hba1c'], type: 'ratio/proportion', content: 0.05 }), null, 'no code asserted');
+  });
+
+  it('[LABR-5b] isValidLoincCode checks the mod-10 digit', () => {
+    for (const ok of ['8867-4', '2947-0', '20447-9', '5196-1', '2880-3']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isValidLoincCode)(ok), true, ok);
+    for (const bad of ['8867-5', '2947', 'LP1234-5', '12345678-9', '']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.isValidLoincCode)(bad), false, bad);
+  });
+
+  it('[LABR-6] imported items: resolvable, never in getAllActive; unknown types left out too', () => {
+    const coded = model.itemsDefs.forKey('body-blood-coded');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(coded.isImported, true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(coded.isEnterable, false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forKey('body-blood-serum-ferritin').isImported, false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-blood-serum-ferritin', 'body-blood-hba1c', 'body-blood-serum-glucose-random', 'body-blood-coagulation-inr', 'body-ratio-other', 'fertility-ratio-scale']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forEvent({ streamIds: ['body-blood-coded'], type: 'lab-result/coded-v1' }).key, 'body-blood-coded');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forEvent({ streamIds: ['body-blood'], type: 'lab-result/coded-v1' }, false), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcFormSpec.validateFormSpecItemKeys({ sections: [{ key: 's', itemKeys: ['body-blood-coded'] }] }, model), []);
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/legacyChat.test.js"
 /*!**********************************!*\
   !*** ./tests/legacyChat.test.js ***!
@@ -45278,6 +53439,200 @@ describe('[LISX] Lib settings', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.l(text), text.en);
     _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.settings.setPreferredLocales(['fr']);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.l(text), text.fr);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/loader.test.js"
+/*!******************************!*\
+  !*** ./tests/loader.test.js ***!
+  \******************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/appTemplates/loader.ts */ "./ts/appTemplates/loader.ts");
+
+
+
+function validTemplate () {
+  return {
+    id: 'sample-template',
+    title: { en: 'Sample Template' },
+    description: { en: 'Sample women cohort' },
+    chat: true,
+    sections: [
+      { key: 'menstrual', type: 'recurring', name: { en: 'Menstrual' }, customFieldKeys: ['flow'] }
+    ],
+    customFields: [
+      {
+        streamId: 'sample-template-custom-flow',
+        eventType: 'note/txt',
+        def: {
+          version: 'v1',
+          templateId: 'sample-template',
+          key: 'flow',
+          label: { en: 'Menstrual flow' },
+          options: ['light', 'medium', 'heavy'],
+          section: 'menstrual'
+        }
+      }
+    ],
+    existingStreamRefs: [
+      { streamId: 'external-stream-a', permissions: ['manage'], purpose: 'example-out' },
+      { streamId: 'external-stream-b', permissions: ['read'], purpose: 'example-in' }
+    ]
+  };
+}
+
+describe('[CFLD] AppTemplate loader', function () {
+  describe('[CFLD-OK] valid templates', function () {
+    it('[CFLD-OK-1] accepts a fully-specified template', function () {
+      const tpl = (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(validTemplate());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.id, 'sample-template');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.customFields.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.existingStreamRefs.length, 2);
+    });
+
+    it('[CFLD-OK-2] accepts a minimal template (no customFields, no existingStreamRefs)', function () {
+      const tpl = (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)({
+        id: 'min',
+        title: { en: 'min' },
+        description: { en: 'min' },
+        chat: false,
+        sections: []
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.id, 'min');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.customFields, undefined);
+    });
+
+    it('[CFLD-OK-3] accepts a string for localizable text (oneOf)', function () {
+      const tpl = (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)({
+        id: 'str',
+        title: 'String title',
+        description: 'String desc',
+        chat: false,
+        sections: []
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(tpl.title, 'String title');
+    });
+  });
+
+  describe('[CFLD-AJV] schema-level rejection', function () {
+    it('[CFLD-AJV-1] rejects missing required field', function () {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(
+        () => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)({ id: 'x', title: { en: 'x' }, description: { en: 'x' }, chat: true /* sections missing */ }),
+        /sections/
+      );
+    });
+
+    it('[CFLD-AJV-2] rejects bad eventType in customFields', function () {
+      const t = validTemplate();
+      t.customFields[0].eventType = 'temperature/c'; // not in enum
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /eventType|enum/);
+    });
+
+    it('[CFLD-AJV-3] rejects unknown top-level field', function () {
+      const t = validTemplate();
+      t.bogus = 'extra';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /must NOT have additional properties|bogus/i);
+    });
+
+    it('[CFLD-AJV-4] rejects bad permission level in existingStreamRefs', function () {
+      const t = validTemplate();
+      t.existingStreamRefs[0].permissions = ['admin'];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /enum|permissions/);
+    });
+
+    it('[CFLD-AJV-5] rejects empty permissions array (minItems)', function () {
+      const t = validTemplate();
+      t.existingStreamRefs[0].permissions = [];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /minItems|permissions/);
+    });
+
+    it('[CFLD-AJV-6] rejects bad id pattern', function () {
+      const t = validTemplate();
+      t.id = 'BAD_ID';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /pattern|id/);
+    });
+
+    it('[CFLD-AJV-7] customField def.repeatable follows the data-model grammar (B-2026-10-05-11)', function () {
+      for (const ok of ['once', 'any', 'unlimited', 'P1D', 'P1W', 'PT12H', 'P1DT6H']) {
+        const t = validTemplate();
+        t.customFields[0].def.repeatable = ok;
+        (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t);
+      }
+      for (const bad of ['daily', 'P', '1D', 'p1d', '']) {
+        const t = validTemplate();
+        t.customFields[0].def.repeatable = bad;
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /pattern|repeatable/, `"${bad}" should be rejected`);
+      }
+    });
+  });
+
+  describe('[CFLD-CF] cross-field rules', function () {
+    it('[CFLD-CF-1] rejects customFields[].streamId outside the sandbox', function () {
+      const t = validTemplate();
+      t.customFields[0].streamId = 'foreign-stream-flow';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /sandbox prefix/i);
+    });
+
+    it('[CFLD-CF-2] rejects def.templateId mismatch', function () {
+      const t = validTemplate();
+      t.customFields[0].def.templateId = 'something-else';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /templateId/);
+    });
+
+    it('[CFLD-CF-3] rejects existingStreamRefs[].streamId inside the sandbox', function () {
+      const t = validTemplate();
+      t.existingStreamRefs[0].streamId = 'sample-template-system-out';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /sandbox prefix/i);
+    });
+
+    it('[CFLD-CF-4] rejects existingStreamRefs collision with customFields streamId', function () {
+      const t = validTemplate();
+      t.existingStreamRefs.push({
+        streamId: 'sample-template-custom-flow', // same as customFields[0]
+        permissions: ['read']
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /sandbox prefix|mode-2|customFields/i);
+    });
+
+    it('[CFLD-CF-5] rejects customFields[].def.section pointing at unknown section key', function () {
+      const t = validTemplate();
+      t.customFields[0].def.section = 'no-such-section';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /section/);
+    });
+
+    it('[CFLD-CF-6] rejects section.customFieldKeys[] pointing at unknown def.key', function () {
+      const t = validTemplate();
+      t.sections[0].customFieldKeys = ['unknown-key'];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /unknown key|customFieldKeys/);
+    });
+
+    it('[CFLD-CF-7] rejects streamId/def.key suffix mismatch', function () {
+      const t = validTemplate();
+      t.customFields[0].streamId = 'sample-template-custom-other';
+      // def.key still 'flow' → mismatch
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => (0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.loadTemplate)(t), /key|streamId/);
+    });
+  });
+
+  describe('[CFLD-TG] type guards', function () {
+    it('[CFLD-TG-1] isCustomFieldDeclaration', function () {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.isCustomFieldDeclaration)(validTemplate().customFields[0]), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.isCustomFieldDeclaration)({}), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.isCustomFieldDeclaration)(null), false);
+    });
+
+    it('[CFLD-TG-2] isExistingStreamRef', function () {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.isExistingStreamRef)({ streamId: 's', permissions: ['read'] }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.isExistingStreamRef)({ streamId: 's' }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_appTemplates_loader_ts__WEBPACK_IMPORTED_MODULE_1__.isExistingStreamRef)(null), false);
+    });
   });
 });
 
@@ -45791,6 +54146,548 @@ describe('[PLBL] permission labels', function () {
 
 /***/ },
 
+/***/ "./tests/preferred.test.js"
+/*!*********************************!*\
+  !*** ./tests/preferred.test.js ***!
+  \*********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+describe('[PREF] HDSModel.preferred', function () {
+  let model;
+
+  before(async () => {
+    model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)();
+    await model.load(modelURL);
+    await model.converters.ensureEngine('mood');
+    await model.converters.ensureEngine('cervical-fluid');
+  });
+
+  afterEach(() => {
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+  });
+
+  // ─── Variation items ─────────────────────────────────────────
+
+  describe('[PREF-V] variation items', () => {
+    it('[PREF-V1] body-weight returns variation config with default (metric)', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('unitSystem', 'metric');
+      const pref = model.preferred.getPreferredInput('body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.type, 'variation');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.eventType, 'mass/kg');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(pref.symbol, 'Should have symbol');
+    });
+
+    it('[PREF-V2] body-weight returns imperial when unitSystem=imperial', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('unitSystem', 'imperial');
+      const pref = model.preferred.getPreferredInput('body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.type, 'variation');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.eventType, 'mass/lb');
+    });
+
+    it('[PREF-V3] per-item override takes precedence over unitSystem', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('unitSystem', 'metric');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-input-body-weight', 'mass/lb');
+      const pref = model.preferred.getPreferredInput('body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.eventType, 'mass/lb');
+    });
+
+    it('[PREF-V4] body-height respects per-item override (Canada: metric but ft)', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('unitSystem', 'metric');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-input-body-height', 'length/ft');
+      const weightPref = model.preferred.getPreferredInput('body-weight');
+      const heightPref = model.preferred.getPreferredInput('body-height');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(weightPref.eventType, 'mass/kg', 'weight follows unitSystem');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(heightPref.eventType, 'length/ft', 'height uses per-item override');
+    });
+
+    it('[PREF-V5] display and input can differ', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('unitSystem', 'metric');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-weight', 'mass/lb');
+      const input = model.preferred.getPreferredInput('body-weight');
+      const display = model.preferred.getPreferredDisplay('body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(input.eventType, 'mass/kg', 'input follows unitSystem');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(display.eventType, 'mass/lb', 'display uses per-item override');
+    });
+
+    it('[PREF-V6] without settings returns first option as default', () => {
+      const pref = model.preferred.getPreferredInput('body-weight');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.type, 'variation');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(pref.eventType, 'Should have an eventType');
+    });
+  });
+
+  // ─── Converter items ─────────────────────────────────────────
+
+  describe('[PREF-C] converter items', () => {
+    it('[PREF-C1] mood with no preference returns method=null', () => {
+      const pref = model.preferred.getPreferredInput('wellbeing-mood');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.type, 'converter');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.method, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(pref.engine, 'Should have engine');
+    });
+
+    it('[PREF-C2] mood with preferred-input returns method + name', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-input-wellbeing-mood', 'mira');
+      const pref = model.preferred.getPreferredInput('wellbeing-mood');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.type, 'converter');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.method, 'mira');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.methodName, 'Mira');
+    });
+
+    it('[PREF-C3] cervical-fluid preferred-display returns method', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'appleHealth');
+      const pref = model.preferred.getPreferredDisplay('body-vulva-mucus-inspect');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.type, 'converter');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.method, 'appleHealth');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.methodName, 'Apple Health');
+    });
+
+    it('[PREF-C4] input and display can differ', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-input-body-vulva-mucus-inspect', 'chartneo');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject('preferred-display-body-vulva-mucus-inspect', 'billings');
+      const input = model.preferred.getPreferredInput('body-vulva-mucus-inspect');
+      const display = model.preferred.getPreferredDisplay('body-vulva-mucus-inspect');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(input.method, 'chartneo');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(display.method, 'billings');
+    });
+  });
+
+  // ─── The cervical-fluid method key (B-2026-10-26-16) ─────────
+
+  describe('[PREF-K] cervical-fluid method key', () => {
+    it('[PREF-K1] the canonical key is the item-key form, the legacy one the converter-model form', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_KEY, 'preferred-input-body-vulva-mucus-inspect');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_LEGACY_KEY, 'preferred-input-cervical-fluid');
+      const itemDef = model.itemsDefs.forKey('body-vulva-mucus-inspect');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_KEY, 'preferred-input-' + itemDef.key);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_LEGACY_KEY, 'preferred-input-' + itemDef.data['converter-engine'].models);
+    });
+
+    it('[PREF-K2] the canonical key drives getPreferredInput', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_KEY, 'creighton');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.preferred.getPreferredInput('body-vulva-mucus-inspect').method, 'creighton');
+    });
+
+    it('[PREF-K3] the legacy key is read when the canonical one is not set', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_LEGACY_KEY, 'billings');
+      const pref = model.preferred.getPreferredInput('body-vulva-mucus-inspect');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.method, 'billings');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.methodName, 'Billings');
+    });
+
+    it('[PREF-K4] the canonical key wins over the legacy one', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_LEGACY_KEY, 'billings');
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_KEY, 'creighton');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.preferred.getPreferredInput('body-vulva-mucus-inspect').method, 'creighton');
+    });
+
+    it('[PREF-K5] the legacy fallback is for input only: display keeps its own key', () => {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings._testInject(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.CERVICAL_FLUID_METHOD_LEGACY_KEY, 'billings');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.preferred.getPreferredDisplay('body-vulva-mucus-inspect').method, null);
+    });
+  });
+
+  // ─── Default items (no variation, no converter) ──────────────
+
+  describe('[PREF-D] default items', () => {
+    it('[PREF-D1] simple checkbox returns default', () => {
+      const pref = model.preferred.getPreferredInput('activity-yoga');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.type, 'default');
+    });
+
+    it('[PREF-D2] unknown item returns default', () => {
+      const pref = model.preferred.getPreferredInput('nonexistent-item');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(pref.type, 'default');
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/questionnaire.test.js"
+/*!*************************************!*\
+  !*** ./tests/questionnaire.test.js ***!
+  \*************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/Questionnaire.ts */ "./ts/appTemplates/Questionnaire.ts");
+
+
+
+
+describe('[QSTX] Questionnaire (Plan 71)', function () {
+  this.timeout(8000);
+
+  before(async () => {
+    await (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_0__.initHDSModel)();
+  });
+
+  function validQuestionDef () {
+    return {
+      label: { en: 'Did you take Progesterone in your life?' },
+      itemRef: 'medication-intake-coded',
+      params: { drug: { codes: [{ system: 'ATC', code: 'G03DA04' }] } },
+      scope: { type: 'ever' },
+      subField: {
+        type: 'select-segmented',
+        label: { en: 'Trimester' },
+        options: [
+          { value: 'T1', label: { en: 'T1' } },
+          { value: 'T2', label: { en: 'T2' } }
+        ]
+      }
+    };
+  }
+
+  describe('[QST-CTOR] construction + question keys', function () {
+    it('[QST-CTOR-1] empty constructor produces a blank questionnaire', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(q.title, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(q.description, null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(q.questionKeys, []);
+    });
+
+    it('[QST-CTOR-2] addQuestion stores a valid question', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      q.addQuestion('progesterone-life', validQuestionDef());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(q.questionKeys, ['progesterone-life']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(q.getQuestion('progesterone-life').itemRef, 'medication-intake-coded');
+    });
+
+    it('[QST-CTOR-3] adding the same key twice throws', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      q.addQuestion('weight-week', { label: { en: 'Weight' }, itemRef: 'body-weight', scope: { type: 'latest', withinDays: 7 } });
+      try {
+        q.addQuestion('weight-week', { label: { en: 'Weight again' }, itemRef: 'body-weight', scope: { type: 'ever' } });
+        throw new Error('should have thrown');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /already has a question/);
+      }
+    });
+
+    it('[QST-CTOR-4] rejects keys with colon (Pryv path grammar)', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      try {
+        q.addQuestion('has:colon', validQuestionDef());
+        throw new Error('should have thrown');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /Pryv path grammar/);
+      }
+    });
+
+    it('[QST-CTOR-5] rejects keys with dot', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      try {
+        q.addQuestion('has.dot', validQuestionDef());
+        throw new Error('should have thrown');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /Pryv path grammar/);
+      }
+    });
+
+    it('[QST-CTOR-6] rejects empty key', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      try {
+        q.addQuestion('', validQuestionDef());
+        throw new Error('should have thrown');
+      } catch (e) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /non-empty string/);
+      }
+    });
+
+    it('[QST-CTOR-7] removeQuestion removes and returns true', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      q.addQuestion('weight-week', { label: { en: 'Weight' }, itemRef: 'body-weight', scope: { type: 'ever' } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(q.removeQuestion('weight-week'), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(q.removeQuestion('weight-week'), false);
+    });
+  });
+
+  describe('[QST-VAL] question definition validation', function () {
+    it('[QST-VAL-1] missing label throws', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      const def = validQuestionDef();
+      delete def.label;
+      try {
+        q.addQuestion('key1', def);
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /missing 'label'/); }
+    });
+
+    it('[QST-VAL-2] missing itemRef throws', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      const def = validQuestionDef();
+      delete def.itemRef;
+      try {
+        q.addQuestion('key1', def);
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /missing 'itemRef'/); }
+    });
+
+    it('[QST-VAL-3] missing scope throws', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      const def = validQuestionDef();
+      delete def.scope;
+      try {
+        q.addQuestion('key1', def);
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /missing 'scope'/); }
+    });
+
+    it('[QST-VAL-4] scope.type ever does NOT accept withinDays', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      try {
+        q.addQuestion('key1', { label: { en: 'X' }, itemRef: 'body-weight', scope: { type: 'ever', withinDays: 7 } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /must not carry extra fields/); }
+    });
+
+    it('[QST-VAL-5] scope.type window requires withinDays > 0', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      try {
+        q.addQuestion('key1', { label: { en: 'X' }, itemRef: 'body-weight', scope: { type: 'window' } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /positive number/); }
+      try {
+        q.addQuestion('key2', { label: { en: 'X' }, itemRef: 'body-weight', scope: { type: 'window', withinDays: 0 } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /positive number/); }
+    });
+
+    it('[QST-VAL-6] unknown scope.type throws', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      try {
+        q.addQuestion('key1', { label: { en: 'X' }, itemRef: 'body-weight', scope: { type: 'range', from: '2026-01-01', to: '2026-06-15' } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /not recognized/); }
+    });
+
+    it('[QST-VAL-7] subField with unknown type throws', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      const def = validQuestionDef();
+      def.subField = { type: 'dropdown' };
+      try {
+        q.addQuestion('key1', def);
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /select-segmented/); }
+    });
+  });
+
+  describe('[QST-SER] serialization to request event content', function () {
+    it('[QST-SER-1] requires at least one question', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      try {
+        q.toRequestEventContent();
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /at least one question/); }
+    });
+
+    it('[QST-SER-2] produces a payload that matches the request schema shape', () => {
+      const q = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire({ title: { en: 'Pregnancy intake' } });
+      q.addQuestion('progesterone-life', validQuestionDef());
+      q.addQuestion('weight-week', { label: { en: 'Weight' }, itemRef: 'body-weight', scope: { type: 'latest', withinDays: 7 } });
+      const content = q.toRequestEventContent();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(Object.keys(content).sort(), ['questions', 'title']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(content.title.en, 'Pregnancy intake');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(Object.keys(content.questions).sort(), ['progesterone-life', 'weight-week']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(content.questions['weight-week'].scope.withinDays, 7);
+    });
+
+    it('[QST-SER-3] roundtrips through fromRequestEvent', () => {
+      const q1 = new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire();
+      q1.addQuestion('weight-week', { label: { en: 'Weight' }, itemRef: 'body-weight', scope: { type: 'latest', withinDays: 7 } });
+      const requestEvent = { content: q1.toRequestEventContent() };
+      const q2 = _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.fromRequestEvent(requestEvent);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(q2.questionKeys, ['weight-week']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(q2.getQuestion('weight-week').scope.withinDays, 7);
+    });
+
+    it('[QST-SER-4] fromRequestEvent rejects an event with no content', () => {
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.fromRequestEvent({});
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /no content/); }
+    });
+
+    it('[QST-SER-5] makeRequestEvent builds a ready-to-write event payload', () => {
+      const ev = _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.makeRequestEvent(
+        { questions: { 'weight-week': { label: { en: 'Weight' }, itemRef: 'body-weight', scope: { type: 'latest', withinDays: 7 } } } },
+        ['questionnaire-out'],
+        1735689600
+      );
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(ev.type, 'questionnaire/request-v1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(ev.streamIds, ['questionnaire-out']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(ev.time, 1735689600);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(ev.content.questions['weight-week'].itemRef, 'body-weight');
+    });
+
+    it('[QST-SER-6] makeRequestEvent defaults time to now (seconds)', () => {
+      const before = Math.floor(Date.now() / 1000);
+      const ev = _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.makeRequestEvent(
+        { questions: { 'weight-week': { label: { en: 'Weight' }, itemRef: 'body-weight', scope: { type: 'ever' } } } },
+        ['s']
+      );
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(ev.time >= before);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.ok(ev.time <= Math.floor(Date.now() / 1000) + 1);
+    });
+
+    it('[QST-SER-7] makeRequestEvent rejects empty streamIds', () => {
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.makeRequestEvent(
+          { questions: { x: { label: { en: 'x' }, itemRef: 'body-weight', scope: { type: 'ever' } } } },
+          []
+        );
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /non-empty array/); }
+    });
+
+    it('[QST-SER-8] makeRequestEvent re-validates content (rejects bad keys)', () => {
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.makeRequestEvent(
+          { questions: { 'has:colon': { label: { en: 'x' }, itemRef: 'body-weight', scope: { type: 'ever' } } } },
+          ['s']
+        );
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /Pryv path grammar/); }
+    });
+  });
+
+  describe('[QST-WRB] writeBundled (Plan 71 E1)', function () {
+    function mockConnection () {
+      const calls = [];
+      const conn = {
+        calls,
+        async api (batch) {
+          calls.push(batch);
+          return batch.map((b, i) => ({ event: { id: `evt-${i}`, ...b.params } }));
+        }
+      };
+      return conn;
+    }
+
+    it('[QST-WRB-1] no bundled questionnaires → no API call, empty result', async () => {
+      const conn = mockConnection();
+      const out = await _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.writeBundled(conn, { questionnaires: [] }, ['s']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(out, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(conn.calls.length, 0);
+    });
+
+    it('[QST-WRB-2] writes one events.create per bundled questionnaire', async () => {
+      const conn = mockConnection();
+      const req = {
+        questionnaires: [
+          { title: { en: 'Q1' }, questions: { a: { label: { en: 'A' }, itemRef: 'body-weight', scope: { type: 'ever' } } } },
+          { title: { en: 'Q2' }, questions: { b: { label: { en: 'B' }, itemRef: 'body-weight', scope: { type: 'ever' } } } }
+        ]
+      };
+      const out = await _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.writeBundled(conn, req, ['s'], { timeSeconds: 1735689600 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(conn.calls.length, 1);
+      const batch = conn.calls[0];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(batch.length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(batch[0].method, 'events.create');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(batch[0].params.type, 'questionnaire/request-v1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(batch[0].params.streamIds, ['s']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(batch[0].params.time, 1735689600);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(batch[0].params.content.title.en, 'Q1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(batch[1].params.content.title.en, 'Q2');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(out.length, 2);
+    });
+
+    it('[QST-WRB-3] empty streamIds throws', async () => {
+      try {
+        await _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.writeBundled({ api: async () => [] }, { questionnaires: [] }, []);
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /non-empty array/); }
+    });
+
+    it('[QST-WRB-4] re-validates each questionnaire content via makeRequestEvent', async () => {
+      const conn = mockConnection();
+      const req = {
+        questionnaires: [
+          { questions: { 'has:colon': { label: { en: 'x' }, itemRef: 'body-weight', scope: { type: 'ever' } } } }
+        ]
+      };
+      try {
+        await _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.writeBundled(conn, req, ['s']);
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /Pryv path grammar/); }
+    });
+  });
+
+  describe('[QST-ANS] buildAnswerEvent helper', function () {
+    it('[QST-ANS-1] builds content + clientData mirror', () => {
+      const out = _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.buildAnswerEvent('evt-q-abc', {
+        'progesterone-life': { status: 'answered', references: ['evt-prog-1'], qualifier: 'T2' },
+        'weight-week': { status: 'answered', references: ['evt-bw-1'] },
+        'cycle-recent': { status: 'no' },
+        sensitive: { status: 'declined', reason: 'privacy' },
+        forgotten: { status: 'unknown' }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(out.content.requestEventId, 'evt-q-abc');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(out.content.answers['progesterone-life'].qualifier, 'T2');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(out.content.answers.sensitive.reason, 'privacy');
+      // clientData.related includes request + all referenced ids
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(Object.keys(out.clientData.related).sort(), ['evt-bw-1', 'evt-prog-1', 'evt-q-abc']);
+    });
+
+    it('[QST-ANS-2] empty requestEventId throws', () => {
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.buildAnswerEvent('', { k: { status: 'no' } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /non-empty string/); }
+    });
+
+    it('[QST-ANS-3] answered without references throws', () => {
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.buildAnswerEvent('evt-q-abc', { k: { status: 'answered', references: [] } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /non-empty 'references'/); }
+    });
+
+    it('[QST-ANS-4] no/unknown/declined carrying references throws', () => {
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.buildAnswerEvent('evt-q-abc', { k: { status: 'no', references: ['evt-x'] } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /must not carry 'references'/); }
+    });
+
+    it('[QST-ANS-5] knownQuestionKeys enforces membership', () => {
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.buildAnswerEvent('evt-q-abc',
+          { 'not-a-question': { status: 'no' } },
+          ['weight-week']);
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /not a question on the request/); }
+    });
+
+    it('[QST-ANS-6] declined.reason as non-string throws', () => {
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.buildAnswerEvent('evt-q-abc', { k: { status: 'declined', reason: 42 } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /reason must be a string/); }
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/reminders.test.js"
 /*!*********************************!*\
   !*** ./tests/reminders.test.js ***!
@@ -46163,6 +55060,290 @@ describe('[REMX] Reminders', () => {
       const lh = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.computeReminders)(lhSetup(), events, {}, at('2026-01-08T07:00:00Z'), ZRH).find(r => r.itemKey === 'lh');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lh.status, 'due');
     });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/resolveStream.test.js"
+/*!*************************************!*\
+  !*** ./tests/resolveStream.test.js ***!
+  \*************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/appTemplates/resolveStream.ts */ "./ts/appTemplates/resolveStream.ts");
+
+
+
+// Compact tree builder — Plan 45 §2.4 inheritance fixtures.
+function tree () {
+  return [
+    {
+      id: 'sample-template',
+      parentId: null,
+      clientData: {
+        hdsCustomField: {
+          'note/txt': {
+            version: 'v1',
+            templateId: 'sample-template',
+            key: 'menstrual-flow',
+            label: { en: 'Menstrual flow' },
+            options: ['light', 'medium', 'heavy']
+          }
+        }
+      },
+      children: [
+        {
+          id: 'sample-template-custom',
+          parentId: 'sample-template',
+          clientData: {},
+          children: [
+            {
+              id: 'sample-template-custom-flow',
+              parentId: 'sample-template-custom',
+              clientData: {
+                hdsCustomField: {
+                  // Override label
+                  'note/txt': {
+                    version: 'v1',
+                    templateId: 'sample-template',
+                    key: 'menstrual-flow-detailed',
+                    label: { en: 'Detailed flow' },
+                    options: ['light', 'medium', 'heavy', 'flooding']
+                  }
+                }
+              }
+            },
+            {
+              id: 'sample-template-custom-optedout',
+              parentId: 'sample-template-custom',
+              clientData: {
+                hdsCustomField: { 'note/txt': {} } // explicit opt-out
+              }
+            },
+            {
+              id: 'sample-template-custom-inherited',
+              parentId: 'sample-template-custom'
+              // No clientData — falls through to grandparent
+            }
+          ]
+        }
+      ]
+    }
+  ];
+}
+
+describe('[CFRS] resolveStream', function () {
+  describe('[CFRS-MAP] buildStreamMap', function () {
+    it('[CFRS-MAP-1] flattens a nested tree by id', function () {
+      const map = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.buildStreamMap)(tree());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(map.size, 5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(map.has('sample-template-custom-flow'));
+    });
+  });
+
+  describe('[CFRS-CF] resolveStreamCustomField', function () {
+    it('[CFRS-CF-1] returns the def declared on the stream itself', function () {
+      const def = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomField)(tree(), 'sample-template-custom-flow', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(def);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(def.key, 'menstrual-flow-detailed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(def.options, ['light', 'medium', 'heavy', 'flooding']);
+    });
+
+    it('[CFRS-CF-2] inherits from grandparent when stream has no clientData', function () {
+      const def = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomField)(tree(), 'sample-template-custom-inherited', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(def);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(def.key, 'menstrual-flow'); // from sample-template root
+    });
+
+    it('[CFRS-CF-3] empty {} on a descendant is opt-out → returns null', function () {
+      const def = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomField)(tree(), 'sample-template-custom-optedout', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(def, null);
+    });
+
+    it('[CFRS-CF-4] returns null when no declaration up the chain', function () {
+      const def = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomField)(tree(), 'sample-template-custom-inherited', 'count/generic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(def, null);
+    });
+
+    it('[CFRS-CF-5] returns null for unknown streamId', function () {
+      const def = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomField)(tree(), 'no-such-stream', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(def, null);
+    });
+
+    it('[CFRS-CF-6] detailed variant distinguishes opt-out from none', function () {
+      const optOut = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomFieldDetailed)(tree(), 'sample-template-custom-optedout', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(optOut.kind, 'optOut');
+      const none = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomFieldDetailed)(tree(), 'sample-template-custom-inherited', 'count/generic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(none.kind, 'none');
+      const def = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomFieldDetailed)(tree(), 'sample-template-custom-flow', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(def.kind, 'def');
+    });
+
+    it('[CFRS-CF-7] accepts a pre-built StreamMap for repeated lookups', function () {
+      const map = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.buildStreamMap)(tree());
+      const def = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.resolveStreamCustomField)(map, 'sample-template-custom-flow', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(def);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(def.key, 'menstrual-flow-detailed');
+    });
+  });
+
+  describe('[CFRS-VI] streamCustomFieldToVirtualItem', function () {
+    it('[CFRS-VI-1] converts a note/txt with options to a select-type virtual item', function () {
+      const item = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.streamCustomFieldToVirtualItem)(tree(), 'sample-template-custom-flow', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(item);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.key, 'sample-template::menstrual-flow-detailed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.type, 'select');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.eventType, 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.streamId, 'sample-template-custom-flow');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.options.length, 4);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.options[0].value, 'light');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.options[0].label.en, 'light');
+    });
+
+    it('[CFRS-VI-2] note/txt without options stays a text-type', function () {
+      const subTree = [{
+        id: 't1',
+        parentId: null,
+        clientData: {
+          hdsCustomField: {
+            'note/txt': { version: 'v1', templateId: 't', key: 'free', label: { en: 'Free text' } }
+          }
+        }
+      }];
+      const item = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.streamCustomFieldToVirtualItem)(subTree, 't1', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.type, 'text');
+    });
+
+    it('[CFRS-VI-3] count/generic resolves to number type', function () {
+      const subTree = [{
+        id: 't1',
+        parentId: null,
+        clientData: {
+          hdsCustomField: {
+            'count/generic': { version: 'v1', templateId: 't', key: 'cnt', label: { en: 'Count' }, min: 0, max: 10 }
+          }
+        }
+      }];
+      const item = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.streamCustomFieldToVirtualItem)(subTree, 't1', 'count/generic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.type, 'number');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.min, 0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.data.max, 10);
+    });
+
+    it('[CFRS-VI-4] returns null on opt-out', function () {
+      const item = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.streamCustomFieldToVirtualItem)(tree(), 'sample-template-custom-optedout', 'note/txt');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item, null);
+    });
+
+    it('[CFRS-VI-5] returns null when no declaration in chain', function () {
+      const item = (0,_ts_appTemplates_resolveStream_ts__WEBPACK_IMPORTED_MODULE_1__.streamCustomFieldToVirtualItem)(tree(), 'sample-template-custom-inherited', 'count/generic');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item, null);
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/systemItems.test.js"
+/*!***********************************!*\
+  !*** ./tests/systemItems.test.js ***!
+  \***********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+
+
+
+/**
+ * System items (`type: system`, data-model 3.13.0): state written by software,
+ * e.g. a connector's status under `sync-status`. Readable and resolvable like any
+ * item, never offered in pickers.
+ */
+
+/** Minimal pack.json-shaped model: one regular item + the `sync-status` system item with two context leaves. */
+function makeModel () {
+  return {
+    items: {
+      'body-weight': {
+        version: 'v1',
+        label: { en: 'Body weight' },
+        description: { en: 'Your weight.' },
+        streamId: 'body-weight',
+        eventType: 'mass/kg',
+        type: 'number',
+        repeatable: 'any'
+      },
+      'sync-status': {
+        version: 'v1',
+        label: { en: 'Connected services status' },
+        description: { en: 'Whether your connected services are working and when they last synced.' },
+        streamId: 'sync-status',
+        eventType: 'sync-status/connector-v1',
+        type: 'system',
+        repeatable: 'once'
+      }
+    },
+    streams: [
+      { id: 'body-weight', name: 'Body weight', parentId: null },
+      {
+        id: 'sync-status',
+        name: 'Connected services',
+        parentId: null,
+        children: [
+          { id: 'sync-status-mira', name: 'Mira connection status', parentId: 'sync-status', role: 'context' },
+          { id: 'sync-status-tempdrop', name: 'Tempdrop connection status', parentId: 'sync-status', role: 'context' }
+        ]
+      }
+    ]
+  };
+}
+
+function load (data) {
+  const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('http://fake/pack.json');
+  model.loadFromObject(data);
+  return model;
+}
+
+describe('[SYSX] system items', () => {
+  it('[SYS1] isSystem is true for type: system and false otherwise', () => {
+    const model = load(makeModel());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forKey('sync-status').isSystem, true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forKey('body-weight').isSystem, false);
+  });
+
+  it('[SYS2] getAllActive hides system items, getAll keeps them', () => {
+    const model = load(makeModel());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(model.itemsDefs.getAllActive().map((i) => i.key), ['body-weight']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.getAll().length, 2);
+  });
+
+  it('[SYS3] an event on a connector leaf resolves to the system item', () => {
+    const model = load(makeModel());
+    const itemDef = model.itemsDefs.forEvent({
+      streamIds: ['sync-status-mira'],
+      type: 'sync-status/connector-v1'
+    });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(itemDef.key, 'sync-status');
+  });
+
+  it('[SYS4] eventTemplate places a connector status on its leaf', () => {
+    const model = load(makeModel());
+    const template = model.itemsDefs.forKey('sync-status').eventTemplate({ context: 'sync-status-mira' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(template, { streamIds: ['sync-status-mira'], type: 'sync-status/connector-v1' });
+  });
+
+  it('[SYS5] eventTemplate refuses a context outside the sync-status tree', () => {
+    const model = load(makeModel());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => model.itemsDefs.forKey('sync-status').eventTemplate({ context: 'body-weight' }));
   });
 });
 
@@ -46956,6 +56137,146 @@ describe('[TKTX] toolKit Streams Tools', function () {
 
 /***/ },
 
+/***/ "./tests/twinSatisfies.test.js"
+/*!*************************************!*\
+  !*** ./tests/twinSatisfies.test.js ***!
+  \*************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+
+
+
+/**
+ * [TWIN] Twin-aware "was this recorded?" matching.
+ *
+ * A concept can be recorded at two fidelities on one stream: a presence marker
+ * (`activity/plain`) for sources that only know an occurrence, and a graded
+ * twin (`ratio/proportion`). data-model 3.2.0 published that contract in prose;
+ * nothing links a pair in machine-readable form, so the shared `streamId` is
+ * the only signal a consumer has.
+ *
+ * `B-2026-09-15-5`: a form spec was migrated to the graded items while the
+ * bridge feeding it writes presence flags, so completion reported every one of
+ * them missing and the subject was asked to re-enter what the bridge had
+ * already sent. Live prod data at the time: 0 graded events, 17 presence.
+ *
+ * The fixtures mirror the real pack, including the deliberately awkward LH pair
+ * that shares a stream while meaning different units.
+ */
+function load (data) {
+  const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('http://fake/pack.json');
+  model.loadFromObject(data);
+  return model;
+}
+
+function twinModel () {
+  return load({
+    items: {
+      'symptom-pain-headache': {
+        version: 'v1',
+        deprecated: true,
+        label: { en: 'Headache' },
+        description: { en: 'Presence marker; use symptom-pain-headache-severity when a severity is known.' },
+        streamId: 'symptom-pain-headache',
+        eventType: 'activity/plain',
+        type: 'checkbox',
+        repeatable: 'unlimited'
+      },
+      'symptom-pain-headache-severity': {
+        version: 'v1',
+        label: { en: 'Headache' },
+        streamId: 'symptom-pain-headache',
+        eventType: 'ratio/proportion',
+        type: 'number',
+        repeatable: 'unlimited'
+      },
+      'body-weight': {
+        version: 'v1',
+        label: { en: 'Weight' },
+        streamId: 'body-weight',
+        eventType: 'mass/kg',
+        type: 'number',
+        repeatable: 'unlimited'
+      }
+    },
+    streams: [
+      { id: 'symptom-pain-headache', name: 'Headache' },
+      { id: 'body-weight', name: 'Weight' }
+    ]
+  });
+}
+
+const ev = (type, streamId) => ({ type, streamIds: [streamId] });
+
+describe('[TWIN] satisfyingEventTypes / satisfiedByEvent', () => {
+  it('[TWIN1] the graded item accepts its presence twin', () => {
+    const model = twinModel();
+    const graded = model.itemsDefs.forKey('symptom-pain-headache-severity');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(graded.satisfyingEventTypes.sort(), ['activity/plain', 'ratio/proportion']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(graded.satisfiedByEvent(ev('activity/plain', 'symptom-pain-headache')), true);
+  });
+
+  it('[TWIN2] and still accepts its own type', () => {
+    const graded = twinModel().itemsDefs.forKey('symptom-pain-headache-severity');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(graded.satisfiedByEvent(ev('ratio/proportion', 'symptom-pain-headache')), true);
+  });
+
+  it('[TWIN3] an item alone on its stream is unchanged', () => {
+    // The widening must not quietly loosen matching for the ordinary case.
+    const weight = twinModel().itemsDefs.forKey('body-weight');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(weight.satisfyingEventTypes, ['mass/kg']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(weight.satisfiedByEvent(ev('activity/plain', 'body-weight')), false);
+  });
+
+  it('[TWIN4] a matching type on a DIFFERENT stream does not satisfy', () => {
+    const graded = twinModel().itemsDefs.forKey('symptom-pain-headache-severity');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(graded.satisfiedByEvent(ev('ratio/proportion', 'symptom-pain-backache')), false);
+  });
+
+  it('[TWIN5] matchesEvent keeps its strict meaning', () => {
+    // satisfiedByEvent answers "was the concept recorded"; matchesEvent answers
+    // "is this event THIS item". Widening the first must not widen the second,
+    // or forEvent-based resolution would start returning the wrong itemDef.
+    const model = twinModel();
+    const graded = model.itemsDefs.forKey('symptom-pain-headache-severity');
+    const presenceEvent = ev('activity/plain', 'symptom-pain-headache');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(graded.satisfiedByEvent(presenceEvent), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(graded.matchesEvent(presenceEvent), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forEvent(presenceEvent).key, 'symptom-pain-headache');
+  });
+
+  it('[TWIN6] forStreamId returns every item on the stream, deprecated included', () => {
+    const model = twinModel();
+    const keys = model.itemsDefs.forStreamId('symptom-pain-headache').map(d => d.key).sort();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(keys, ['symptom-pain-headache', 'symptom-pain-headache-severity']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(model.itemsDefs.forStreamId('nope'), []);
+  });
+
+  it('[TWIN7] units that share a stream are collected, and the doc says not to read across them', () => {
+    // body-urine-hormones-lh (IU/L) and fertility-hormone-lh (mg/L) really do
+    // share a stream in the published pack. Both count as "LH was recorded";
+    // neither may be read as the other. This pins the recorded-vs-read line.
+    const model = load({
+      items: {
+        'body-urine-hormones-lh': { version: 'v2', label: { en: 'LH' }, streamId: 'body-urine-hormones-lh', eventType: 'concentration/iu-l', type: 'number', repeatable: 'any' },
+        'fertility-hormone-lh': { version: 'v1', deprecated: true, label: { en: 'LH legacy' }, streamId: 'body-urine-hormones-lh', eventType: 'concentration/mg-l', type: 'number', repeatable: 'any' }
+      },
+      streams: [{ id: 'body-urine-hormones-lh', name: 'LH' }]
+    });
+    const active = model.itemsDefs.forKey('body-urine-hormones-lh');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(active.satisfyingEventTypes.sort(), ['concentration/iu-l', 'concentration/mg-l']);
+    // …but resolution still tells them apart, which is what protects the value.
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forEvent(ev('concentration/mg-l', 'body-urine-hormones-lh')).key, 'fertility-hormone-lh');
+  });
+});
+
+
+/***/ },
+
 /***/ "./ts/appTemplates/schemas/appTemplate.validator.js"
 /*!**********************************************************!*\
   !*** ./ts/appTemplates/schemas/appTemplate.validator.js ***!
@@ -47106,35 +56427,95 @@ var __webpack_exports__ = {};
   \********************************/
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _accountPreferences_test_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./accountPreferences.test.js */ "./tests/accountPreferences.test.js");
-/* harmony import */ var _applicationClass_test_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./applicationClass.test.js */ "./tests/applicationClass.test.js");
-/* harmony import */ var _apptemplatesRequest_test_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./apptemplatesRequest.test.js */ "./tests/apptemplatesRequest.test.js");
-/* harmony import */ var _bridgeAccess_test_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./bridgeAccess.test.js */ "./tests/bridgeAccess.test.js");
-/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
-/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _appDescription_test_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./appDescription.test.js */ "./tests/appDescription.test.js");
+/* harmony import */ var _applicationClass_test_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./applicationClass.test.js */ "./tests/applicationClass.test.js");
+/* harmony import */ var _appScope_test_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./appScope.test.js */ "./tests/appScope.test.js");
+/* harmony import */ var _apptemplatesRequest_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./apptemplatesRequest.test.js */ "./tests/apptemplatesRequest.test.js");
+/* harmony import */ var _attachmentsItems_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./attachmentsItems.test.js */ "./tests/attachmentsItems.test.js");
+/* harmony import */ var _bridgeAccess_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./bridgeAccess.test.js */ "./tests/bridgeAccess.test.js");
+/* harmony import */ var _cmcConstants_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./cmcConstants.test.js */ "./tests/cmcConstants.test.js");
+/* harmony import */ var _cmcDataExport_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./cmcDataExport.test.js */ "./tests/cmcDataExport.test.js");
+/* harmony import */ var _cmcDocuments_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./cmcDocuments.test.js */ "./tests/cmcDocuments.test.js");
+/* harmony import */ var _cmcFormSpec_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./cmcFormSpec.test.js */ "./tests/cmcFormSpec.test.js");
+/* harmony import */ var _cmcItemReminders_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./cmcItemReminders.test.js */ "./tests/cmcItemReminders.test.js");
+/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
+/* harmony import */ var _codedMedicationTemplate_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./codedMedicationTemplate.test.js */ "./tests/codedMedicationTemplate.test.js");
+/* harmony import */ var _connectors_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./connectors.test.js */ "./tests/connectors.test.js");
+/* harmony import */ var _contact_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./contact.test.js */ "./tests/contact.test.js");
+/* harmony import */ var _contextResolution_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./contextResolution.test.js */ "./tests/contextResolution.test.js");
+/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
+/* harmony import */ var _converterEngine_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./converterEngine.test.js */ "./tests/converterEngine.test.js");
 /* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
+/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
+/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
+/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
+/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
+/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
+/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
- * Add new tests here
+ * Every `*.test.js` file is listed here, except the node-only ones:
+ * - validatorDrift.test.js (reads the file system and runs the validator build)
+ * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
