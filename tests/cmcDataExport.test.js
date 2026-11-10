@@ -1,5 +1,5 @@
-import assert from 'node:assert/strict';
-import { cmcDataExport } from '../js/index.js';
+import { assert } from './test-utils/deps-node.js';
+import { cmcDataExport } from '../ts/index.ts';
 
 function fakeConnection (getResult = []) {
   const calls = [];

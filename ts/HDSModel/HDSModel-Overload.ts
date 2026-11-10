@@ -22,8 +22,8 @@ import { HDSLibError } from '../errors.ts';
  *  - change `type` or `eventType` of an existing setting
  *  - change `endpoint` / `queryParam` / `resultKey` of an existing datasource
  *
- * Restating an immutable field of an existing item or stream with exactly its base value (same JSON, key order
- * included) is accepted, so an overlay item that later became canonical keeps loading.
+ * Restating an immutable field of an existing item, stream, setting or datasource with exactly its base value (same
+ * JSON, key order included) is accepted, so an overlay entry that later became canonical keeps loading.
  */
 export interface HDSModelOverload {
   items?: { [key: string]: any };
@@ -107,7 +107,7 @@ export function validateOverload (modelData: any, overload: HDSModelOverload): v
       const base = modelData.settings?.[key];
       if (!base) continue;
       for (const field of Object.keys(overlay)) {
-        if (SETTING_IMMUTABLE_FIELDS.has(field)) {
+        if (SETTING_IMMUTABLE_FIELDS.has(field) && !sameValue(overlay[field], base[field])) {
           errors.push(`settings["${key}"]: cannot override immutable field "${field}"`);
         }
       }
@@ -120,7 +120,7 @@ export function validateOverload (modelData: any, overload: HDSModelOverload): v
       const base = modelData.datasources?.[key];
       if (!base) continue;
       for (const field of Object.keys(overlay)) {
-        if (DATASOURCE_IMMUTABLE_FIELDS.has(field)) {
+        if (DATASOURCE_IMMUTABLE_FIELDS.has(field) && !sameValue(overlay[field], base[field])) {
           errors.push(`datasources["${key}"]: cannot override immutable field "${field}"`);
         }
       }
@@ -305,7 +305,7 @@ function mergeStreamForest (
 }
 
 /**
- * Equality used for restated immutable fields (items and streams alike): the JSON serializations must match,
+ * Equality used for restated immutable fields (items, streams, settings and datasources): the JSON serializations must match,
  * so object key order counts and a restatement must carry the base value exactly.
  */
 function sameValue (a: any, b: any): boolean {

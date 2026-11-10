@@ -8,7 +8,8 @@ import { ensureAppScope, pryvErrorCode } from '../ts/cmc/appScope.ts';
  * `:_cmc:apps:<appCode>` is auto-provisioned by the CMC plugin's
  * `cmcAccessProvisionAppScopeHook` on `accesses.create` / `accesses.update`.
  * So this helper only does the sub-scope `streams.create` — the no-subPath
- * case returns the leaf id without any API call.
+ * case returns the leaf id without any API call — unless the leaf is
+ * missing, in which case it creates it and retries (B-2026-10-26-23).
  */
 
 const APP_CODE = 'hds-collector';
@@ -74,6 +75,40 @@ describe('[CAS] cmcAppScope.ensureAppScope', function () {
       const out = await ensureAppScope(conn, APP_CODE, 'abc123');
       assert.equal(out, EXPECTED_APP_SCOPE + ':abc123');
       assert.equal(conn.calls.length, 1);
+    });
+  });
+
+  describe('[CASL] missing leaf (B-2026-10-26-23)', function () {
+    it('[CAS40] creates the leaf under :_cmc:apps and retries the sub-scope', async () => {
+      const conn = makeConn((method, params, i) => {
+        if (i === 0) throw pryvError('unknown-referenced-resource');
+        return { stream: {} };
+      });
+      const out = await ensureAppScope(conn, APP_CODE, 'abc123');
+      assert.equal(out, EXPECTED_APP_SCOPE + ':abc123');
+      assert.deepEqual(conn.calls.map(c => c.params), [
+        { id: EXPECTED_APP_SCOPE + ':abc123', parentId: EXPECTED_APP_SCOPE, name: 'abc123' },
+        { id: EXPECTED_APP_SCOPE, parentId: ':_cmc:apps', name: APP_CODE },
+        { id: EXPECTED_APP_SCOPE + ':abc123', parentId: EXPECTED_APP_SCOPE, name: 'abc123' }
+      ]);
+    });
+
+    it('[CAS41] tolerates a leaf created concurrently', async () => {
+      const conn = makeConn((method, params, i) => {
+        if (i === 0) throw pryvError('unknown-referenced-resource');
+        if (i === 1) throw pryvError('item-already-exists');
+        return { stream: {} };
+      });
+      assert.equal(await ensureAppScope(conn, APP_CODE, 'abc123'), EXPECTED_APP_SCOPE + ':abc123');
+      assert.equal(conn.calls.length, 3);
+    });
+
+    it('[CAS42] rethrows when the leaf cannot be created', async () => {
+      const conn = makeConn((method, params, i) => {
+        throw pryvError(i === 0 ? 'unknown-referenced-resource' : 'forbidden');
+      });
+      await assert.rejects(ensureAppScope(conn, APP_CODE, 'abc123'), (e) => e.innerObject?.id === 'forbidden');
+      assert.equal(conn.calls.length, 2);
     });
   });
 

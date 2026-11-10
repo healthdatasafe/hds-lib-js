@@ -1,4 +1,5 @@
 import * as logger from '../logger.ts';
+import type { APICall } from 'pryv';
 
 /**
  * Which streams the user must create so an incoming CMC grant can write.
@@ -76,9 +77,9 @@ export function offerStreamsToCreate (
 }
 
 /** Turn the resolved list into `streams.create` API calls. */
-export function offerStreamsToApiCalls (streams: StreamToCreate[]): Array<{ method: string; params: Record<string, unknown> }> {
+export function offerStreamsToApiCalls (streams: StreamToCreate[]): Array<APICall<'streams.create'>> {
   return streams.map((s) => ({
-    method: 'streams.create',
+    method: 'streams.create' as const,
     params: s.parentId != null ? { id: s.id, name: s.name, parentId: s.parentId } : { id: s.id, name: s.name },
   }));
 }
