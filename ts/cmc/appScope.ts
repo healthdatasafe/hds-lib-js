@@ -6,8 +6,10 @@
  * `cmcAccessProvisionAppScopeHook` post-hook on `accesses.create` /
  * `accesses.update`, whenever the access references a matching
  * `:_cmc:apps:<appCode>:*` permission (deployed 2026-05-26, plan-61
- * upstream fix). Callers therefore do not need to `streams.create` the
- * leaf — this helper returns its id directly.
+ * upstream fix). A caller that never went through such an access (a
+ * personal token on a fresh account) finds no leaf: when the sub-scope
+ * create reports its parent unknown, this helper creates the leaf under
+ * `:_cmc:apps` (which user code may do) and retries (B-2026-10-26-23).
  *
  * Sub-scopes (`:_cmc:apps:<appCode>:<subPath>`) are NOT auto-provisioned
  * and still require a `streams.create` here.
@@ -43,10 +45,20 @@ export async function ensureAppScope (
   if (subPath == null) return appScope;
   const sub = appScope + ':' + subPath;
   try {
-    await connection.apiOne('streams.create', { id: sub, parentId: appScope, name: subPath });
+    await createTolerant(connection, sub, appScope, subPath);
   } catch (e: unknown) {
-    const code = pryvErrorCode(e);
-    if (code !== 'item-already-exists') throw e;
+    if (pryvErrorCode(e) !== 'unknown-referenced-resource') throw e;
+    await createTolerant(connection, appScope, ':_cmc:apps', appCode);
+    await createTolerant(connection, sub, appScope, subPath);
   }
   return sub;
+}
+
+/** `streams.create`, treating an existing stream as success. */
+async function createTolerant (connection: pryv.Connection, id: string, parentId: string, name: string): Promise<void> {
+  try {
+    await connection.apiOne('streams.create', { id, parentId, name });
+  } catch (e: unknown) {
+    if (pryvErrorCode(e) !== 'item-already-exists') throw e;
+  }
 }

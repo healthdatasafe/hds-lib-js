@@ -175,6 +175,13 @@ describe('[OVRX] HDSModel overload', () => {
         validateOverload(m, { items: { 'body-weight': { [field]: structuredClone(m.items['body-weight'][field]) } } });
       }
     });
+    it('[OVAL] accepts an identical restatement of a setting\'s and a datasource\'s immutable fields (B-2026-10-28-9)', () => {
+      const m = makeBaseModel();
+      validateOverload(m, {
+        settings: { theme: { ...structuredClone(m.settings.theme), default: 'dark' } },
+        datasources: { medication: structuredClone(m.datasources.medication) }
+      });
+    });
   });
 
   describe('[OVRB] validateOverload — forbidden', () => {
@@ -211,6 +218,22 @@ describe('[OVRX] HDSModel overload', () => {
     it('[OVBG] rejects changing existing datasource endpoint', () => {
       const m = makeBaseModel();
       assert.throws(() => validateOverload(m, { datasources: { medication: { endpoint: 'http://other' } } }), HDSLibError);
+    });
+    it('[OVBH] a divergent restatement of a setting or datasource is still refused, naming each field (B-2026-10-28-9)', () => {
+      const m = makeBaseModel();
+      try {
+        validateOverload(m, {
+          settings: { theme: { ...structuredClone(m.settings.theme), eventType: 'settings/other' } },
+          datasources: { medication: { ...structuredClone(m.datasources.medication), resultKey: 'drugs' } }
+        });
+        assert.fail('should have thrown');
+      } catch (err) {
+        assert.ok(err instanceof HDSLibError);
+        assert.deepEqual(err.innerObject.errors, [
+          'settings["theme"]: cannot override immutable field "eventType"',
+          'datasources["medication"]: cannot override immutable field "resultKey"'
+        ]);
+      }
     });
     it('[OVBI] rejects changing existing item unitConversions as an immutable field (B-2026-10-27-8)', () => {
       const m = makeBaseModel();

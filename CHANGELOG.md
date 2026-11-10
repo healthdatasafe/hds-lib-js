@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.45.0] - 2026-11-10
+
+### Fixed
+- **`cmcAppScope.ensureAppScope(conn, appCode, subPath)`** works on an account that has no `:_cmc:apps:<appCode>` leaf
+  yet (a personal token on a fresh account; B-2026-10-26-23). The leaf is only auto-provisioned when an access with a
+  matching permission is created or updated; when the sub-scope create answers `unknown-referenced-resource`, the
+  helper now creates the leaf under `:_cmc:apps` and retries (an existing leaf, created concurrently, is fine).
+- **Model overlays**: restating a setting's `type` / `eventType` or a datasource's `endpoint` / `queryParam` /
+  `resultKey` with exactly its base value is accepted, as it already was for items and streams (B-2026-10-28-9). A
+  different value is still refused.
+
+### Changed
+- **`appTemplates.offerStreamsToApiCalls`** returns pryv's `APICall<'streams.create'>[]` instead of
+  `{ method: string; params: Record<string, unknown> }[]`, so `connection.api(calls)` needs no cast (B-2026-10-26-27).
+- **Browser test suite** (`tests/browser-tests.js`) runs every test file but the node-only `validatorDrift`: 55 files
+  instead of 26 (B-2026-10-26-26). `cmcDataExport.test.js` imports the TypeScript source like the others, and a new
+  node test fails when a test file is neither listed nor excluded.
+
 ## [2.44.0] - 2026-11-08
 
 A CMC contact is named by the requester's own name, not its username (B-2026-11-02-15; data-model 3.47.2,
