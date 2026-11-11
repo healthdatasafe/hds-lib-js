@@ -23877,8 +23877,8 @@ exports.Questionnaire = Questionnaire;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.diffFormSpecWithTemplate = exports.diffTemplateScope = exports.scopeHashMatches = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.permissionView = exports.dataName = exports.legacyChatMessages = exports.legacyChatSource = exports.legacyChatStreams = exports.LEGACY_CHAT_TYPE = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
-exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = void 0;
+exports.diffTemplateScope = exports.scopeHashMatches = exports.templateScopeHash = exports.templateScope = exports.isExistingStreamRef = exports.isCustomFieldDeclaration = exports.loadTemplateFromUrl = exports.loadTemplate = exports.isEmptyDef = exports.customFieldDeclarationToVirtualItem = exports.streamCustomFieldToVirtualItem = exports.resolveStreamCustomFieldDetailed = exports.resolveStreamCustomField = exports.buildStreamMap = exports.checkQuestionnaireCoverage = exports.Questionnaire = exports.Contact = exports.CollectorRequest = exports.Application = exports.AppClientAccount = exports.AppManagingAccount = exports.permissionView = exports.dataName = exports.legacyChatMessages = exports.legacyChatSource = exports.legacyChatStreams = exports.LEGACY_CHAT_TYPE = exports.collectItemLabels = exports.collectItemLabelsFromSections = exports.getSectionItemLabels = exports.offerStreamsToApiCalls = exports.offerStreamsToCreate = exports.HookOpenUrlError = exports.HookInitiateError = exports.UnresolvedVariableError = exports.executeDisconnect = exports.executeHook = exports.expand = exports.markConnectorDisconnected = exports.disconnectedStatusContent = exports.getOrCreateConnectorAccess = exports.connectorAccessRefusal = exports.syncStatusLeafFor = exports.connectorAccessName = exports.findConnectorAccesses = exports.connectorIdFromCmcAppCode = exports.connectorCmcAppCode = exports.CONNECTOR_STATUS_TYPE = exports.ensureBridgeAccess = exports.getOrCreateBridgeAccess = void 0;
+exports.APP_PRIVATE_PURPOSE = exports.DATASET_TEMPLATE_FORMAT = exports.withAppPrivatePermissions = exports.templateSource = exports.templateToFormSpec = exports.semverBump = exports.diffFormSpecWithTemplate = void 0;
 const AppManagingAccount_ts_1 = __webpack_require__(/*! ./AppManagingAccount.js */ "./ts/appTemplates/AppManagingAccount.ts");
 Object.defineProperty(exports, "AppManagingAccount", ({ enumerable: true, get: function () { return AppManagingAccount_ts_1.AppManagingAccount; } }));
 const AppClientAccount_ts_1 = __webpack_require__(/*! ./AppClientAccount.js */ "./ts/appTemplates/AppClientAccount.ts");
@@ -23912,6 +23912,7 @@ Object.defineProperty(exports, "executeHook", ({ enumerable: true, get: function
 Object.defineProperty(exports, "executeDisconnect", ({ enumerable: true, get: function () { return hookExecutor_ts_1.executeDisconnect; } }));
 Object.defineProperty(exports, "UnresolvedVariableError", ({ enumerable: true, get: function () { return hookExecutor_ts_1.UnresolvedVariableError; } }));
 Object.defineProperty(exports, "HookInitiateError", ({ enumerable: true, get: function () { return hookExecutor_ts_1.HookInitiateError; } }));
+Object.defineProperty(exports, "HookOpenUrlError", ({ enumerable: true, get: function () { return hookExecutor_ts_1.HookOpenUrlError; } }));
 var offerStreams_ts_1 = __webpack_require__(/*! ./offerStreams.js */ "./ts/appTemplates/offerStreams.ts");
 Object.defineProperty(exports, "offerStreamsToCreate", ({ enumerable: true, get: function () { return offerStreams_ts_1.offerStreamsToCreate; } }));
 Object.defineProperty(exports, "offerStreamsToApiCalls", ({ enumerable: true, get: function () { return offerStreams_ts_1.offerStreamsToApiCalls; } }));
@@ -25045,7 +25046,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HookInitiateError = exports.UnresolvedVariableError = void 0;
+exports.HookOpenUrlError = exports.HookInitiateError = exports.UnresolvedVariableError = void 0;
 exports.expand = expand;
 exports.executeHook = executeHook;
 exports.executeDisconnect = executeDisconnect;
@@ -25068,6 +25069,17 @@ class HookInitiateError extends Error {
     }
 }
 exports.HookInitiateError = HookInitiateError;
+/** The URL to open is not `https:` (nor `http:` when allowed): never `javascript:`, `data:` or another scheme. */
+class HookOpenUrlError extends Error {
+    protocol;
+    constructor(protocol) {
+        // the URL itself is not in the message: its params may carry the apiEndpoint
+        super(`hook open URL refused: scheme "${protocol}"`);
+        this.name = 'HookOpenUrlError';
+        this.protocol = protocol;
+    }
+}
+exports.HookOpenUrlError = HookOpenUrlError;
 const VARIABLE_PATTERN = /\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
 function expand(template, vars) {
     return template.replace(VARIABLE_PATTERN, (_match, name) => {
@@ -25090,7 +25102,18 @@ async function executeHook(hook, ctx) {
     }
     const expandedUrl = expand(openStep.url, vars);
     const finalUrl = appendParams(expandedUrl, openStep.params, vars);
-    const allowedOrigin = new URL(finalUrl).origin;
+    let parsed;
+    try {
+        parsed = new URL(finalUrl);
+    }
+    catch {
+        // not an absolute URL; the TypeError would carry the URL itself
+        throw new HookOpenUrlError('none');
+    }
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && ctx.allowHttp === true)) {
+        throw new HookOpenUrlError(parsed.protocol);
+    }
+    const allowedOrigin = parsed.origin;
     const isEmbedded = openStep.embed === true && ctx.embeddable;
     return {
         mode: isEmbedded ? 'iframe' : 'redirect',
@@ -26484,8 +26507,41 @@ function randomId() {
  * Known limits: scope updates write the whole permission set from `rel.grantedPermissions`, so pass
  * a freshly read relationship (a stale one re-grants what another device removed). Two devices
  * sharing with a contact for the first time at the same moment can each create a `shared` child;
- * `stopSharingDocuments` removes the first one listed in the grant.
+ * `stopSharingDocuments` removes and deletes the first one listed in the grant.
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.streamsCheck = exports.DOCUMENT_ALERT_KINDS = exports.ET_DOCUMENT = exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = exports.DOCUMENTS_STREAM_ID = void 0;
 exports.newShareStreamId = newShareStreamId;
@@ -26511,6 +26567,7 @@ exports.cleanupOrphanDocumentShares = cleanupOrphanDocumentShares;
 exports.sendDocument = sendDocument;
 const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 const appScope_ts_1 = __webpack_require__(/*! ./appScope.js */ "./ts/cmc/appScope.ts");
 const dataExport_ts_1 = __webpack_require__(/*! ./dataExport.js */ "./ts/cmc/dataExport.ts");
@@ -26597,36 +26654,41 @@ function buildDocumentAlertContent(kind, eventId, locale = 'en') {
     };
 }
 /**
- * Pure part of `listDocumentAlerts` (exported for tests): one alert per `(kind, eventId)`, the
- * earliest, oldest first. A `document-shared` is `current` unless a later `document-unshared`
- * of the same document exists.
+ * Pure part of `listDocumentAlerts` (exported for tests): the document alerts, oldest first, one
+ * per alert event, so sharing a document again after taking it back is a new alert. A
+ * `document-sent` counts once per document (a repeated announcement is the same document). A
+ * `document-shared` is `current` while no later `document-shared` or `document-unshared` of the
+ * same document follows it: one active share per document.
  */
 function parseDocumentAlerts(events) {
     const kinds = new Set(Object.values(exports.DOCUMENT_ALERT_KINDS));
-    const seen = new Map();
-    const lastShare = new Map();
+    const seen = new Set();
+    const out = [];
     const sorted = [...(events ?? [])].sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
     for (const e of sorted) {
-        if (e.type !== dataExport_ts_1.ET_ALERT)
+        if (e.type !== dataExport_ts_1.ET_ALERT || seen.has(e.id))
             continue;
         const c = e.content ?? {};
         const kind = c.hds?.kind;
         const eventId = c.hds?.eventId;
         if (!kinds.has(kind) || typeof eventId !== 'string' || eventId.length === 0)
             continue;
-        const time = e.time ?? 0;
-        if (kind !== exports.DOCUMENT_ALERT_KINDS.SENT)
-            lastShare.set(eventId, { kind, time });
-        const key = kind + ':' + eventId;
+        const key = kind === exports.DOCUMENT_ALERT_KINDS.SENT ? 'sent:' + eventId : e.id;
         if (seen.has(key))
             continue;
+        seen.add(e.id);
+        seen.add(key);
         const from = c.from && typeof c.from.username === 'string' ? { username: c.from.username, host: String(c.from.host ?? '') } : null;
-        seen.set(key, { alertEventId: e.id, kind, eventId, time, direction: from ? 'received' : 'sent', from, current: true });
+        out.push({ alertEventId: e.id, kind, eventId, time: e.time ?? 0, direction: from ? 'received' : 'sent', from, current: true });
     }
-    const out = [...seen.values()];
-    for (const a of out) {
+    const changedLater = new Set();
+    for (let i = out.length - 1; i >= 0; i--) {
+        const a = out[i];
+        if (a.kind === exports.DOCUMENT_ALERT_KINDS.SENT)
+            continue;
         if (a.kind === exports.DOCUMENT_ALERT_KINDS.SHARED)
-            a.current = lastShare.get(a.eventId)?.kind === exports.DOCUMENT_ALERT_KINDS.SHARED;
+            a.current = !changedLater.has(a.eventId);
+        changedLater.add(a.eventId);
     }
     return out;
 }
@@ -26685,12 +26747,23 @@ async function ensureDocumentSharesRoot(connection) {
             throw e;
     }
 }
-/** The relationship's share child for `direction`, created (with the root) when missing. */
+/**
+ * The relationship's share child for `direction`, created (with the root) when missing. A `shared` child is reused
+ * only while the contact is granted it: an ungranted one (left by a stop whose delete failed) still carries the
+ * documents shared before, and granting it again would hand them all back.
+ */
 async function ensureShareStream(connection, rel, direction) {
     const relationship = relationshipIdOf(requireAccessId(rel, 'ensureShareStream'));
-    const existing = (await listShareStreams(connection)).find(s => s.relationship === relationship && s.direction === direction);
-    if (existing)
-        return existing.id;
+    if (direction === 'shared') {
+        const granted = await liveSharedChild(connection, rel);
+        if (granted != null)
+            return granted;
+    }
+    else {
+        const existing = (await listShareStreams(connection)).find(s => s.relationship === relationship && s.direction === direction);
+        if (existing)
+            return existing.id;
+    }
     await ensureDocumentSharesRoot(connection);
     const id = newShareStreamId();
     // pryv's typings take flat clientData values only
@@ -26739,8 +26812,11 @@ async function unshareDocument(connection, rel, eventId, opts = {}) {
 /**
  * Stop sharing all documents with a contact: its `read` on the share child removed (scope
  * update with `hds.removed`). The conversation goes on: a chat-only remainder is accepted, and
- * when nothing else is shared the `hds-noop` placeholder is granted (and provisioned). Documents
- * keep their share id until the child is deleted (`cleanupDocumentShares`); the contact no longer reads them.
+ * when nothing else is shared the `hds-noop` placeholder is granted (and provisioned). Once the
+ * change is applied the share child is deleted (best effort; the documents keep `documents`), so a
+ * later share starts a new child and never hands the contact back what was shared before. With
+ * `waitForCompletion: false` the child is kept (the change may not apply); `ensureShareStream`
+ * never reuses an ungranted one.
  */
 async function stopSharingDocuments(connection, rel, opts = {}) {
     const shared = shareStreamsOf(rel.grantedPermissions).shared;
@@ -26749,7 +26825,18 @@ async function stopSharingDocuments(connection, rel, opts = {}) {
     const others = (0, scope_ts_1.personPermissions)(rel.grantedPermissions).filter(p => p.streamId !== shared);
     if (!others.some(p => p.streamId != null && !p.streamId.startsWith(':_')))
         await (0, formSpec_ts_1.provisionHdsNoop)(connection);
-    return (0, scope_ts_1.stopSharingStream)(connection, rel, shared, { ...opts, parentIds: [exports.DOCUMENT_SHARES_ROOT_ID], allowChatOnly: true });
+    const result = await (0, scope_ts_1.stopSharingStream)(connection, rel, shared, { ...opts, parentIds: [exports.DOCUMENT_SHARES_ROOT_ID], allowChatOnly: true });
+    let shareStreamDeleted = false;
+    if (result.applied) {
+        try {
+            await deleteShareStream(connection, shared);
+            shareStreamDeleted = true;
+        }
+        catch (e) {
+            logger.warn('stopSharingDocuments: share child not deleted (not reused, deleted with the relationship):', e);
+        }
+    }
+    return { ...result, shareStreamDeleted };
 }
 /** Let a contact send documents (Route B): `create-only` on the relationship's receive child. */
 async function allowDocumentsFrom(connection, rel, opts = {}) {
@@ -26807,25 +26894,29 @@ async function cleanupDocumentShares(connection, relationship) {
             }
         }
     }
-    for (const s of mine) {
-        // the first call trashes the stream, the second deletes it; the API takes the boolean
-        // `mergeEventsWithParent` (pryv's typings say `mergeEventsWithParents`, a string)
-        for (let i = 0; i < 2; i++) {
-            try {
-                await connection.apiOne('streams.delete', { id: s.id, mergeEventsWithParent: false });
-            }
-            catch (e) {
-                if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'unknown-resource')
-                    throw e;
-            }
-        }
-    }
+    for (const s of mine)
+        await deleteShareStream(connection, s.id);
     return mine.map(s => s.id);
 }
-/** After a restore (accesses are not restored): clean up every share child whose relationship is not in `liveRelationships`. */
+/**
+ * Clean up every share child whose relationship no longer exists: after a restore (accesses are not restored), or a
+ * revoke whose `cleanupDocumentShares` failed. Without `liveRelationships` the live ones are read from the account's
+ * accesses (expired ones count as live), which needs a personal token: an app token lists only the accesses it
+ * created, and would make every relationship look gone. So it can run at any time, contacts loaded or not.
+ */
 async function cleanupOrphanDocumentShares(connection, liveRelationships) {
+    const children = await listShareStreams(connection, { includeTrashed: true });
+    if (children.length === 0)
+        return [];
+    if (liveRelationships == null) {
+        const info = await connection.accessInfo();
+        if (info?.type !== 'personal')
+            throw new errors_ts_1.HDSLibError('cleanupOrphanDocumentShares: reading the live relationships needs a personal token', { reason: 'not-personal' });
+        const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses');
+        liveRelationships = accesses.map(a => a.id);
+    }
     const live = new Set(liveRelationships.map(relationshipIdOf));
-    const orphans = [...new Set((await listShareStreams(connection, { includeTrashed: true })).map(s => s.relationship))].filter(r => !live.has(r));
+    const orphans = [...new Set(children.map(s => s.relationship))].filter(r => !live.has(r));
     const deleted = [];
     for (const r of orphans)
         deleted.push(...await cleanupDocumentShares(connection, r));
@@ -26849,8 +26940,14 @@ async function sendDocument(personConnection, ownConnection, params) {
     const eventId = body?.event?.id;
     if (!eventId)
         throw new errors_ts_1.HDSLibError('sendDocument: the document was not created', { reason: 'not-created', error: body?.error });
-    const { alertEventId } = await postDocumentAlert(ownConnection, params.collectorStreamId, exports.DOCUMENT_ALERT_KINDS.SENT, eventId, params.locale);
-    return { eventId, alertEventId };
+    try {
+        const { alertEventId } = await postDocumentAlert(ownConnection, params.collectorStreamId, exports.DOCUMENT_ALERT_KINDS.SENT, eventId, params.locale);
+        return { eventId, alertEventId };
+    }
+    catch (e) {
+        // sent, not announced: the caller posts the alert again (`postDocumentAlert` with this eventId), never the document
+        throw new errors_ts_1.HDSLibError('sendDocument: the document was sent, its alert was not posted', { reason: 'alert-not-posted', eventId, error: e });
+    }
 }
 // ---- internals ---- //
 function requireAccessId(rel, fn) {
@@ -26864,6 +26961,39 @@ function requireCollectorStream(rel, fn) {
         throw new errors_ts_1.HDSLibError(`${fn}: the relationship has no collectors stream (no system channel)`, { reason: 'no-collector-stream', accessId: rel.accessId });
     }
     return rel.localCollectorStreamId;
+}
+/**
+ * The `shared` child the contact is granted now: from the live access (a personal token lists it), so a relationship
+ * read before another device's first share reuses that device's child instead of ungranting it; else from `rel`.
+ */
+async function liveSharedChild(connection, rel) {
+    const base = relationshipIdOf(rel.accessId);
+    try {
+        const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
+        const live = accesses.find(a => relationshipIdOf(a.id) === base);
+        if (live != null)
+            return shareStreamsOf(live.permissions ?? []).shared;
+    }
+    catch (e) {
+        logger.warn('ensureShareStream: the live grant was not read, the relationship as given is used:', e);
+    }
+    return shareStreamsOf(rel.grantedPermissions).shared;
+}
+/**
+ * Delete a share child with `mergeEventsWithParent: false`: its documents lose its id and keep `documents`. The first
+ * call trashes the stream, the second deletes it; the API takes the boolean `mergeEventsWithParent` (pryv's typings
+ * say `mergeEventsWithParents`, a string).
+ */
+async function deleteShareStream(connection, streamId) {
+    for (let i = 0; i < 2; i++) {
+        try {
+            await connection.apiOne('streams.delete', { id: streamId, mergeEventsWithParent: false });
+        }
+        catch (e) {
+            if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'unknown-resource')
+                throw e;
+        }
+    }
 }
 async function getEvent(connection, eventId) {
     return await connection.apiOne('events.getOne', { id: eventId }, 'event');
@@ -46348,8 +46478,12 @@ function apiError (id) {
  * An account as the platform keeps it: streams, events, and scope updates settled as applied
  * (the grant changes to `newPermissions`, kept on `grant`).
  */
-function account ({ streams = [], events = [] } = {}) {
+function account ({ streams = [], events = [], accesses = [], tokenType = 'personal' } = {}) {
   const state = { streams: [...streams], events: new Map(events.map(e => [e.id, { ...e }])), calls: [], grant: null, n: 0 };
+  state.accessInfo = async () => {
+    state.calls.push({ method: 'accessInfo' });
+    return { type: tokenType };
+  };
   const children = (parentId) => state.streams.filter(s => s.parentId === parentId);
   state.apiOne = async function (method, params, key) {
     state.calls.push({ method, params });
@@ -46395,6 +46529,8 @@ function account ({ streams = [], events = [] } = {}) {
         Object.assign(e, params.update);
         return out('event', e);
       }
+      case 'accesses.get':
+        return out('accesses', accesses);
       case 'events.get':
         return out('events', [...state.events.values()].filter(e =>
           (params.state === 'all' || (!e.trashed && params.streams.every(id => !state.streams.find(s => s.id === id)?.trashed))) &&
@@ -46464,8 +46600,9 @@ describe('[CDOC] cmcDocuments', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.buildDocumentAlertContent(K.SHARED, ''));
     });
 
-    it('[CDOC5] parseDocumentAlerts: one per (kind, eventId), the later of shared / unshared wins, other alerts ignored', () => {
-      const a = (id, time, kind, eventId, from) => ({ id, time, type: 'notification/alert-cmc', content: { hds: { kind, eventId }, ...(from ? { from: { username: 'anna', host: 'x' } } : {}) } });
+    const a = (id, time, kind, eventId, from) => ({ id, time, type: 'notification/alert-cmc', content: { hds: { kind, eventId }, ...(from ? { from: { username: 'anna', host: 'x' } } : {}) } });
+
+    it('[CDOC5] parseDocumentAlerts: every alert, oldest first; a share taken back later is not current; other alerts ignored', () => {
       const parsed = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.parseDocumentAlerts([
         a('a3', 3, K.UNSHARED, 'd1'),
         a('a1', 1, K.SHARED, 'd1'),
@@ -46476,9 +46613,34 @@ describe('[CDOC] cmcDocuments', function () {
       ]);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.kind, p.eventId, p.current, p.direction]), [
         ['a1', K.SHARED, 'd1', false, 'sent'],
+        ['a2', K.SHARED, 'd1', false, 'sent'],
         ['a3', K.UNSHARED, 'd1', true, 'sent'],
         ['a4', K.SHARED, 'd2', true, 'received']
       ]);
+    });
+
+    it('[CDOC6] shared again after being taken back: a new current alert after the "taken back" one; an alert listed twice counts once', () => {
+      const parsed = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.parseDocumentAlerts([
+        a('a1', 1, K.SHARED, 'd1'),
+        a('a2', 2, K.UNSHARED, 'd1'),
+        a('a3', 3, K.SHARED, 'd1'),
+        a('a3', 3, K.SHARED, 'd1')
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.kind, p.current]), [
+        ['a1', K.SHARED, false],
+        ['a2', K.UNSHARED, true],
+        ['a3', K.SHARED, true]
+      ]);
+    });
+
+    it('[CDOC7] one active share per document; a document sent and announced again counts once', () => {
+      const parsed = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.parseDocumentAlerts([
+        a('a1', 1, K.SHARED, 'd1'),
+        a('a2', 2, K.SHARED, 'd1'),
+        a('s1', 3, K.SENT, 'r1', true),
+        a('s2', 4, K.SENT, 'r1', true)
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.current]), [['a1', false], ['a2', true], ['s1', true]]);
     });
   });
 
@@ -46510,16 +46672,27 @@ describe('[CDOC] cmcDocuments', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', 'share-aaaaaaaaaaaa']);
     });
 
-    it('[CDOC12] an existing ungranted child of the relationship is reused; another relationship\'s is not', async () => {
+    it('[CDOC12] an ungranted child of the relationship is never reused: it still lists what was shared before', async () => {
       const streams = [
         { id: 'document-shares', parentId: null, name: 'Shared documents' },
         { id: 'share-other0000000', parentId: 'document-shares', name: 'x', clientData: { hdsDocumentShare: { relationship: 'acc-9', direction: 'shared' } } },
         { id: 'share-mine00000000', parentId: 'document-shares', name: 'x', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } }
       ];
-      const conn = account({ streams, events: [doc('d1')] });
+      const conn = account({ streams, events: [doc('d1'), doc('old', ['documents', 'share-mine00000000'])] });
       const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.shareStreamId, 'share-mine00000000');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!['share-mine00000000', 'share-other0000000'].includes(res.shareStreamId));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(conn.streams.find(s => s.id === res.shareStreamId), 'a new child');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.grant.some(p => p.streamId === 'share-mine00000000'), 'the old child is not granted');
+    });
+
+    it('[CDOC16] a relationship read before another device\'s first share reuses that device\'s child, never ungrants it', async () => {
+      const streams = [tree()[0], { id: 'share-xxxxxxxxxxxx', parentId: 'document-shares', name: 'x', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } }];
+      const live = [{ streamId: 'body-weight', level: 'read' }, { streamId: 'share-xxxxxxxxxxxx', level: 'read' }, ...CHANNEL];
+      const conn = account({ streams, events: [doc('d1')], accesses: [{ id: 'acc-1:3', permissions: live }] });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.shareStreamId, 'share-xxxxxxxxxxxx');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.calls.some(c => c.method === 'streams.create'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(conn.grant.some(p => p.streamId === 'share-xxxxxxxxxxxx'), 'still granted');
     });
 
     it('[CDOC13] the contact already reads every document: only the alert', async () => {
@@ -46580,6 +46753,34 @@ describe('[CDOC] cmcDocuments', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant, [{ streamId: 'hds-noop', level: 'read' }]);
     });
 
+    it('[CDOC24] once stopped the share child is deleted: documents keep `documents`, a later share never hands them back', async () => {
+      const streams = [tree()[0], { id: 'share-aaaaaaaaaaaa', parentId: 'document-shares', name: 'share-aaaaaaaaaaaa', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } }];
+      const conn = account({ streams, events: [doc('d1', ['documents', 'share-aaaaaaaaaaaa']), doc('d2')] });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.stopSharingDocuments(conn, relWith([{ streamId: 'body-weight', level: 'read' }, { streamId: 'share-aaaaaaaaaaaa', level: 'read' }]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.shareStreamDeleted, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.streams.some(s => s.id === 'share-aaaaaaaaaaaa'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents']);
+      for (const c of conn.calls.filter(c => c.method === 'streams.delete')) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.params.mergeEventsWithParent, false);
+      const again = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith(conn.grant), 'd2');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notStrictEqual(again.shareStreamId, 'share-aaaaaaaaaaaa');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents'], 'the earlier document stays unshared');
+    });
+
+    it('[CDOC25] the delete failing does not fail the stop; not waited for, the child is kept', async () => {
+      const failing = account();
+      const apiOne = failing.apiOne;
+      failing.apiOne = async (method, params, key) => {
+        if (method === 'streams.delete') throw apiError('forbidden');
+        return apiOne(method, params, key);
+      };
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.stopSharingDocuments(failing, relWith([{ streamId: 'hds-noop', level: 'read' }, { streamId: 'share-aaaaaaaaaaaa', level: 'read' }]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([res.applied, res.shareStreamDeleted], [true, false]);
+      const pending = account();
+      const res2 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.stopSharingDocuments(pending, relWith([{ streamId: 'hds-noop', level: 'read' }, { streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), { waitForCompletion: false });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([res2.status, res2.shareStreamDeleted], ['pending', false]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!pending.calls.some(c => c.method === 'streams.delete'));
+    });
+
     it('[CDOC23] other streams keep their meaning: without allowChatOnly the last one is still refused', async () => {
       const { cmcScope } = await Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! ../ts/index.ts */ "./ts/index.ts", 19));
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(cmcScope.planStopSharing([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }], 'share-aaaaaaaaaaaa'), { ok: false, reason: 'nothing-left' });
@@ -46614,6 +46815,17 @@ describe('[CDOC] cmcDocuments', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(own.events.get(res.alertEventId).content.hds, { kind: 'document-sent', eventId: res.eventId });
       await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sendDocument(person, own, { receiveStreamId: 'documents', collectorStreamId: 'x', content: {}, file: new Uint8Array(), filename: 'a' }),
         (e) => e.innerObject?.reason === 'not-a-share-stream');
+    });
+
+    it('[CDOC34] sent but not announced: alert-not-posted with the created eventId, so only the alert is posted again', async () => {
+      const person = account();
+      const own = account();
+      own.apiOne = async () => { throw new Error('offline'); };
+      let eventId;
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sendDocument(person, own, {
+        receiveStreamId: 'share-rrrrrrrrrrrr', collectorStreamId: ':_cmc:apps:hds-collector:collectors:anna', content: {}, file: new Uint8Array([1]), filename: 'a.pdf'
+      }), (e) => { eventId = e.innerObject?.eventId; return e.innerObject?.reason === 'alert-not-posted'; });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(person.events.has(eventId), 'the document is there');
     });
 
     it('[CDOC32] receiveDocument moves a valid document to documents, refuses the rest unchanged', async () => {
@@ -46677,6 +46889,27 @@ describe('[CDOC] cmcDocuments', function () {
       const conn = account({ streams: tree() });
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(conn, ['acc-1:2']), ['share-oooooooooooo']);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.listShareStreams(account()), [], 'no root yet: no share child');
+    });
+
+    it('[CDOC43] without a list, the live relationships are the accesses (expired too), read only with a personal token', async () => {
+      const conn = account({ streams: tree(), accesses: [{ id: 'acc-1:5' }, { id: 'app-x' }] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(conn), ['share-oooooooooooo']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.calls.find(c => c.method === 'accesses.get').params, { includeExpired: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.streams.map(s => s.id).sort(), ['document-shares', 'share-rrrrrrrrrrrr', 'share-ssssssssssss']);
+      const app = account({ streams: tree(), accesses: [], tokenType: 'app' });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(app), (e) => e.innerObject?.reason === 'not-personal');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(app.streams.length, 4, 'nothing deleted');
+      const down = account({ streams: tree() });
+      const apiOne = down.apiOne;
+      down.apiOne = async (method, params, key) => {
+        if (method === 'accesses.get') throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(down), /offline/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(down.streams.length, 4, 'accesses not read: nothing deleted');
+      const empty = account();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(empty), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!empty.calls.some(c => c.method === 'accessInfo' || c.method === 'accesses.get'), 'no share child: accesses not read');
     });
   });
 });
@@ -48074,6 +48307,19 @@ describe('[CONH] connectors: hook executor', function () {
     await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx()), (e) => e instanceof _ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.HookInitiateError && /connect refused/.test(e.reason));
     stubFetch(() => new Response(JSON.stringify({ other: 1 }), { status: 200 }));
     await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx()), /openUrl missing/);
+  });
+
+  it('[CH07] the URL to open is https only (http when allowed), never javascript: or data:, and the error never names the URL', async () => {
+    for (const openUrl of ['javascript:alert(document.domain)', 'data:text/html,<script>1</script>', 'ftp://bridge.test/x']) {
+      stubFetch(() => new Response(JSON.stringify({ openUrl }), { status: 200 }));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx({ allowHttp: true })), (e) => e instanceof _ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.HookOpenUrlError && !e.message.includes(openUrl));
+    }
+    const httpHook = { open: { url: 'http://localhost:4000/connect', embed: true, params: { apiEndpoint: '${apiEndpoint}' } } };
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(httpHook, ctx()), (e) => e instanceof _ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.HookOpenUrlError && e.protocol === 'http:' && !e.message.includes('token-abc'));
+    const allowed = await (0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(httpHook, ctx({ allowHttp: true }));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(allowed.allowedOrigin, 'http://localhost:4000');
+    stubFetch(() => new Response(JSON.stringify({ openUrl: 'not a url token-abc' }), { status: 200 }));
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects((0,_ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.executeHook)(miraHook, ctx()), (e) => e instanceof _ts_appTemplates_hookExecutor_ts__WEBPACK_IMPORTED_MODULE_2__.HookOpenUrlError && e.protocol === 'none' && !e.message.includes('token-abc'));
   });
 
   it('[CH06] disconnect is best-effort: posts with auth, swallows HTTP and network errors, no-op without a step', async () => {
