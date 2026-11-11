@@ -308,6 +308,9 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
       await Questionnaire.writeBundled(conn, { questionnaires: [forged] }, ['s']);
       assert.equal(conn.calls[1][0].params.content.requester, undefined, 'an offer-supplied requester is dropped');
       assert.equal(new Questionnaire(forged).toRequestEventContent().requester, undefined, 'never a template field');
+      for (const bad of ['', 42]) {
+        assert.throws(() => Questionnaire.makeRequestEvent(forged, ['s'], 1, { requester: bad }), /requester must be the access id/);
+      }
     });
   });
 
