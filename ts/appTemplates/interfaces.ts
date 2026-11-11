@@ -61,6 +61,17 @@ export interface QuestionnaireRequestContent {
   questions: Record<string, QuestionDef>;
 }
 
+/**
+ * Who asked for a questionnaire (data-model 3.49.0, QUESTIONNAIRE.md § Who asked): the base id of the access the person
+ * granted the requester. An instantiation fact set when the request event is written, never part of a template.
+ */
+export interface QuestionnaireRequester {
+  relationship: string;
+}
+
+/** Content of a written `questionnaire/request-v1` event: the template content plus, optionally, who asked. */
+export type QuestionnaireRequestEventContent = QuestionnaireRequestContent & { requester?: QuestionnaireRequester };
+
 /** Content shape of a `questionnaire/answer-v1` event (does NOT include the clientData mirror). */
 export interface QuestionnaireAnswerContent {
   requestEventId: string;

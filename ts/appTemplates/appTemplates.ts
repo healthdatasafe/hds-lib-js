@@ -65,6 +65,8 @@ export type {
   AnswerStatus,
   AnswerEntry,
   QuestionnaireRequestContent,
+  QuestionnaireRequester,
+  QuestionnaireRequestEventContent,
   QuestionnaireAnswerContent
 } from './interfaces.ts';
 

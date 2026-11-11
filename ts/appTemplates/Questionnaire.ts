@@ -7,8 +7,19 @@ import type {
   QuestionSubField,
   AnswerEntry,
   QuestionnaireRequestContent,
+  QuestionnaireRequestEventContent,
   QuestionnaireAnswerContent
 } from './interfaces.ts';
+import { pryv } from '../patchedPryv.ts';
+
+/** The base of an access id (without its serial), as a CMC relationship is keyed (`cmcDocuments.relationshipIdOf`). */
+function accessBase (accessId: string): string {
+  try {
+    return (pryv as any).utils.parseAccessRef(accessId).base;
+  } catch {
+    return accessId;
+  }
+}
 
 /**
  * Plan 71 — questionnaire template.
@@ -164,21 +175,43 @@ export class Questionnaire {
   static makeRequestEvent (
     content: QuestionnaireRequestContent,
     streamIds: string[],
-    timeSeconds?: number
-  ): { type: 'questionnaire/request-v1', streamIds: string[], time: number, content: QuestionnaireRequestContent } {
+    timeSeconds?: number,
+    options?: { requester?: string }
+  ): { type: 'questionnaire/request-v1', streamIds: string[], time: number, content: QuestionnaireRequestEventContent } {
     if (!Array.isArray(streamIds) || streamIds.length === 0) {
       throw new HDSLibError('makeRequestEvent: streamIds must be a non-empty array');
     }
     // Roundtrip through a Questionnaire instance to validate the shape — the
     // caller may pass content from anywhere (a CollectorRequest's bundled
-    // entry, a saved template, or a fresh build).
-    const roundTripped = new Questionnaire(content).toRequestEventContent();
+    // entry, a saved template, or a fresh build). It keeps only template
+    // fields: a `requester` in the content (an offer naming someone else as
+    // the one asking) never survives it.
+    const roundTripped: QuestionnaireRequestEventContent = new Questionnaire(content).toRequestEventContent();
+    if (options?.requester != null) {
+      if (typeof options.requester !== 'string' || options.requester.length === 0) {
+        throw new HDSLibError('makeRequestEvent: requester must be the access id the person granted the requester');
+      }
+      roundTripped.requester = { relationship: accessBase(options.requester) };
+    }
     return {
       type: 'questionnaire/request-v1',
       streamIds,
       time: timeSeconds ?? Math.floor(Date.now() / 1000),
       content: roundTripped
     };
+  }
+
+  /**
+   * The relationship that asked for a request (QUESTIONNAIRE.md § Who asked), among `relationships` (access ids or
+   * their bases): the one whose access wrote it (`createdBy`), else `content.requester.relationship`; null when
+   * neither is one of them (a request written before data-model 3.49.0, or by a relationship that has ended).
+   */
+  static requesterOf (event: { createdBy?: string, content?: unknown }, relationships: string[]): string | null {
+    const live = new Set(relationships.map(accessBase));
+    const writer = typeof event?.createdBy === 'string' ? accessBase(event.createdBy.split(' ')[0]) : null;
+    if (writer != null && live.has(writer)) return writer;
+    const recorded = (event?.content as { requester?: { relationship?: unknown } } | undefined)?.requester?.relationship;
+    return typeof recorded === 'string' && live.has(recorded) ? recorded : null;
   }
 
   /**
@@ -196,12 +229,16 @@ export class Questionnaire {
    * Atomicity: Pryv `events.batch` is best-effort per-entry — a single failed
    * write doesn't roll back the others. Callers needing transactional
    * guarantees must inspect the result and reconcile.
+   *
+   * `options.requester`: the access the person just granted the requester
+   * (the accept result's `dataGrantAccessId`), recorded on each event as
+   * `requester.relationship` (data-model 3.49.0), so the app can say who asked.
    */
   static async writeBundled (
     connection: { api: (calls: Array<{ method: string, params: unknown }>) => Promise<unknown[]> },
     request: { questionnaires: QuestionnaireRequestContent[] },
     streamIds: string[],
-    options?: { timeSeconds?: number }
+    options?: { timeSeconds?: number, requester?: string }
   ): Promise<unknown[]> {
     if (!Array.isArray(streamIds) || streamIds.length === 0) {
       throw new HDSLibError('writeBundled: streamIds must be a non-empty array');
@@ -211,7 +248,7 @@ export class Questionnaire {
     const time = options?.timeSeconds ?? Math.floor(Date.now() / 1000);
     const calls = list.map((content) => ({
       method: 'events.create',
-      params: Questionnaire.makeRequestEvent(content, streamIds, time)
+      params: Questionnaire.makeRequestEvent(content, streamIds, time, { requester: options?.requester })
     }));
     return await connection.api(calls);
   }
