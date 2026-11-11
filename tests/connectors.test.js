@@ -17,7 +17,8 @@ import {
   executeHook,
   executeDisconnect,
   UnresolvedVariableError,
-  HookInitiateError
+  HookInitiateError,
+  HookOpenUrlError
 } from '../ts/appTemplates/hookExecutor.ts';
 import { offerStreamsToCreate, offerStreamsToApiCalls } from '../ts/appTemplates/offerStreams.ts';
 
@@ -211,6 +212,19 @@ describe('[CONH] connectors: hook executor', function () {
     await assert.rejects(executeHook(miraHook, ctx()), (e) => e instanceof HookInitiateError && /connect refused/.test(e.reason));
     stubFetch(() => new Response(JSON.stringify({ other: 1 }), { status: 200 }));
     await assert.rejects(executeHook(miraHook, ctx()), /openUrl missing/);
+  });
+
+  it('[CH07] the URL to open is https only (http when allowed), never javascript: or data:, and the error never names the URL', async () => {
+    for (const openUrl of ['javascript:alert(document.domain)', 'data:text/html,<script>1</script>', 'ftp://bridge.test/x']) {
+      stubFetch(() => new Response(JSON.stringify({ openUrl }), { status: 200 }));
+      await assert.rejects(executeHook(miraHook, ctx({ allowHttp: true })), (e) => e instanceof HookOpenUrlError && !e.message.includes(openUrl));
+    }
+    const httpHook = { open: { url: 'http://localhost:4000/connect', embed: true, params: { apiEndpoint: '${apiEndpoint}' } } };
+    await assert.rejects(executeHook(httpHook, ctx()), (e) => e instanceof HookOpenUrlError && e.protocol === 'http:' && !e.message.includes('token-abc'));
+    const allowed = await executeHook(httpHook, ctx({ allowHttp: true }));
+    assert.equal(allowed.allowedOrigin, 'http://localhost:4000');
+    stubFetch(() => new Response(JSON.stringify({ openUrl: 'not a url token-abc' }), { status: 200 }));
+    await assert.rejects(executeHook(miraHook, ctx()), (e) => e instanceof HookOpenUrlError && e.protocol === 'none' && !e.message.includes('token-abc'));
   });
 
   it('[CH06] disconnect is best-effort: posts with auth, swallows HTTP and network errors, no-op without a step', async () => {

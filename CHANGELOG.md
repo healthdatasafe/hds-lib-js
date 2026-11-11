@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.46.0] - 2026-11-11
+
+Documents sharing follow-ups (B-2026-11-02-3) and a scheme check on the hook's open URL (B-2026-11-11-4).
+
+### Fixed
+- **`cmcDocuments.parseDocumentAlerts` / `listDocumentAlerts`** return one entry per alert event, not the earliest per
+  `(kind, eventId)`: sharing a document again after taking it back is a new bubble, after the "taken back" one. A
+  `document-shared` is `current` while no later share or take-back of the same document follows it (one active share
+  per document); a `document-sent` still counts once per document.
+- **`cmcDocuments.stopSharingDocuments`** deletes the share child once the scope update is applied (best effort,
+  `mergeEventsWithParent: false`, documents keep `documents`), and returns `shareStreamDeleted`. **`ensureShareStream`**
+  reuses a `shared` child only while the contact is granted it (read from the live access with a personal token), so a
+  later share never hands back what was shared before, and a stale relationship never ungrants another device's child.
+  Apps that deleted the child themselves (hds-webapp#68) can drop that.
+- **`cmcDocuments.sendDocument`**: when the document is created but its alert is not posted, it throws `HDSLibError`
+  with `reason: 'alert-not-posted'` and the created `eventId`, so the app posts only the alert again
+  (`postDocumentAlert`).
+- **`appTemplates.executeHook`** refuses an open URL that is not `https:` (`http:` only with the new
+  `HookContext.allowHttp`, for a local bridge in a development build) or not an absolute URL, with the new
+  `HookOpenUrlError` (its `protocol`; the URL is never in the message, its params may carry the apiEndpoint).
+
+### Added
+- **`cmcDocuments.cleanupOrphanDocumentShares(connection)`** without a list reads the live relationships from the
+  account's accesses (expired ones count as live). It needs a personal token (`reason: 'not-personal'` otherwise: an app
+  token lists only the accesses it created), and reads nothing when there is no share child, so an app can run it at
+  any time, e.g. once per sign-in.
+
 ## [2.45.0] - 2026-11-10
 
 ### Fixed

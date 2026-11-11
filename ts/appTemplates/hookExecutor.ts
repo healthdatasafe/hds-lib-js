@@ -39,6 +39,8 @@ export interface HookContext {
   returnUrl: string;
   mode: 'connect' | 'resync';
   embeddable: boolean;
+  /** Also open an `http:` URL (a local bridge in a development build). Default: `https:` only. */
+  allowHttp?: boolean;
 }
 
 export interface HookResult {
@@ -62,6 +64,17 @@ export class HookInitiateError extends Error {
     super(`hook initiate failed: ${reason}`, options);
     this.name = 'HookInitiateError';
     this.reason = reason;
+  }
+}
+
+/** The URL to open is not `https:` (nor `http:` when allowed): never `javascript:`, `data:` or another scheme. */
+export class HookOpenUrlError extends Error {
+  readonly protocol: string;
+  constructor (protocol: string) {
+    // the URL itself is not in the message: its params may carry the apiEndpoint
+    super(`hook open URL refused: scheme "${protocol}"`);
+    this.name = 'HookOpenUrlError';
+    this.protocol = protocol;
   }
 }
 
@@ -91,7 +104,17 @@ export async function executeHook (hook: HookDescriptor, ctx: HookContext): Prom
 
   const expandedUrl = expand(openStep.url, vars);
   const finalUrl = appendParams(expandedUrl, openStep.params, vars);
-  const allowedOrigin = new URL(finalUrl).origin;
+  let parsed: URL;
+  try {
+    parsed = new URL(finalUrl);
+  } catch {
+    // not an absolute URL; the TypeError would carry the URL itself
+    throw new HookOpenUrlError('none');
+  }
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && ctx.allowHttp === true)) {
+    throw new HookOpenUrlError(parsed.protocol);
+  }
+  const allowedOrigin = parsed.origin;
   const isEmbedded = openStep.embed === true && ctx.embeddable;
   return {
     mode: isEmbedded ? 'iframe' : 'redirect',

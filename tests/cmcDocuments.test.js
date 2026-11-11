@@ -20,8 +20,12 @@ function apiError (id) {
  * An account as the platform keeps it: streams, events, and scope updates settled as applied
  * (the grant changes to `newPermissions`, kept on `grant`).
  */
-function account ({ streams = [], events = [] } = {}) {
+function account ({ streams = [], events = [], accesses = [], tokenType = 'personal' } = {}) {
   const state = { streams: [...streams], events: new Map(events.map(e => [e.id, { ...e }])), calls: [], grant: null, n: 0 };
+  state.accessInfo = async () => {
+    state.calls.push({ method: 'accessInfo' });
+    return { type: tokenType };
+  };
   const children = (parentId) => state.streams.filter(s => s.parentId === parentId);
   state.apiOne = async function (method, params, key) {
     state.calls.push({ method, params });
@@ -67,6 +71,8 @@ function account ({ streams = [], events = [] } = {}) {
         Object.assign(e, params.update);
         return out('event', e);
       }
+      case 'accesses.get':
+        return out('accesses', accesses);
       case 'events.get':
         return out('events', [...state.events.values()].filter(e =>
           (params.state === 'all' || (!e.trashed && params.streams.every(id => !state.streams.find(s => s.id === id)?.trashed))) &&
@@ -136,8 +142,9 @@ describe('[CDOC] cmcDocuments', function () {
       assert.throws(() => cmcDocuments.buildDocumentAlertContent(K.SHARED, ''));
     });
 
-    it('[CDOC5] parseDocumentAlerts: one per (kind, eventId), the later of shared / unshared wins, other alerts ignored', () => {
-      const a = (id, time, kind, eventId, from) => ({ id, time, type: 'notification/alert-cmc', content: { hds: { kind, eventId }, ...(from ? { from: { username: 'anna', host: 'x' } } : {}) } });
+    const a = (id, time, kind, eventId, from) => ({ id, time, type: 'notification/alert-cmc', content: { hds: { kind, eventId }, ...(from ? { from: { username: 'anna', host: 'x' } } : {}) } });
+
+    it('[CDOC5] parseDocumentAlerts: every alert, oldest first; a share taken back later is not current; other alerts ignored', () => {
       const parsed = cmcDocuments.parseDocumentAlerts([
         a('a3', 3, K.UNSHARED, 'd1'),
         a('a1', 1, K.SHARED, 'd1'),
@@ -148,9 +155,34 @@ describe('[CDOC] cmcDocuments', function () {
       ]);
       assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.kind, p.eventId, p.current, p.direction]), [
         ['a1', K.SHARED, 'd1', false, 'sent'],
+        ['a2', K.SHARED, 'd1', false, 'sent'],
         ['a3', K.UNSHARED, 'd1', true, 'sent'],
         ['a4', K.SHARED, 'd2', true, 'received']
       ]);
+    });
+
+    it('[CDOC6] shared again after being taken back: a new current alert after the "taken back" one; an alert listed twice counts once', () => {
+      const parsed = cmcDocuments.parseDocumentAlerts([
+        a('a1', 1, K.SHARED, 'd1'),
+        a('a2', 2, K.UNSHARED, 'd1'),
+        a('a3', 3, K.SHARED, 'd1'),
+        a('a3', 3, K.SHARED, 'd1')
+      ]);
+      assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.kind, p.current]), [
+        ['a1', K.SHARED, false],
+        ['a2', K.UNSHARED, true],
+        ['a3', K.SHARED, true]
+      ]);
+    });
+
+    it('[CDOC7] one active share per document; a document sent and announced again counts once', () => {
+      const parsed = cmcDocuments.parseDocumentAlerts([
+        a('a1', 1, K.SHARED, 'd1'),
+        a('a2', 2, K.SHARED, 'd1'),
+        a('s1', 3, K.SENT, 'r1', true),
+        a('s2', 4, K.SENT, 'r1', true)
+      ]);
+      assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.current]), [['a1', false], ['a2', true], ['s1', true]]);
     });
   });
 
@@ -182,16 +214,27 @@ describe('[CDOC] cmcDocuments', function () {
       assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', 'share-aaaaaaaaaaaa']);
     });
 
-    it('[CDOC12] an existing ungranted child of the relationship is reused; another relationship\'s is not', async () => {
+    it('[CDOC12] an ungranted child of the relationship is never reused: it still lists what was shared before', async () => {
       const streams = [
         { id: 'document-shares', parentId: null, name: 'Shared documents' },
         { id: 'share-other0000000', parentId: 'document-shares', name: 'x', clientData: { hdsDocumentShare: { relationship: 'acc-9', direction: 'shared' } } },
         { id: 'share-mine00000000', parentId: 'document-shares', name: 'x', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } }
       ];
-      const conn = account({ streams, events: [doc('d1')] });
+      const conn = account({ streams, events: [doc('d1'), doc('old', ['documents', 'share-mine00000000'])] });
       const res = await cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1');
-      assert.strictEqual(res.shareStreamId, 'share-mine00000000');
+      assert.ok(!['share-mine00000000', 'share-other0000000'].includes(res.shareStreamId));
+      assert.ok(conn.streams.find(s => s.id === res.shareStreamId), 'a new child');
+      assert.ok(!conn.grant.some(p => p.streamId === 'share-mine00000000'), 'the old child is not granted');
+    });
+
+    it('[CDOC16] a relationship read before another device\'s first share reuses that device\'s child, never ungrants it', async () => {
+      const streams = [tree()[0], { id: 'share-xxxxxxxxxxxx', parentId: 'document-shares', name: 'x', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } }];
+      const live = [{ streamId: 'body-weight', level: 'read' }, { streamId: 'share-xxxxxxxxxxxx', level: 'read' }, ...CHANNEL];
+      const conn = account({ streams, events: [doc('d1')], accesses: [{ id: 'acc-1:3', permissions: live }] });
+      const res = await cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1');
+      assert.strictEqual(res.shareStreamId, 'share-xxxxxxxxxxxx');
       assert.ok(!conn.calls.some(c => c.method === 'streams.create'));
+      assert.ok(conn.grant.some(p => p.streamId === 'share-xxxxxxxxxxxx'), 'still granted');
     });
 
     it('[CDOC13] the contact already reads every document: only the alert', async () => {
@@ -252,6 +295,34 @@ describe('[CDOC] cmcDocuments', function () {
       assert.deepStrictEqual(conn.grant, [{ streamId: 'hds-noop', level: 'read' }]);
     });
 
+    it('[CDOC24] once stopped the share child is deleted: documents keep `documents`, a later share never hands them back', async () => {
+      const streams = [tree()[0], { id: 'share-aaaaaaaaaaaa', parentId: 'document-shares', name: 'share-aaaaaaaaaaaa', clientData: { hdsDocumentShare: { relationship: 'acc-1', direction: 'shared' } } }];
+      const conn = account({ streams, events: [doc('d1', ['documents', 'share-aaaaaaaaaaaa']), doc('d2')] });
+      const res = await cmcDocuments.stopSharingDocuments(conn, relWith([{ streamId: 'body-weight', level: 'read' }, { streamId: 'share-aaaaaaaaaaaa', level: 'read' }]));
+      assert.strictEqual(res.shareStreamDeleted, true);
+      assert.ok(!conn.streams.some(s => s.id === 'share-aaaaaaaaaaaa'));
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents']);
+      for (const c of conn.calls.filter(c => c.method === 'streams.delete')) assert.strictEqual(c.params.mergeEventsWithParent, false);
+      const again = await cmcDocuments.shareDocument(conn, relWith(conn.grant), 'd2');
+      assert.notStrictEqual(again.shareStreamId, 'share-aaaaaaaaaaaa');
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents'], 'the earlier document stays unshared');
+    });
+
+    it('[CDOC25] the delete failing does not fail the stop; not waited for, the child is kept', async () => {
+      const failing = account();
+      const apiOne = failing.apiOne;
+      failing.apiOne = async (method, params, key) => {
+        if (method === 'streams.delete') throw apiError('forbidden');
+        return apiOne(method, params, key);
+      };
+      const res = await cmcDocuments.stopSharingDocuments(failing, relWith([{ streamId: 'hds-noop', level: 'read' }, { streamId: 'share-aaaaaaaaaaaa', level: 'read' }]));
+      assert.deepStrictEqual([res.applied, res.shareStreamDeleted], [true, false]);
+      const pending = account();
+      const res2 = await cmcDocuments.stopSharingDocuments(pending, relWith([{ streamId: 'hds-noop', level: 'read' }, { streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), { waitForCompletion: false });
+      assert.deepStrictEqual([res2.status, res2.shareStreamDeleted], ['pending', false]);
+      assert.ok(!pending.calls.some(c => c.method === 'streams.delete'));
+    });
+
     it('[CDOC23] other streams keep their meaning: without allowChatOnly the last one is still refused', async () => {
       const { cmcScope } = await import('../ts/index.ts');
       assert.deepStrictEqual(cmcScope.planStopSharing([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }], 'share-aaaaaaaaaaaa'), { ok: false, reason: 'nothing-left' });
@@ -286,6 +357,17 @@ describe('[CDOC] cmcDocuments', function () {
       assert.deepStrictEqual(own.events.get(res.alertEventId).content.hds, { kind: 'document-sent', eventId: res.eventId });
       await assert.rejects(cmcDocuments.sendDocument(person, own, { receiveStreamId: 'documents', collectorStreamId: 'x', content: {}, file: new Uint8Array(), filename: 'a' }),
         (e) => e.innerObject?.reason === 'not-a-share-stream');
+    });
+
+    it('[CDOC34] sent but not announced: alert-not-posted with the created eventId, so only the alert is posted again', async () => {
+      const person = account();
+      const own = account();
+      own.apiOne = async () => { throw new Error('offline'); };
+      let eventId;
+      await assert.rejects(cmcDocuments.sendDocument(person, own, {
+        receiveStreamId: 'share-rrrrrrrrrrrr', collectorStreamId: ':_cmc:apps:hds-collector:collectors:anna', content: {}, file: new Uint8Array([1]), filename: 'a.pdf'
+      }), (e) => { eventId = e.innerObject?.eventId; return e.innerObject?.reason === 'alert-not-posted'; });
+      assert.ok(person.events.has(eventId), 'the document is there');
     });
 
     it('[CDOC32] receiveDocument moves a valid document to documents, refuses the rest unchanged', async () => {
@@ -349,6 +431,27 @@ describe('[CDOC] cmcDocuments', function () {
       const conn = account({ streams: tree() });
       assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(conn, ['acc-1:2']), ['share-oooooooooooo']);
       assert.deepStrictEqual(await cmcDocuments.listShareStreams(account()), [], 'no root yet: no share child');
+    });
+
+    it('[CDOC43] without a list, the live relationships are the accesses (expired too), read only with a personal token', async () => {
+      const conn = account({ streams: tree(), accesses: [{ id: 'acc-1:5' }, { id: 'app-x' }] });
+      assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(conn), ['share-oooooooooooo']);
+      assert.deepStrictEqual(conn.calls.find(c => c.method === 'accesses.get').params, { includeExpired: true });
+      assert.deepStrictEqual(conn.streams.map(s => s.id).sort(), ['document-shares', 'share-rrrrrrrrrrrr', 'share-ssssssssssss']);
+      const app = account({ streams: tree(), accesses: [], tokenType: 'app' });
+      await assert.rejects(cmcDocuments.cleanupOrphanDocumentShares(app), (e) => e.innerObject?.reason === 'not-personal');
+      assert.strictEqual(app.streams.length, 4, 'nothing deleted');
+      const down = account({ streams: tree() });
+      const apiOne = down.apiOne;
+      down.apiOne = async (method, params, key) => {
+        if (method === 'accesses.get') throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      await assert.rejects(cmcDocuments.cleanupOrphanDocumentShares(down), /offline/);
+      assert.strictEqual(down.streams.length, 4, 'accesses not read: nothing deleted');
+      const empty = account();
+      assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(empty), []);
+      assert.ok(!empty.calls.some(c => c.method === 'accessInfo' || c.method === 'accesses.get'), 'no share child: accesses not read');
     });
   });
 });

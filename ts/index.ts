@@ -66,7 +66,7 @@ export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from '
 export type { LoadTemplateFromUrlOptions } from './appTemplates/loader.ts';
 export type { DataExportRequest, DataExportRequestParams } from './cmc/dataExport.ts';
 export type { ScopePermission, ScopeMessage, ScopeRelationship, ScopeUpdateHds, ScopeChangeOptions, ScopeChangeResult, StopSharingRefusal, StopSharingPlan, PlanStopSharingOptions, SharingNote, ScopeRequestHds, ProposeDataSetUpdateOptions, ProposeDataSetUpdateResult, ScopeRequestRecord } from './cmc/scope.ts';
-export type { DocumentAlertKind, ShareDirection, ShareStream, DocumentRelationship, DocumentAlert, ShareDocumentResult, ReceiveRefusal } from './cmc/documents.ts';
+export type { DocumentAlertKind, ShareDirection, ShareStream, DocumentRelationship, DocumentAlert, ShareDocumentResult, StopSharingDocumentsResult, ReceiveRefusal } from './cmc/documents.ts';
 export type { ItemReminder, ReminderSection, ItemReminderRefusal } from './cmc/itemReminders.ts';
 export type { PermissionView, PermissionLabelOptions } from './appTemplates/permissionLabels.ts';
 export type { LegacyChatSource, LegacyChatEventLike, LegacyChatMessage } from './appTemplates/legacyChat.ts';
