@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.47.0] - 2026-11-11
+
+Who asked for a questionnaire (B-2026-10-27-35; data-model 3.49.0, QUESTIONNAIRE.md § Who asked).
+
+### Added
+- **`appTemplates.Questionnaire.writeBundled(conn, request, streamIds, { requester })`** and
+  **`makeRequestEvent(content, streamIds, time, { requester })`**: `requester` is the access the person just granted
+  the requester (the accept result's `dataGrantAccessId`); each `questionnaire/request-v1` then carries
+  `requester: { relationship: <its base id> }`. It is set after the template round-trip, so a `requester` in the
+  offer's content (someone else named as the one asking) never survives; a `Questionnaire` never carries it.
+- **`appTemplates.Questionnaire.requesterOf(event, relationships)`**: the relationship that asked, among the given
+  access ids: the one whose access wrote the request (`createdBy`), else `content.requester.relationship`, else null.
+- Types `QuestionnaireRequester`, `QuestionnaireRequestEventContent`.
+
 ## [2.46.0] - 2026-11-11
 
 Documents sharing follow-ups (B-2026-11-02-3) and a scheme check on the hook's open URL (B-2026-11-11-4).

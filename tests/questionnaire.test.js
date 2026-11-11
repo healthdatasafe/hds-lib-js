@@ -299,6 +299,30 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
         throw new Error('should throw');
       } catch (e) { assert.match(e.message, /Pryv path grammar/); }
     });
+
+    it('[QST-WRB-5] records who asked from the accept, never from the offer (data-model 3.49.0)', async () => {
+      const conn = mockConnection();
+      const forged = { requester: { relationship: 'someone-else' }, questions: { a: { label: { en: 'A' }, itemRef: 'body-weight', scope: { type: 'ever' } } } };
+      await Questionnaire.writeBundled(conn, { questionnaires: [forged] }, ['s'], { requester: 'cgrant123:4' });
+      assert.deepEqual(conn.calls[0][0].params.content.requester, { relationship: 'cgrant123' });
+      await Questionnaire.writeBundled(conn, { questionnaires: [forged] }, ['s']);
+      assert.equal(conn.calls[1][0].params.content.requester, undefined, 'an offer-supplied requester is dropped');
+      assert.equal(new Questionnaire(forged).toRequestEventContent().requester, undefined, 'never a template field');
+      for (const bad of ['', 42]) {
+        assert.throws(() => Questionnaire.makeRequestEvent(forged, ['s'], 1, { requester: bad }), /requester must be the access id/);
+      }
+    });
+  });
+
+  describe('[QST-RQR] requesterOf', function () {
+    const content = { requester: { relationship: 'cgrant123' }, questions: {} };
+    it('[QST-RQR-1] the writer\'s own grant first, else the recorded relationship, else null', () => {
+      assert.equal(Questionnaire.requesterOf({ createdBy: 'cdoc999:2', content }, ['cdoc999:3', 'cgrant123:1']), 'cdoc999');
+      assert.equal(Questionnaire.requesterOf({ createdBy: 'cdoc999 caller', content: {} }, ['cdoc999']), 'cdoc999');
+      assert.equal(Questionnaire.requesterOf({ createdBy: 'cmyownapp', content }, ['cgrant123:7']), 'cgrant123');
+      assert.equal(Questionnaire.requesterOf({ createdBy: 'cmyownapp', content }, ['cother']), null, 'an ended relationship');
+      assert.equal(Questionnaire.requesterOf({ createdBy: 'cmyownapp', content: { questions: {} } }, ['cgrant123']), null, 'before 3.49.0');
+    });
   });
 
   describe('[QST-ANS] buildAnswerEvent helper', function () {
