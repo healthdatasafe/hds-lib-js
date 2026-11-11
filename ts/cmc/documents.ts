@@ -22,11 +22,12 @@
  * Known limits: scope updates write the whole permission set from `rel.grantedPermissions`, so pass
  * a freshly read relationship (a stale one re-grants what another device removed). Two devices
  * sharing with a contact for the first time at the same moment can each create a `shared` child;
- * `stopSharingDocuments` removes the first one listed in the grant.
+ * `stopSharingDocuments` removes and deletes the first one listed in the grant.
  */
 
 import { pryv } from '../patchedPryv.ts';
 import { HDSLibError } from '../errors.ts';
+import * as logger from '../logger.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { pryvErrorCode } from './appScope.ts';
 import { ET_ALERT } from './dataExport.ts';
@@ -58,7 +59,7 @@ export interface ShareStream {
 /** A relationship as these helpers need it (a `CmcRelationship` fits). */
 export type DocumentRelationship = ScopeRelationship;
 
-/** A document alert as a conversation shows it, one per `(kind, eventId)`. */
+/** A document alert as a conversation shows it, one per alert event. */
 export interface DocumentAlert {
   alertEventId: string;
   kind: DocumentAlertKind;
@@ -68,7 +69,7 @@ export interface DocumentAlert {
   /** `received` when the alert carries `content.from` (delivered by the peer), else `sent`. */
   direction: 'sent' | 'received';
   from: { username: string; host: string } | null;
-  /** On `document-shared`: false once a later `document-unshared` of the same document exists. */
+  /** On `document-shared`: false once a `document-unshared` of the same document follows this one. */
   current: boolean;
 }
 
@@ -146,31 +147,36 @@ export function buildDocumentAlertContent (kind: DocumentAlertKind, eventId: str
 }
 
 /**
- * Pure part of `listDocumentAlerts` (exported for tests): one alert per `(kind, eventId)`, the
- * earliest, oldest first. A `document-shared` is `current` unless a later `document-unshared`
- * of the same document exists.
+ * Pure part of `listDocumentAlerts` (exported for tests): the document alerts, oldest first, one
+ * per alert event, so sharing a document again after taking it back is a new alert. A
+ * `document-sent` counts once per document (a repeated announcement is the same document). A
+ * `document-shared` is `current` while no later `document-shared` or `document-unshared` of the
+ * same document follows it: one active share per document.
  */
 export function parseDocumentAlerts (events: Array<{ id: string; type: string; time?: number; content?: Record<string, any> | null }>): DocumentAlert[] {
   const kinds = new Set<string>(Object.values(DOCUMENT_ALERT_KINDS));
-  const seen = new Map<string, DocumentAlert>();
-  const lastShare = new Map<string, { kind: string; time: number }>();
+  const seen = new Set<string>();
+  const out: DocumentAlert[] = [];
   const sorted = [...(events ?? [])].sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
   for (const e of sorted) {
-    if (e.type !== ET_ALERT) continue;
+    if (e.type !== ET_ALERT || seen.has(e.id)) continue;
     const c = e.content ?? {};
     const kind = c.hds?.kind;
     const eventId = c.hds?.eventId;
     if (!kinds.has(kind) || typeof eventId !== 'string' || eventId.length === 0) continue;
-    const time = e.time ?? 0;
-    if (kind !== DOCUMENT_ALERT_KINDS.SENT) lastShare.set(eventId, { kind, time });
-    const key = kind + ':' + eventId;
+    const key = kind === DOCUMENT_ALERT_KINDS.SENT ? 'sent:' + eventId : e.id;
     if (seen.has(key)) continue;
+    seen.add(e.id);
+    seen.add(key);
     const from = c.from && typeof c.from.username === 'string' ? { username: c.from.username, host: String(c.from.host ?? '') } : null;
-    seen.set(key, { alertEventId: e.id, kind, eventId, time, direction: from ? 'received' : 'sent', from, current: true });
+    out.push({ alertEventId: e.id, kind, eventId, time: e.time ?? 0, direction: from ? 'received' : 'sent', from, current: true });
   }
-  const out = [...seen.values()];
-  for (const a of out) {
-    if (a.kind === DOCUMENT_ALERT_KINDS.SHARED) a.current = lastShare.get(a.eventId)?.kind === DOCUMENT_ALERT_KINDS.SHARED;
+  const changedLater = new Set<string>();
+  for (let i = out.length - 1; i >= 0; i--) {
+    const a = out[i];
+    if (a.kind === DOCUMENT_ALERT_KINDS.SENT) continue;
+    if (a.kind === DOCUMENT_ALERT_KINDS.SHARED) a.current = !changedLater.has(a.eventId);
+    changedLater.add(a.eventId);
   }
   return out;
 }
@@ -227,11 +233,20 @@ export async function ensureDocumentSharesRoot (connection: pryv.Connection): Pr
   }
 }
 
-/** The relationship's share child for `direction`, created (with the root) when missing. */
+/**
+ * The relationship's share child for `direction`, created (with the root) when missing. A `shared` child is reused
+ * only while the contact is granted it: an ungranted one (left by a stop whose delete failed) still carries the
+ * documents shared before, and granting it again would hand them all back.
+ */
 export async function ensureShareStream (connection: pryv.Connection, rel: DocumentRelationship, direction: ShareDirection): Promise<string> {
   const relationship = relationshipIdOf(requireAccessId(rel, 'ensureShareStream'));
-  const existing = (await listShareStreams(connection)).find(s => s.relationship === relationship && s.direction === direction);
-  if (existing) return existing.id;
+  if (direction === 'shared') {
+    const granted = await liveSharedChild(connection, rel);
+    if (granted != null) return granted;
+  } else {
+    const existing = (await listShareStreams(connection)).find(s => s.relationship === relationship && s.direction === direction);
+    if (existing) return existing.id;
+  }
   await ensureDocumentSharesRoot(connection);
   const id = newShareStreamId();
   // pryv's typings take flat clientData values only
@@ -297,22 +312,40 @@ export async function unshareDocument (
   return postDocumentAlert(connection, collectorStreamId, DOCUMENT_ALERT_KINDS.UNSHARED, eventId, opts.locale);
 }
 
+export type StopSharingDocumentsResult = ScopeChangeResult & {
+  /** The share child was deleted, so the documents lost its id. False when not waited for, or the delete failed. */
+  shareStreamDeleted: boolean;
+};
+
 /**
  * Stop sharing all documents with a contact: its `read` on the share child removed (scope
  * update with `hds.removed`). The conversation goes on: a chat-only remainder is accepted, and
- * when nothing else is shared the `hds-noop` placeholder is granted (and provisioned). Documents
- * keep their share id until the child is deleted (`cleanupDocumentShares`); the contact no longer reads them.
+ * when nothing else is shared the `hds-noop` placeholder is granted (and provisioned). Once the
+ * change is applied the share child is deleted (best effort; the documents keep `documents`), so a
+ * later share starts a new child and never hands the contact back what was shared before. With
+ * `waitForCompletion: false` the child is kept (the change may not apply); `ensureShareStream`
+ * never reuses an ungranted one.
  */
 export async function stopSharingDocuments (
   connection: pryv.Connection,
   rel: DocumentRelationship,
   opts: ScopeChangeOptions = {}
-): Promise<ScopeChangeResult> {
+): Promise<StopSharingDocumentsResult> {
   const shared = shareStreamsOf(rel.grantedPermissions).shared;
   if (shared == null) throw new HDSLibError('stopSharingDocuments: no document is shared with this relationship', { reason: 'not-shared' });
   const others = personPermissions(rel.grantedPermissions).filter(p => p.streamId !== shared);
   if (!others.some(p => p.streamId != null && !p.streamId.startsWith(':_'))) await provisionHdsNoop(connection);
-  return stopSharingStream(connection, rel, shared, { ...opts, parentIds: [DOCUMENT_SHARES_ROOT_ID], allowChatOnly: true });
+  const result = await stopSharingStream(connection, rel, shared, { ...opts, parentIds: [DOCUMENT_SHARES_ROOT_ID], allowChatOnly: true });
+  let shareStreamDeleted = false;
+  if (result.applied) {
+    try {
+      await deleteShareStream(connection, shared);
+      shareStreamDeleted = true;
+    } catch (e) {
+      logger.warn('stopSharingDocuments: share child not deleted (not reused, deleted with the relationship):', e);
+    }
+  }
+  return { ...result, shareStreamDeleted };
 }
 
 /** Let a contact send documents (Route B): `create-only` on the relationship's receive child. */
@@ -377,24 +410,27 @@ export async function cleanupDocumentShares (connection: pryv.Connection, relati
       }
     }
   }
-  for (const s of mine) {
-    // the first call trashes the stream, the second deletes it; the API takes the boolean
-    // `mergeEventsWithParent` (pryv's typings say `mergeEventsWithParents`, a string)
-    for (let i = 0; i < 2; i++) {
-      try {
-        await connection.apiOne('streams.delete', { id: s.id, mergeEventsWithParent: false } as any);
-      } catch (e) {
-        if (pryvErrorCode(e) !== 'unknown-resource') throw e;
-      }
-    }
-  }
+  for (const s of mine) await deleteShareStream(connection, s.id);
   return mine.map(s => s.id);
 }
 
-/** After a restore (accesses are not restored): clean up every share child whose relationship is not in `liveRelationships`. */
-export async function cleanupOrphanDocumentShares (connection: pryv.Connection, liveRelationships: string[]): Promise<string[]> {
+/**
+ * Clean up every share child whose relationship no longer exists: after a restore (accesses are not restored), or a
+ * revoke whose `cleanupDocumentShares` failed. Without `liveRelationships` the live ones are read from the account's
+ * accesses (expired ones count as live), which needs a personal token: an app token lists only the accesses it
+ * created, and would make every relationship look gone. So it can run at any time, contacts loaded or not.
+ */
+export async function cleanupOrphanDocumentShares (connection: pryv.Connection, liveRelationships?: string[]): Promise<string[]> {
+  const children = await listShareStreams(connection, { includeTrashed: true });
+  if (children.length === 0) return [];
+  if (liveRelationships == null) {
+    const info = await connection.accessInfo() as { type?: string };
+    if (info?.type !== 'personal') throw new HDSLibError('cleanupOrphanDocumentShares: reading the live relationships needs a personal token', { reason: 'not-personal' });
+    const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses') as Array<{ id: string }>;
+    liveRelationships = accesses.map(a => a.id);
+  }
   const live = new Set(liveRelationships.map(relationshipIdOf));
-  const orphans = [...new Set((await listShareStreams(connection, { includeTrashed: true })).map(s => s.relationship))].filter(r => !live.has(r));
+  const orphans = [...new Set(children.map(s => s.relationship))].filter(r => !live.has(r));
   const deleted: string[] = [];
   for (const r of orphans) deleted.push(...await cleanupDocumentShares(connection, r));
   return deleted;
@@ -427,8 +463,13 @@ export async function sendDocument (
   const body = await (personConnection as any).createEventWithFileFromBuffer(event, params.file, params.filename);
   const eventId = body?.event?.id;
   if (!eventId) throw new HDSLibError('sendDocument: the document was not created', { reason: 'not-created', error: body?.error });
-  const { alertEventId } = await postDocumentAlert(ownConnection, params.collectorStreamId, DOCUMENT_ALERT_KINDS.SENT, eventId, params.locale);
-  return { eventId, alertEventId };
+  try {
+    const { alertEventId } = await postDocumentAlert(ownConnection, params.collectorStreamId, DOCUMENT_ALERT_KINDS.SENT, eventId, params.locale);
+    return { eventId, alertEventId };
+  } catch (e) {
+    // sent, not announced: the caller posts the alert again (`postDocumentAlert` with this eventId), never the document
+    throw new HDSLibError('sendDocument: the document was sent, its alert was not posted', { reason: 'alert-not-posted', eventId, error: e });
+  }
 }
 
 // ---- internals ---- //
@@ -444,6 +485,37 @@ function requireCollectorStream (rel: DocumentRelationship, fn: string): string 
     throw new HDSLibError(`${fn}: the relationship has no collectors stream (no system channel)`, { reason: 'no-collector-stream', accessId: rel.accessId });
   }
   return rel.localCollectorStreamId;
+}
+
+/**
+ * The `shared` child the contact is granted now: from the live access (a personal token lists it), so a relationship
+ * read before another device's first share reuses that device's child instead of ungranting it; else from `rel`.
+ */
+async function liveSharedChild (connection: pryv.Connection, rel: DocumentRelationship): Promise<string | null> {
+  const base = relationshipIdOf(rel.accessId);
+  try {
+    const accesses = await connection.apiOne('accesses.get', {}, 'accesses') as Array<{ id: string; permissions?: ScopePermission[] }>;
+    const live = accesses.find(a => relationshipIdOf(a.id) === base);
+    if (live != null) return shareStreamsOf(live.permissions ?? []).shared;
+  } catch (e) {
+    logger.warn('ensureShareStream: the live grant was not read, the relationship as given is used:', e);
+  }
+  return shareStreamsOf(rel.grantedPermissions).shared;
+}
+
+/**
+ * Delete a share child with `mergeEventsWithParent: false`: its documents lose its id and keep `documents`. The first
+ * call trashes the stream, the second deletes it; the API takes the boolean `mergeEventsWithParent` (pryv's typings
+ * say `mergeEventsWithParents`, a string).
+ */
+async function deleteShareStream (connection: pryv.Connection, streamId: string): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    try {
+      await connection.apiOne('streams.delete', { id: streamId, mergeEventsWithParent: false } as any);
+    } catch (e) {
+      if (pryvErrorCode(e) !== 'unknown-resource') throw e;
+    }
+  }
 }
 
 async function getEvent (connection: pryv.Connection, eventId: string): Promise<Record<string, any>> {

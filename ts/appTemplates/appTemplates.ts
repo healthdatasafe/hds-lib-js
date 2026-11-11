@@ -26,7 +26,8 @@ export {
   executeHook,
   executeDisconnect,
   UnresolvedVariableError,
-  HookInitiateError
+  HookInitiateError,
+  HookOpenUrlError
 } from './hookExecutor.ts';
 export type {
   HookHttpStep,
