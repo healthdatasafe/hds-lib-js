@@ -23546,6 +23546,16 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Questionnaire = void 0;
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
+/** The base of an access id (without its serial), as a CMC relationship is keyed (`cmcDocuments.relationshipIdOf`). */
+function accessBase(accessId) {
+    try {
+        return patchedPryv_ts_1.pryv.utils.parseAccessRef(accessId).base;
+    }
+    catch {
+        return accessId;
+    }
+}
 /**
  * Plan 71 — questionnaire template.
  *
@@ -23683,20 +23693,41 @@ class Questionnaire {
      * patient accepts and the data-grant access is in hand. The consumer
      * batches the returned payloads via `connection.api()`.
      */
-    static makeRequestEvent(content, streamIds, timeSeconds) {
+    static makeRequestEvent(content, streamIds, timeSeconds, options) {
         if (!Array.isArray(streamIds) || streamIds.length === 0) {
             throw new errors_ts_1.HDSLibError('makeRequestEvent: streamIds must be a non-empty array');
         }
         // Roundtrip through a Questionnaire instance to validate the shape — the
         // caller may pass content from anywhere (a CollectorRequest's bundled
-        // entry, a saved template, or a fresh build).
+        // entry, a saved template, or a fresh build). It keeps only template
+        // fields: a `requester` in the content (an offer naming someone else as
+        // the one asking) never survives it.
         const roundTripped = new Questionnaire(content).toRequestEventContent();
+        if (options?.requester != null) {
+            if (typeof options.requester !== 'string' || options.requester.length === 0) {
+                throw new errors_ts_1.HDSLibError('makeRequestEvent: requester must be the access id the person granted the requester');
+            }
+            roundTripped.requester = { relationship: accessBase(options.requester) };
+        }
         return {
             type: 'questionnaire/request-v1',
             streamIds,
             time: timeSeconds ?? Math.floor(Date.now() / 1000),
             content: roundTripped
         };
+    }
+    /**
+     * The relationship that asked for a request (QUESTIONNAIRE.md § Who asked), among `relationships` (access ids or
+     * their bases): the one whose access wrote it (`createdBy`), else `content.requester.relationship`; null when
+     * neither is one of them (a request written before data-model 3.49.0, or by a relationship that has ended).
+     */
+    static requesterOf(event, relationships) {
+        const live = new Set(relationships.map(accessBase));
+        const writer = typeof event?.createdBy === 'string' ? accessBase(event.createdBy.split(' ')[0]) : null;
+        if (writer != null && live.has(writer))
+            return writer;
+        const recorded = event?.content?.requester?.relationship;
+        return typeof recorded === 'string' && live.has(recorded) ? recorded : null;
     }
     /**
      * Materialize a CollectorRequest's bundled questionnaires into
@@ -23713,6 +23744,10 @@ class Questionnaire {
      * Atomicity: Pryv `events.batch` is best-effort per-entry — a single failed
      * write doesn't roll back the others. Callers needing transactional
      * guarantees must inspect the result and reconcile.
+     *
+     * `options.requester`: the access the person just granted the requester
+     * (the accept result's `dataGrantAccessId`), recorded on each event as
+     * `requester.relationship` (data-model 3.49.0), so the app can say who asked.
      */
     static async writeBundled(connection, request, streamIds, options) {
         if (!Array.isArray(streamIds) || streamIds.length === 0) {
@@ -23724,7 +23759,7 @@ class Questionnaire {
         const time = options?.timeSeconds ?? Math.floor(Date.now() / 1000);
         const calls = list.map((content) => ({
             method: 'events.create',
-            params: Questionnaire.makeRequestEvent(content, streamIds, time)
+            params: Questionnaire.makeRequestEvent(content, streamIds, time, { requester: options?.requester })
         }));
         return await connection.api(calls);
     }
@@ -54873,6 +54908,30 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
         await _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.writeBundled(conn, req, ['s']);
         throw new Error('should throw');
       } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /Pryv path grammar/); }
+    });
+
+    it('[QST-WRB-5] records who asked from the accept, never from the offer (data-model 3.49.0)', async () => {
+      const conn = mockConnection();
+      const forged = { requester: { relationship: 'someone-else' }, questions: { a: { label: { en: 'A' }, itemRef: 'body-weight', scope: { type: 'ever' } } } };
+      await _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.writeBundled(conn, { questionnaires: [forged] }, ['s'], { requester: 'cgrant123:4' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(conn.calls[0][0].params.content.requester, { relationship: 'cgrant123' });
+      await _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.writeBundled(conn, { questionnaires: [forged] }, ['s']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(conn.calls[1][0].params.content.requester, undefined, 'an offer-supplied requester is dropped');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire(forged).toRequestEventContent().requester, undefined, 'never a template field');
+      for (const bad of ['', 42]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.throws(() => _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.makeRequestEvent(forged, ['s'], 1, { requester: bad }), /requester must be the access id/);
+      }
+    });
+  });
+
+  describe('[QST-RQR] requesterOf', function () {
+    const content = { requester: { relationship: 'cgrant123' }, questions: {} };
+    it('[QST-RQR-1] the writer\'s own grant first, else the recorded relationship, else null', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(_ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.requesterOf({ createdBy: 'cdoc999:2', content }, ['cdoc999:3', 'cgrant123:1']), 'cdoc999');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(_ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.requesterOf({ createdBy: 'cdoc999 caller', content: {} }, ['cdoc999']), 'cdoc999');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(_ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.requesterOf({ createdBy: 'cmyownapp', content }, ['cgrant123:7']), 'cgrant123');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(_ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.requesterOf({ createdBy: 'cmyownapp', content }, ['cother']), null, 'an ended relationship');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(_ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.requesterOf({ createdBy: 'cmyownapp', content: { questions: {} } }, ['cgrant123']), null, 'before 3.49.0');
     });
   });
 
