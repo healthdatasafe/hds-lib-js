@@ -211,6 +211,30 @@ async function trashExistingAvatar (): Promise<void> {
   }
 }
 
+/** The account preferences stream (data-model 3.50.0, child of `profile`). */
+const PREFERENCES_STREAM_ID = 'profile-preferences';
+
+/** Names `ensureStream` gives, as the data model names the streams; any other stream is named by its id. */
+const STREAM_NAMES: Record<string, string> = { [PREFERENCES_STREAM_ID]: 'Account preferences' };
+
+/**
+ * B-2026-11-12-3: a grant on `profile-preferences` made before data-model 3.50.0 had the core create it at the
+ * account's root (from the permission's `defaultName`), where `events.get { streams: ['profile'] }` never reads it:
+ * stored preferences looked unset and were written again. Move it under `profile` (same id, so its events and the
+ * grants on it are kept). Best effort: an access that cannot see or manage it leaves it where it is.
+ */
+async function healRootPreferencesStream (): Promise<void> {
+  if (!_connection) return;
+  try {
+    const roots = await _connection.apiOne('streams.get', {}, 'streams') as Array<{ id?: string; parentId?: string | null }>;
+    if (!roots?.some((s) => s.id === PREFERENCES_STREAM_ID && s.parentId == null)) return;
+    await _connection.apiOne('streams.create', { id: 'profile', name: 'Profile' }, 'stream').catch(() => { /* exists */ });
+    await _connection.apiOne('streams.update', { id: PREFERENCES_STREAM_ID, update: { parentId: 'profile' } }, 'stream');
+  } catch {
+    // best effort
+  }
+}
+
 /**
  * Ensure a profile child stream exists, creating the parent `profile` stream and the child if needed.
  */
@@ -226,7 +250,7 @@ async function ensureStream (streamId: string): Promise<void> {
     // Create child stream
     await _connection.apiOne(
       'streams.create',
-      { id: streamId, name: streamId, parentId: 'profile' },
+      { id: streamId, name: STREAM_NAMES[streamId] ?? streamId, parentId: 'profile' },
       'stream'
     ).catch(() => { /* already exists — ok */ });
     _ensuredStreams.add(streamId);
@@ -324,6 +348,7 @@ const HDSProfile = {
    */
   async hookToConnection (connection: Connection): Promise<void> {
     _connection = connection;
+    await healRootPreferencesStream();
     await load();
   },
 

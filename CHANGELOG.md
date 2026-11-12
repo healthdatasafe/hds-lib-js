@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.48.0] - 2026-11-12
+
+Account preferences found where a grant put them (B-2026-11-12-3; data-model 3.50.0).
+
+### Fixed
+- **`HDSProfile.hookToConnection` moves a root `profile-preferences` under `profile`**: a grant on it made before
+  data-model 3.50.0 (every practitioner invite since doctor-dashboard #43) had the core create it at the account's
+  root, where `HDSProfile` (`events.get { streams: ['profile'] }`) never read it: stored preferences looked unset,
+  hds-webapp wrote the time zone again each session, and Preferences saves never read back. The move keeps the
+  id, so its events and the grants on it stay. Best effort, once per hook; an access that cannot see or manage the
+  stream leaves it. Tests `[HDSP-S10]`.
+- `ensureStream` names `profile-preferences` "Account preferences", as the data model does (was its id). `[HDSP-S11]`.
+
 ## [2.47.0] - 2026-11-11
 
 Who asked for a questionnaire (B-2026-10-27-35; data-model 3.49.0, QUESTIONNAIRE.md § Who asked).
