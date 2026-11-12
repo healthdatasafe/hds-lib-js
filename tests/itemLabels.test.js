@@ -143,5 +143,28 @@ describe('[ILBL] itemLabels', function () {
       assert.deepEqual(result[0].options[0], { en: 'No problems walking' });
       assert.deepEqual(result[0].options[1], { en: 'Unable to walk' });
     });
+
+    it('[ILBL-S1] keeps slider anchor overrides; a section with only them is not empty (B-2026-11-12-1)', function () {
+      const anchors = { 0: { description: { en: 'The worst health you can imagine' } }, 1: { description: { en: 'The best health you can imagine' } } };
+      const sources = [{
+        section: mkSection('s', ['wellbeing-self-rated-health'], {
+          'wellbeing-self-rated-health': { labels: { sliderLabels: anchors } }
+        }),
+        source: { contactName: 'Dr. A' }
+      }];
+      const result = collectItemLabelsFromSections('wellbeing-self-rated-health', sources);
+      assert.equal(result.length, 1);
+      assert.deepEqual(result[0].sliderLabels, anchors);
+    });
+
+    it('[ILBL-S2] different slider anchors are not deduplicated away', function () {
+      const a = { labels: { sliderLabels: { 0: { label: { en: 'Worst' } } } } };
+      const b = { labels: { sliderLabels: { 0: { label: { en: 'Pire' } } } } };
+      const sources = [
+        { section: mkSection('s1', ['m'], { m: a }), source: { contactName: 'A' } },
+        { section: mkSection('s2', ['m'], { m: b }), source: { contactName: 'B' } }
+      ];
+      assert.equal(collectItemLabelsFromSections('m', sources).length, 2);
+    });
   });
 });

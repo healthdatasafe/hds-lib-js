@@ -23,6 +23,13 @@ export interface ItemLabels {
   description?: localizableText;
   /** Per-option-value overrides for `select` fields, keyed by raw option value */
   options?: Record<string | number, localizableText>;
+  /**
+   * Per-anchor overrides for `slider` fields, keyed by raw value as the item's `slider.labels`
+   * (e.g. `0` and `1` on a 0..1 slider shown 0..100): each replaces that anchor's `label` and/or
+   * `description`. A licensed scale's own anchors (EQ VAS) live here, not in the data model
+   * (B-2026-11-12-1).
+   */
+  sliderLabels?: Record<string | number, { label?: localizableText; description?: localizableText }>;
 }
 
 /**
@@ -76,7 +83,9 @@ export function getSectionItemLabels (section: CollectorSectionInterface, itemKe
 }
 
 function isEmptyLabels (l: ItemLabels | undefined): boolean {
-  return !l || (l.question == null && l.description == null && (l.options == null || Object.keys(l.options).length === 0));
+  return !l || (l.question == null && l.description == null &&
+    (l.options == null || Object.keys(l.options).length === 0) &&
+    (l.sliderLabels == null || Object.keys(l.sliderLabels).length === 0));
 }
 
 /**
@@ -98,7 +107,7 @@ export function collectItemLabelsFromSections (
     if (requireLabels && isEmptyLabels(labels)) continue;
     const entry: ItemLabelsWithSource = { ...labels, source };
     if (deduplicate) {
-      const sig = JSON.stringify({ q: entry.question, d: entry.description, o: entry.options });
+      const sig = JSON.stringify({ q: entry.question, d: entry.description, o: entry.options, s: entry.sliderLabels });
       if (seen.has(sig)) continue;
       seen.add(sig);
     }

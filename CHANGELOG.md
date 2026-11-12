@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.49.0] - 2026-11-12
+
+### Added
+- **`appTemplates.ItemLabels.sliderLabels`** (B-2026-11-12-1): per-anchor overrides for a `slider` item, keyed by raw
+  value as its `slider.labels`, each replacing that anchor's `label` and/or `description`. A form template carries a
+  licensed scale's own anchors here (the EQ-5D-5L VAS), since data-model 3.49.1 keeps the item's anchors generic.
+  `collectItemLabelsFromSections` keeps it, counts a section with only it as labelled, and tells sets apart by it.
+  Tests `[ILBL-S1/S2]`. Rendered by hds-forms-js 0.30.0.
+
 ## [2.48.0] - 2026-11-12
 
 Account preferences found where a grant put them (B-2026-11-12-3; data-model 3.50.0).
