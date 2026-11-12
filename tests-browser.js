@@ -29334,6 +29334,30 @@ async function trashExistingAvatar() {
         _values.avatar = null;
     }
 }
+/** The account preferences stream (data-model 3.50.0, child of `profile`). */
+const PREFERENCES_STREAM_ID = 'profile-preferences';
+/** Names `ensureStream` gives, as the data model names the streams; any other stream is named by its id. */
+const STREAM_NAMES = { [PREFERENCES_STREAM_ID]: 'Account preferences' };
+/**
+ * B-2026-11-12-3: a grant on `profile-preferences` made before data-model 3.50.0 had the core create it at the
+ * account's root (from the permission's `defaultName`), where `events.get { streams: ['profile'] }` never reads it:
+ * stored preferences looked unset and were written again. Move it under `profile` (same id, so its events and the
+ * grants on it are kept). Best effort: an access that cannot see or manage it leaves it where it is.
+ */
+async function healRootPreferencesStream() {
+    if (!_connection)
+        return;
+    try {
+        const roots = await _connection.apiOne('streams.get', {}, 'streams');
+        if (!roots?.some((s) => s.id === PREFERENCES_STREAM_ID && s.parentId == null))
+            return;
+        await _connection.apiOne('streams.create', { id: 'profile', name: 'Profile' }, 'stream').catch(() => { });
+        await _connection.apiOne('streams.update', { id: PREFERENCES_STREAM_ID, update: { parentId: 'profile' } }, 'stream');
+    }
+    catch {
+        // best effort
+    }
+}
 /**
  * Ensure a profile child stream exists, creating the parent `profile` stream and the child if needed.
  */
@@ -29344,7 +29368,7 @@ async function ensureStream(streamId) {
         // Create parent 'profile' stream (idempotent — ignores "already exists" error)
         await _connection.apiOne('streams.create', { id: 'profile', name: 'Profile' }, 'stream').catch(() => { });
         // Create child stream
-        await _connection.apiOne('streams.create', { id: streamId, name: streamId, parentId: 'profile' }, 'stream').catch(() => { });
+        await _connection.apiOne('streams.create', { id: streamId, name: STREAM_NAMES[streamId] ?? streamId, parentId: 'profile' }, 'stream').catch(() => { });
         _ensuredStreams.add(streamId);
     }
     catch {
@@ -29432,6 +29456,7 @@ const HDSProfile = {
      */
     async hookToConnection(connection) {
         _connection = connection;
+        await healRootPreferencesStream();
         await load();
     },
     /**
@@ -43405,6 +43430,31 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('unitSystem'), 'imperial');
     });
 
+    it('[HDSP-S10] a root profile-preferences (created by a grant) is moved under profile on hook and read (B-2026-11-12-3)', async () => {
+      const other = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUser)();
+      const conn = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(other.apiEndpoint);
+      await conn.api([
+        { method: 'streams.create', params: { id: 'profile-preferences', name: 'Account preferences (time zone, language, units)' } },
+        { method: 'events.create', params: { streamIds: ['profile-preferences'], type: 'settings/timezone', content: 'Asia/Tokyo' } }
+      ]);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(conn);
+      const streams = await conn.apiOne('streams.get', {}, 'streams');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.find((s) => s.id === 'profile-preferences'), undefined, 'no longer a root');
+      const profile = streams.find((s) => s.id === 'profile');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(profile?.children?.some((c) => c.id === 'profile-preferences'), 'now under profile');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.get('timezone'), 'Asia/Tokyo');
+    });
+
+    it('[HDSP-S11] profile-preferences is created under its data-model name', async () => {
+      const other = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUser)();
+      const conn = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(other.apiEndpoint);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(conn);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.set('timezone', 'Europe/Paris');
+      const streams = await conn.apiOne('streams.get', {}, 'streams');
+      const pref = streams.find((s) => s.id === 'profile')?.children?.find((c) => c.id === 'profile-preferences');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pref?.name, 'Account preferences');
+    });
+
     it('[HDSP-S5] getAll returns all set values', async () => {
       await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.hookToConnection(connection);
       const all = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSProfile.getAll();
@@ -43739,7 +43789,9 @@ describe('[HDSPL] HDSProfile locale side effect (L1)', () => {
 function flakyConnection (events) {
   let calls = 0;
   return {
-    apiOne: async () => {
+    // Only the profile reads count: the hook's streams.get (root-stream heal, B-2026-11-12-3) answers no stream.
+    apiOne: async (method) => {
+      if (method !== 'events.get') return [];
       calls += 1;
       if (calls > 1) throw new Error('transient network error');
       return events;
