@@ -81,7 +81,9 @@ describe('[HDSPL] HDSProfile locale side effect (L1)', () => {
 function flakyConnection (events) {
   let calls = 0;
   return {
-    apiOne: async () => {
+    // Only the profile reads count: the hook's streams.get (root-stream heal, B-2026-11-12-3) answers no stream.
+    apiOne: async (method) => {
+      if (method !== 'events.get') return [];
       calls += 1;
       if (calls > 1) throw new Error('transient network error');
       return events;

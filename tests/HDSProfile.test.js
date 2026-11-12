@@ -210,6 +210,31 @@ describe('[HDSP] HDSProfile (dev API)', function () {
       assert.strictEqual(HDSProfile.get('unitSystem'), 'imperial');
     });
 
+    it('[HDSP-S10] a root profile-preferences (created by a grant) is moved under profile on hook and read (B-2026-11-12-3)', async () => {
+      const other = await createUser();
+      const conn = new pryv.Connection(other.apiEndpoint);
+      await conn.api([
+        { method: 'streams.create', params: { id: 'profile-preferences', name: 'Account preferences (time zone, language, units)' } },
+        { method: 'events.create', params: { streamIds: ['profile-preferences'], type: 'settings/timezone', content: 'Asia/Tokyo' } }
+      ]);
+      await HDSProfile.hookToConnection(conn);
+      const streams = await conn.apiOne('streams.get', {}, 'streams');
+      assert.strictEqual(streams.find((s) => s.id === 'profile-preferences'), undefined, 'no longer a root');
+      const profile = streams.find((s) => s.id === 'profile');
+      assert.ok(profile?.children?.some((c) => c.id === 'profile-preferences'), 'now under profile');
+      assert.strictEqual(HDSProfile.get('timezone'), 'Asia/Tokyo');
+    });
+
+    it('[HDSP-S11] profile-preferences is created under its data-model name', async () => {
+      const other = await createUser();
+      const conn = new pryv.Connection(other.apiEndpoint);
+      await HDSProfile.hookToConnection(conn);
+      await HDSProfile.set('timezone', 'Europe/Paris');
+      const streams = await conn.apiOne('streams.get', {}, 'streams');
+      const pref = streams.find((s) => s.id === 'profile')?.children?.find((c) => c.id === 'profile-preferences');
+      assert.strictEqual(pref?.name, 'Account preferences');
+    });
+
     it('[HDSP-S5] getAll returns all set values', async () => {
       await HDSProfile.hookToConnection(connection);
       const all = HDSProfile.getAll();
