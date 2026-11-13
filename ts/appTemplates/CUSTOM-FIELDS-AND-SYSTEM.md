@@ -263,7 +263,7 @@ A `CollectorRequest` references streams via three orthogonal mechanisms:
 | ---- | ------------------------------------- | ------------------------------------------------------ |
 | 1    | `sections[].itemKeys[]`               | Canonical items resolved via `data-model/pack.json`.   |
 | 2    | `customFields[]` *(provision-new)*    | Template-private streams created at acceptance.        |
-| 3    | `existingStreamRefs[]`                | Access asks on pre-existing streams.                   |
+| 3    | `existingStreamRefs[]`                | A read on one of the app's own pre-existing streams (`app-private`); any other ref is display only. |
 
 ### Mode 2 — sandbox prefix rule
 
@@ -282,27 +282,29 @@ template could squat under another's namespace. With this rule, every
 template's customFields live under a deterministic prefix derived from its id,
 and bridges/exports can detect template-scoped streams generically.
 
-### Mode 3 — access-ask UX
+### Mode 3 — a read on an app's own existing stream (`app-private`)
 
-`existingStreamRefs[]` declares **what permissions** the template needs on
-**already-existing streams**. The user app's accept flow surfaces a per-stream
-consent prompt before granting; refusing one ref blocks the entire acceptance
-(consistent with chat-feature acceptance).
+`existingStreamRefs[]` names **already-existing streams** the data set refers to. **Only a ref with
+`purpose: 'app-private'` (`APP_PRIVATE_PURPOSE`) grants anything:** `withAppPrivatePermissions` adds a `read` on
+its stream to the FormSpec's `permissions` when the requester's app builds the spec (the doctor-dashboard's save and
+`presetToFormSpec`). The CMC invite's `requestedPermissions` come from `formSpec.permissions` (`cmc/formSpec.ts`), so
+that `read` is what the person consents to, with the data set's other permissions, on one consent screen.
+
+Any other ref (another `purpose`, or `manage` / `contribute` levels) **grants nothing**: it travels as display data in
+the FormSpec snapshot and in a template's scope hash (`templateScope`), and the invite never carries it. There is no
+per-stream consent prompt and no "append-permissions" step at accept (B-2026-10-15-1: the doctor-dashboard's `Preset`
+type now accepts `app-private` refs only, and refuses another one at load). Data a data set needs from another stream
+is asked through its items; a connector's status through `requiredBridges`.
 
 Each ref:
 ```jsonc
 {
-  "streamId":    "some-account-level-stream",
-  "permissions": ["manage"],
-  "purpose":     "human-readable-purpose"
+  "streamId":    "cycle-notes",          // an existing stream of the app
+  "permissions": ["read"],
+  "purpose":     "app-private",
+  "label":       { "en": "Cycle notes" } // optional: names the stream for the reader
 }
 ```
-
-The `purpose` field is informational — surfaces in the UI as the consent prompt's
-explanation. Permissions are Pryv's standard `read | manage | contribute` levels.
-
-The CollectorClient append-permissions block applies the requested permissions
-without `streams.create` calls (the streams already exist).
 
 ### How the loader enforces the rules
 
