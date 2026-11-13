@@ -67,6 +67,19 @@ async function init () {
  * @returns {CreateUserResult}
  */
 async function createUser (username, password, email) {
+  // demo drops a connection now and then ("fetch failed: other side closed", B-2026-11-02-25): retry on a network
+  // error only, with a new username unless one was asked for (the dropped request may have created the first one)
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await createUserOnce(username, password, email);
+    } catch (e) {
+      if (attempt >= 2 || !(e.cause instanceof TypeError)) throw e;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+}
+
+async function createUserOnce (username, password, email) {
   const host = await getHost();
   password = password || passwordGenerator.rnd();
   username = username || getNewUserId('u');
@@ -90,7 +103,7 @@ async function createUser (username, password, email) {
     if (body.apiEndpoint == null) throw new Error('Cannot find apiEndpoint in response');
     return { apiEndpoint: body.apiEndpoint, username: body.username, password };
   } catch (e) {
-    throw new Error('Failed creating user ' + host + 'users');
+    throw new Error('Failed creating user ' + host + 'users', { cause: e });
   }
 }
 
