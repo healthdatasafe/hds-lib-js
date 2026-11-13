@@ -7,7 +7,7 @@ import { Contact } from '../ts/appTemplates/Contact.ts';
  * Surfaces under test:
  * - constructor + addAccessObject (raw access tracking)
  * - initStreamCache + eventIsAccessible (access-permission-derived stream cache)
- * - eventIsFromContact (modifiedBy attribution including replaced-access chain
+ * - eventIsFromContact (createdBy attribution including replaced-access chain
  *   and Plan 66 composite ids)
  * - aggregateCmc + cmc* getters (Plan 59 Phase 5a)
  */
@@ -99,16 +99,35 @@ describe('[CTCT] Contact class', function () {
       c.initStreamCache(streamsById); // 'body-weight' absent from streamsById
       assert.equal(c.eventIsAccessible({ streamIds: ['body-weight'] }), true);
     });
+
+    it('[CTAP4] create-only writes without reading (B-2026-11-12-7)', () => {
+      const c = new Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'health', level: 'create-only' }] });
+      c.addAccessObject({ id: 'a2', permissions: [{ streamId: '*', level: 'create-only' }] });
+      c.initStreamCache(streamsById);
+      assert.equal(c.eventIsAccessible({ streamIds: ['health'] }), false);
+      assert.equal(c.eventIsAccessible({ streamIds: ['diary'] }), false);
+    });
+
+    it('[CTAP5] a stream created after the cache is read through its parent', () => {
+      const c = new Contact('u', 'U');
+      const streams = { ...streamsById, 'health-new': { id: 'health-new', parentId: 'health', children: [] } };
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'health', level: 'read' }, { streamId: 'diary', level: 'none' }] });
+      c.initStreamCache(streams);
+      assert.equal(c.eventIsAccessible({ streamIds: ['health-new'] }), true);
+      streams['diary-new'] = { id: 'diary-new', parentId: 'diary', children: [] };
+      assert.equal(c.eventIsAccessible({ streamIds: ['health', 'diary-new'] }), false);
+    });
   });
 
   describe('[CTEF] eventIsFromContact', function () {
-    it('[CTAQ] matches events modified by contact access', () => {
+    it('[CTAQ] matches events created by contact access', () => {
       const c = new Contact('u', 'U');
       c.addAccessObject({ id: 'a1' });
       c.addAccessObject({ id: 'a2' });
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'a2' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'other' }), false);
+      assert.equal(c.eventIsFromContact({ createdBy: 'a1' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'a2' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'other' }), false);
     });
 
     it('[CTAQ2] matches events from previous (replaced) accesses via clientData chain', () => {
@@ -122,19 +141,19 @@ describe('[CTCT] Contact class', function () {
           }
         }
       });
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'a3-new' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1-old' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'a2-older' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'unknown' }), false);
+      assert.equal(c.eventIsFromContact({ createdBy: 'a3-new' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'a1-old' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'a2-older' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'unknown' }), false);
     });
 
     it('[CTAQ3] matches across Plan 66 composite ids (base-only equality)', () => {
       const c = new Contact('u', 'U');
       c.addAccessObject({ id: 'a1:2' });
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1:1' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'a1:2' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'b1:0' }), false);
+      assert.equal(c.eventIsFromContact({ createdBy: 'a1' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'a1:1' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'a1:2' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'b1:0' }), false);
     });
 
     it('[CTAR] matches across legacy bridge-access recreate chain (clientData.previousAccessIds)', () => {
@@ -143,9 +162,24 @@ describe('[CTCT] Contact class', function () {
         id: 'b2',
         clientData: { previousAccessIds: ['b1', 'b0'] }
       });
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'b0' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'b1' }), true);
-      assert.equal(c.eventIsFromContact({ modifiedBy: 'b2' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'b0' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'b1' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'b2' }), true);
+    });
+
+    it('[CTAS] the creator decides, whoever edited it later (B-2026-11-12-7)', () => {
+      const c = new Contact('u', 'U');
+      c.addAccessObject({ id: 'a1' });
+      assert.equal(c.eventIsFromContact({ createdBy: 'a1', modifiedBy: 'mine' }), true);
+      assert.equal(c.eventIsFromContact({ createdBy: 'mine', modifiedBy: 'a1' }), false);
+    });
+
+    it('[CTAT] hasAccessId ignores a caller id after a space', () => {
+      const c = new Contact('u', 'U');
+      c.addAccessObject({ id: 'a1' });
+      assert.equal(c.hasAccessId('a1 caller'), true);
+      assert.equal(c.hasAccessId(''), false);
+      assert.equal(c.hasAccessId(null), false);
     });
   });
 

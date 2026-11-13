@@ -1,5 +1,5 @@
 import type { Permission } from './interfaces.ts';
-import { getStreamIdAndChildrenIds } from '../toolkit/StreamsTools.ts';
+import { getStreamIdAndChildrenIds, READING_LEVELS, streamAndParents } from '../toolkit/StreamsTools.ts';
 import { pryv, cmc } from '../patchedPryv.ts';
 import type { FormSpec } from '../cmc/formSpec.ts';
 import { legacyChatStreams, legacyChatSource, legacyChatMessages } from './legacyChat.ts';
@@ -113,10 +113,13 @@ export interface CmcRelationship {
  */
 function refBase (ref: string | null | undefined): string | null {
   if (ref == null) return null;
+  // the platform may append a caller id after a space (`<accessId> <callerId>`)
+  const accessRef = ref.split(' ')[0];
+  if (accessRef === '') return null;
   const parse = (pryv as any).utils?.parseAccessRef;
-  if (typeof parse !== 'function') return ref;
+  if (typeof parse !== 'function') return accessRef;
   try {
-    return parse(ref).base;
+    return parse(accessRef).base;
   } catch {
     return null;
   }
@@ -150,6 +153,8 @@ export class Contact {
    * `#grantsByAccess`. A mask only narrows the access it belongs to (B-2026-11-03-9).
    */
   #grantsByAccess: Array<{ ids: Set<string>; forbidden: Set<string> }> = [];
+  /** The account's streams the cache was built from, to find the parents of a stream created after it */
+  #streamsById: Record<string, any> = {};
 
   // ---- CMC-shaped fields (Plan 59 Phase 5a; canonical Plan 61 Phase C) ---- //
 
@@ -180,12 +185,14 @@ export class Contact {
   // ---- Stream cache & event filtering ---- //
 
   /**
-   * Build the accessible stream IDs cache from all access permissions.
-   * @param streamsById - map of streamId → stream object (with children) from the account
+   * Build the accessible stream IDs cache from all access permissions: the reading ones (`READING_LEVELS`; a
+   * `create-only` permission writes without reading, B-2026-11-12-7) and the `none` masks.
+   * @param streamsById - map of streamId → stream object (with children and parentId) from the account
    */
   initStreamCache (streamsById: Record<string, any>): void {
     this.#accessibleStreamIds = new Set();
     this.#grantsByAccess = [];
+    this.#streamsById = streamsById ?? {};
     for (const access of this.accessObjects) {
       if (access.deleted) continue;
       if (!access.permissions) continue;
@@ -201,6 +208,7 @@ export class Contact {
           if (masked) getStreamIdAndChildrenIds(masked).forEach((id: string) => grant.forbidden.add(id));
           continue;
         }
+        if (!READING_LEVELS.includes(p.level ?? 'read')) continue;
         if (p.streamId === '*') {
           if (!this.isPerson) {
             // Bridge with wildcard: resolve bridge's own streams from access name
@@ -264,18 +272,31 @@ export class Contact {
       return false;
     }
     // Person contacts: filter by stream permissions, one access at a time (the platform's rule: an access reads an
-    // event when one of its streams is granted and none of them is masked by that access)
+    // event when one of its streams, or a parent of one, is granted and none of them is masked by that access; the
+    // parents cover a stream created after the cache was built). Same rule as `toolkit.StreamTools.permissionsRead`.
     if (!this.#accessibleStreamIds) return false;
-    const streamIds: string[] = event.streamIds ?? [];
+    const streamIds: string[] = [...new Set((event.streamIds ?? []).flatMap((id: string) => streamAndParents(id, this.#streamsById)))];
     return this.#grantsByAccess.some((g) => {
       if (streamIds.some((id) => g.forbidden.has(id))) return false;
       return g.ids.has('*') || streamIds.some((id) => g.ids.has(id));
     });
   }
 
-  /** Check if an event was created/modified by this contact (including replaced accesses) */
+  /**
+   * Whether an event comes from this contact: created by one of its accesses, including the ones they replaced. The
+   * creator decides, whoever edited it later (B-2026-11-12-7, perki 2026-11-12): an entry the person corrected stays
+   * the contact's, and one the contact edited stays hers.
+   */
   eventIsFromContact (event: pryv.Event): boolean {
-    const eventBase = refBase(event.modifiedBy);
+    return this.hasAccessId(event.createdBy);
+  }
+
+  /**
+   * Whether an access id (an event's `createdBy` / `modifiedBy`) is one of this contact's accesses, or one they
+   * replaced (`previousAccessIds`). Plan 66 composite ids compare on their base.
+   */
+  hasAccessId (accessRef: string | null | undefined): boolean {
+    const eventBase = refBase(accessRef);
     if (eventBase == null) return false;
     for (const access of this.accessObjects) {
       // Plan 66: access.id may be composite (`<base>:<serial>`) on updated accesses.
