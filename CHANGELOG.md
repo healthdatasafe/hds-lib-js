@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.51.1] - 2026-11-13
+
+### Fixed
+- **`cyclePhaseAt` reads every fertile window of a cycle** (B-2026-11-13-7): it took only the first, so fertile days
+  written one event per day (the cyclefem import) read fertile on the first day only. Each window covers its first to
+  its last day; luteal starts after the last one. Test `[CPHW]`.
+
 ## [2.51.0] - 2026-11-13
 
 What an entry's details show beside its short text (B-2026-11-13-5).

@@ -134,7 +134,7 @@ function bleedingRunEnd (bled: Set<number>, startDay: number, lastDay: number): 
  * A cycle runs from a `fertility-cycles-start` day to the day before the next one (its `duration` never bounds a
  * phase); an open cycle stops after 90 days. A boundary belongs to the cycle containing its own day, the earliest
  * when there are several. Phases: `menstrual` on the start day and through the period-end day; `fertile` on the
- * fertile-window days (first and last inclusive) and the ovulation day; `follicular` after the period end and before
+ * fertile-window days (first and last inclusive, of every window in the cycle) and the ovulation day; `follicular` after the period end and before
  * the first fertile day; `luteal` after the ovulation day. Any other day has `phase: null`.
  *
  * The period end is the cycle's `fertility-cycles-period-end` day. When the cycle has none, it is the last of the
@@ -175,13 +175,20 @@ export function cyclePhaseAt (time: number, events: CycleEventLike[], timeZone?:
     };
   };
 
-  const inCycle = (stream: string): Dated | undefined =>
-    byDay(of(stream), timeZone).find(d => d.day >= start.day && d.day <= lastDay);
-  const window = inCycle(STREAM.fertileWindow);
+  const allInCycle = (stream: string): Dated[] =>
+    byDay(of(stream), timeZone).filter(d => d.day >= start.day && d.day <= lastDay);
+  const inCycle = (stream: string): Dated | undefined => allInCycle(stream)[0];
+  // Every window of the cycle, not only the first: a source may write its fertile days as several events (one per
+  // day, B-2026-11-13-7) rather than one with a duration. Each covers its first to its last day, clipped to the cycle.
+  const windows = allInCycle(STREAM.fertileWindow).map(w => ({
+    ...w,
+    end: Math.min(localDayNumber(w.event.time + (w.event.duration ?? 0), timeZone), lastDay)
+  }));
+  const window = windows[0];
   const ovulation = inCycle(STREAM.ovulation);
-  const windowEnd = window != null
-    ? Math.min(localDayNumber(window.event.time + (window.event.duration ?? 0), timeZone), lastDay)
-    : null;
+  // The last fertile-window day of the cycle
+  const windowEnd = windows.length > 0 ? Math.max(...windows.map(w => w.end)) : null;
+  const windowOn = windows.find(w => today >= w.day && today <= w.end);
   // The first fertile day: the window's start or the ovulation day, whichever comes first
   const firstFertile = window != null && ovulation != null ? (ovulation.day < window.day ? ovulation : window) : (window ?? ovulation);
   // The period's last day: the recorded period end, else the run of bleeding days from the start (no boundary event)
@@ -194,7 +201,7 @@ export function cyclePhaseAt (time: number, events: CycleEventLike[], timeZone?:
 
   if (today === start.day) return result('menstrual', [start.event]);
   if (periodEnd != null && today <= periodEnd.day) return result('menstrual', periodUsed);
-  if (window != null && windowEnd != null && today >= window.day && today <= windowEnd) return result('fertile', [window.event]);
+  if (windowOn != null) return result('fertile', [windowOn.event]);
   if (ovulation != null && today === ovulation.day) return result('fertile', [ovulation.event]);
   // Luteal only once the fertile days are over: an ovulation recorded before a window decides nothing in between
   if (ovulation != null && today > ovulation.day && (windowEnd == null || today > windowEnd)) return result('luteal', [ovulation.event]);
