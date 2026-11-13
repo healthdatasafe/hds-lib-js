@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.50.0] - 2026-11-13
+
+One "can read" rule and one "from" rule for every screen (B-2026-11-12-7, plan 124 2.1).
+
+### Added
+- **`toolkit.StreamTools.permissionsRead(permissions, streamIds, streamsById)`**: whether one access's permissions
+  read an event on these streams (a `read` / `contribute` / `manage` permission on `*`, a stream or a parent; no
+  `none` on any of them). With `streamAndParents(streamId, streamsById)` and `READING_LEVELS`. Moved from
+  hds-webapp's "Who can see", so the app and `Contact` share it. Tests `[TKPA-C]`.
+- **`Contact.hasAccessId(ref)`**: whether an access id (`createdBy` / `modifiedBy`) is one of the contact's accesses
+  or one they replaced. Tests `[CTAT]`.
+
+### Changed
+- **`Contact.eventIsFromContact` compares `createdBy`** (was `modifiedBy`): the creator decides, whoever edited the
+  entry later (perki 2026-11-12). An entry the person corrected stays the contact's; one the contact edited stays
+  hers. Tests `[CTAS]`.
+- **`Contact.eventIsAccessible` no longer counts `create-only` as readable** (the platform's semantics; hds-webapp's
+  "Who can see" already left it out), and reads a stream created after `initStreamCache` through its parents.
+  Tests `[CTAP4]`, `[CTAP5]`.
+
 ## [2.49.0] - 2026-11-12
 
 ### Added

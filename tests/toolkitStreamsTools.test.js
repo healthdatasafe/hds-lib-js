@@ -1,6 +1,6 @@
 import { assert } from './test-utils/deps-node.js';
 
-import { allStreamsAndChildren, getStreamIdAndChildrenIds } from '../ts/toolkit/StreamsTools.ts';
+import { allStreamsAndChildren, getStreamIdAndChildrenIds, permissionsRead, READING_LEVELS, streamAndParents } from '../ts/toolkit/StreamsTools.ts';
 
 describe('[TKTX] toolKit Streams Tools', function () {
   describe('[TKAX] allStreamsAndChildren', function () {
@@ -89,6 +89,35 @@ describe('[TKTX] toolKit Streams Tools', function () {
       };
       const result = getStreamIdAndChildrenIds(stream);
       assert.deepEqual(result, ['root', 'level1', 'level2', 'level3']);
+    });
+  });
+
+  describe('[TKPX] streamAndParents & permissionsRead', function () {
+    const streams = {
+      body: { id: 'body', parentId: null },
+      'body-weight': { id: 'body-weight', parentId: 'body' },
+      diary: { id: 'diary' }
+    };
+
+    it('[TKPA] streamAndParents walks the parentId chain, nearest first', () => {
+      assert.deepEqual(streamAndParents('body-weight', streams), ['body-weight', 'body']);
+      assert.deepEqual(streamAndParents('unknown', streams), ['unknown']);
+    });
+
+    it('[TKPB] a reading permission on the stream, a parent or * reads it', () => {
+      assert.equal(permissionsRead([{ streamId: 'body', level: 'read' }], ['body-weight'], streams), true);
+      assert.equal(permissionsRead([{ streamId: 'body-weight', level: 'contribute' }], ['body-weight'], streams), true);
+      assert.equal(permissionsRead([{ streamId: '*', level: 'manage' }], ['diary'], streams), true);
+      assert.equal(permissionsRead([{ streamId: 'body' }], ['body-weight'], streams), true);
+      assert.equal(permissionsRead([{ streamId: 'body', level: 'read' }], ['diary'], streams), false);
+      assert.equal(permissionsRead([{ streamId: 'body', level: 'read' }], [], streams), false);
+    });
+
+    it('[TKPC] create-only does not read; none on a stream or a parent refuses it', () => {
+      assert.equal(permissionsRead([{ streamId: 'body', level: 'create-only' }], ['body-weight'], streams), false);
+      assert.equal(permissionsRead([{ streamId: '*', level: 'read' }, { streamId: 'body', level: 'none' }], ['body-weight'], streams), false);
+      assert.equal(permissionsRead([{ streamId: '*', level: 'read' }, { streamId: 'body', level: 'none' }], ['diary', 'body-weight'], streams), false);
+      assert.deepEqual([...READING_LEVELS], ['read', 'contribute', 'manage']);
     });
   });
 });
