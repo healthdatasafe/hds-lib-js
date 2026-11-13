@@ -30604,7 +30604,7 @@ function bleedingRunEnd(bled, startDay, lastDay) {
  * A cycle runs from a `fertility-cycles-start` day to the day before the next one (its `duration` never bounds a
  * phase); an open cycle stops after 90 days. A boundary belongs to the cycle containing its own day, the earliest
  * when there are several. Phases: `menstrual` on the start day and through the period-end day; `fertile` on the
- * fertile-window days (first and last inclusive) and the ovulation day; `follicular` after the period end and before
+ * fertile-window days (first and last inclusive, of every window in the cycle) and the ovulation day; `follicular` after the period end and before
  * the first fertile day; `luteal` after the ovulation day. Any other day has `phase: null`.
  *
  * The period end is the cycle's `fertility-cycles-period-end` day. When the cycle has none, it is the last of the
@@ -30645,12 +30645,19 @@ function cyclePhaseAt(time, events, timeZone) {
             predictedBy: basis === 'predicted' ? predictedByOf(used) : []
         };
     };
-    const inCycle = (stream) => byDay(of(stream), timeZone).find(d => d.day >= start.day && d.day <= lastDay);
-    const window = inCycle(STREAM.fertileWindow);
+    const allInCycle = (stream) => byDay(of(stream), timeZone).filter(d => d.day >= start.day && d.day <= lastDay);
+    const inCycle = (stream) => allInCycle(stream)[0];
+    // Every window of the cycle, not only the first: a source may write its fertile days as several events (one per
+    // day, B-2026-11-13-7) rather than one with a duration. Each covers its first to its last day, clipped to the cycle.
+    const windows = allInCycle(STREAM.fertileWindow).map(w => ({
+        ...w,
+        end: Math.min((0, calendarDay_ts_1.localDayNumber)(w.event.time + (w.event.duration ?? 0), timeZone), lastDay)
+    }));
+    const window = windows[0];
     const ovulation = inCycle(STREAM.ovulation);
-    const windowEnd = window != null
-        ? Math.min((0, calendarDay_ts_1.localDayNumber)(window.event.time + (window.event.duration ?? 0), timeZone), lastDay)
-        : null;
+    // The last fertile-window day of the cycle
+    const windowEnd = windows.length > 0 ? Math.max(...windows.map(w => w.end)) : null;
+    const windowOn = windows.find(w => today >= w.day && today <= w.end);
     // The first fertile day: the window's start or the ovulation day, whichever comes first
     const firstFertile = window != null && ovulation != null ? (ovulation.day < window.day ? ovulation : window) : (window ?? ovulation);
     // The period's last day: the recorded period end, else the run of bleeding days from the start (no boundary event)
@@ -30665,8 +30672,8 @@ function cyclePhaseAt(time, events, timeZone) {
         return result('menstrual', [start.event]);
     if (periodEnd != null && today <= periodEnd.day)
         return result('menstrual', periodUsed);
-    if (window != null && windowEnd != null && today >= window.day && today <= windowEnd)
-        return result('fertile', [window.event]);
+    if (windowOn != null)
+        return result('fertile', [windowOn.event]);
     if (ovulation != null && today === ovulation.day)
         return result('fertile', [ovulation.event]);
     // Luteal only once the fertile days are over: an ovulation recorded before a window decides nothing in between
@@ -49906,6 +49913,20 @@ describe('[CPHX] cyclePhaseAt', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(13, events).phase, null);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(16, events).phase, 'fertile');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(20, events).phase, 'luteal');
+  });
+
+  it('[CPHW] every window of the cycle counts: fertile days written one per day (B-2026-11-13-7)', () => {
+    // a source writing each fertile day as its own window (duration 0: first and last day the same)
+    const perDay = [start(1), periodEnd(5), window(10, 0), window(11, 0), window(12, 0), ovulation(12), start(29)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(9, 13, perDay), ['follicular', 'fertile', 'fertile', 'fertile', 'luteal']);
+    // two windows apart: the days between have no phase, luteal only after the last one
+    const apart = [start(1), periodEnd(5), window(10, 1), window(14, 1), ovulation(13)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(10, 16, apart), ['fertile', 'fertile', null, 'fertile', 'fertile', 'fertile', 'luteal']);
+    // the phase rests on the window holding the day
+    const p = { clientData: { hdsBasis: 'predicted' }, createdBy: 'mira' };
+    const mixed = [start(1), window(10, 0), window(11, 0, p)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(phaseOn(10, mixed).basis, 'unknown');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phaseOn(11, mixed).predictedBy, ['mira']);
   });
 
   describe('[CPHP] period end from bleeding when no -period-end is recorded', () => {
