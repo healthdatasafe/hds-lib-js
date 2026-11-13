@@ -23031,11 +23031,15 @@ const legacyChat_ts_1 = __webpack_require__(/*! ./legacyChat.js */ "./ts/appTemp
 function refBase(ref) {
     if (ref == null)
         return null;
+    // the platform may append a caller id after a space (`<accessId> <callerId>`)
+    const accessRef = ref.split(' ')[0];
+    if (accessRef === '')
+        return null;
     const parse = patchedPryv_ts_1.pryv.utils?.parseAccessRef;
     if (typeof parse !== 'function')
-        return ref;
+        return accessRef;
     try {
-        return parse(ref).base;
+        return parse(accessRef).base;
     }
     catch {
         return null;
@@ -23068,6 +23072,8 @@ class Contact {
      * `#grantsByAccess`. A mask only narrows the access it belongs to (B-2026-11-03-9).
      */
     #grantsByAccess = [];
+    /** The account's streams the cache was built from, to find the parents of a stream created after it */
+    #streamsById = {};
     // ---- CMC-shaped fields (Plan 59 Phase 5a; canonical Plan 61 Phase C) ---- //
     /** CMC counterparty identity */
     counterparty;
@@ -23092,12 +23098,14 @@ class Contact {
     }
     // ---- Stream cache & event filtering ---- //
     /**
-     * Build the accessible stream IDs cache from all access permissions.
-     * @param streamsById - map of streamId → stream object (with children) from the account
+     * Build the accessible stream IDs cache from all access permissions: the reading ones (`READING_LEVELS`; a
+     * `create-only` permission writes without reading, B-2026-11-12-7) and the `none` masks.
+     * @param streamsById - map of streamId → stream object (with children and parentId) from the account
      */
     initStreamCache(streamsById) {
         this.#accessibleStreamIds = new Set();
         this.#grantsByAccess = [];
+        this.#streamsById = streamsById ?? {};
         for (const access of this.accessObjects) {
             if (access.deleted)
                 continue;
@@ -23117,6 +23125,8 @@ class Contact {
                         (0, StreamsTools_ts_1.getStreamIdAndChildrenIds)(masked).forEach((id) => grant.forbidden.add(id));
                     continue;
                 }
+                if (!StreamsTools_ts_1.READING_LEVELS.includes(p.level ?? 'read'))
+                    continue;
                 if (p.streamId === '*') {
                     if (!this.isPerson) {
                         // Bridge with wildcard: resolve bridge's own streams from access name
@@ -23189,19 +23199,31 @@ class Contact {
             return false;
         }
         // Person contacts: filter by stream permissions, one access at a time (the platform's rule: an access reads an
-        // event when one of its streams is granted and none of them is masked by that access)
+        // event when one of its streams, or a parent of one, is granted and none of them is masked by that access; the
+        // parents cover a stream created after the cache was built). Same rule as `toolkit.StreamTools.permissionsRead`.
         if (!this.#accessibleStreamIds)
             return false;
-        const streamIds = event.streamIds ?? [];
+        const streamIds = [...new Set((event.streamIds ?? []).flatMap((id) => (0, StreamsTools_ts_1.streamAndParents)(id, this.#streamsById)))];
         return this.#grantsByAccess.some((g) => {
             if (streamIds.some((id) => g.forbidden.has(id)))
                 return false;
             return g.ids.has('*') || streamIds.some((id) => g.ids.has(id));
         });
     }
-    /** Check if an event was created/modified by this contact (including replaced accesses) */
+    /**
+     * Whether an event comes from this contact: created by one of its accesses, including the ones they replaced. The
+     * creator decides, whoever edited it later (B-2026-11-12-7, perki 2026-11-12): an entry the person corrected stays
+     * the contact's, and one the contact edited stays hers.
+     */
     eventIsFromContact(event) {
-        const eventBase = refBase(event.modifiedBy);
+        return this.hasAccessId(event.createdBy);
+    }
+    /**
+     * Whether an access id (an event's `createdBy` / `modifiedBy`) is one of this contact's accesses, or one they
+     * replaced (`previousAccessIds`). Plan 66 composite ids compare on their base.
+     */
+    hasAccessId(accessRef) {
+        const eventBase = refBase(accessRef);
         if (eventBase == null)
             return false;
         for (const access of this.accessObjects) {
@@ -30171,8 +30193,11 @@ exports.StreamsAutoCreate = StreamsAutoCreate;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.READING_LEVELS = void 0;
 exports.allStreamsAndChildren = allStreamsAndChildren;
 exports.getStreamIdAndChildrenIds = getStreamIdAndChildrenIds;
+exports.streamAndParents = streamAndParents;
+exports.permissionsRead = permissionsRead;
 /**
  * Iterate all streams and children
  */
@@ -30192,6 +30217,32 @@ function getStreamIdAndChildrenIds(stream) {
         streamIds.push(s.id);
     }
     return streamIds;
+}
+/** The permission levels that read; `create-only` writes without reading, `none` forbids. */
+exports.READING_LEVELS = ['read', 'contribute', 'manage'];
+/** A stream and its parents (`parentId` chain in `streamsById`), nearest first; the id alone when it is not in the map. */
+function streamAndParents(streamId, streamsById) {
+    const out = [];
+    let id = streamId;
+    while (id != null && !out.includes(id)) {
+        out.push(id);
+        id = streamsById[id]?.parentId;
+    }
+    return out;
+}
+/**
+ * Whether one access's permissions read an event on these streams, the platform's rule: a reading permission
+ * (`READING_LEVELS`, a missing level counts as `read`) on `*`, on one of the streams or on a parent of one, and no
+ * `none` permission on any of them or their parents. The one "can read" rule for every screen (B-2026-11-12-7).
+ */
+function permissionsRead(permissions, streamIds, streamsById) {
+    if (streamIds.length === 0)
+        return false;
+    const covered = new Set(streamIds.flatMap(id => streamAndParents(id, streamsById)));
+    const level = (p) => p.level ?? 'read';
+    if (permissions.some(p => level(p) === 'none' && p.streamId != null && covered.has(p.streamId)))
+        return false;
+    return permissions.some(p => exports.READING_LEVELS.includes(level(p)) && p.streamId != null && (p.streamId === '*' || covered.has(p.streamId)));
 }
 
 
@@ -48479,7 +48530,7 @@ __webpack_require__.r(__webpack_exports__);
  * Surfaces under test:
  * - constructor + addAccessObject (raw access tracking)
  * - initStreamCache + eventIsAccessible (access-permission-derived stream cache)
- * - eventIsFromContact (modifiedBy attribution including replaced-access chain
+ * - eventIsFromContact (createdBy attribution including replaced-access chain
  *   and Plan 66 composite ids)
  * - aggregateCmc + cmc* getters (Plan 59 Phase 5a)
  */
@@ -48571,16 +48622,35 @@ describe('[CTCT] Contact class', function () {
       c.initStreamCache(streamsById); // 'body-weight' absent from streamsById
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['body-weight'] }), true);
     });
+
+    it('[CTAP4] create-only writes without reading (B-2026-11-12-7)', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'health', level: 'create-only' }] });
+      c.addAccessObject({ id: 'a2', permissions: [{ streamId: '*', level: 'create-only' }] });
+      c.initStreamCache(streamsById);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['health'] }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['diary'] }), false);
+    });
+
+    it('[CTAP5] a stream created after the cache is read through its parent', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      const streams = { ...streamsById, 'health-new': { id: 'health-new', parentId: 'health', children: [] } };
+      c.addAccessObject({ id: 'a1', permissions: [{ streamId: 'health', level: 'read' }, { streamId: 'diary', level: 'none' }] });
+      c.initStreamCache(streams);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['health-new'] }), true);
+      streams['diary-new'] = { id: 'diary-new', parentId: 'diary', children: [] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsAccessible({ streamIds: ['health', 'diary-new'] }), false);
+    });
   });
 
   describe('[CTEF] eventIsFromContact', function () {
-    it('[CTAQ] matches events modified by contact access', () => {
+    it('[CTAQ] matches events created by contact access', () => {
       const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
       c.addAccessObject({ id: 'a1' });
       c.addAccessObject({ id: 'a2' });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a2' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'other' }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a1' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a2' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'other' }), false);
     });
 
     it('[CTAQ2] matches events from previous (replaced) accesses via clientData chain', () => {
@@ -48594,19 +48664,19 @@ describe('[CTCT] Contact class', function () {
           }
         }
       });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a3-new' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1-old' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a2-older' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'unknown' }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a3-new' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a1-old' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a2-older' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'unknown' }), false);
     });
 
     it('[CTAQ3] matches across Plan 66 composite ids (base-only equality)', () => {
       const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
       c.addAccessObject({ id: 'a1:2' });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1:1' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'a1:2' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'b1:0' }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a1' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a1:1' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a1:2' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'b1:0' }), false);
     });
 
     it('[CTAR] matches across legacy bridge-access recreate chain (clientData.previousAccessIds)', () => {
@@ -48615,9 +48685,24 @@ describe('[CTCT] Contact class', function () {
         id: 'b2',
         clientData: { previousAccessIds: ['b1', 'b0'] }
       });
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'b0' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'b1' }), true);
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ modifiedBy: 'b2' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'b0' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'b1' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'b2' }), true);
+    });
+
+    it('[CTAS] the creator decides, whoever edited it later (B-2026-11-12-7)', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'a1', modifiedBy: 'mine' }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.eventIsFromContact({ createdBy: 'mine', modifiedBy: 'a1' }), false);
+    });
+
+    it('[CTAT] hasAccessId ignores a caller id after a space', () => {
+      const c = new _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_1__.Contact('u', 'U');
+      c.addAccessObject({ id: 'a1' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.hasAccessId('a1 caller'), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.hasAccessId(''), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.hasAccessId(null), false);
     });
   });
 
@@ -56512,6 +56597,35 @@ describe('[TKTX] toolKit Streams Tools', function () {
       };
       const result = (0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.getStreamIdAndChildrenIds)(stream);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(result, ['root', 'level1', 'level2', 'level3']);
+    });
+  });
+
+  describe('[TKPX] streamAndParents & permissionsRead', function () {
+    const streams = {
+      body: { id: 'body', parentId: null },
+      'body-weight': { id: 'body-weight', parentId: 'body' },
+      diary: { id: 'diary' }
+    };
+
+    it('[TKPA] streamAndParents walks the parentId chain, nearest first', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.streamAndParents)('body-weight', streams), ['body-weight', 'body']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.streamAndParents)('unknown', streams), ['unknown']);
+    });
+
+    it('[TKPB] a reading permission on the stream, a parent or * reads it', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body', level: 'read' }], ['body-weight'], streams), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body-weight', level: 'contribute' }], ['body-weight'], streams), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: '*', level: 'manage' }], ['diary'], streams), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body' }], ['body-weight'], streams), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body', level: 'read' }], ['diary'], streams), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body', level: 'read' }], [], streams), false);
+    });
+
+    it('[TKPC] create-only does not read; none on a stream or a parent refuses it', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body', level: 'create-only' }], ['body-weight'], streams), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: '*', level: 'read' }, { streamId: 'body', level: 'none' }], ['body-weight'], streams), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: '*', level: 'read' }, { streamId: 'body', level: 'none' }], ['diary', 'body-weight'], streams), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([..._ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.READING_LEVELS], ['read', 'contribute', 'manage']);
     });
   });
 });
