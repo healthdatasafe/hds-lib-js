@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [2.51.0] - 2026-11-13
+
+What an entry's details show beside its short text (B-2026-11-13-5).
+
+### Added
+- **`compositeParts(event)`**: a composite entry's parts, in the item's order, as `{ key, label, value }`
+  (`CompositePart`): each declared field holding a value, a select as its option's label (the nearest one for a
+  number between stops), a number in the preferred language's digits. Undeclared fields (an importer's ids) and empty
+  ones are left out; `[]` for anything not a composite. Tests `[EVD-1..4]`.
+- **`formatDuration(seconds, { locale? })`**: a duration in words in the preferred language, its two largest parts
+  ("1 hour, 30 minutes", "1 heure et 1 minute"), empty for none. `durationToLabel` stays English (reminders). Tests
+  `[EVD-5..6]`.
+
 ### Documentation
 - **CUSTOM-FIELDS-AND-SYSTEM.md § Mode 3** (2026-11-13, B-2026-10-15-1): `existingStreamRefs[]` grant only when
   `purpose: 'app-private'` (a `read`, `withAppPrivatePermissions`); any other ref is display data the invite never

@@ -28,6 +28,7 @@ import './datasetTemplate.test.js';
 import './delegation.test.js';
 import './encounters.test.js';
 import './errors.test.js';
+import './eventDetails.test.js';
 import './eventToShortText.test.js';
 import './formatEventDate.test.js';
 import './genetics.test.js';
