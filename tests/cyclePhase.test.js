@@ -122,6 +122,20 @@ describe('[CPHX] cyclePhaseAt', () => {
     assert.equal(phaseOn(20, events).phase, 'luteal');
   });
 
+  it('[CPHW] every window of the cycle counts: fertile days written one per day (B-2026-11-13-7)', () => {
+    // a source writing each fertile day as its own window (duration 0: first and last day the same)
+    const perDay = [start(1), periodEnd(5), window(10, 0), window(11, 0), window(12, 0), ovulation(12), start(29)];
+    assert.deepEqual(phases(9, 13, perDay), ['follicular', 'fertile', 'fertile', 'fertile', 'luteal']);
+    // two windows apart: the days between have no phase, luteal only after the last one
+    const apart = [start(1), periodEnd(5), window(10, 1), window(14, 1), ovulation(13)];
+    assert.deepEqual(phases(10, 16, apart), ['fertile', 'fertile', null, 'fertile', 'fertile', 'fertile', 'luteal']);
+    // the phase rests on the window holding the day
+    const p = { clientData: { hdsBasis: 'predicted' }, createdBy: 'mira' };
+    const mixed = [start(1), window(10, 0), window(11, 0, p)];
+    assert.equal(phaseOn(10, mixed).basis, 'unknown');
+    assert.deepEqual(phaseOn(11, mixed).predictedBy, ['mira']);
+  });
+
   describe('[CPHP] period end from bleeding when no -period-end is recorded', () => {
     it('[CPHP0] the threshold anchors (Spotting 0.08, Very light 0.2) are the published bleeding options', async () => {
       const model = getHDSModel();
