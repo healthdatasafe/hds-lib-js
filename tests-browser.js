@@ -19716,6 +19716,7 @@ exports.formatEventDate = formatEventDate;
 exports.formatEventDateTime = formatEventDateTime;
 exports.eventToShortText = eventToShortText;
 exports.eventToShortTextWithOrigin = eventToShortTextWithOrigin;
+exports.compositeParts = compositeParts;
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 // HDSSettings is still the right source for per-app settings (the dynamic
@@ -19886,6 +19887,54 @@ function eventToShortTextWithOrigin(event) {
     if (status)
         result.text += (result.text.includes(' — ') ? ', ' : ' — ') + status;
     return result;
+}
+/**
+ * A composite entry's parts, in the item's order, for an entry's details: each field the item declares that holds a
+ * value, labelled ("Type of visit: Teleconsultation", "Reason: Check-up"). A select reads as its option's label (the
+ * nearest one for a number between stops), a number in the preferred language's digits, a text as written. Fields
+ * the item does not declare (an importer's ids, specialty, participants) and empty ones are left out. `[]` when the
+ * event is not a composite of the loaded model.
+ */
+function compositeParts(event) {
+    const content = event?.content;
+    if (content == null || typeof content !== 'object' || Array.isArray(content))
+        return [];
+    let itemDef;
+    try {
+        itemDef = (0, HDSModelInitAndSingleton_ts_1.getModel)().itemsDefs.forEvent(event, false);
+    }
+    catch {
+        return [];
+    }
+    const composite = itemDef?.data?.type === 'composite' ? itemDef.data.composite : null;
+    if (!composite || typeof composite !== 'object')
+        return [];
+    const parts = [];
+    for (const [key, def] of Object.entries(composite)) {
+        const value = compositePartText(content[key], def);
+        if (value == null)
+            continue;
+        const label = typeof def?.label === 'string' ? def.label : ((0, localizeText_ts_1.localizeText)(def?.label) || key);
+        parts.push({ key, label, value });
+    }
+    return parts;
+}
+function compositePartText(value, def) {
+    if (value == null || typeof value === 'object')
+        return null;
+    if (typeof value === 'string' && value.trim() === '')
+        return null;
+    if (def?.type === 'select' && Array.isArray(def.options)) {
+        let opt = def.options.find((o) => o.value === value);
+        if (!opt && typeof value === 'number')
+            opt = nearestNumericOption(def.options, value);
+        if (opt?.label)
+            return typeof opt.label === 'string' ? opt.label : ((0, localizeText_ts_1.localizeText)(opt.label) || String(value));
+        return String(value);
+    }
+    if (typeof value === 'number')
+        return new Intl.NumberFormat((0, localizeText_ts_1.getPreferredLocales)()[0]).format(value);
+    return String(value);
 }
 /** A vocabulary value's localized label, the value itself when the pack has none. */
 function vocabularyLabel(vocabulary, value) {
@@ -28678,8 +28727,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = void 0;
+exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -28704,6 +28753,7 @@ exports.toolkit = toolkit;
 const duration_ts_1 = __webpack_require__(/*! ./utils/duration.js */ "./ts/utils/duration.ts");
 Object.defineProperty(exports, "durationToSeconds", ({ enumerable: true, get: function () { return duration_ts_1.durationToSeconds; } }));
 Object.defineProperty(exports, "durationToLabel", ({ enumerable: true, get: function () { return duration_ts_1.durationToLabel; } }));
+Object.defineProperty(exports, "formatDuration", ({ enumerable: true, get: function () { return duration_ts_1.formatDuration; } }));
 const calendarDay_ts_1 = __webpack_require__(/*! ./utils/calendarDay.js */ "./ts/utils/calendarDay.ts");
 Object.defineProperty(exports, "cycleDayAt", ({ enumerable: true, get: function () { return calendarDay_ts_1.cycleDayAt; } }));
 const cyclePhase_ts_1 = __webpack_require__(/*! ./utils/cyclePhase.js */ "./ts/utils/cyclePhase.ts");
@@ -28721,6 +28771,7 @@ const eventToShortText_ts_1 = __webpack_require__(/*! ./HDSModel/eventToShortTex
 Object.defineProperty(exports, "eventToShortText", ({ enumerable: true, get: function () { return eventToShortText_ts_1.eventToShortText; } }));
 Object.defineProperty(exports, "eventToShortTextWithOrigin", ({ enumerable: true, get: function () { return eventToShortText_ts_1.eventToShortTextWithOrigin; } }));
 Object.defineProperty(exports, "formatEventDate", ({ enumerable: true, get: function () { return eventToShortText_ts_1.formatEventDate; } }));
+Object.defineProperty(exports, "compositeParts", ({ enumerable: true, get: function () { return eventToShortText_ts_1.compositeParts; } }));
 const labResults_ts_1 = __webpack_require__(/*! ./HDSModel/labResults.js */ "./ts/HDSModel/labResults.ts");
 Object.defineProperty(exports, "LAB_RESULT_CODED", ({ enumerable: true, get: function () { return labResults_ts_1.LAB_RESULT_CODED; } }));
 Object.defineProperty(exports, "LAB_COMPARATORS", ({ enumerable: true, get: function () { return labResults_ts_1.LAB_COMPARATORS; } }));
@@ -28820,6 +28871,7 @@ const HDSLib = {
     logger,
     durationToSeconds: duration_ts_1.durationToSeconds,
     durationToLabel: duration_ts_1.durationToLabel,
+    formatDuration: duration_ts_1.formatDuration,
     cycleDayAt: calendarDay_ts_1.cycleDayAt,
     cyclePhaseAt: cyclePhase_ts_1.cyclePhaseAt,
     shiftOf: temperatureShift_ts_1.shiftOf,
@@ -28832,6 +28884,7 @@ const HDSLib = {
     eventToShortText: eventToShortText_ts_1.eventToShortText,
     eventToShortTextWithOrigin: eventToShortText_ts_1.eventToShortTextWithOrigin,
     formatEventDate: eventToShortText_ts_1.formatEventDate,
+    compositeParts: eventToShortText_ts_1.compositeParts,
     LAB_RESULT_CODED: labResults_ts_1.LAB_RESULT_CODED,
     LAB_COMPARATORS: labResults_ts_1.LAB_COMPARATORS,
     labComparatorOf: labResults_ts_1.labComparatorOf,
@@ -30632,18 +30685,20 @@ function cyclePhaseAt(time, events, timeZone) {
 /*!******************************!*\
   !*** ./ts/utils/duration.ts ***!
   \******************************/
-(__unused_webpack_module, exports) {
+(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
 
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.durationToSeconds = durationToSeconds;
+exports.formatDuration = formatDuration;
+exports.durationToLabel = durationToLabel;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 /**
  * ISO 8601 duration parser and formatter.
  * Supports: P{n}D, P{n}W, P{n}M, P{n}Y, and combinations like P1Y6M.
  * Month = 30 days, Year = 365 days (approximation sufficient for reminder logic).
  */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.durationToSeconds = durationToSeconds;
-exports.durationToLabel = durationToLabel;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_DAY = 86400;
 const SECONDS_PER_WEEK = 604800;
@@ -30676,8 +30731,31 @@ function durationToSeconds(iso) {
         throw new Error(`Duration is zero: "${iso}"`);
     return total;
 }
+const DURATION_PARTS = [['day', SECONDS_PER_DAY], ['hour', SECONDS_PER_HOUR], ['minute', 60]];
 /**
- * Format seconds as a human-readable duration label.
+ * An event's duration in words, in the preferred language (or `opts.locale`): "45 minutes", "1 hour, 30 minutes",
+ * "3 days, 4 hours". At most its two largest non-zero parts (days, hours, minutes), the rest dropped; under a minute
+ * in seconds. Empty for 0, a negative or a non-number (an ongoing event's `null` duration is the caller's to word).
+ */
+function formatDuration(seconds, opts = {}) {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0)
+        return '';
+    const locale = opts.locale ?? (0, localizeText_ts_1.getPreferredLocales)()[0];
+    const unit = (n, u) => new Intl.NumberFormat(locale, { style: 'unit', unit: u, unitDisplay: 'long' }).format(n);
+    if (seconds < 60)
+        return unit(Math.round(seconds), 'second');
+    let rest = Math.round(seconds / 60) * 60;
+    const parts = [];
+    for (const [u, n] of DURATION_PARTS) {
+        const q = Math.floor(rest / n);
+        if (q > 0)
+            parts.push(unit(q, u));
+        rest -= q * n;
+    }
+    return new Intl.ListFormat(locale, { style: 'long', type: 'unit' }).format(parts.slice(0, 2));
+}
+/**
+ * Format seconds as a human-readable duration label (English; `formatDuration` words it in the preferred language).
  */
 function durationToLabel(seconds) {
     if (seconds >= SECONDS_PER_YEAR) {
@@ -50942,6 +51020,157 @@ describe('[ERRX] HDSLibError', () => {
 
 /***/ },
 
+/***/ "./tests/eventDetails.test.js"
+/*!************************************!*\
+  !*** ./tests/eventDetails.test.js ***!
+  \************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+
+/**
+ * What an entry's details show beside its short text (B-2026-11-13-5): a composite's parts, labelled, and the
+ * event's duration in words.
+ */
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+
+function makeModel () {
+  return {
+    items: {
+      'encounter-visit': {
+        version: 'v1',
+        label: { en: 'Care visit' },
+        description: { en: 'A visit.' },
+        streamId: 'encounter-visit',
+        eventType: 'encounter/visit-v1',
+        type: 'composite',
+        composite: {
+          kind: {
+            type: 'select',
+            label: { en: 'Type of visit', fr: 'Type de visite' },
+            options: [
+              { value: 'consultation', label: { en: 'Consultation', fr: 'Consultation' } },
+              { value: 'teleconsultation', label: { en: 'Teleconsultation', fr: 'Téléconsultation' } }
+            ]
+          },
+          reason: { type: 'text', label: { en: 'Reason', fr: 'Motif' }, canBeNull: true },
+          notes: { type: 'text', label: { en: 'Notes', fr: 'Notes' }, canBeNull: true }
+        }
+      },
+      'fertility-delivery': {
+        version: 'v1',
+        label: { en: 'Delivery' },
+        description: { en: 'A birth.' },
+        streamId: 'fertility-deliveries',
+        eventType: 'delivery/composite-v1',
+        type: 'composite',
+        composite: {
+          birthWeight: { type: 'number', label: { en: 'Birth weight (g)', fr: 'Poids de naissance (g)' }, canBeNull: true },
+          score: {
+            type: 'select',
+            label: { en: 'Score' },
+            options: [{ value: 0, label: { en: 'Low' } }, { value: 1, label: { en: 'High' } }]
+          }
+        }
+      },
+      'note-txt': {
+        version: 'v1',
+        label: { en: 'Note' },
+        description: { en: 'A note.' },
+        streamId: 'notes',
+        eventType: 'note/txt',
+        type: 'text'
+      }
+    },
+    streams: [
+      { id: 'encounter-visit', name: 'Visits and stays', parentId: null },
+      { id: 'fertility-deliveries', name: 'Deliveries', parentId: null },
+      { id: 'notes', name: 'Notes', parentId: null }
+    ]
+  };
+}
+
+const visit = (content) => ({ streamIds: ['encounter-visit'], type: 'encounter/visit-v1', content });
+const delivery = (content) => ({ streamIds: ['fertility-deliveries'], type: 'delivery/composite-v1', content });
+
+describe('[EVD] entry details: composite parts and duration', () => {
+  before(() => {
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().loadFromObject(makeModel());
+  });
+  after(async () => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)();
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.resetModel)();
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+  });
+  afterEach(() => (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)());
+
+  it('[EVD-1] lists the declared fields that hold a value, labelled, in the item order', () => {
+    const parts = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(visit({ notes: 'Bring the results', kind: 'teleconsultation', reason: 'Check-up', serviceProvider: { eventId: 'o1' }, specialty: 'x' }));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(parts, [
+      { key: 'kind', label: 'Type of visit', value: 'Teleconsultation' },
+      { key: 'reason', label: 'Reason', value: 'Check-up' },
+      { key: 'notes', label: 'Notes', value: 'Bring the results' }
+    ]);
+  });
+
+  it('[EVD-2] leaves out empty fields and reads in the preferred language', () => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(visit({ kind: 'consultation', reason: '  ', notes: null })), [
+      { key: 'kind', label: 'Type de visite', value: 'Consultation' }
+    ]);
+  });
+
+  it('[EVD-3] numbers in local digits, a number between select stops as the nearest option', () => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+    const parts = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(delivery({ birthWeight: 3250, score: 0.8 }));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parts[0].label, 'Poids de naissance (g)');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parts[0].value.replace(/\s/g, ' '), '3 250');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(parts[1], { key: 'score', label: 'Score', value: 'High' });
+  });
+
+  it('[EVD-4] nothing for a non-composite, an unknown event or no content', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)({ streamIds: ['notes'], type: 'note/txt', content: 'hello' }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)({ streamIds: ['unknown'], type: 'x/y', content: { a: 1 } }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(visit(null)), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(null), []);
+  });
+
+  it('[EVD-5] formatDuration: two largest parts, in the preferred language or the given locale', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(45 * 60), '45 minutes');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(90 * 60), '1 hour, 30 minutes');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(3 * 86400 + 4 * 3600 + 12 * 60), '3 days, 4 hours');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(86400 + 30 * 60), '1 day, 30 minutes');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(30), '30 seconds');
+    // French separates a number from its unit with a (narrow) no-break space
+    const sp = (s) => s.replace(/\s/g, ' ');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(sp((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(2 * 3600, { locale: 'fr' })), '2 heures');
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(sp((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(45 * 60)), '45 minutes');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(sp((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(3600 + 60)), '1 heure et 1 minute');
+  });
+
+  it('[EVD-6] formatDuration: empty for no duration', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(0), '');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(-5), '');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(null), '');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatDuration)(NaN), '');
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/eventToShortText.test.js"
 /*!****************************************!*\
   !*** ./tests/eventToShortText.test.js ***!
@@ -56946,43 +57175,45 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
 /* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
 /* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
-/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
-/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
-/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
-/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
-/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
-/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
-/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
+/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
+/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
+/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
+/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
+/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Every `*.test.js` file is listed here, except the node-only ones:
  * - validatorDrift.test.js (reads the file system and runs the validator build)
  * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
 
 
 
