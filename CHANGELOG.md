@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Documentation
+- **CUSTOM-FIELDS-AND-SYSTEM.md § Mode 3** (2026-11-13, B-2026-10-15-1): `existingStreamRefs[]` grant only when
+  `purpose: 'app-private'` (a `read`, `withAppPrivatePermissions`); any other ref is display data the invite never
+  carries. The per-stream consent prompt and the "append-permissions block" it described do not exist.
+
 ## [2.50.0] - 2026-11-13
 
 One "can read" rule and one "from" rule for every screen (B-2026-11-12-7, plan 124 2.1).
