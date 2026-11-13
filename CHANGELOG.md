@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [2.51.2] - 2026-11-13
+
+### Fixed
+- **`HDSModel.load` retries a transient failure** (B-2026-11-02-25): a network error, a 5xx, or a page that is not
+  JSON (a host's HTML error page: model.datasafe.dev answered one to a CI run on 2026-11-13) is retried twice, after 1 s
+  and 3 s (`HDSModel.loadRetryDelaysMs`); a 4xx throws at once with the status. Before, an app that loaded the model
+  during such a blip failed with `Unexpected token '<'`. Tests `[MLR1..3]`.
+
+### Tests
+- The live-demo helper `createUser` retries a dropped connection (twice, with a new username unless one was asked
+  for): `"before all"` hooks failed on demo's `other side closed` and took their whole suite down.
+
 ## [2.51.1] - 2026-11-13
 
 ### Fixed

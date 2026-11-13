@@ -12,6 +12,40 @@ import { HDSModelAppStreams } from './HDSModel-AppStreams.ts';
 import { HDSModelVocabularies } from './HDSModel-Vocabularies.ts';
 import { applyOverload, validateOverload, type HDSModelOverload } from './HDSModel-Overload.ts';
 
+/**
+ * The pack's JSON, retrying a transient failure (B-2026-11-02-25): the network, a 5xx, or a page that is not JSON (a
+ * host's HTML error page). A 4xx is the URL's answer and throws at once.
+ */
+async function fetchModelJson (url: string): Promise<any> {
+  const delays = HDSModel.loadRetryDelaysMs;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, delays[attempt - 1]));
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (e) {
+      lastError = e;
+      continue;
+    }
+    // judged by the status when there is one (a stubbed fetch may give only `text()`)
+    if (response.status >= 400 && response.status < 500) {
+      throw new HDSLibError(`Cannot load the data model from ${url}: HTTP ${response.status}`);
+    }
+    if (response.status >= 500) {
+      lastError = new HDSLibError(`Cannot load the data model from ${url}: HTTP ${response.status}`);
+      continue;
+    }
+    const text = await response.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw new HDSLibError(`Cannot load the data model from ${url}`, lastError ?? {});
+}
+
 export class HDSModel {
   /**
    * JSON definition file URL.
@@ -71,11 +105,15 @@ export class HDSModel {
     if (modelUrl) {
       this.#modelUrl = modelUrl;
     }
-    const response = await fetch(this.#modelUrl);
-    const resultText = await response.text();
-    const result = JSON.parse(resultText);
+    const result = await fetchModelJson(this.#modelUrl);
     this.loadFromObject(result, overload);
   }
+
+  /**
+   * Waits between attempts of `load()` (ms): a transient failure (the network, a 5xx, an HTML error page where the
+   * pack's JSON should be) is retried once per entry; a 4xx is not. Tests set it to `[0, 0]`.
+   */
+  static loadRetryDelaysMs: number[] = [1000, 3000];
 
   /**
    * Load model from an in-memory object (skips fetch). Useful when the

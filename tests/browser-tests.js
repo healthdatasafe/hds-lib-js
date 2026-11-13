@@ -49,6 +49,7 @@ import './loader.test.js';
 import './localizeText.test.js';
 import './logger.test.js';
 import './medication.test.js';
+import './modelLoadRetry.test.js';
 import './MonitorScope.test.js';
 import './permissionLabels.test.js';
 import './preferred.test.js';
