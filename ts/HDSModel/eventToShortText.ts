@@ -229,6 +229,54 @@ export function eventToShortTextWithOrigin (event: any): ShortTextResult {
   return result;
 }
 
+/** One part of a composite entry: the item's field key, its localized label, its value as text. */
+export interface CompositePart {
+  key: string;
+  label: string;
+  value: string;
+}
+
+/**
+ * A composite entry's parts, in the item's order, for an entry's details: each field the item declares that holds a
+ * value, labelled ("Type of visit: Teleconsultation", "Reason: Check-up"). A select reads as its option's label (the
+ * nearest one for a number between stops), a number in the preferred language's digits, a text as written. Fields
+ * the item does not declare (an importer's ids, specialty, participants) and empty ones are left out. `[]` when the
+ * event is not a composite of the loaded model.
+ */
+export function compositeParts (event: any): CompositePart[] {
+  const content = event?.content;
+  if (content == null || typeof content !== 'object' || Array.isArray(content)) return [];
+  let itemDef: any;
+  try {
+    itemDef = getModel().itemsDefs.forEvent(event, false);
+  } catch {
+    return [];
+  }
+  const composite = itemDef?.data?.type === 'composite' ? itemDef.data.composite : null;
+  if (!composite || typeof composite !== 'object') return [];
+  const parts: CompositePart[] = [];
+  for (const [key, def] of Object.entries<any>(composite)) {
+    const value = compositePartText(content[key], def);
+    if (value == null) continue;
+    const label = typeof def?.label === 'string' ? def.label : (localizeText(def?.label) || key);
+    parts.push({ key, label, value });
+  }
+  return parts;
+}
+
+function compositePartText (value: any, def: any): string | null {
+  if (value == null || typeof value === 'object') return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  if (def?.type === 'select' && Array.isArray(def.options)) {
+    let opt = def.options.find((o: any) => o.value === value);
+    if (!opt && typeof value === 'number') opt = nearestNumericOption(def.options, value);
+    if (opt?.label) return typeof opt.label === 'string' ? opt.label : (localizeText(opt.label) || String(value));
+    return String(value);
+  }
+  if (typeof value === 'number') return new Intl.NumberFormat(getPreferredLocales()[0]).format(value);
+  return String(value);
+}
+
 /** A vocabulary value's localized label, the value itself when the pack has none. */
 function vocabularyLabel (vocabulary: string, value: string): string {
   try {

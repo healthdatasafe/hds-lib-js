@@ -7,12 +7,12 @@ import * as logger from './logger.ts';
 import { HDSService } from './HDSService.ts';
 import * as HDSModelInitAndSingleton from './HDSModel/HDSModelInitAndSingleton.ts';
 import * as toolkit from './toolkit/index.ts';
-import { durationToSeconds, durationToLabel } from './utils/duration.ts';
+import { durationToSeconds, durationToLabel, formatDuration } from './utils/duration.ts';
 import { cycleDayAt } from './utils/calendarDay.ts';
 import { cyclePhaseAt } from './utils/cyclePhase.ts';
 import { shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES } from './utils/temperatureShift.ts';
 import { computeReminders } from './HDSModel/reminders.ts';
-import { eventToShortText, eventToShortTextWithOrigin, formatEventDate } from './HDSModel/eventToShortText.ts';
+import { eventToShortText, eventToShortTextWithOrigin, formatEventDate, compositeParts } from './HDSModel/eventToShortText.ts';
 import { LAB_RESULT_CODED, LAB_COMPARATORS, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labResultCodedText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded } from './HDSModel/labResults.ts';
 import { ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, contentEventIds, withRelatedMirror, checkRelatedMirror } from './HDSModel/encounters.ts';
 import { GENETIC_VARIANT_CODED, geneticVariantText } from './HDSModel/genetics.ts';
@@ -38,7 +38,7 @@ import * as cmcDocuments from './cmc/documents.ts';
 import * as cmcItemReminders from './cmc/itemReminders.ts';
 import * as appDescription from './appDescription.ts';
 export type { Localizable, localizableText } from './localizeText.ts';
-export type { FormatEventDateOptions, EventDateSource, ShortTextOrigin, ShortTextResult } from './HDSModel/eventToShortText.ts';
+export type { FormatEventDateOptions, EventDateSource, ShortTextOrigin, ShortTextResult, CompositePart } from './HDSModel/eventToShortText.ts';
 export type { LabComparator, LabFhirValue, LabResultCodedIssue } from './HDSModel/labResults.ts';
 export type { ContentEventIdField, ContentEventId, RelatedMirrorIssue } from './HDSModel/encounters.ts';
 export type { MedicationIntakeKind } from './HDSModel/medication.ts';
@@ -59,7 +59,7 @@ export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts
 
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, cycleDayAt, cyclePhaseAt, shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, LAB_RESULT_CODED, LAB_COMPARATORS, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labResultCodedText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, contentEventIds, withRelatedMirror, checkRelatedMirror, GENETIC_VARIANT_CODED, geneticVariantText, MEDICATION_INTAKE_TYPES, MEDICATION_PRESCRIPTION_TYPES, medicationIntakeKind, isSkipped, isCodedDrug, ENTERABLE_ITEM_TYPES, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope, cmcDocuments, cmcItemReminders, appDescription };
+export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, formatDuration, cycleDayAt, cyclePhaseAt, shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, compositeParts, LAB_RESULT_CODED, LAB_COMPARATORS, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labResultCodedText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, contentEventIds, withRelatedMirror, checkRelatedMirror, GENETIC_VARIANT_CODED, geneticVariantText, MEDICATION_INTAKE_TYPES, MEDICATION_PRESCRIPTION_TYPES, medicationIntakeKind, isSkipped, isCodedDrug, ENTERABLE_ITEM_TYPES, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope, cmcDocuments, cmcItemReminders, appDescription };
 export type { AppManifest, AppOpenLinks, CatalogueEntryLike, OAuthClientLike, AppTrust, AppDescription, DescribeAppInput, LocalizedMap } from './appDescription.ts';
 export type { FormSpec, FormSpecRecord, FormSpecItemKeyIssue, FormSpecItemKeyIssueReason, FormSpecSource, FormSpecOpenLink } from './cmc/formSpec.ts';
 export type { TemplateScopeDiff, TemplateBump, TemplateToFormSpecResult } from './appTemplates/datasetTemplate.ts';
@@ -119,6 +119,7 @@ const HDSLib = {
   logger,
   durationToSeconds,
   durationToLabel,
+  formatDuration,
   cycleDayAt,
   cyclePhaseAt,
   shiftOf,
@@ -131,6 +132,7 @@ const HDSLib = {
   eventToShortText,
   eventToShortTextWithOrigin,
   formatEventDate,
+  compositeParts,
   LAB_RESULT_CODED,
   LAB_COMPARATORS,
   labComparatorOf,

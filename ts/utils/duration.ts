@@ -1,3 +1,5 @@
+import { getPreferredLocales } from '../localizeText.ts';
+
 /**
  * ISO 8601 duration parser and formatter.
  * Supports: P{n}D, P{n}W, P{n}M, P{n}Y, and combinations like P1Y6M.
@@ -31,8 +33,30 @@ export function durationToSeconds (iso: string): number {
   return total;
 }
 
+const DURATION_PARTS: Array<[string, number]> = [['day', SECONDS_PER_DAY], ['hour', SECONDS_PER_HOUR], ['minute', 60]];
+
 /**
- * Format seconds as a human-readable duration label.
+ * An event's duration in words, in the preferred language (or `opts.locale`): "45 minutes", "1 hour, 30 minutes",
+ * "3 days, 4 hours". At most its two largest non-zero parts (days, hours, minutes), the rest dropped; under a minute
+ * in seconds. Empty for 0, a negative or a non-number (an ongoing event's `null` duration is the caller's to word).
+ */
+export function formatDuration (seconds: number, opts: { locale?: string } = {}): string {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return '';
+  const locale = opts.locale ?? getPreferredLocales()[0];
+  const unit = (n: number, u: string) => new Intl.NumberFormat(locale, { style: 'unit', unit: u, unitDisplay: 'long' }).format(n);
+  if (seconds < 60) return unit(Math.round(seconds), 'second');
+  let rest = Math.round(seconds / 60) * 60;
+  const parts: string[] = [];
+  for (const [u, n] of DURATION_PARTS) {
+    const q = Math.floor(rest / n);
+    if (q > 0) parts.push(unit(q, u));
+    rest -= q * n;
+  }
+  return new Intl.ListFormat(locale, { style: 'long', type: 'unit' }).format(parts.slice(0, 2));
+}
+
+/**
+ * Format seconds as a human-readable duration label (English; `formatDuration` words it in the preferred language).
  */
 export function durationToLabel (seconds: number): string {
   if (seconds >= SECONDS_PER_YEAR) {
