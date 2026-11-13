@@ -19229,6 +19229,42 @@ const HDSModel_Preferred_ts_1 = __webpack_require__(/*! ./HDSModel-Preferred.js 
 const HDSModel_AppStreams_ts_1 = __webpack_require__(/*! ./HDSModel-AppStreams.js */ "./ts/HDSModel/HDSModel-AppStreams.ts");
 const HDSModel_Vocabularies_ts_1 = __webpack_require__(/*! ./HDSModel-Vocabularies.js */ "./ts/HDSModel/HDSModel-Vocabularies.ts");
 const HDSModel_Overload_ts_1 = __webpack_require__(/*! ./HDSModel-Overload.js */ "./ts/HDSModel/HDSModel-Overload.ts");
+/**
+ * The pack's JSON, retrying a transient failure (B-2026-11-02-25): the network, a 5xx, or a page that is not JSON (a
+ * host's HTML error page). A 4xx is the URL's answer and throws at once.
+ */
+async function fetchModelJson(url) {
+    const delays = HDSModel.loadRetryDelaysMs;
+    let lastError = null;
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+        if (attempt > 0)
+            await new Promise(resolve => setTimeout(resolve, delays[attempt - 1]));
+        let response;
+        try {
+            response = await fetch(url);
+        }
+        catch (e) {
+            lastError = e;
+            continue;
+        }
+        // judged by the status when there is one (a stubbed fetch may give only `text()`)
+        if (response.status >= 400 && response.status < 500) {
+            throw new errors_ts_1.HDSLibError(`Cannot load the data model from ${url}: HTTP ${response.status}`);
+        }
+        if (response.status >= 500) {
+            lastError = new errors_ts_1.HDSLibError(`Cannot load the data model from ${url}: HTTP ${response.status}`);
+            continue;
+        }
+        const text = await response.text();
+        try {
+            return JSON.parse(text);
+        }
+        catch (e) {
+            lastError = e;
+        }
+    }
+    throw new errors_ts_1.HDSLibError(`Cannot load the data model from ${url}`, lastError ?? {});
+}
 class HDSModel {
     /**
      * JSON definition file URL.
@@ -19279,11 +19315,14 @@ class HDSModel {
         if (modelUrl) {
             this.#modelUrl = modelUrl;
         }
-        const response = await fetch(this.#modelUrl);
-        const resultText = await response.text();
-        const result = JSON.parse(resultText);
+        const result = await fetchModelJson(this.#modelUrl);
         this.loadFromObject(result, overload);
     }
+    /**
+     * Waits between attempts of `load()` (ms): a transient failure (the network, a 5xx, an HTML error page where the
+     * pack's JSON should be) is retried once per entry; a 4xx is not. Tests set it to `[0, 0]`.
+     */
+    static loadRetryDelaysMs = [1000, 3000];
     /**
      * Load model from an in-memory object (skips fetch). Useful when the
      * pack.json content is already in memory — tests, embedded apps, or
@@ -54753,6 +54792,74 @@ describe('[MEDX] medications (data-model 3.46.0)', () => {
 
 /***/ },
 
+/***/ "./tests/modelLoadRetry.test.js"
+/*!**************************************!*\
+  !*** ./tests/modelLoadRetry.test.js ***!
+  \**************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+
+
+
+/**
+ * HDSModel.load retries a transient failure (B-2026-11-02-25): the network, a 5xx, a page that is not JSON (a host's
+ * HTML error page, seen from model.datasafe.dev in CI). A 4xx throws at once.
+ */
+describe('[MLR] HDSModel.load retries a transient failure', () => {
+  const pack = { items: { 'body-weight': { label: { en: 'Body weight' } } }, streams: [], eventTypes: { types: {}, extras: {} } };
+  const realFetch = globalThis.fetch;
+  const realDelays = _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel.loadRetryDelaysMs;
+  let answers;
+  let calls;
+
+  const json = (body) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
+  const html = (status) => ({ ok: status < 400, status, text: async () => '<!DOCTYPE html><html>error</html>' });
+
+  beforeEach(() => {
+    calls = 0;
+    _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel.loadRetryDelaysMs = [0, 0];
+    globalThis.fetch = async () => {
+      const next = answers[calls++];
+      if (next instanceof Error) throw next;
+      return next;
+    };
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel.loadRetryDelaysMs = realDelays;
+  });
+
+  it('[MLR1] a network error, a 502 and an HTML page are retried', async () => {
+    answers = [new TypeError('fetch failed'), html(502), html(200), json(pack)];
+    _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel.loadRetryDelaysMs = [0, 0, 0];
+    const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('https://model.example/pack.json');
+    await model.load();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls, 4);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.modelData.items['body-weight'].key, 'body-weight');
+  });
+
+  it('[MLR2] gives up after the last retry, saying why', async () => {
+    answers = [html(503), html(503), html(503)];
+    const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('https://model.example/pack.json');
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => model.load(), /Cannot load the data model from https:\/\/model.example\/pack.json/);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls, 3);
+  });
+
+  it('[MLR3] a 4xx throws at once', async () => {
+    answers = [html(404), json(pack)];
+    const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('https://model.example/pack.json');
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => model.load(), /HTTP 404/);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls, 1);
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/permissionLabels.test.js"
 /*!****************************************!*\
   !*** ./tests/permissionLabels.test.js ***!
@@ -56499,6 +56606,19 @@ async function init () {
  * @returns {CreateUserResult}
  */
 async function createUser (username, password, email) {
+  // demo drops a connection now and then ("fetch failed: other side closed", B-2026-11-02-25): retry on a network
+  // error only, with a new username unless one was asked for (the dropped request may have created the first one)
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await createUserOnce(username, password, email);
+    } catch (e) {
+      if (attempt >= 2 || !(e.cause instanceof TypeError)) throw e;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+}
+
+async function createUserOnce (username, password, email) {
   const host = await getHost();
   password = password || passwordGenerator.rnd();
   username = username || getNewUserId('u');
@@ -56522,7 +56642,7 @@ async function createUser (username, password, email) {
     if (body.apiEndpoint == null) throw new Error('Cannot find apiEndpoint in response');
     return { apiEndpoint: body.apiEndpoint, username: body.username, password };
   } catch (e) {
-    throw new Error('Failed creating user ' + host + 'users');
+    throw new Error('Failed creating user ' + host + 'users', { cause: e });
   }
 }
 
@@ -57217,23 +57337,25 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
 /* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
 /* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
-/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
-/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
-/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
+/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Every `*.test.js` file is listed here, except the node-only ones:
  * - validatorDrift.test.js (reads the file system and runs the validator build)
  * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
 
 
 
