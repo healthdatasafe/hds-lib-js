@@ -25919,7 +25919,9 @@ function pick(text, locale) {
 /**
  * The name of the data a stream holds, in the person's language: the label of the item filed
  * there (the item named as the stream when it holds several; deprecated items only when nothing
- * else is there), else `opts.fallback`, else the model stream's name, else the stream id.
+ * else is there), else the stream's own localised `label` (data-model 4.4.0 carries one on every
+ * stream no single item speaks for: roots, intermediate streams), else `opts.fallback`, else the
+ * model stream's name, else the stream id.
  */
 function dataName(streamId, opts = {}) {
     let model;
@@ -25930,6 +25932,13 @@ function dataName(streamId, opts = {}) {
         const def = current.find(d => d.key === streamId) ??
             (current.length === 1 ? current[0] : (current.length === 0 && defs.length === 1 ? defs[0] : undefined));
         const label = pick(def?.data?.label, opts.locale);
+        if (label)
+            return label;
+    }
+    catch { /* model not loaded */ }
+    try {
+        const streamLabel = model?.streams.getDataById(streamId, false)?.label;
+        const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel, opts.locale) : null;
         if (label)
             return label;
     }
@@ -29947,6 +29956,7 @@ const HDSSettings = {
     async set(key, value) {
         if (!_connection || !_streamId) {
             _values[key] = value;
+            _cache[key] = { content: value }; // no event: marks the value as stored for isSet()
             applySideEffects(_values, key);
             return;
         }
@@ -29961,6 +29971,27 @@ const HDSSettings = {
             _cache[key] = created;
         }
         _values[key] = value;
+        applySideEffects(_values, key);
+    },
+    /**
+     * Whether a typed setting holds a stored value (an event on the server, or a value set in memory-only mode) rather
+     * than its default. Lets an app give "nothing stored" its own meaning: the webapp's theme follows the system then.
+     */
+    isSet(key) {
+        return _cache[key] != null;
+    },
+    /**
+     * Remove a typed setting's stored value: its event is deleted for good and `get()` returns the default again.
+     * Nothing stored: no call. In memory-only mode the value is dropped from memory.
+     */
+    async unset(key) {
+        const existing = _cache[key];
+        if (existing == null)
+            return;
+        if (_connection && existing.id)
+            await deleteForGood(_connection, existing.id);
+        delete _cache[key];
+        _values[key] = { ...DEFAULTS, ...browserDefaults() }[key];
         applySideEffects(_values, key);
     },
     /**
@@ -44186,6 +44217,48 @@ describe('[HDSS] HDSSettings', function () {
     });
   });
 
+  describe('[HDSS-X] isSet / unset', () => {
+    function deletingConn (events) {
+      return createMockConnection({
+        'events.get': () => ({ events }),
+        'events.delete': ({ id }) => ({ eventDeletion: { id } })
+      });
+    }
+
+    it('[HDSS-X1] isSet is false for a default, true for a loaded or set value', async () => {
+      const conn = deletingConn([{ id: 'ev-theme', type: 'settings/theme', content: 'dark' }]);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isSet('theme'), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isSet('unitSystem'), false);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('unitSystem', 'imperial');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isSet('unitSystem'), true);
+    });
+
+    it('[HDSS-X2] unset deletes the event and get returns the default', async () => {
+      const conn = deletingConn([{ id: 'ev-theme', type: 'settings/theme', content: 'dark' }]);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unset('theme');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isSet('theme'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'light');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.apiCalls.filter(c => c.method === 'events.delete').map(c => c.params.id), ['ev-theme']);
+    });
+
+    it('[HDSS-X3] unset with nothing stored makes no call', async () => {
+      const conn = deletingConn([]);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unset('theme');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.apiCalls.filter(c => c.method === 'events.delete').length, 0);
+    });
+
+    it('[HDSS-X4] memory-only: set marks the value stored, unset drops it', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.set('theme', 'dark');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isSet('theme'), true);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unset('theme');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.isSet('theme'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('theme'), 'light');
+    });
+  });
+
   describe('[HDSS-R] reload', () => {
     it('[HDSS-R1] reloads settings from server', async () => {
       let callCount = 0;
@@ -54940,6 +55013,15 @@ describe('[PLBL] permission labels', function () {
 
   it('[PLBL7] no level means read', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'body-weight' }).level, 'read');
+  });
+
+  it('[PLBL8] a stream no item speaks for is named by its own label (data-model 4.4.0), before the fallback', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('encounter', { locale: 'fr' }), 'Soins et prestataires');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('encounter', { locale: 'en' }), 'Care encounters and providers');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('encounter', { locale: 'fr', fallback: 'Their label' }), 'Soins et prestataires');
+    const view = permissionView({ streamId: 'symptom', level: 'read' }, { locale: 'fr' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.name, 'Symptômes');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.label, 'Symptômes et tout ce qui en dépend');
   });
 });
 
