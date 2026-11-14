@@ -171,6 +171,48 @@ describe('[HDSS] HDSSettings', function () {
     });
   });
 
+  describe('[HDSS-X] isSet / unset', () => {
+    function deletingConn (events) {
+      return createMockConnection({
+        'events.get': () => ({ events }),
+        'events.delete': ({ id }) => ({ eventDeletion: { id } })
+      });
+    }
+
+    it('[HDSS-X1] isSet is false for a default, true for a loaded or set value', async () => {
+      const conn = deletingConn([{ id: 'ev-theme', type: 'settings/theme', content: 'dark' }]);
+      await HDSSettings.hookToConnection(conn, 'test-stream');
+      assert.strictEqual(HDSSettings.isSet('theme'), true);
+      assert.strictEqual(HDSSettings.isSet('unitSystem'), false);
+      await HDSSettings.set('unitSystem', 'imperial');
+      assert.strictEqual(HDSSettings.isSet('unitSystem'), true);
+    });
+
+    it('[HDSS-X2] unset deletes the event and get returns the default', async () => {
+      const conn = deletingConn([{ id: 'ev-theme', type: 'settings/theme', content: 'dark' }]);
+      await HDSSettings.hookToConnection(conn, 'test-stream');
+      await HDSSettings.unset('theme');
+      assert.strictEqual(HDSSettings.isSet('theme'), false);
+      assert.strictEqual(HDSSettings.get('theme'), 'light');
+      assert.deepStrictEqual(conn.apiCalls.filter(c => c.method === 'events.delete').map(c => c.params.id), ['ev-theme']);
+    });
+
+    it('[HDSS-X3] unset with nothing stored makes no call', async () => {
+      const conn = deletingConn([]);
+      await HDSSettings.hookToConnection(conn, 'test-stream');
+      await HDSSettings.unset('theme');
+      assert.strictEqual(conn.apiCalls.filter(c => c.method === 'events.delete').length, 0);
+    });
+
+    it('[HDSS-X4] memory-only: set marks the value stored, unset drops it', async () => {
+      await HDSSettings.set('theme', 'dark');
+      assert.strictEqual(HDSSettings.isSet('theme'), true);
+      await HDSSettings.unset('theme');
+      assert.strictEqual(HDSSettings.isSet('theme'), false);
+      assert.strictEqual(HDSSettings.get('theme'), 'light');
+    });
+  });
+
   describe('[HDSS-R] reload', () => {
     it('[HDSS-R1] reloads settings from server', async () => {
       let callCount = 0;
