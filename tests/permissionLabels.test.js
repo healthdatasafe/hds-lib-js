@@ -67,4 +67,13 @@ describe('[PLBL] permission labels', function () {
   it('[PLBL7] no level means read', () => {
     assert.strictEqual(permissionView({ streamId: 'body-weight' }).level, 'read');
   });
+
+  it('[PLBL8] a stream no item speaks for is named by its own label (data-model 4.4.0), before the fallback', () => {
+    assert.strictEqual(dataName('encounter', { locale: 'fr' }), 'Soins et prestataires');
+    assert.strictEqual(dataName('encounter', { locale: 'en' }), 'Care encounters and providers');
+    assert.strictEqual(dataName('encounter', { locale: 'fr', fallback: 'Their label' }), 'Soins et prestataires');
+    const view = permissionView({ streamId: 'symptom', level: 'read' }, { locale: 'fr' });
+    assert.strictEqual(view.name, 'Symptômes');
+    assert.strictEqual(view.label, 'Symptômes et tout ce qui en dépend');
+  });
 });

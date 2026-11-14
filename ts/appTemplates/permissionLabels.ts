@@ -54,7 +54,9 @@ function pick (text: Localizable | null | undefined, locale?: string): string | 
 /**
  * The name of the data a stream holds, in the person's language: the label of the item filed
  * there (the item named as the stream when it holds several; deprecated items only when nothing
- * else is there), else `opts.fallback`, else the model stream's name, else the stream id.
+ * else is there), else the stream's own localised `label` (data-model 4.4.0 carries one on every
+ * stream no single item speaks for: roots, intermediate streams), else `opts.fallback`, else the
+ * model stream's name, else the stream id.
  */
 export function dataName (streamId: string, opts: PermissionLabelOptions & { fallback?: string } = {}): string {
   let model;
@@ -65,6 +67,11 @@ export function dataName (streamId: string, opts: PermissionLabelOptions & { fal
     const def = current.find(d => d.key === streamId) ??
       (current.length === 1 ? current[0] : (current.length === 0 && defs.length === 1 ? defs[0] : undefined));
     const label = pick(def?.data?.label, opts.locale);
+    if (label) return label;
+  } catch { /* model not loaded */ }
+  try {
+    const streamLabel = model?.streams.getDataById(streamId, false)?.label;
+    const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel as Localizable, opts.locale) : null;
     if (label) return label;
   } catch { /* model not loaded */ }
   if (opts.fallback) return opts.fallback;
