@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.52.0] - 2026-11-14
+
+### Added
+- **`HDSSettings.isSet(key)` and `HDSSettings.unset(key)`** (plan 121 WP 5): whether a typed setting holds a stored
+  value rather than its default, and removing that value (its event deleted for good, `get()` back to the default).
+  The webapp's theme uses "nothing stored" for "follow the system", which the `settings/theme` enum (`light`, `dark`)
+  cannot hold. Memory-only mode marks a set value as stored too. Tests `[HDSS-X1..4]`.
+
 ## [2.51.2] - 2026-11-13
 
 ### Fixed

@@ -236,6 +236,7 @@ const HDSSettings = {
   async set<K extends SettingKey> (key: K, value: SettingsValues[K]): Promise<void> {
     if (!_connection || !_streamId) {
       _values[key] = value;
+      _cache[key] = { content: value }; // no event: marks the value as stored for isSet()
       applySideEffects(_values, key);
       return;
     }
@@ -260,6 +261,27 @@ const HDSSettings = {
     }
 
     _values[key] = value;
+    applySideEffects(_values, key);
+  },
+
+  /**
+   * Whether a typed setting holds a stored value (an event on the server, or a value set in memory-only mode) rather
+   * than its default. Lets an app give "nothing stored" its own meaning: the webapp's theme follows the system then.
+   */
+  isSet (key: SettingKey): boolean {
+    return _cache[key] != null;
+  },
+
+  /**
+   * Remove a typed setting's stored value: its event is deleted for good and `get()` returns the default again.
+   * Nothing stored: no call. In memory-only mode the value is dropped from memory.
+   */
+  async unset (key: SettingKey): Promise<void> {
+    const existing = _cache[key];
+    if (existing == null) return;
+    if (_connection && existing.id) await deleteForGood(_connection, existing.id);
+    delete _cache[key];
+    (_values as any)[key] = ({ ...DEFAULTS, ...browserDefaults() } as any)[key];
     applySideEffects(_values, key);
   },
 
