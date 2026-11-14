@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.53.0] - 2026-11-14
+
+### Added
+- **`dataName` / `permissionView` read the stream's localised `label`** (data-model 4.4.0): a stream no single item
+  speaks for (a root such as `encounter` or `symptom`, an intermediate stream, a stream with several items and none
+  named as it) is named by its own `label` in the asked or preferred language, before `opts.fallback` and the English
+  `name`. With an older model nothing changes. Test `[PLBL8]`.
+
 ## [2.52.0] - 2026-11-14
 
 ### Added
