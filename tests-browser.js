@@ -25922,6 +25922,10 @@ function pick(text, locale) {
  * else is there), else the stream's own localised `label` (data-model 4.4.0 carries one on every
  * stream no single item speaks for: roots, intermediate streams), else `opts.fallback`, else the
  * model stream's name, else the stream id.
+ *
+ * `opts.qualified`: a child stream named by its own label is a bare word out of context
+ * ("Généraux", "Fertilité"), so it is prefixed with its parent's name: "Symptômes › Généraux".
+ * Names from an item label, and root streams, are left as they are.
  */
 function dataName(streamId, opts = {}) {
     let model;
@@ -25937,10 +25941,15 @@ function dataName(streamId, opts = {}) {
     }
     catch { /* model not loaded */ }
     try {
-        const streamLabel = model?.streams.getDataById(streamId, false)?.label;
+        const stream = model?.streams.getDataById(streamId, false);
+        const streamLabel = stream?.label;
         const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel, opts.locale) : null;
-        if (label)
+        if (label) {
+            if (opts.qualified && typeof stream?.parentId === 'string' && stream.parentId !== '') {
+                return `${dataName(stream.parentId, { locale: opts.locale })} › ${label}`;
+            }
             return label;
+        }
     }
     catch { /* model not loaded */ }
     if (opts.fallback)
@@ -25981,7 +25990,7 @@ function permissionView(perm, opts = {}) {
         hasChildren = (stream?.children?.length ?? 0) > 0;
     }
     catch { /* model not loaded: the requester's label, flagged */ }
-    const name = inModel ? dataName(streamId, opts) : quoted;
+    const name = inModel ? dataName(streamId, { ...opts, qualified: true }) : quoted;
     const label = hasChildren ? pick(TEXTS.under, opts.locale).replace('{name}', name) : name;
     return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren };
 }
@@ -55022,6 +55031,16 @@ describe('[PLBL] permission labels', function () {
     const view = permissionView({ streamId: 'symptom', level: 'read' }, { locale: 'fr' });
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.name, 'Symptômes');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.label, 'Symptômes et tout ce qui en dépend');
+  });
+
+  it('[PLBL9] a child stream named by its own label reads "Parent › Child" on a permission; roots and item names stay bare', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'symptom-general' }, { locale: 'fr' }).name, 'Symptômes › Généraux');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'treatment-fertility' }, { locale: 'fr' }).name, 'Traitements › Fertilité');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'symptom-general' }, { locale: 'fr' }).label, 'Symptômes › Généraux et tout ce qui en dépend');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'symptom' }, { locale: 'fr' }).name, 'Symptômes');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'body-weight' }, { locale: 'en' }).name, model.itemsDefs.forKey('body-weight').data.label.en);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('symptom-general', { locale: 'fr' }), 'Généraux');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('symptom-general', { locale: 'en', qualified: true }), 'Symptoms › General');
   });
 });
 
