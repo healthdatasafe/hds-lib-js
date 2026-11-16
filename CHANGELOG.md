@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.54.0] - 2026-11-16
+
+### Added
+- **`permissionView` names a child stream "Parent › Child"** when the name comes from the stream's own `label`: a
+  bare word such as « Généraux » or « Fertilité » now reads « Symptômes › Généraux », « Traitements › Fertilité » on
+  consent and sharing rows (Fable's follow-up on the data-model 4.4.0 review). Root streams and names taken from an
+  item label are unchanged. `dataName` takes the same behaviour as `opts.qualified` (off by default). Test `[PLBL9]`.
+
 ## [2.53.0] - 2026-11-14
 
 ### Added
