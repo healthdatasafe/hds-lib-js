@@ -76,4 +76,14 @@ describe('[PLBL] permission labels', function () {
     assert.strictEqual(view.name, 'Symptômes');
     assert.strictEqual(view.label, 'Symptômes et tout ce qui en dépend');
   });
+
+  it('[PLBL9] a child stream named by its own label reads "Parent › Child" on a permission; roots and item names stay bare', () => {
+    assert.strictEqual(permissionView({ streamId: 'symptom-general' }, { locale: 'fr' }).name, 'Symptômes › Généraux');
+    assert.strictEqual(permissionView({ streamId: 'treatment-fertility' }, { locale: 'fr' }).name, 'Traitements › Fertilité');
+    assert.strictEqual(permissionView({ streamId: 'symptom-general' }, { locale: 'fr' }).label, 'Symptômes › Généraux et tout ce qui en dépend');
+    assert.strictEqual(permissionView({ streamId: 'symptom' }, { locale: 'fr' }).name, 'Symptômes');
+    assert.strictEqual(permissionView({ streamId: 'body-weight' }, { locale: 'en' }).name, model.itemsDefs.forKey('body-weight').data.label.en);
+    assert.strictEqual(dataName('symptom-general', { locale: 'fr' }), 'Généraux');
+    assert.strictEqual(dataName('symptom-general', { locale: 'en', qualified: true }), 'Symptoms › General');
+  });
 });
