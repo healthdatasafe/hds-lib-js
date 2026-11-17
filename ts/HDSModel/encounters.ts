@@ -10,6 +10,8 @@ import { getModel } from './HDSModelInitAndSingleton.ts';
  *   authoritative when the two drift.
  * - A provider's GLN / ZSR identifier is mirrored as `clientData.hdsGln` / `clientData.hdsZsr` (the bare value), the
  *   key a writer looks a provider up by before creating one.
+ * - A document's `uniqueId` (data-model 4.14.0, DOCUMENTS.md "A document already held") is mirrored as
+ *   `clientData.hdsDocumentUniqueId` = `<system>|<value>`, the key a writer looks a document up by before creating one.
  */
 
 export const ENCOUNTER_VISIT = 'encounter/visit-v1';
@@ -93,6 +95,62 @@ export function contentEventIds (event: EncounterEventLike): ContentEventId[] {
   return out;
 }
 
+/** The `clientData` key mirroring a document's `uniqueId` (data-model 4.14.0). */
+export const DOCUMENT_UNIQUE_ID_KEY = 'hdsDocumentUniqueId';
+/** The identifier system of an OID or a UUID written as a URI (IHE ITI TF-2 Appendix Z.9.1). */
+export const IDENTIFIER_SYSTEM_URI = 'urn:ietf:rfc:3986';
+
+export interface DocumentUniqueId { system: string; value: string }
+
+const OID_RE = /^[0-2](\.(0|[1-9][0-9]*))+$/;
+const UUID_RE = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+/** As the schema: a URI scheme, then no space and no `|` (the key separator). */
+const SYSTEM_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s|]+$/;
+
+/** An OID or a UUID, bare or `urn:oid:` / `urn:uuid:` prefixed in any case, as `urn:oid:<oid>` / lower-case `urn:uuid:<uuid>`. */
+function oidOrUuidUri (text: string): string | null {
+  const m = /^urn:(oid|uuid):(.*)$/i.exec(text);
+  const kind = m ? m[1].toLowerCase() : null;
+  const body = m ? m[2] : text;
+  if (kind !== 'uuid' && OID_RE.test(body)) return 'urn:oid:' + body;
+  if (kind !== 'oid' && UUID_RE.test(body)) return 'urn:uuid:' + body.toLowerCase();
+  return null;
+}
+
+/**
+ * The `uniqueId` to store for a document identifier, in its one spelling (data-model DOCUMENTS.md), or null when it
+ * must not be stored. Pure.
+ * - a string is an XDS `DocumentEntry.uniqueId`: an OID or a UUID, bare or prefixed, in any case, gives
+ *   `{ system: 'urn:ietf:rfc:3986', value: 'urn:oid:<oid>' | 'urn:uuid:<uuid in lower case>' }`. Anything else is
+ *   null, the `<root>^<extension>` form included: its mapping is not settled;
+ * - an object is a FHIR Identifier (a `masterIdentifier`): only `system` and `value` are kept (`use`, `type` and
+ *   `assigner` are stripped). Under `urn:ietf:rfc:3986` (any case) its value takes the spelling above, null when it is
+ *   neither an OID nor a UUID. A `urn:oid:<root>` system is the root-plus-extension form: null. Another system is kept
+ *   as it is, trimmed, when it holds no space or `|` and the value is not blank. No system: null.
+ */
+export function normalizeDocumentUniqueId (id: unknown): DocumentUniqueId | null {
+  if (typeof id === 'string') {
+    const value = oidOrUuidUri(id.trim());
+    return value == null ? null : { system: IDENTIFIER_SYSTEM_URI, value };
+  }
+  if (!isPlainObject(id) || typeof id.system !== 'string' || typeof id.value !== 'string') return null;
+  const system = id.system.trim();
+  const value = id.value.trim();
+  if (value === '' || /[\r\n]/.test(value)) return null;
+  if (system.toLowerCase() === IDENTIFIER_SYSTEM_URI) {
+    const uri = oidOrUuidUri(value);
+    return uri == null ? null : { system: IDENTIFIER_SYSTEM_URI, value: uri };
+  }
+  if (/^urn:oid:/i.test(system) || !SYSTEM_RE.test(system)) return null;
+  return { system, value };
+}
+
+/** The `clientData.hdsDocumentUniqueId` value of a stored `uniqueId`, `<system>|<value>`; null without one. */
+export function documentUniqueIdKey (uniqueId: unknown): string | null {
+  if (!isPlainObject(uniqueId) || !isId(uniqueId.system) || !isId(uniqueId.value)) return null;
+  return uniqueId.system + '|' + uniqueId.value;
+}
+
 /** The values of a provider's identifiers in `system`. */
 function identifierValues (content: any, system: string): string[] {
   if (!Array.isArray(content?.identifiers)) return [];
@@ -110,7 +168,9 @@ function identifierValues (content: any, system: string): string[] {
  * - on a provider, `hdsGln` / `hdsZsr` are the value of its GLN / ZSR identifier (an existing value is kept when it
  *   is still one of them, else the first), removed when it has none. On an update (`previousContent` given) a removed
  *   key is set to `null`: `events.update` merges top-level `clientData` keys and only `null` deletes one (open-pryv.io
- *   `mergeClientDataMap`). `related` is always written whole, so its removed keys need no `null`.
+ *   `mergeClientDataMap`). `related` is always written whole, so its removed keys need no `null`;
+ * - on a document (`file/xds-v1`), `hdsDocumentUniqueId` is `<system>|<value>` of its content `uniqueId` as stored
+ *   (normalise it before writing: `normalizeDocumentUniqueId`), removed when it has none, `null` on an update.
  */
 export function withRelatedMirror (event: EncounterEventLike, previousContent?: any): Record<string, any> {
   const clientData: Record<string, any> = isPlainObject(event?.clientData) ? { ...event.clientData } : {};
@@ -133,11 +193,17 @@ export function withRelatedMirror (event: EncounterEventLike, previousContent?: 
       } else if (!values.includes(clientData[key])) clientData[key] = values[0];
     }
   }
+  if (event?.type === FILE_XDS) {
+    const key = documentUniqueIdKey(event.content?.uniqueId);
+    if (key != null) clientData[DOCUMENT_UNIQUE_ID_KEY] = key;
+    else if (previousContent !== undefined && clientData[DOCUMENT_UNIQUE_ID_KEY] != null) clientData[DOCUMENT_UNIQUE_ID_KEY] = null;
+    else delete clientData[DOCUMENT_UNIQUE_ID_KEY];
+  }
   return clientData;
 }
 
 export interface RelatedMirrorIssue {
-  code: 'missing-related' | 'wrong-target-type' | 'missing-provider-key' | 'stale-provider-key';
+  code: 'missing-related' | 'wrong-target-type' | 'missing-provider-key' | 'stale-provider-key' | 'missing-document-key' | 'stale-document-key';
   /** The content field holding the id (`missing-related`, `wrong-target-type`). */
   field?: ContentEventIdField;
   eventId?: string;
@@ -145,10 +211,10 @@ export interface RelatedMirrorIssue {
   targetType?: string;
   expectedTypes?: string[];
   /**
-   * The provider key, and an identifier value it should hold (`missing-provider-key`) or the value it holds that no
-   * identifier does (`stale-provider-key`).
+   * The provider or document key, and the value it should hold (`missing-provider-key`, `missing-document-key`) or the
+   * value it holds that the content does not (`stale-provider-key`, `stale-document-key`).
    */
-  key?: 'hdsGln' | 'hdsZsr';
+  key?: 'hdsGln' | 'hdsZsr' | 'hdsDocumentUniqueId';
   value?: string;
 }
 
@@ -164,7 +230,10 @@ type TargetsLike = Map<string, { type?: string } | null | undefined> | Record<st
  *   (deleted, unreadable, not fetched) is not an issue: a reader shows what the event itself says;
  * - `missing-provider-key`: a provider with a GLN / ZSR identifier and no `clientData.hdsGln` / `hdsZsr`;
  * - `stale-provider-key`: a provider whose `clientData.hdsGln` / `hdsZsr` is set to a value no identifier of that
- *   system holds. It would send another writer's lookup to the wrong provider.
+ *   system holds. It would send another writer's lookup to the wrong provider;
+ * - `missing-document-key` / `stale-document-key`: a document with a `uniqueId` and no `clientData.hdsDocumentUniqueId`,
+ *   or one set to anything but `<system>|<value>` of that `uniqueId` (another writer's lookup would miss it, or find the
+ *   wrong document).
  */
 export function checkRelatedMirror (event: EncounterEventLike, targets?: TargetsLike): RelatedMirrorIssue[] {
   const issues: RelatedMirrorIssue[] = [];
@@ -188,6 +257,15 @@ export function checkRelatedMirror (event: EncounterEventLike, targets?: Targets
       } else if (values.length > 0) {
         issues.push({ code: 'missing-provider-key', key, value: values[0] });
       }
+    }
+  }
+  if (event?.type === FILE_XDS) {
+    const want = documentUniqueIdKey(event.content?.uniqueId);
+    const held = event.clientData?.[DOCUMENT_UNIQUE_ID_KEY];
+    if (held != null) {
+      if (held !== want) issues.push({ code: 'stale-document-key', key: DOCUMENT_UNIQUE_ID_KEY, value: held });
+    } else if (want != null) {
+      issues.push({ code: 'missing-document-key', key: DOCUMENT_UNIQUE_ID_KEY, value: want });
     }
   }
   return issues;
