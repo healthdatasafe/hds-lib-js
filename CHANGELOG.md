@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [2.54.1] - 2026-11-16
+
+### Fixed
+- **`Questionnaire.buildAnswerEvent` keeps a question key named `__proto__`** (B-2026-11-16-21): the answers and the
+  `clientData.related` mirror were built by plain assignment, which sets the prototype for `__proto__` instead of
+  adding the key, so that answer was silently dropped. They are now built from `Map`s with `Object.fromEntries`.
+  Tests `[QST-ANS-7]` (answers keyed `__proto__`, `constructor`, `toString`, `valueOf`, `hasOwnProperty`, also through
+  JSON) and `[QST-ANS-8]` (a request with those question keys keeps them).
+- Test `[GENX-M1]` no longer pins `genetics` as the only `explicitGrantOnly` root: data-model 4.12.0 marks
+  `questionnaire` too.
+
 ## [2.54.0] - 2026-11-16
 
 ### Added

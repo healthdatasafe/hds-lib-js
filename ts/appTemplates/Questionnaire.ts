@@ -280,24 +280,25 @@ export class Questionnaire {
       throw new HDSLibError('buildAnswerEvent: requestEventId must be a non-empty string');
     }
     const validKeys = knownQuestionKeys ? new Set(knownQuestionKeys) : null;
-    const related: Record<string, true> = { [requestEventId]: true };
-    const outAnswers: Record<string, AnswerEntry> = {};
+    // Maps, then Object.fromEntries: a plain `obj[key] = v` drops a key named `__proto__` (B-2026-11-16-21).
+    const related = new Map<string, true>([[requestEventId, true]]);
+    const outAnswers = new Map<string, AnswerEntry>();
     for (const [key, entry] of Object.entries(answers)) {
       Questionnaire.#validateQuestionKey(key);
       if (validKeys && !validKeys.has(key)) {
         throw new HDSLibError(`buildAnswerEvent: answer key '${key}' is not a question on the request`);
       }
       Questionnaire.#validateAnswerEntry(key, entry);
-      outAnswers[key] = structuredClone(entry);
+      outAnswers.set(key, structuredClone(entry));
       if (entry.status === 'answered') {
         for (const refId of entry.references) {
-          related[refId] = true;
+          related.set(refId, true);
         }
       }
     }
     return {
-      content: { requestEventId, answers: outAnswers },
-      clientData: { related }
+      content: { requestEventId, answers: Object.fromEntries(outAnswers) },
+      clientData: { related: Object.fromEntries(related) }
     };
   }
 
