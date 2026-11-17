@@ -23892,24 +23892,25 @@ class Questionnaire {
             throw new errors_ts_1.HDSLibError('buildAnswerEvent: requestEventId must be a non-empty string');
         }
         const validKeys = knownQuestionKeys ? new Set(knownQuestionKeys) : null;
-        const related = { [requestEventId]: true };
-        const outAnswers = {};
+        // Maps, then Object.fromEntries: a plain `obj[key] = v` drops a key named `__proto__` (B-2026-11-16-21).
+        const related = new Map([[requestEventId, true]]);
+        const outAnswers = new Map();
         for (const [key, entry] of Object.entries(answers)) {
             Questionnaire.#validateQuestionKey(key);
             if (validKeys && !validKeys.has(key)) {
                 throw new errors_ts_1.HDSLibError(`buildAnswerEvent: answer key '${key}' is not a question on the request`);
             }
             Questionnaire.#validateAnswerEntry(key, entry);
-            outAnswers[key] = structuredClone(entry);
+            outAnswers.set(key, structuredClone(entry));
             if (entry.status === 'answered') {
                 for (const refId of entry.references) {
-                    related[refId] = true;
+                    related.set(refId, true);
                 }
             }
         }
         return {
-            content: { requestEventId, answers: outAnswers },
-            clientData: { related }
+            content: { requestEventId, answers: Object.fromEntries(outAnswers) },
+            clientData: { related: Object.fromEntries(related) }
         };
     }
     // ---------- validation ---------- //
@@ -52524,7 +52525,8 @@ describe('[GENX] genetic test results', function () {
   describe('[GENX-M] the explicitGrantOnly marker', () => {
     it('[GENX-M1] genetics is the marked root; its child is covered, other streams are not', () => {
       const streams = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().streams;
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(streams.explicitGrantOnlyRootIds(), ['genetics']);
+      // not pinned to genetics alone: data-model 4.12.0 marks the `questionnaire` root too
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(streams.explicitGrantOnlyRootIds().includes('genetics'), streams.explicitGrantOnlyRootIds().join());
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.isExplicitGrantOnly('genetics'), true);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.isExplicitGrantOnly('genetics-variant'), true);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streams.isExplicitGrantOnly('body'), false);
@@ -55606,6 +55608,27 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
         _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.buildAnswerEvent('evt-q-abc', { k: { status: 'declined', reason: 42 } });
         throw new Error('should throw');
       } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /reason must be a string/); }
+    });
+
+    it('[QST-ANS-7] keeps question keys named like Object.prototype members (B-2026-11-16-21)', () => {
+      const keys = ['__proto__', 'constructor', 'toString', 'valueOf', 'hasOwnProperty'];
+      const answers = JSON.parse('{' + keys.map((k, i) => `"${k}": { "status": "answered", "references": ["evt-${i}"] }`).join(',') + '}');
+      const out = _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.buildAnswerEvent('evt-q-abc', answers, keys);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(Object.keys(out.content.answers), keys);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(Object.getPrototypeOf(out.content.answers), Object.prototype);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(Object.getOwnPropertyDescriptor(out.content.answers, '__proto__').value, { status: 'answered', references: ['evt-0'] });
+      const wire = JSON.parse(JSON.stringify(out));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(Object.keys(wire.content.answers), keys);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(Object.keys(out.clientData.related).sort(), ['evt-0', 'evt-1', 'evt-2', 'evt-3', 'evt-4', 'evt-q-abc']);
+    });
+
+    it('[QST-ANS-8] a request with those question keys keeps them', () => {
+      const keys = ['__proto__', 'constructor', 'toString', 'valueOf', 'hasOwnProperty'];
+      const content = JSON.parse(JSON.stringify({ questions: {} }));
+      for (const k of keys) Object.defineProperty(content.questions, k, { value: validQuestionDef(), enumerable: true });
+      const q = _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.fromRequestEvent({ content });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(q.questionKeys, keys);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(q.toRequestEventContent())).questions), keys);
     });
   });
 });
