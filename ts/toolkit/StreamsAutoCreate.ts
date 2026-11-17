@@ -32,17 +32,29 @@ export class StreamsAutoCreate {
    * @param keysOrDefs - Array or Set of itemDefs or itemKeys
    */
   async ensureExistsForItems (keysOrDefs: Array<string | HDSItemDef> | Set<string | HDSItemDef>): Promise<any[]> {
-    // get existing streamIds;
+    const items = Array.from(keysOrDefs) as any;
     const modelStreams = getModel().streams;
-    const streamsToCreate = modelStreams.getNecessaryListForItems(Array.from(keysOrDefs) as any, { knowExistingStreamsIds: this.knowStreamIds() });
-    const apiCalls: pryv.APICall[] = streamsToCreate.map((s) => ({
-      method: 'streams.create',
-      params: s
-    }));
+    const necessary = (): any[] => modelStreams.getNecessaryListForItems(items, { knowExistingStreamsIds: this.knowStreamIds() });
     const connection = this.connection?.deref();
     if (!connection) {
       throw new Error('Lost reference to connection');
     }
+    let streamsToCreate = necessary();
+    // Something looks missing: read the streams this access can see before creating any. An access scoped to a model
+    // stream cannot see (nor create) its parents, and the core answers `forbidden` there, not `item-already-exists`;
+    // a known stream's model parents count as existing (`getNecessaryListForItems`).
+    if (streamsToCreate.length > 0) {
+      const [got] = await connection.api([{ method: 'streams.get', params: {} }]);
+      if (Array.isArray(got?.streams)) {
+        this.addStreamStructure(got.streams);
+        streamsToCreate = necessary();
+      }
+    }
+    if (streamsToCreate.length === 0) return [];
+    const apiCalls: pryv.APICall[] = streamsToCreate.map((s) => ({
+      method: 'streams.create',
+      params: s
+    }));
 
     const results = await connection.api(apiCalls);
     const streamsCreated: any[] = [];
@@ -50,6 +62,7 @@ export class StreamsAutoCreate {
     for (const result of results) {
       if (result.stream?.id) {
         streamsCreated.push(result.stream);
+        this.#addStream(result.stream);
         continue;
       }
       if (result.error) {

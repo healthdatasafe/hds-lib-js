@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [2.54.2] - 2026-11-17
+
+### Fixed
+- **`StreamsAutoCreate.ensureExistsForItems` works for an access scoped to a model stream** (B-2026-11-17-1): with no
+  `knownStreamStructure`, it asked to create the item's whole stream chain from the root. An app granted only
+  `body-weight` (the consent creates `body` and `body-weight`) cannot see `body`, the core answers `forbidden` there,
+  not `item-already-exists`, and the call threw `Error creating streams` on every sign-in that followed the docs. When
+  a stream still looks missing, it now reads `streams.get` first (the streams this access can see; a known stream's
+  model parents count as existing) and creates only what is left; the streams it creates are remembered, so a second
+  call makes no API call. `forbidden` on a stream that really is missing still throws. Tests `[TKSG-manage]`,
+  `[TKSG-contribute]` (scoped access, nothing created) and `[TKSH]` (full access creates the tree once).
+
 ## [2.54.1] - 2026-11-16
 
 ### Fixed
