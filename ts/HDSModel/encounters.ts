@@ -137,7 +137,7 @@ export function normalizeDocumentUniqueId (id: unknown): DocumentUniqueId | null
   const system = id.system.trim();
   const value = id.value.trim();
   // the schema's value pattern is `^\S(.*\S)?$`, and `.` matches no line terminator
-  if (value === '' || /[\n\r  ]/.test(value)) return null;
+  if (value === '' || /[\n\r\u2028\u2029]/.test(value)) return null;
   if (system.toLowerCase() === IDENTIFIER_SYSTEM_URI) {
     const uri = oidOrUuidUri(value);
     return uri == null ? null : { system: IDENTIFIER_SYSTEM_URI, value: uri };

@@ -247,7 +247,7 @@ describe('[ENC-LIB] care encounters and providers', () => {
       assert.equal(normalizeDocumentUniqueId({ system: 'urn:x|y', value: 'a' }), null, 'a | in system');
       assert.equal(normalizeDocumentUniqueId({ system: 'not a uri', value: 'a' }), null);
       assert.equal(normalizeDocumentUniqueId({ system: 'https://x.org', value: '  ' }), null, 'blank value');
-      for (const lt of ['\n', '\r', ' ', ' ']) {
+      for (const lt of ['\n', '\r', '\u2028', '\u2029']) {
         assert.equal(normalizeDocumentUniqueId({ system: 'https://x.org', value: 'a' + lt + 'b' }), null, 'a line terminator ' + JSON.stringify(lt));
       }
       assert.equal(normalizeDocumentUniqueId(null), null);
