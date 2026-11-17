@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { eventToShortText, contentEventIds, withRelatedMirror, checkRelatedMirror, ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR } from '../ts/index.ts';
+import { eventToShortText, contentEventIds, withRelatedMirror, checkRelatedMirror, normalizeDocumentUniqueId, documentUniqueIdKey, ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, IDENTIFIER_SYSTEM_URI, DOCUMENT_UNIQUE_ID_KEY } from '../ts/index.ts';
 import { getModel, resetModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 import { setPreferredLocales, resetPreferredLocales } from '../ts/localizeText.ts';
 
@@ -217,6 +217,74 @@ describe('[ENC-LIB] care encounters and providers', () => {
     assert.deepEqual(checkRelatedMirror({ ...stale, clientData: withRelatedMirror(stale) }), []);
     // never on another type
     assert.deepEqual(checkRelatedMirror(visit({ kind: 'other' }, { hdsGln: '7601000000000' })), []);
+  });
+
+  describe('[ENC-LIB-DOC] a document already held: uniqueId and hdsDocumentUniqueId (data-model 4.14.0)', () => {
+    const OID = { system: IDENTIFIER_SYSTEM_URI, value: 'urn:oid:2.999.1.2.3' };
+    const KEY = 'urn:ietf:rfc:3986|urn:oid:2.999.1.2.3';
+    const doc = (extra, clientData) => xds({ title: 'Report', class: cardiology, type: [cardiology], language: 'fr', ...extra }, clientData);
+
+    it('[ENC-LIB-DOC-1] normalizeDocumentUniqueId: an XDS uniqueId string, one spelling', () => {
+      for (const s of ['2.999.1.2.3', 'urn:oid:2.999.1.2.3', 'URN:OID:2.999.1.2.3', ' 2.999.1.2.3 ']) {
+        assert.deepEqual(normalizeDocumentUniqueId(s), OID, s);
+      }
+      const uuid = { system: IDENTIFIER_SYSTEM_URI, value: 'urn:uuid:6f1e3c2a-8b4d-4e5f-9a0b-1c2d3e4f5a6b' };
+      for (const s of ['6F1E3C2A-8B4D-4E5F-9A0B-1C2D3E4F5A6B', 'urn:uuid:6f1e3c2a-8b4d-4e5f-9a0b-1c2d3e4f5a6b', 'URN:UUID:6F1E3C2A-8B4D-4E5F-9A0B-1C2D3E4F5A6B']) {
+        assert.deepEqual(normalizeDocumentUniqueId(s), uuid, s);
+      }
+      // root^extension (not settled), a prefix that does not match its body, free text, a leading zero arc
+      for (const s of ['2.999.1^ext-42', 'urn:uuid:2.999.1', 'urn:oid:6f1e3c2a-8b4d-4e5f-9a0b-1c2d3e4f5a6b', 'report-42', '', '2.01.3', '3.1']) {
+        assert.equal(normalizeDocumentUniqueId(s), null, s);
+      }
+    });
+
+    it('[ENC-LIB-DOC-2] normalizeDocumentUniqueId: a FHIR masterIdentifier', () => {
+      assert.deepEqual(normalizeDocumentUniqueId({ system: 'URN:IETF:RFC:3986', value: 'URN:OID:2.999.1.2.3', use: 'official', type: { text: 'x' }, assigner: { display: 'EPR' } }), OID);
+      assert.deepEqual(normalizeDocumentUniqueId({ system: ' https://lab.example.org/reports ', value: ' R-2026-0042 ' }), { system: 'https://lab.example.org/reports', value: 'R-2026-0042' });
+      assert.equal(normalizeDocumentUniqueId({ system: IDENTIFIER_SYSTEM_URI, value: 'http://example.org/doc/1' }), null, 'neither an OID nor a UUID');
+      assert.equal(normalizeDocumentUniqueId({ system: 'urn:oid:2.999.1', value: 'ext-42' }), null, 'root plus extension');
+      assert.equal(normalizeDocumentUniqueId({ value: 'urn:oid:2.999.1.2.3' }), null, 'no system');
+      assert.equal(normalizeDocumentUniqueId({ system: 'urn:x|y', value: 'a' }), null, 'a | in system');
+      assert.equal(normalizeDocumentUniqueId({ system: 'not a uri', value: 'a' }), null);
+      assert.equal(normalizeDocumentUniqueId({ system: 'https://x.org', value: '  ' }), null, 'blank value');
+      assert.equal(normalizeDocumentUniqueId({ system: 'https://x.org', value: 'a\nb' }), null, 'a line break');
+      assert.equal(normalizeDocumentUniqueId(null), null);
+      assert.equal(normalizeDocumentUniqueId(42), null);
+    });
+
+    it('[ENC-LIB-DOC-3] documentUniqueIdKey', () => {
+      assert.equal(documentUniqueIdKey(OID), KEY);
+      assert.equal(documentUniqueIdKey({ system: 'https://lab.example.org/reports', value: 'R-1' }), 'https://lab.example.org/reports|R-1');
+      assert.equal(documentUniqueIdKey(undefined), null);
+      assert.equal(documentUniqueIdKey({ system: IDENTIFIER_SYSTEM_URI }), null);
+      assert.equal(DOCUMENT_UNIQUE_ID_KEY, 'hdsDocumentUniqueId');
+    });
+
+    it('[ENC-LIB-DOC-4] withRelatedMirror sets and removes hdsDocumentUniqueId on documents only', () => {
+      assert.deepEqual(withRelatedMirror(doc({ uniqueId: OID }, { sourceKey: 'tool:letter:1' })), { sourceKey: 'tool:letter:1', hdsDocumentUniqueId: KEY });
+      // a stale key is replaced
+      assert.deepEqual(withRelatedMirror(doc({ uniqueId: OID }, { hdsDocumentUniqueId: 'x|y' })), { hdsDocumentUniqueId: KEY });
+      // with links: both mirrors
+      assert.deepEqual(withRelatedMirror(doc({ uniqueId: OID, supersedes: ['d0'] })), { related: { d0: true }, hdsDocumentUniqueId: KEY });
+      // create without uniqueId: the key is dropped; update: set to null so events.update deletes it
+      assert.deepEqual(withRelatedMirror(doc({}, { hdsDocumentUniqueId: KEY })), {});
+      assert.deepEqual(withRelatedMirror(doc({}, { hdsDocumentUniqueId: KEY }), { title: 'Report', uniqueId: OID }), { hdsDocumentUniqueId: null });
+      assert.deepEqual(withRelatedMirror(doc({})), {});
+      // never on another type
+      assert.deepEqual(withRelatedMirror(visit({ kind: 'other', uniqueId: OID }, { hdsDocumentUniqueId: 'x' })), { hdsDocumentUniqueId: 'x' });
+    });
+
+    it('[ENC-LIB-DOC-5] checkRelatedMirror: missing-document-key, stale-document-key', () => {
+      assert.deepEqual(checkRelatedMirror(doc({ uniqueId: OID })), [{ code: 'missing-document-key', key: 'hdsDocumentUniqueId', value: KEY }]);
+      assert.deepEqual(checkRelatedMirror(doc({ uniqueId: OID }, { hdsDocumentUniqueId: 'urn:ietf:rfc:3986|urn:oid:2.999.9' })),
+        [{ code: 'stale-document-key', key: 'hdsDocumentUniqueId', value: 'urn:ietf:rfc:3986|urn:oid:2.999.9' }]);
+      assert.deepEqual(checkRelatedMirror(doc({}, { hdsDocumentUniqueId: KEY })), [{ code: 'stale-document-key', key: 'hdsDocumentUniqueId', value: KEY }]);
+      assert.deepEqual(checkRelatedMirror(doc({ uniqueId: OID }, { hdsDocumentUniqueId: KEY })), []);
+      assert.deepEqual(checkRelatedMirror(doc({}, { hdsDocumentUniqueId: null })), []);
+      const stale = doc({ uniqueId: OID }, { hdsDocumentUniqueId: 'x|y' });
+      assert.deepEqual(checkRelatedMirror({ ...stale, clientData: withRelatedMirror(stale) }), []);
+      assert.deepEqual(checkRelatedMirror(visit({ kind: 'other' }, { hdsDocumentUniqueId: KEY })), []);
+    });
   });
 
   it('[ENC-LIB-4] eventToShortText with the items loaded', () => {

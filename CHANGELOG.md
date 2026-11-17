@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [2.55.0] - 2026-11-17
+
+### Added
+- **A document already held: `normalizeDocumentUniqueId`, `documentUniqueIdKey` and the `hdsDocumentUniqueId`
+  mirror** (data-model 4.14.0, site-agents#36 A11). `normalizeDocumentUniqueId(id)` turns an XDS `uniqueId` string or
+  a FHIR `masterIdentifier` into the one spelling `file/xds-v1` `uniqueId` stores. An OID or a UUID, however it is
+  spelled, becomes `urn:ietf:rfc:3986` + `urn:oid:<oid>` / lower-case `urn:uuid:<uuid>`, and `use`, `type` and
+  `assigner` are stripped. It returns `null` for what must not be stored: the unsettled `<root>^<extension>` form
+  (or a `urn:oid:<root>` system), no system, a blank value. `withRelatedMirror` sets
+  `clientData.hdsDocumentUniqueId` = `<system>|<value>` on a document and sets it to `null` on an update that drops
+  the `uniqueId`. `checkRelatedMirror` reports `missing-document-key` and `stale-document-key`. New constants
+  `IDENTIFIER_SYSTEM_URI`, `DOCUMENT_UNIQUE_ID_KEY`.
+
 ## [2.54.2] - 2026-11-17
 
 ### Fixed
