@@ -19626,7 +19626,8 @@ function normalizeDocumentUniqueId(id) {
         return null;
     const system = id.system.trim();
     const value = id.value.trim();
-    if (value === '' || /[\r\n]/.test(value))
+    // the schema's value pattern is `^\S(.*\S)?$`, and `.` matches no line terminator
+    if (value === '' || /[\n\r\u2028\u2029]/.test(value))
         return null;
     if (system.toLowerCase() === exports.IDENTIFIER_SYSTEM_URI) {
         const uri = oidOrUuidUri(value);
@@ -51192,7 +51193,9 @@ describe('[ENC-LIB] care encounters and providers', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'urn:x|y', value: 'a' }), null, 'a | in system');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'not a uri', value: 'a' }), null);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'https://x.org', value: '  ' }), null, 'blank value');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'https://x.org', value: 'a\nb' }), null, 'a line break');
+      for (const lt of ['\n', '\r', '\u2028', '\u2029']) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'https://x.org', value: 'a' + lt + 'b' }), null, 'a line terminator ' + JSON.stringify(lt));
+      }
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)(null), null);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)(42), null);
     });
