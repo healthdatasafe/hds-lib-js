@@ -78,6 +78,31 @@ describe('[TKSX] toolKit Stream Auto Create', function () {
     assert.ok(createdStreams.length > 0);
   });
 
+  for (const level of ['manage', 'contribute']) {
+    it(`[TKSG-${level}] an access scoped to a model stream that exists: nothing created, no forbidden (B-2026-11-17-1)`, async () => {
+      const initialStreams = [{ id: 'body', name: 'Body' }, { id: 'body-weight', name: 'Body Weight', parentId: 'body' }];
+      const user = await createUserAndPermissions(null, [{ streamId: 'body-weight', level }], initialStreams, 'tk-test TKSG');
+      const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
+      const streamsAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
+      const created = await streamsAutoCreate.ensureExistsForItems(['body-weight']);
+      assert.deepEqual(created, []);
+      assert.ok(streamsAutoCreate.knowStreamIds().includes('body-weight'), 'the visible stream is now known');
+    });
+  }
+
+  it('[TKSH] a full-access connection creates the tree once, then knows it without another create', async () => {
+    const user = await createUserAndPermissions(null, [{ streamId: '*', level: 'manage' }], [], 'tk-test TKSH');
+    const connection = new HDSLib.pryv.Connection(user.appApiEndpoint);
+    const streamsAutoCreate = HDSLib.toolkit.StreamsAutoCreate.attachToConnection(connection);
+    const created = await streamsAutoCreate.ensureExistsForItems(['body-weight']);
+    assert.deepEqual(created.map((s) => s.id), ['body', 'body-weight']);
+    const calls = [];
+    const api = connection.api.bind(connection);
+    connection.api = (c) => { calls.push(...c.map((x) => x.method)); return api(c); };
+    assert.deepEqual(await streamsAutoCreate.ensureExistsForItems(['body-weight']), []);
+    assert.deepEqual(calls, [], 'the created streams are known: no API call');
+  });
+
   it('[TKSF] ensureExistsForItems with item-already-exists error continues normally', async () => {
     const permissionsManager = [{ streamId: '*', level: 'manage' }];
     const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test TKSF');
