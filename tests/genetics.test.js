@@ -16,7 +16,8 @@ describe('[GENX] genetic test results', function () {
   describe('[GENX-M] the explicitGrantOnly marker', () => {
     it('[GENX-M1] genetics is the marked root; its child is covered, other streams are not', () => {
       const streams = getModel().streams;
-      assert.deepStrictEqual(streams.explicitGrantOnlyRootIds(), ['genetics']);
+      // not pinned to genetics alone: data-model 4.12.0 marks the `questionnaire` root too
+      assert.ok(streams.explicitGrantOnlyRootIds().includes('genetics'), streams.explicitGrantOnlyRootIds().join());
       assert.strictEqual(streams.isExplicitGrantOnly('genetics'), true);
       assert.strictEqual(streams.isExplicitGrantOnly('genetics-variant'), true);
       assert.strictEqual(streams.isExplicitGrantOnly('body'), false);

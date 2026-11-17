@@ -377,5 +377,26 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
         throw new Error('should throw');
       } catch (e) { assert.match(e.message, /reason must be a string/); }
     });
+
+    it('[QST-ANS-7] keeps question keys named like Object.prototype members (B-2026-11-16-21)', () => {
+      const keys = ['__proto__', 'constructor', 'toString', 'valueOf', 'hasOwnProperty'];
+      const answers = JSON.parse('{' + keys.map((k, i) => `"${k}": { "status": "answered", "references": ["evt-${i}"] }`).join(',') + '}');
+      const out = Questionnaire.buildAnswerEvent('evt-q-abc', answers, keys);
+      assert.deepEqual(Object.keys(out.content.answers), keys);
+      assert.equal(Object.getPrototypeOf(out.content.answers), Object.prototype);
+      assert.deepEqual(Object.getOwnPropertyDescriptor(out.content.answers, '__proto__').value, { status: 'answered', references: ['evt-0'] });
+      const wire = JSON.parse(JSON.stringify(out));
+      assert.deepEqual(Object.keys(wire.content.answers), keys);
+      assert.deepEqual(Object.keys(out.clientData.related).sort(), ['evt-0', 'evt-1', 'evt-2', 'evt-3', 'evt-4', 'evt-q-abc']);
+    });
+
+    it('[QST-ANS-8] a request with those question keys keeps them', () => {
+      const keys = ['__proto__', 'constructor', 'toString', 'valueOf', 'hasOwnProperty'];
+      const content = JSON.parse(JSON.stringify({ questions: {} }));
+      for (const k of keys) Object.defineProperty(content.questions, k, { value: validQuestionDef(), enumerable: true });
+      const q = Questionnaire.fromRequestEvent({ content });
+      assert.deepEqual(q.questionKeys, keys);
+      assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(q.toRequestEventContent())).questions), keys);
+    });
   });
 });
