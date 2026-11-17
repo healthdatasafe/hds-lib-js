@@ -19497,8 +19497,10 @@ async function initHDSModel(opts = {}) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = void 0;
+exports.IDENTIFIER_SYSTEM_URI = exports.DOCUMENT_UNIQUE_ID_KEY = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = void 0;
 exports.contentEventIds = contentEventIds;
+exports.normalizeDocumentUniqueId = normalizeDocumentUniqueId;
+exports.documentUniqueIdKey = documentUniqueIdKey;
 exports.withRelatedMirror = withRelatedMirror;
 exports.checkRelatedMirror = checkRelatedMirror;
 exports.encounterShortText = encounterShortText;
@@ -19513,6 +19515,8 @@ const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndS
  *   authoritative when the two drift.
  * - A provider's GLN / ZSR identifier is mirrored as `clientData.hdsGln` / `clientData.hdsZsr` (the bare value), the
  *   key a writer looks a provider up by before creating one.
+ * - A document's `uniqueId` (data-model 4.14.0, DOCUMENTS.md "A document already held") is mirrored as
+ *   `clientData.hdsDocumentUniqueId` = `<system>|<value>`, the key a writer looks a document up by before creating one.
  */
 exports.ENCOUNTER_VISIT = 'encounter/visit-v1';
 exports.PROVIDER_PRACTITIONER = 'provider/practitioner-v1';
@@ -19583,6 +19587,61 @@ function contentEventIds(event) {
     }
     return out;
 }
+/** The `clientData` key mirroring a document's `uniqueId` (data-model 4.14.0). */
+exports.DOCUMENT_UNIQUE_ID_KEY = 'hdsDocumentUniqueId';
+/** The identifier system of an OID or a UUID written as a URI (IHE ITI TF-2 Appendix Z.9.1). */
+exports.IDENTIFIER_SYSTEM_URI = 'urn:ietf:rfc:3986';
+const OID_RE = /^[0-2](\.(0|[1-9][0-9]*))+$/;
+const UUID_RE = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+/** As the schema: a URI scheme, then no space and no `|` (the key separator). */
+const SYSTEM_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s|]+$/;
+/** An OID or a UUID, bare or `urn:oid:` / `urn:uuid:` prefixed in any case, as `urn:oid:<oid>` / lower-case `urn:uuid:<uuid>`. */
+function oidOrUuidUri(text) {
+    const m = /^urn:(oid|uuid):(.*)$/i.exec(text);
+    const kind = m ? m[1].toLowerCase() : null;
+    const body = m ? m[2] : text;
+    if (kind !== 'uuid' && OID_RE.test(body))
+        return 'urn:oid:' + body;
+    if (kind !== 'oid' && UUID_RE.test(body))
+        return 'urn:uuid:' + body.toLowerCase();
+    return null;
+}
+/**
+ * The `uniqueId` to store for a document identifier, in its one spelling (data-model DOCUMENTS.md), or null when it
+ * must not be stored. Pure.
+ * - a string is an XDS `DocumentEntry.uniqueId`: an OID or a UUID, bare or prefixed, in any case, gives
+ *   `{ system: 'urn:ietf:rfc:3986', value: 'urn:oid:<oid>' | 'urn:uuid:<uuid in lower case>' }`. Anything else is
+ *   null, the `<root>^<extension>` form included: its mapping is not settled;
+ * - an object is a FHIR Identifier (a `masterIdentifier`): only `system` and `value` are kept (`use`, `type` and
+ *   `assigner` are stripped). Under `urn:ietf:rfc:3986` (any case) its value takes the spelling above, null when it is
+ *   neither an OID nor a UUID. A `urn:oid:<root>` system is the root-plus-extension form: null. Another system is kept
+ *   as it is, trimmed, when it holds no space or `|` and the value is not blank. No system: null.
+ */
+function normalizeDocumentUniqueId(id) {
+    if (typeof id === 'string') {
+        const value = oidOrUuidUri(id.trim());
+        return value == null ? null : { system: exports.IDENTIFIER_SYSTEM_URI, value };
+    }
+    if (!isPlainObject(id) || typeof id.system !== 'string' || typeof id.value !== 'string')
+        return null;
+    const system = id.system.trim();
+    const value = id.value.trim();
+    if (value === '' || /[\r\n]/.test(value))
+        return null;
+    if (system.toLowerCase() === exports.IDENTIFIER_SYSTEM_URI) {
+        const uri = oidOrUuidUri(value);
+        return uri == null ? null : { system: exports.IDENTIFIER_SYSTEM_URI, value: uri };
+    }
+    if (/^urn:oid:/i.test(system) || !SYSTEM_RE.test(system))
+        return null;
+    return { system, value };
+}
+/** The `clientData.hdsDocumentUniqueId` value of a stored `uniqueId`, `<system>|<value>`; null without one. */
+function documentUniqueIdKey(uniqueId) {
+    if (!isPlainObject(uniqueId) || !isId(uniqueId.system) || !isId(uniqueId.value))
+        return null;
+    return uniqueId.system + '|' + uniqueId.value;
+}
 /** The values of a provider's identifiers in `system`. */
 function identifierValues(content, system) {
     if (!Array.isArray(content?.identifiers))
@@ -19600,7 +19659,9 @@ function identifierValues(content, system) {
  * - on a provider, `hdsGln` / `hdsZsr` are the value of its GLN / ZSR identifier (an existing value is kept when it
  *   is still one of them, else the first), removed when it has none. On an update (`previousContent` given) a removed
  *   key is set to `null`: `events.update` merges top-level `clientData` keys and only `null` deletes one (open-pryv.io
- *   `mergeClientDataMap`). `related` is always written whole, so its removed keys need no `null`.
+ *   `mergeClientDataMap`). `related` is always written whole, so its removed keys need no `null`;
+ * - on a document (`file/xds-v1`), `hdsDocumentUniqueId` is `<system>|<value>` of its content `uniqueId` as stored
+ *   (normalise it before writing: `normalizeDocumentUniqueId`), removed when it has none, `null` on an update.
  */
 function withRelatedMirror(event, previousContent) {
     const clientData = isPlainObject(event?.clientData) ? { ...event.clientData } : {};
@@ -19629,6 +19690,15 @@ function withRelatedMirror(event, previousContent) {
                 clientData[key] = values[0];
         }
     }
+    if (event?.type === FILE_XDS) {
+        const key = documentUniqueIdKey(event.content?.uniqueId);
+        if (key != null)
+            clientData[exports.DOCUMENT_UNIQUE_ID_KEY] = key;
+        else if (previousContent !== undefined && clientData[exports.DOCUMENT_UNIQUE_ID_KEY] != null)
+            clientData[exports.DOCUMENT_UNIQUE_ID_KEY] = null;
+        else
+            delete clientData[exports.DOCUMENT_UNIQUE_ID_KEY];
+    }
     return clientData;
 }
 /**
@@ -19641,7 +19711,10 @@ function withRelatedMirror(event, previousContent) {
  *   (deleted, unreadable, not fetched) is not an issue: a reader shows what the event itself says;
  * - `missing-provider-key`: a provider with a GLN / ZSR identifier and no `clientData.hdsGln` / `hdsZsr`;
  * - `stale-provider-key`: a provider whose `clientData.hdsGln` / `hdsZsr` is set to a value no identifier of that
- *   system holds. It would send another writer's lookup to the wrong provider.
+ *   system holds. It would send another writer's lookup to the wrong provider;
+ * - `missing-document-key` / `stale-document-key`: a document with a `uniqueId` and no `clientData.hdsDocumentUniqueId`,
+ *   or one set to anything but `<system>|<value>` of that `uniqueId` (another writer's lookup would miss it, or find the
+ *   wrong document).
  */
 function checkRelatedMirror(event, targets) {
     const issues = [];
@@ -19669,6 +19742,17 @@ function checkRelatedMirror(event, targets) {
             else if (values.length > 0) {
                 issues.push({ code: 'missing-provider-key', key, value: values[0] });
             }
+        }
+    }
+    if (event?.type === FILE_XDS) {
+        const want = documentUniqueIdKey(event.content?.uniqueId);
+        const held = event.clientData?.[exports.DOCUMENT_UNIQUE_ID_KEY];
+        if (held != null) {
+            if (held !== want)
+                issues.push({ code: 'stale-document-key', key: exports.DOCUMENT_UNIQUE_ID_KEY, value: held });
+        }
+        else if (want != null) {
+            issues.push({ code: 'missing-document-key', key: exports.DOCUMENT_UNIQUE_ID_KEY, value: want });
         }
     }
     return issues;
@@ -28785,8 +28869,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = void 0;
+exports.contentEventIds = exports.DOCUMENT_UNIQUE_ID_KEY = exports.IDENTIFIER_SYSTEM_URI = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -28849,9 +28933,13 @@ Object.defineProperty(exports, "PROVIDER_PRACTITIONER", ({ enumerable: true, get
 Object.defineProperty(exports, "PROVIDER_ORGANIZATION", ({ enumerable: true, get: function () { return encounters_ts_1.PROVIDER_ORGANIZATION; } }));
 Object.defineProperty(exports, "IDENTIFIER_SYSTEM_GLN", ({ enumerable: true, get: function () { return encounters_ts_1.IDENTIFIER_SYSTEM_GLN; } }));
 Object.defineProperty(exports, "IDENTIFIER_SYSTEM_ZSR", ({ enumerable: true, get: function () { return encounters_ts_1.IDENTIFIER_SYSTEM_ZSR; } }));
+Object.defineProperty(exports, "IDENTIFIER_SYSTEM_URI", ({ enumerable: true, get: function () { return encounters_ts_1.IDENTIFIER_SYSTEM_URI; } }));
+Object.defineProperty(exports, "DOCUMENT_UNIQUE_ID_KEY", ({ enumerable: true, get: function () { return encounters_ts_1.DOCUMENT_UNIQUE_ID_KEY; } }));
 Object.defineProperty(exports, "contentEventIds", ({ enumerable: true, get: function () { return encounters_ts_1.contentEventIds; } }));
 Object.defineProperty(exports, "withRelatedMirror", ({ enumerable: true, get: function () { return encounters_ts_1.withRelatedMirror; } }));
 Object.defineProperty(exports, "checkRelatedMirror", ({ enumerable: true, get: function () { return encounters_ts_1.checkRelatedMirror; } }));
+Object.defineProperty(exports, "normalizeDocumentUniqueId", ({ enumerable: true, get: function () { return encounters_ts_1.normalizeDocumentUniqueId; } }));
+Object.defineProperty(exports, "documentUniqueIdKey", ({ enumerable: true, get: function () { return encounters_ts_1.documentUniqueIdKey; } }));
 const genetics_ts_1 = __webpack_require__(/*! ./HDSModel/genetics.js */ "./ts/HDSModel/genetics.ts");
 Object.defineProperty(exports, "GENETIC_VARIANT_CODED", ({ enumerable: true, get: function () { return genetics_ts_1.GENETIC_VARIANT_CODED; } }));
 Object.defineProperty(exports, "geneticVariantText", ({ enumerable: true, get: function () { return genetics_ts_1.geneticVariantText; } }));
@@ -28960,9 +29048,13 @@ const HDSLib = {
     PROVIDER_ORGANIZATION: encounters_ts_1.PROVIDER_ORGANIZATION,
     IDENTIFIER_SYSTEM_GLN: encounters_ts_1.IDENTIFIER_SYSTEM_GLN,
     IDENTIFIER_SYSTEM_ZSR: encounters_ts_1.IDENTIFIER_SYSTEM_ZSR,
+    IDENTIFIER_SYSTEM_URI: encounters_ts_1.IDENTIFIER_SYSTEM_URI,
+    DOCUMENT_UNIQUE_ID_KEY: encounters_ts_1.DOCUMENT_UNIQUE_ID_KEY,
     contentEventIds: encounters_ts_1.contentEventIds,
     withRelatedMirror: encounters_ts_1.withRelatedMirror,
     checkRelatedMirror: encounters_ts_1.checkRelatedMirror,
+    normalizeDocumentUniqueId: encounters_ts_1.normalizeDocumentUniqueId,
+    documentUniqueIdKey: encounters_ts_1.documentUniqueIdKey,
     GENETIC_VARIANT_CODED: genetics_ts_1.GENETIC_VARIANT_CODED,
     geneticVariantText: genetics_ts_1.geneticVariantText,
     MEDICATION_INTAKE_TYPES: medication_ts_1.MEDICATION_INTAKE_TYPES,
@@ -51070,6 +51162,74 @@ describe('[ENC-LIB] care encounters and providers', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)({ ...stale, clientData: (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(stale) }), []);
     // never on another type
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(visit({ kind: 'other' }, { hdsGln: '7601000000000' })), []);
+  });
+
+  describe('[ENC-LIB-DOC] a document already held: uniqueId and hdsDocumentUniqueId (data-model 4.14.0)', () => {
+    const OID = { system: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.IDENTIFIER_SYSTEM_URI, value: 'urn:oid:2.999.1.2.3' };
+    const KEY = 'urn:ietf:rfc:3986|urn:oid:2.999.1.2.3';
+    const doc = (extra, clientData) => xds({ title: 'Report', class: cardiology, type: [cardiology], language: 'fr', ...extra }, clientData);
+
+    it('[ENC-LIB-DOC-1] normalizeDocumentUniqueId: an XDS uniqueId string, one spelling', () => {
+      for (const s of ['2.999.1.2.3', 'urn:oid:2.999.1.2.3', 'URN:OID:2.999.1.2.3', ' 2.999.1.2.3 ']) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)(s), OID, s);
+      }
+      const uuid = { system: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.IDENTIFIER_SYSTEM_URI, value: 'urn:uuid:6f1e3c2a-8b4d-4e5f-9a0b-1c2d3e4f5a6b' };
+      for (const s of ['6F1E3C2A-8B4D-4E5F-9A0B-1C2D3E4F5A6B', 'urn:uuid:6f1e3c2a-8b4d-4e5f-9a0b-1c2d3e4f5a6b', 'URN:UUID:6F1E3C2A-8B4D-4E5F-9A0B-1C2D3E4F5A6B']) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)(s), uuid, s);
+      }
+      // root^extension (not settled), a prefix that does not match its body, free text, a leading zero arc
+      for (const s of ['2.999.1^ext-42', 'urn:uuid:2.999.1', 'urn:oid:6f1e3c2a-8b4d-4e5f-9a0b-1c2d3e4f5a6b', 'report-42', '', '2.01.3', '3.1']) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)(s), null, s);
+      }
+    });
+
+    it('[ENC-LIB-DOC-2] normalizeDocumentUniqueId: a FHIR masterIdentifier', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'URN:IETF:RFC:3986', value: 'URN:OID:2.999.1.2.3', use: 'official', type: { text: 'x' }, assigner: { display: 'EPR' } }), OID);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: ' https://lab.example.org/reports ', value: ' R-2026-0042 ' }), { system: 'https://lab.example.org/reports', value: 'R-2026-0042' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.IDENTIFIER_SYSTEM_URI, value: 'http://example.org/doc/1' }), null, 'neither an OID nor a UUID');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'urn:oid:2.999.1', value: 'ext-42' }), null, 'root plus extension');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ value: 'urn:oid:2.999.1.2.3' }), null, 'no system');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'urn:x|y', value: 'a' }), null, 'a | in system');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'not a uri', value: 'a' }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'https://x.org', value: '  ' }), null, 'blank value');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)({ system: 'https://x.org', value: 'a\nb' }), null, 'a line break');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)(null), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.normalizeDocumentUniqueId)(42), null);
+    });
+
+    it('[ENC-LIB-DOC-3] documentUniqueIdKey', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.documentUniqueIdKey)(OID), KEY);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.documentUniqueIdKey)({ system: 'https://lab.example.org/reports', value: 'R-1' }), 'https://lab.example.org/reports|R-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.documentUniqueIdKey)(undefined), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.documentUniqueIdKey)({ system: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.IDENTIFIER_SYSTEM_URI }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.DOCUMENT_UNIQUE_ID_KEY, 'hdsDocumentUniqueId');
+    });
+
+    it('[ENC-LIB-DOC-4] withRelatedMirror sets and removes hdsDocumentUniqueId on documents only', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(doc({ uniqueId: OID }, { sourceKey: 'tool:letter:1' })), { sourceKey: 'tool:letter:1', hdsDocumentUniqueId: KEY });
+      // a stale key is replaced
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(doc({ uniqueId: OID }, { hdsDocumentUniqueId: 'x|y' })), { hdsDocumentUniqueId: KEY });
+      // with links: both mirrors
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(doc({ uniqueId: OID, supersedes: ['d0'] })), { related: { d0: true }, hdsDocumentUniqueId: KEY });
+      // create without uniqueId: the key is dropped; update: set to null so events.update deletes it
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(doc({}, { hdsDocumentUniqueId: KEY })), {});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(doc({}, { hdsDocumentUniqueId: KEY }), { title: 'Report', uniqueId: OID }), { hdsDocumentUniqueId: null });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(doc({})), {});
+      // never on another type
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(visit({ kind: 'other', uniqueId: OID }, { hdsDocumentUniqueId: 'x' })), { hdsDocumentUniqueId: 'x' });
+    });
+
+    it('[ENC-LIB-DOC-5] checkRelatedMirror: missing-document-key, stale-document-key', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(doc({ uniqueId: OID })), [{ code: 'missing-document-key', key: 'hdsDocumentUniqueId', value: KEY }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(doc({ uniqueId: OID }, { hdsDocumentUniqueId: 'urn:ietf:rfc:3986|urn:oid:2.999.9' })),
+        [{ code: 'stale-document-key', key: 'hdsDocumentUniqueId', value: 'urn:ietf:rfc:3986|urn:oid:2.999.9' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(doc({}, { hdsDocumentUniqueId: KEY })), [{ code: 'stale-document-key', key: 'hdsDocumentUniqueId', value: KEY }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(doc({ uniqueId: OID }, { hdsDocumentUniqueId: KEY })), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(doc({}, { hdsDocumentUniqueId: null })), []);
+      const stale = doc({ uniqueId: OID }, { hdsDocumentUniqueId: 'x|y' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)({ ...stale, clientData: (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.withRelatedMirror)(stale) }), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.checkRelatedMirror)(visit({ kind: 'other' }, { hdsDocumentUniqueId: KEY })), []);
+    });
   });
 
   it('[ENC-LIB-4] eventToShortText with the items loaded', () => {
