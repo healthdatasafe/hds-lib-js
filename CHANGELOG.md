@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.55.1] - 2026-11-17
+
+### Fixed
+- **`normalizeDocumentUniqueId` refuses a value with a U+2028 / U+2029 line separator**, as it does `\n` and `\r`.
+  The `file/xds-v1` schema's value pattern (`^\S(.*\S)?$`) refuses all four, so 2.55.0 could return a value the
+  schema rejects (Fable review).
+
 ## [2.55.0] - 2026-11-17
 
 ### Added
