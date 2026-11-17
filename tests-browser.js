@@ -30259,23 +30259,37 @@ class StreamsAutoCreate {
      * @param keysOrDefs - Array or Set of itemDefs or itemKeys
      */
     async ensureExistsForItems(keysOrDefs) {
-        // get existing streamIds;
+        const items = Array.from(keysOrDefs);
         const modelStreams = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams;
-        const streamsToCreate = modelStreams.getNecessaryListForItems(Array.from(keysOrDefs), { knowExistingStreamsIds: this.knowStreamIds() });
-        const apiCalls = streamsToCreate.map((s) => ({
-            method: 'streams.create',
-            params: s
-        }));
+        const necessary = () => modelStreams.getNecessaryListForItems(items, { knowExistingStreamsIds: this.knowStreamIds() });
         const connection = this.connection?.deref();
         if (!connection) {
             throw new Error('Lost reference to connection');
         }
+        let streamsToCreate = necessary();
+        // Something looks missing: read the streams this access can see before creating any. An access scoped to a model
+        // stream cannot see (nor create) its parents, and the core answers `forbidden` there, not `item-already-exists`;
+        // a known stream's model parents count as existing (`getNecessaryListForItems`).
+        if (streamsToCreate.length > 0) {
+            const [got] = await connection.api([{ method: 'streams.get', params: {} }]);
+            if (Array.isArray(got?.streams)) {
+                this.addStreamStructure(got.streams);
+                streamsToCreate = necessary();
+            }
+        }
+        if (streamsToCreate.length === 0)
+            return [];
+        const apiCalls = streamsToCreate.map((s) => ({
+            method: 'streams.create',
+            params: s
+        }));
         const results = await connection.api(apiCalls);
         const streamsCreated = [];
         const errors = [];
         for (const result of results) {
             if (result.stream?.id) {
                 streamsCreated.push(result.stream);
+                this.#addStream(result.stream);
                 continue;
             }
             if (result.error) {
@@ -56963,6 +56977,31 @@ describe('[TKSX] toolKit Stream Auto Create', function () {
 
     const createdStreams = await streamsAutoCreate.ensureExistsForItems(itemKeys);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(createdStreams.length > 0);
+  });
+
+  for (const level of ['manage', 'contribute']) {
+    it(`[TKSG-${level}] an access scoped to a model stream that exists: nothing created, no forbidden (B-2026-11-17-1)`, async () => {
+      const initialStreams = [{ id: 'body', name: 'Body' }, { id: 'body-weight', name: 'Body Weight', parentId: 'body' }];
+      const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, [{ streamId: 'body-weight', level }], initialStreams, 'tk-test TKSG');
+      const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint);
+      const streamsAutoCreate = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+      const created = await streamsAutoCreate.ensureExistsForItems(['body-weight']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(created, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(streamsAutoCreate.knowStreamIds().includes('body-weight'), 'the visible stream is now known');
+    });
+  }
+
+  it('[TKSH] a full-access connection creates the tree once, then knows it without another create', async () => {
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, [{ streamId: '*', level: 'manage' }], [], 'tk-test TKSH');
+    const connection = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint);
+    const streamsAutoCreate = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.toolkit.StreamsAutoCreate.attachToConnection(connection);
+    const created = await streamsAutoCreate.ensureExistsForItems(['body-weight']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(created.map((s) => s.id), ['body', 'body-weight']);
+    const calls = [];
+    const api = connection.api.bind(connection);
+    connection.api = (c) => { calls.push(...c.map((x) => x.method)); return api(c); };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await streamsAutoCreate.ensureExistsForItems(['body-weight']), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls, [], 'the created streams are known: no API call');
   });
 
   it('[TKSF] ensureExistsForItems with item-already-exists error continues normally', async () => {
