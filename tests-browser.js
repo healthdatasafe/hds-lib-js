@@ -23846,6 +23846,42 @@ function accessBase(accessId) {
 /** Pryv content-query path grammar — question keys must match for queryability. */
 const QUESTION_KEY_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const SUB_FIELD_TYPES = ['select-segmented', 'text', 'number'];
+/** A text with its `en`: added from its own translation when missing; left as it is when it has none at all */
+function withEnglish(text) {
+    if (text == null || typeof text !== 'object' || Array.isArray(text))
+        return text;
+    const t = text;
+    if (t.en != null || !Object.values(t).some((v) => typeof v === 'string'))
+        return text;
+    return { ...t, en: (0, localizeText_ts_1.localizeText)(t) };
+}
+/** A copy of a stored request's content where every text has its `en` (see `Questionnaire.fromRequestEvent`) */
+function withEnglishTexts(content) {
+    const c = structuredClone(content);
+    if (c.title != null)
+        c.title = withEnglish(c.title);
+    if (c.description != null)
+        c.description = withEnglish(c.description);
+    if (c.questions != null && typeof c.questions === 'object') {
+        for (const def of Object.values(c.questions)) {
+            if (def == null || typeof def !== 'object')
+                continue;
+            if (def.label != null)
+                def.label = withEnglish(def.label);
+            const sub = def.subField;
+            if (sub == null || typeof sub !== 'object')
+                continue;
+            if (sub.label != null)
+                sub.label = withEnglish(sub.label);
+            if (Array.isArray(sub.options)) {
+                for (const opt of sub.options)
+                    if (opt != null && typeof opt === 'object' && opt.label != null)
+                        opt.label = withEnglish(opt.label);
+            }
+        }
+    }
+    return c;
+}
 const ANSWER_STATUSES = ['answered', 'no', 'unknown', 'declined'];
 class Questionnaire {
     #title;
@@ -23951,12 +23987,15 @@ class Questionnaire {
     /**
      * Load a Questionnaire from a `questionnaire/request-v1` event (the patient's
      * renderer needs this to know how to render the form).
+     *
+     * The data model does not require `en` on a stored request's texts (title, description, labels), while a
+     * Questionnaire does: a text without `en` gets it from its own translation, as `localizeText` picks it.
      */
     static fromRequestEvent(event) {
         if (event?.content == null || typeof event.content !== 'object') {
             throw new errors_ts_1.HDSLibError('Cannot load Questionnaire: event has no content');
         }
-        return new Questionnaire(event.content);
+        return new Questionnaire(withEnglishTexts(event.content));
     }
     /**
      * Build a ready-to-write `questionnaire/request-v1` event payload.
@@ -29235,16 +29274,17 @@ function resetPreferredLocales() {
 function localizeText(textItem) {
     if (textItem == null)
         return null;
-    const en = textItem.en;
-    if (en == null)
-        throw new errors_ts_1.HDSLibError('textItems must have an english translation', { textItem });
     const texts = textItem;
     for (const l of preferredLocales) {
         const v = texts[l];
         if (v != null)
             return v;
     }
-    return en;
+    // every supported locale, `en` included, is in preferredLocales: what is left is another language
+    const other = Object.values(texts).find((v) => typeof v === 'string');
+    if (other == null)
+        throw new errors_ts_1.HDSLibError('textItems must have at least one translation', { textItem });
+    return other;
 }
 /**
  * Change prefferedLocal order
@@ -54905,17 +54945,21 @@ describe('[LOCX] Localization', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res, 'Hello');
     });
 
-    it('[LOLT] localizable items must have an english translation, even if default language is not english', () => {
-      try {
-        const text = {
-          es: 'Ola',
-          fr: 'Bonjour'
-        };
-        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']);
-        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(text);
-        throw new Error('Should throw error');
-      } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'textItems must have an english translation');
+    it('[LOLT] a text without english gives the preferred locale, else any language it has; none at all throws', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ es: 'Ola', fr: 'Bonjour' }), 'Bonjour');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['es']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ es: 'Ola', fr: 'Bonjour' }), 'Ola');
+      // a language hds-lib does not support (questionnaire labels written by another app)
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ de: 'Hallo' }), 'Hallo');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ de: 'Hallo', fr: null }), 'Hallo');
+      for (const text of [{}, { fr: null }]) {
+        try {
+          (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(text);
+          throw new Error('Should throw error');
+        } catch (e) {
+          _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'textItems must have at least one translation');
+        }
       }
     });
 
@@ -55559,6 +55603,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/Questionnaire.ts */ "./ts/appTemplates/Questionnaire.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
 
 
 
@@ -55755,6 +55801,41 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
         _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.fromRequestEvent({});
         throw new Error('should throw');
       } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /no content/); }
+    });
+
+    it('[QST-SER-6] fromRequestEvent reads a stored request whose texts lack en (the data model allows it); authoring still requires en', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)();
+      const content = {
+        title: { fr: 'Questionnaire de grossesse' },
+        questions: {
+          'progesterone-life': {
+            label: { fr: 'Avez-vous déjà pris de la progestérone ?', de: 'Haben Sie je Progesteron genommen?' },
+            itemRef: 'medication-intake-coded',
+            scope: { type: 'ever' },
+            subField: { type: 'select-segmented', label: { de: 'Trimester' }, options: [{ value: 'T1', label: { fr: 'T1' } }] }
+          },
+          'weight-week': { label: { en: 'Weight', fr: 'Poids' }, itemRef: 'body-weight', scope: { type: 'latest', withinDays: 7 } }
+        }
+      };
+      const q = _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.fromRequestEvent({ content });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(q.title.en, 'Questionnaire de grossesse');
+      const p = q.getQuestion('progesterone-life');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(p.label.en, 'Avez-vous déjà pris de la progestérone ?');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(p.label.de, 'Haben Sie je Progesteron genommen?');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(p.subField.label.en, 'Trimester');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(p.subField.options[0].label.en, 'T1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.deepEqual(q.getQuestion('weight-week').label, { en: 'Weight', fr: 'Poids' });
+      // the stored content is not changed
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.equal(content.questions['progesterone-life'].label.en, undefined);
+      // a label with no text at all is still refused, and so is authoring without en
+      try {
+        _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire.fromRequestEvent({ content: { questions: { a: { label: {}, itemRef: 'body-weight', scope: { type: 'ever' } } } } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /localizable text/); }
+      try {
+        new _ts_appTemplates_Questionnaire_ts__WEBPACK_IMPORTED_MODULE_2__.Questionnaire().addQuestion('a', { label: { fr: 'Poids' }, itemRef: 'body-weight', scope: { type: 'ever' } });
+        throw new Error('should throw');
+      } catch (e) { _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_1__.assert.match(e.message, /localizable text/); }
     });
 
     it('[QST-SER-5] makeRequestEvent builds a ready-to-write event payload', () => {
