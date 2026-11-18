@@ -26,6 +26,7 @@ import './converterEngine.test.js';
 import './cyclePhase.test.js';
 import './datasetTemplate.test.js';
 import './delegation.test.js';
+import './documentKinds.test.js';
 import './encounters.test.js';
 import './errors.test.js';
 import './eventDetails.test.js';

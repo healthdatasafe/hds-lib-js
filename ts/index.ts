@@ -43,6 +43,7 @@ export type { LabComparator, LabFhirValue, LabResultCodedIssue } from './HDSMode
 export type { ContentEventIdField, ContentEventId, RelatedMirrorIssue } from './HDSModel/encounters.ts';
 export type { MedicationIntakeKind } from './HDSModel/medication.ts';
 export type { VocabularyDef, VocabularyValue } from './HDSModel/HDSModel-Vocabularies.ts';
+export type { DocumentKindDef, DocumentKindCoding } from './HDSModel/HDSModel-DocumentKinds.ts';
 export type { MonitorScopeConfig, MonitorScopeCallbacks } from './MonitorScope.ts';
 export type { ReminderConfig } from './HDSModel/HDSItemDef.ts';
 export type { ReminderSource, ReminderStatus } from './HDSModel/reminders.ts';

@@ -10,6 +10,7 @@ import { HDSModelConverters } from './HDSModel-Converters.ts';
 import { HDSModelPreferred } from './HDSModel-Preferred.ts';
 import { HDSModelAppStreams } from './HDSModel-AppStreams.ts';
 import { HDSModelVocabularies } from './HDSModel-Vocabularies.ts';
+import { HDSModelDocumentKinds } from './HDSModel-DocumentKinds.ts';
 import { applyOverload, validateOverload, type HDSModelOverload } from './HDSModel-Overload.ts';
 
 /**
@@ -219,6 +220,14 @@ export class HDSModel {
       this.laziliyLoadedMap.vocabularies = new HDSModelVocabularies(this);
     }
     return this.laziliyLoadedMap.vocabularies;
+  }
+
+  get documentKinds (): HDSModelDocumentKinds {
+    if (!this.isLoaded) throwNotLoadedError();
+    if (!this.laziliyLoadedMap.documentKinds) {
+      this.laziliyLoadedMap.documentKinds = new HDSModelDocumentKinds(this);
+    }
+    return this.laziliyLoadedMap.documentKinds;
   }
 }
 
