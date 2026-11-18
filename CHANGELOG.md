@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [2.57.0] - 2026-11-18
+
+### Changed
+- **`localizeText` reads a text without `en`.** Data written by another app may lack it: the data model does not
+  require `en` on a `questionnaire/request-v1` title, description or label, and such a request made every reader
+  throw `textItems must have an english translation`. Now a text without `en` gives its preferred-locale
+  translation, else its first one in any language (`{ de: 'Hallo' }` → `Hallo`). Only a text with no translation
+  at all throws, with `textItems must have at least one translation`.
+- **`Questionnaire.fromRequestEvent`** fills a missing `en` the same way, on the title, the description and every
+  question, sub-field and option label, so it loads such a stored request. The event content is not changed.
+  Authoring (`new Questionnaire`, `addQuestion`, the setters) still requires `en`.
+
 ## [2.56.0] - 2026-11-18
 
 ### Added

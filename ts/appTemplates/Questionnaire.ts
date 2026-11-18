@@ -1,5 +1,5 @@
 import { HDSLibError } from '../errors.ts';
-import { validateLocalizableText } from '../localizeText.ts';
+import { localizeText, validateLocalizableText } from '../localizeText.ts';
 import type { localizableText } from '../localizeText.ts';
 import type {
   QuestionDef,
@@ -41,6 +41,34 @@ function accessBase (accessId: string): string {
 const QUESTION_KEY_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 const SUB_FIELD_TYPES = ['select-segmented', 'text', 'number'] as const;
+
+/** A text with its `en`: added from its own translation when missing; left as it is when it has none at all */
+function withEnglish (text: unknown): unknown {
+  if (text == null || typeof text !== 'object' || Array.isArray(text)) return text;
+  const t = text as Record<string, string | undefined>;
+  if (t.en != null || !Object.values(t).some((v) => typeof v === 'string')) return text;
+  return { ...t, en: localizeText(t) };
+}
+
+/** A copy of a stored request's content where every text has its `en` (see `Questionnaire.fromRequestEvent`) */
+function withEnglishTexts (content: Partial<QuestionnaireRequestContent>): Partial<QuestionnaireRequestContent> {
+  const c = structuredClone(content) as any;
+  if (c.title != null) c.title = withEnglish(c.title);
+  if (c.description != null) c.description = withEnglish(c.description);
+  if (c.questions != null && typeof c.questions === 'object') {
+    for (const def of Object.values(c.questions) as any[]) {
+      if (def == null || typeof def !== 'object') continue;
+      if (def.label != null) def.label = withEnglish(def.label);
+      const sub = def.subField;
+      if (sub == null || typeof sub !== 'object') continue;
+      if (sub.label != null) sub.label = withEnglish(sub.label);
+      if (Array.isArray(sub.options)) {
+        for (const opt of sub.options) if (opt != null && typeof opt === 'object' && opt.label != null) opt.label = withEnglish(opt.label);
+      }
+    }
+  }
+  return c;
+}
 const ANSWER_STATUSES = ['answered', 'no', 'unknown', 'declined'] as const;
 
 export class Questionnaire {
@@ -157,12 +185,15 @@ export class Questionnaire {
   /**
    * Load a Questionnaire from a `questionnaire/request-v1` event (the patient's
    * renderer needs this to know how to render the form).
+   *
+   * The data model does not require `en` on a stored request's texts (title, description, labels), while a
+   * Questionnaire does: a text without `en` gets it from its own translation, as `localizeText` picks it.
    */
   static fromRequestEvent (event: { content?: unknown }): Questionnaire {
     if (event?.content == null || typeof event.content !== 'object') {
       throw new HDSLibError('Cannot load Questionnaire: event has no content');
     }
-    return new Questionnaire(event.content as Partial<QuestionnaireRequestContent>);
+    return new Questionnaire(withEnglishTexts(event.content as Partial<QuestionnaireRequestContent>));
   }
 
   /**

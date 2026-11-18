@@ -109,17 +109,21 @@ describe('[LOCX] Localization', () => {
       assert.equal(res, 'Hello');
     });
 
-    it('[LOLT] localizable items must have an english translation, even if default language is not english', () => {
-      try {
-        const text = {
-          es: 'Ola',
-          fr: 'Bonjour'
-        };
-        setPreferredLocales(['fr']);
-        localizeText(text);
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'textItems must have an english translation');
+    it('[LOLT] a text without english gives the preferred locale, else any language it has; none at all throws', () => {
+      setPreferredLocales(['fr']);
+      assert.equal(localizeText({ es: 'Ola', fr: 'Bonjour' }), 'Bonjour');
+      setPreferredLocales(['es']);
+      assert.equal(localizeText({ es: 'Ola', fr: 'Bonjour' }), 'Ola');
+      // a language hds-lib does not support (questionnaire labels written by another app)
+      assert.equal(localizeText({ de: 'Hallo' }), 'Hallo');
+      assert.equal(localizeText({ de: 'Hallo', fr: null }), 'Hallo');
+      for (const text of [{}, { fr: null }]) {
+        try {
+          localizeText(text);
+          throw new Error('Should throw error');
+        } catch (e) {
+          assert.equal(e.message, 'textItems must have at least one translation');
+        }
       }
     });
 
