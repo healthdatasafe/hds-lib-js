@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [2.56.0] - 2026-11-18
+
+### Added
+- **`model.documentKinds`** (data-model 4.17.0, pack section `documentKinds`, site-agents#36 A9): the class and first
+  type of a `file/xds-v1` document by kind.
+  - `getAll()` returns the kinds a person or an importer picks from, deprecated ones left out.
+  - `forKey(key)` returns one kind by key.
+  - `forContent(content)` returns a document's kind, or `null` when its codes are in no kind. It reads the first SNOMED CT coding of `type`, and the class when the type is Record artifact.
+  - `label(key)` returns the kind's label, localized.
+  - New types `DocumentKindDef`, `DocumentKindCoding`. A pack without the section has no kind.
+
 ## [2.55.1] - 2026-11-17
 
 ### Fixed
