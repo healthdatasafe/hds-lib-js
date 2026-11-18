@@ -18253,6 +18253,74 @@ exports.HDSModelDatasources = HDSModelDatasources;
 
 /***/ },
 
+/***/ "./ts/HDSModel/HDSModel-DocumentKinds.ts"
+/*!***********************************************!*\
+  !*** ./ts/HDSModel/HDSModel-DocumentKinds.ts ***!
+  \***********************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.HDSModelDocumentKinds = void 0;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const SNOMED = 'http://snomed.info/sct';
+const RECORD_ARTIFACT = '419891008';
+/**
+ * Document kinds - Extension of HDSModel
+ *
+ * The class and first type of a `file/xds-v1` document by kind (data-model 4.17.0, pack section `documentKinds`,
+ * DOCUMENTS.md § Document kinds), one kind per pair of the CH Term ConceptMap. A pack without the section has no
+ * kind.
+ */
+class HDSModelDocumentKinds {
+    #model;
+    constructor(model) {
+        this.#model = model;
+    }
+    #raw() {
+        return this.#model.modelData.documentKinds?.kinds || {};
+    }
+    /** The kinds a person or an importer picks from, in the pack's order (deprecated ones left out) */
+    getAll() {
+        return Object.entries(this.#raw()).filter(([, k]) => !k.deprecated).map(([key, k]) => ({ key, ...k }));
+    }
+    /** A kind by key (e.g. "laboratory-report"), deprecated ones included; null when unknown */
+    forKey(key) {
+        const k = this.#raw()[key];
+        return k ? { key, ...k } : null;
+    }
+    /**
+     * The kind of a document's content, or null when its codes are in no kind. Reads the first SNOMED CT coding of
+     * `type` (another writer may lead with a LOINC one): it identifies the kind, except Record artifact, where `class`
+     * does. Deprecated kinds are found too, so a stored document still reads back.
+     */
+    forContent(content) {
+        const type = Array.isArray(content?.type) ? content.type.find((c) => c?.system === SNOMED) : undefined;
+        if (typeof type?.code !== 'string')
+            return null;
+        const cls = content?.class;
+        const classCode = cls?.system === SNOMED && typeof cls.code === 'string' ? cls.code : null;
+        for (const [key, k] of Object.entries(this.#raw())) {
+            if (k.type.code !== type.code)
+                continue;
+            if (type.code === RECORD_ARTIFACT && k.class.code !== classCode)
+                continue;
+            return { key, ...k };
+        }
+        return null;
+    }
+    /** Localized label of a kind (en, fr, es), or null when unknown */
+    label(key) {
+        const label = this.#raw()[key]?.label;
+        return label ? (0, localizeText_ts_1.localizeText)(label) : null;
+    }
+}
+exports.HDSModelDocumentKinds = HDSModelDocumentKinds;
+
+
+/***/ },
+
 /***/ "./ts/HDSModel/HDSModel-EventTypes.ts"
 /*!********************************************!*\
   !*** ./ts/HDSModel/HDSModel-EventTypes.ts ***!
@@ -19228,6 +19296,7 @@ const HDSModel_Converters_ts_1 = __webpack_require__(/*! ./HDSModel-Converters.j
 const HDSModel_Preferred_ts_1 = __webpack_require__(/*! ./HDSModel-Preferred.js */ "./ts/HDSModel/HDSModel-Preferred.ts");
 const HDSModel_AppStreams_ts_1 = __webpack_require__(/*! ./HDSModel-AppStreams.js */ "./ts/HDSModel/HDSModel-AppStreams.ts");
 const HDSModel_Vocabularies_ts_1 = __webpack_require__(/*! ./HDSModel-Vocabularies.js */ "./ts/HDSModel/HDSModel-Vocabularies.ts");
+const HDSModel_DocumentKinds_ts_1 = __webpack_require__(/*! ./HDSModel-DocumentKinds.js */ "./ts/HDSModel/HDSModel-DocumentKinds.ts");
 const HDSModel_Overload_ts_1 = __webpack_require__(/*! ./HDSModel-Overload.js */ "./ts/HDSModel/HDSModel-Overload.ts");
 /**
  * The pack's JSON, retrying a transient failure (B-2026-11-02-25): the network, a 5xx, or a page that is not JSON (a
@@ -19427,6 +19496,14 @@ class HDSModel {
             this.laziliyLoadedMap.vocabularies = new HDSModel_Vocabularies_ts_1.HDSModelVocabularies(this);
         }
         return this.laziliyLoadedMap.vocabularies;
+    }
+    get documentKinds() {
+        if (!this.isLoaded)
+            throwNotLoadedError();
+        if (!this.laziliyLoadedMap.documentKinds) {
+            this.laziliyLoadedMap.documentKinds = new HDSModel_DocumentKinds_ts_1.HDSModelDocumentKinds(this);
+        }
+        return this.laziliyLoadedMap.documentKinds;
     }
 }
 exports.HDSModel = HDSModel;
@@ -50932,6 +51009,81 @@ describe('[DLGX] Delegation re-export', () => {
 
 /***/ },
 
+/***/ "./tests/documentKinds.test.js"
+/*!*************************************!*\
+  !*** ./tests/documentKinds.test.js ***!
+  \*************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+
+const modelURL = 'https://model.datasafe.dev/pack.json';
+const sct = (code) => ({ system: 'http://snomed.info/sct', code });
+
+/** Document kinds, data-model 4.17.0: a `file/xds-v1` document's class and first type by kind. */
+describe('[DKND] model.documentKinds (data-model 4.17.0)', () => {
+  let model;
+  before(async () => {
+    model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_1__.getModel)();
+    await model.load(modelURL);
+  });
+  afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)(); });
+
+  it('[DKND1] lists the kinds, and finds one by key', () => {
+    const all = model.documentKinds.getAll();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(all.length >= 45, `${all.length} kinds`);
+    const lab = model.documentKinds.forKey('laboratory-report');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lab.key, 'laboratory-report');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(lab.type, { system: 'http://snomed.info/sct', code: '4241000179101', display: 'Laboratory report' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lab.class.code, '371525003');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(lab.timeBasis, 'service');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forKey('nope'), null);
+  });
+
+  it('[DKND2] finds the kind of a document by its type, or by its class for Record artifact', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent({ class: sct('371525003'), type: [sct('4241000179101')] }).key, 'laboratory-report');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent({ class: sct('721927009'), type: [sct('419891008')] }).key, 'referral-letter');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent({ class: sct('371525003'), type: [sct('419891008')] }).key, 'other-procedure-report');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent({ class: sct('419891008'), type: [sct('419891008')] }).key, 'other');
+  });
+
+  it('[DKND3] reads the first SNOMED CT type coding, and gives null for codes in no kind', () => {
+    const loincFirst = { class: sct('371525003'), type: [{ system: 'http://loinc.org', code: '11502-2' }, sct('4241000179101')] };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent(loincFirst).key, 'laboratory-report');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent({ class: sct('371525003'), type: [sct('1')] }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent({ class: sct('1'), type: [sct('419891008')] }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent({ type: [{ system: 'http://loinc.org', code: '11502-2' }] }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent(null), null);
+  });
+
+  it('[DKND4] labels a kind, localized', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.label('discharge-summary'), 'Discharge summary');
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.label('discharge-summary'), 'Rapport de sortie');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.label('nope'), null);
+  });
+
+  it('[DKND5] a pack without the section has no kind', () => {
+    const older = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_2__.HDSModel('https://example.invalid/pack.json');
+    older.loadFromObject({ items: {} });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(older.documentKinds.getAll(), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(older.documentKinds.forContent({ class: sct('371525003'), type: [sct('4241000179101')] }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(older.documentKinds.label('laboratory-report'), null);
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/encounters.test.js"
 /*!**********************************!*\
   !*** ./tests/encounters.test.js ***!
@@ -57640,47 +57792,49 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
 /* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
 /* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
-/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
-/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
-/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
-/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
-/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
-/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
-/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
-/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
+/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
+/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
+/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
+/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
+/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
+/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Every `*.test.js` file is listed here, except the node-only ones:
  * - validatorDrift.test.js (reads the file system and runs the validator build)
  * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
 
 
 
