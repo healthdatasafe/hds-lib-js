@@ -83,3 +83,7 @@ npm run test:coverage  # Coverage report
 `tsc` is only used by the `prepare` script for npm/git-dep consumers.
 
 Browser test suite: build then run `npx backloop.dev ./dist` and open `https://l.backloop.dev:4443/tests.html`
+
+## License
+
+[BSD-3-Clause](LICENSE)

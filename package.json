@@ -19,7 +19,8 @@
     "build:webpack": "webpack --config webpack.config.cjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "lint:change": "eslint $(git diff --name-only HEAD | grep -E '\\.(js|jsx|ts|tsx)$' | xargs)"
+    "lint:change": "eslint $(git diff --name-only HEAD | grep -E '\\.(js|jsx|ts|tsx)$' | xargs)",
+    "license": "source-licenser -c .licenser.yml ."
   },
   "repository": {
     "type": "git",
@@ -41,7 +42,7 @@
     "Data",
     "Safe"
   ],
-  "author": "HDS",
+  "author": "Health Data Safe (https://www.healthdatasafe.org)",
   "license": "BSD-3-Clause",
   "bugs": {
     "url": "https://github.com/healthdatasafe/hds-lib-js/issues"
@@ -57,6 +58,7 @@
     "mocha": "^12.0.0",
     "neostandard": "^0.12.0",
     "process": "^0.11.10",
+    "source-licenser": "^2.0.6",
     "ts-loader": "^9.5.4",
     "typescript-eslint": "^8.20.0",
     "webpack": "^5.99.9",
