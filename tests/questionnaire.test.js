@@ -1,6 +1,7 @@
 import { initHDSModel } from '../ts/index.ts';
 import { assert } from './test-utils/deps-node.js';
 import { Questionnaire } from '../ts/appTemplates/Questionnaire.ts';
+import { resetPreferredLocales } from '../ts/localizeText.ts';
 
 describe('[QSTX] Questionnaire (Plan 71)', function () {
   this.timeout(8000);
@@ -194,6 +195,41 @@ describe('[QSTX] Questionnaire (Plan 71)', function () {
         Questionnaire.fromRequestEvent({});
         throw new Error('should throw');
       } catch (e) { assert.match(e.message, /no content/); }
+    });
+
+    it('[QST-SER-6] fromRequestEvent reads a stored request whose texts lack en (the data model allows it); authoring still requires en', () => {
+      resetPreferredLocales();
+      const content = {
+        title: { fr: 'Questionnaire de grossesse' },
+        questions: {
+          'progesterone-life': {
+            label: { fr: 'Avez-vous déjà pris de la progestérone ?', de: 'Haben Sie je Progesteron genommen?' },
+            itemRef: 'medication-intake-coded',
+            scope: { type: 'ever' },
+            subField: { type: 'select-segmented', label: { de: 'Trimester' }, options: [{ value: 'T1', label: { fr: 'T1' } }] }
+          },
+          'weight-week': { label: { en: 'Weight', fr: 'Poids' }, itemRef: 'body-weight', scope: { type: 'latest', withinDays: 7 } }
+        }
+      };
+      const q = Questionnaire.fromRequestEvent({ content });
+      assert.equal(q.title.en, 'Questionnaire de grossesse');
+      const p = q.getQuestion('progesterone-life');
+      assert.equal(p.label.en, 'Avez-vous déjà pris de la progestérone ?');
+      assert.equal(p.label.de, 'Haben Sie je Progesteron genommen?');
+      assert.equal(p.subField.label.en, 'Trimester');
+      assert.equal(p.subField.options[0].label.en, 'T1');
+      assert.deepEqual(q.getQuestion('weight-week').label, { en: 'Weight', fr: 'Poids' });
+      // the stored content is not changed
+      assert.equal(content.questions['progesterone-life'].label.en, undefined);
+      // a label with no text at all is still refused, and so is authoring without en
+      try {
+        Questionnaire.fromRequestEvent({ content: { questions: { a: { label: {}, itemRef: 'body-weight', scope: { type: 'ever' } } } } });
+        throw new Error('should throw');
+      } catch (e) { assert.match(e.message, /localizable text/); }
+      try {
+        new Questionnaire().addQuestion('a', { label: { fr: 'Poids' }, itemRef: 'body-weight', scope: { type: 'ever' } });
+        throw new Error('should throw');
+      } catch (e) { assert.match(e.message, /localizable text/); }
     });
 
     it('[QST-SER-5] makeRequestEvent builds a ready-to-write event payload', () => {

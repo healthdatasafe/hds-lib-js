@@ -67,21 +67,25 @@ export function resetPreferredLocales (): void {
  *
  * Empty strings `""` are valid translations (the author chose "no text"); the
  * function returns them as-is and falls through to less-preferred locales only
- * when a translation is genuinely `null`/`undefined`. Only a missing `en` key
- * throws.
+ * when a translation is genuinely `null`/`undefined`.
+ *
+ * A text without `en` (data written by another app, e.g. a `questionnaire/request-v1` label: the data model does not
+ * require `en` there) gives its preferred-locale translation, else its first one in any language. Only a text with no
+ * translation at all throws.
  */
 export function localizeText (textItem: Localizable): string;
 export function localizeText (textItem: Localizable | null | undefined): string | null;
 export function localizeText (textItem: Localizable | null | undefined): string | null {
   if (textItem == null) return null;
-  const en = textItem.en;
-  if (en == null) throw new HDSLibError('textItems must have an english translation', { textItem });
   const texts = textItem as Readonly<Record<string, string | undefined>>;
   for (const l of preferredLocales) {
     const v = texts[l];
     if (v != null) return v;
   }
-  return en;
+  // every supported locale, `en` included, is in preferredLocales: what is left is another language
+  const other = Object.values(texts).find((v) => typeof v === 'string');
+  if (other == null) throw new HDSLibError('textItems must have at least one translation', { textItem });
+  return other;
 }
 
 /**
