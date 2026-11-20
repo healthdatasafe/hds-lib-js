@@ -20,8 +20,11 @@ export const CMC_APP_CODES = {
   COLLECTOR: 'hds-collector',
   /** bridge-mira service-account scope (Mira API ingest). */
   BRIDGE_MIRA: 'hds-bridge-mira',
-  /** bridge-athena service-account scope (Athena/EHR ingest; CMC wiring pending). */
-  BRIDGE_ATHENA: 'hds-bridge-athena'
+  /**
+   * bridge-athenahealth service-account scope (Athena/EHR ingest; CMC wiring pending).
+   * Equals `connectorCmcAppCode('bridge-athenahealth')`, the catalogue id's rule.
+   */
+  BRIDGE_ATHENA: 'hds-bridge-athenahealth'
 } as const;
 
 export type CmcAppCode = typeof CMC_APP_CODES[keyof typeof CMC_APP_CODES];
