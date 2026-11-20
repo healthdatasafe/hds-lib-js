@@ -990,6 +990,9 @@ function getMethodName (engine: any, methodId: string | undefined): string {
 function resolveObservationLabel (engine: any, methodId: string, data: any): string {
   const def = engine?.getMethodDef(methodId);
   if (!def?.components) return typeof data === 'string' ? data : JSON.stringify(data);
+  // A case-insensitive method (Creighton) converts '6ck' as '6CK': label it the same way.
+  const matches = (o: any, val: any): boolean => o.value === val ||
+    (!!def.caseInsensitive && typeof o.value === 'string' && typeof val === 'string' && o.value.toUpperCase() === val.toUpperCase());
 
   if (typeof data === 'object' && data !== null) {
     // Multi-component: resolve each field
@@ -997,7 +1000,7 @@ function resolveObservationLabel (engine: any, methodId: string, data: any): str
     for (const comp of def.components) {
       const val = data[comp.field];
       if (val === undefined) continue;
-      const opt = comp.options.find((o: any) => o.value === val);
+      const opt = comp.options.find((o: any) => matches(o, val));
       if (opt?.label) {
         parts.push(localizeText(opt.label) || String(val));
       } else {
@@ -1009,7 +1012,7 @@ function resolveObservationLabel (engine: any, methodId: string, data: any): str
 
   // Single-component: look up in first component's options
   for (const comp of def.components) {
-    const opt = comp.options.find((o: any) => o.value === data);
+    const opt = comp.options.find((o: any) => matches(o, data));
     if (opt?.label) {
       return localizeText(opt.label) || String(data);
     }

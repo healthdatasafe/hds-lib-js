@@ -21,6 +21,15 @@ export interface ComponentOption {
   label: I18nString;
   vector: Partial<ObservationVector>;
   vectorMerge?: Partial<Record<string, 'max' | 'override'>>;
+  /**
+   * `false`: pickers do not propose the option; stored data carrying it still converts and displays (data-model
+   * cervical-fluid Creighton, plan 131). Absent: true. The engine does not read it; pickers do.
+   */
+  offer?: boolean;
+  /** `false`: `fromVector` never returns the option (single-component methods); `toVector` still accepts it. Absent: true. */
+  produce?: boolean;
+  /** The parsed code, for methods whose values are a notation (Creighton: category, base, consistency, colour, lubricative). */
+  parts?: Record<string, string | boolean | null>;
 }
 
 /** A component within a method definition (e.g. mucus type, bleeding level) */
