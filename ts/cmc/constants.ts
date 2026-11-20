@@ -24,7 +24,12 @@ export const CMC_APP_CODES = {
    * bridge-athenahealth service-account scope (Athena/EHR ingest; CMC wiring pending).
    * Equals `connectorCmcAppCode('bridge-athenahealth')`, the catalogue id's rule.
    */
-  BRIDGE_ATHENA: 'hds-bridge-athenahealth'
+  BRIDGE_ATHENA: 'hds-bridge-athenahealth',
+  /**
+   * HDS Reader engine (plan 128): reads a document sent to its inbox, asks in its dialogue, writes confirmed values.
+   * Equals `connectorCmcAppCode('bridge-reader')`. Its streams: data-model `documentation/HDS-READER.md`.
+   */
+  BRIDGE_READER: 'hds-bridge-reader'
 } as const;
 
 export type CmcAppCode = typeof CMC_APP_CODES[keyof typeof CMC_APP_CODES];

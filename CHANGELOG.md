@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [2.58.0] - 2026-11-20
+
+### Added
+- **`CMC_APP_CODES.BRIDGE_READER`** = `hds-bridge-reader`, the HDS Reader engine (plan 128), by the catalogue rule
+  (`connectorCmcAppCode('bridge-reader')`). Tests `[CCS01]`, `[CCS02]`.
+
+### Fixed
+- **`offerStreamsToCreate` puts an app's own tree under its base** (B-2026-11-20-4). When a grant names a
+  `{base}-app` stream the model does not know, the granted unknown streams `{base}-…` are created under `{base}`,
+  which is created first even though the requester holds nothing on it. The HDS Reader's grant now gives
+  `hds-reader/` with `hds-reader-inbox`, `hds-reader-dialogue` and `hds-reader-app` under it (data-model
+  `documentation/HDS-READER.md`), where it gave three root streams. A base the model knows is never used, so no
+  requester can put streams under a clinical root; a grant with no `{base}-app` is unchanged. A granted unknown
+  stream is named by the permission's `defaultName` when it has one. Tests `[CO02]`, `[CO03]`.
+
 ## [2.57.1] - 2026-11-20
 
 ### Fixed

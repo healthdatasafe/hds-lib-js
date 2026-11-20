@@ -16,15 +16,17 @@ import { connectorCmcAppCode } from '../ts/appTemplates/connectors.ts';
 
 describe('[CCST] cmcConstants', function () {
   describe('[CCSA] CMC_APP_CODES', function () {
-    it('[CCS01] PATIENT, COLLECTOR, BRIDGE_MIRA, BRIDGE_ATHENA match locked values', () => {
+    it('[CCS01] PATIENT, COLLECTOR, BRIDGE_MIRA, BRIDGE_ATHENA, BRIDGE_READER match locked values', () => {
       assert.equal(CMC_APP_CODES.PATIENT, 'hds-patient');
       assert.equal(CMC_APP_CODES.COLLECTOR, 'hds-collector');
       assert.equal(CMC_APP_CODES.BRIDGE_MIRA, 'hds-bridge-mira');
       assert.equal(CMC_APP_CODES.BRIDGE_ATHENA, 'hds-bridge-athenahealth');
+      assert.equal(CMC_APP_CODES.BRIDGE_READER, 'hds-bridge-reader');
     });
     it('[CCS02] bridge app codes follow the catalogue rule (connectorCmcAppCode)', () => {
       assert.equal(CMC_APP_CODES.BRIDGE_MIRA, connectorCmcAppCode('bridge-mira'));
       assert.equal(CMC_APP_CODES.BRIDGE_ATHENA, connectorCmcAppCode('bridge-athenahealth'));
+      assert.equal(CMC_APP_CODES.BRIDGE_READER, connectorCmcAppCode('bridge-reader'));
     });
   });
 
