@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.57.1] - 2026-11-20
+
+### Fixed
+- **`CMC_APP_CODES.BRIDGE_ATHENA` is `hds-bridge-athenahealth`** (was `hds-bridge-athena`), the code
+  `connectorCmcAppCode('bridge-athenahealth')` gives for the catalogue id, so invites and accepts will match once
+  athena becomes a CMC connector. Nothing used the old value. Test `[CCS02]` holds every bridge constant to the
+  catalogue rule (B-2026-11-18-16).
+
 ## [2.57.0] - 2026-11-18
 
 ### Changed

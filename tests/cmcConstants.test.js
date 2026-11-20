@@ -5,6 +5,7 @@ import {
   appSubScope,
   extractAppSubScopeSuffix
 } from '../ts/cmc/constants.ts';
+import { connectorCmcAppCode } from '../ts/appTemplates/connectors.ts';
 
 /**
  * Unit tests for the Plan 60 B2 shared CMC constants + scope helpers.
@@ -19,7 +20,11 @@ describe('[CCST] cmcConstants', function () {
       assert.equal(CMC_APP_CODES.PATIENT, 'hds-patient');
       assert.equal(CMC_APP_CODES.COLLECTOR, 'hds-collector');
       assert.equal(CMC_APP_CODES.BRIDGE_MIRA, 'hds-bridge-mira');
-      assert.equal(CMC_APP_CODES.BRIDGE_ATHENA, 'hds-bridge-athena');
+      assert.equal(CMC_APP_CODES.BRIDGE_ATHENA, 'hds-bridge-athenahealth');
+    });
+    it('[CCS02] bridge app codes follow the catalogue rule (connectorCmcAppCode)', () => {
+      assert.equal(CMC_APP_CODES.BRIDGE_MIRA, connectorCmcAppCode('bridge-mira'));
+      assert.equal(CMC_APP_CODES.BRIDGE_ATHENA, connectorCmcAppCode('bridge-athenahealth'));
     });
   });
 
