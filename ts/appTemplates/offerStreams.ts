@@ -29,20 +29,56 @@ export interface StreamToCreate {
   parentId?: string;
 }
 
+const APP_SUFFIX = '-app';
+
+/**
+ * The app bases a grant names (the app-streams convention: a base `{base}` with its `{base}-app` under it): one per
+ * granted `{base}-app` that the model does not know, whose base the model does not know either.
+ */
+function appBasesOf (permissions: Array<{ streamId?: string }>, modelStreams: ModelStreams): string[] {
+  const bases = new Set<string>();
+  for (const perm of permissions) {
+    const id = perm?.streamId;
+    if (typeof id !== 'string' || id.startsWith(':') || !id.endsWith(APP_SUFFIX)) continue;
+    const base = id.slice(0, -APP_SUFFIX.length);
+    if (base === '' || modelStreams.getDataById(id, false) != null || modelStreams.getDataById(base, false) != null) continue;
+    bases.add(base);
+  }
+  // longest first, so a stream goes under the closest base
+  return [...bases].sort((a, b) => b.length - a.length);
+}
+
 /**
  * Resolve the granted permissions into streams to create, ancestors first.
  *
  * Insertion order is parent-before-child, so the batch applies top-down with no
  * separate sort.
+ *
+ * An app's own tree: when the grant names a `{base}-app` stream the model does not know, every granted stream the
+ * model does not know whose id starts with `{base}-` (the `-app` one included) is created under `{base}`, and `{base}`
+ * is created first (named by its id) even when it is not granted. The HDS Reader's grant (`hds-reader-inbox`,
+ * `hds-reader-dialogue`, `hds-reader-app`) thus gives `hds-reader/` with the three under it (data-model
+ * `documentation/HDS-READER.md`), while the requester holds nothing on `hds-reader` itself. A grant with no
+ * `{base}-app` keeps its unknown streams at the root, as before.
+ *
+ * A stream the model knows takes the model's name; a granted one it does not know takes the permission's
+ * `defaultName` when it carries one, else its id.
  */
 export function offerStreamsToCreate (
-  permissions: Array<{ streamId?: string }>,
+  permissions: Array<{ streamId?: string; defaultName?: string }>,
   modelStreams: ModelStreams
 ): StreamToCreate[] {
   const wanted = new Map<string, StreamToCreate>();
+  const appBases = appBasesOf(permissions, modelStreams);
 
-  const add = (id: string, { granted = false }: { granted?: boolean } = {}): void => {
-    if (wanted.has(id)) return;
+  const add = (id: string, { granted = false, defaultName }: { granted?: boolean; defaultName?: string } = {}): void => {
+    const name = typeof defaultName === 'string' && defaultName.trim() !== '' ? defaultName.trim() : id;
+    const already = wanted.get(id);
+    if (already !== undefined) {
+      // an app base added ahead of its granted `-…` stream, then granted itself: keep its own name
+      if (granted && already.name === id) already.name = name;
+      return;
+    }
     const data = modelStreams.getDataById(id, false);
     if (data == null) {
       // Unknown to the model. What reaches here is the requester's OWN root
@@ -51,8 +87,15 @@ export function offerStreamsToCreate (
       // Only ever create an id the user explicitly granted, never an inferred
       // ancestor: inventing a hierarchy inside someone else's subtree is the
       // requester's business, not ours. Hence `granted` is not defaulted true.
+      // The one exception is the base of an app tree the grant itself names (see above).
       if (!granted) return;
-      wanted.set(id, { id, name: id });
+      const base = appBases.find((b) => id.startsWith(b + '-'));
+      if (base === undefined) {
+        wanted.set(id, { id, name });
+        return;
+      }
+      if (!wanted.has(base)) wanted.set(base, { id: base, name: base });
+      wanted.set(id, { id, name, parentId: base });
       return;
     }
     wanted.set(id, { id, name: data.name ?? id, parentId: data.parentId ?? undefined });
@@ -70,7 +113,7 @@ export function offerStreamsToCreate (
       const message = e instanceof Error ? e.message : String(e);
       logger.warn(`offerStreams: could not resolve ancestors of "${streamId}":`, message);
     }
-    add(streamId, { granted: true });
+    add(streamId, { granted: true, defaultName: perm.defaultName });
   }
 
   return [...wanted.values()];

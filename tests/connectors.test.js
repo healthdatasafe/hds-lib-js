@@ -271,4 +271,31 @@ describe('[CONO] connectors: offer streams', function () {
     assert.deepEqual(calls[0], { method: 'streams.create', params: { id: 'body', name: 'Body' } });
     assert.deepEqual(calls[1].params, { id: 'body-temperature', name: 'Temperature', parentId: 'body' });
   });
+
+  it('[CO02] puts an app tree under its base: the HDS Reader grant gives hds-reader/ with its three streams', () => {
+    const streams = offerStreamsToCreate([
+      { streamId: 'hds-reader-inbox', level: 'read', defaultName: 'Reader inbox' },
+      { streamId: 'hds-reader-dialogue', level: 'contribute' },
+      { streamId: 'hds-reader-app', level: 'contribute', defaultName: 'Reader app' }
+    ], model);
+    assert.deepEqual(streams, [
+      { id: 'hds-reader', name: 'hds-reader' },
+      { id: 'hds-reader-inbox', name: 'Reader inbox', parentId: 'hds-reader' },
+      { id: 'hds-reader-dialogue', name: 'hds-reader-dialogue', parentId: 'hds-reader' },
+      { id: 'hds-reader-app', name: 'Reader app', parentId: 'hds-reader' }
+    ]);
+  });
+
+  it('[CO03] the app-tree rule needs an unknown {base}-app, never moves model streams, and leaves other roots alone', () => {
+    // no `-app` granted: unknown roots stay at the root (bridge-mira)
+    assert.deepEqual(offerStreamsToCreate([{ streamId: 'bridge-mira' }, { streamId: 'bridge-mira-x' }], model).map(s => s.parentId), [undefined, undefined]);
+    // a base the model knows is never a base: `body-app` does not put `body-x` under the clinical `body`
+    const known = offerStreamsToCreate([{ streamId: 'body-app' }, { streamId: 'body-x' }], model);
+    assert.deepEqual(known.map(s => [s.id, s.parentId]), [['body-app', undefined], ['body-x', undefined]]);
+    // a granted base stays granted at the root; a model stream with the prefix keeps its model parent
+    const granted = offerStreamsToCreate([{ streamId: 'sync-status-mira' }, { streamId: 'sync-app' }, { streamId: 'sync', defaultName: 'Sync' }], model);
+    assert.deepEqual(granted.map(s => [s.id, s.parentId]), [['sync-status', undefined], ['sync-status-mira', 'sync-status'], ['sync', undefined], ['sync-app', 'sync']]);
+    // the base, added ahead of its `-app` stream, keeps its own name once granted
+    assert.equal(granted.find(s => s.id === 'sync').name, 'Sync');
+  });
 });
