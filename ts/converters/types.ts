@@ -61,6 +61,12 @@ export interface MethodDef {
    * `'none'` (data-model 3.24.0, cervical-fluid pack). See `temperatureRuleOf`.
    */
   temperatureRule?: string;
+  /**
+   * The version of this method's model in the pack (data-model, `pack-{converterVersion}.json`): the pack of
+   * converter version vN holds each method at its newest model version not above vN. Written to `source.modelVersion`.
+   * Absent from `pack-latest.json`.
+   */
+  modelVersion?: string;
 }
 
 /** A coverline rule as the pack declares it (data only; the parameters are hds-lib's `TEMPERATURE_RULES`). */
