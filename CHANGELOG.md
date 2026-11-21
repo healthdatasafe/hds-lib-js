@@ -2,8 +2,10 @@
 
 ## [Unreleased]
 
-Proposed as 2.60.0 (minor). The converter changes are needed to read the Creighton notation of data-model's
-cervical-fluid converter v1 (plan 131).
+## [2.60.0] - 2026-11-21
+
+The converter changes are needed to read the Creighton notation of data-model's cervical-fluid converter v1
+(data-model 4.23.0, plan 131).
 
 ### Added
 - **Versioned converter packs.** `converters.ensureEngine(itemKey)` fetches
