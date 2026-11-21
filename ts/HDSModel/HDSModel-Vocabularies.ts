@@ -13,7 +13,10 @@ export interface VocabularyDef {
   key: string;
   /** FHIR element the values map to, e.g. `Timing.repeat.when` */
   fhirElement?: string;
-  /** The eventType fields these values label (`path` is dotted inside the content) */
+  /**
+   * The eventType fields these values label: `path` is dotted inside the content, and steps into an array of objects
+   * with no bracket (`reactions.severity` labels each `reactions[i].severity`); pass that form to `forField`.
+   */
   binds: Array<{ eventType: string; path: string }>;
   /** Values in the order of the bound enum */
   values: { [value: string]: VocabularyValue };
