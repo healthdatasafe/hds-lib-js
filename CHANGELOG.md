@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [2.62.0] - 2026-11-21
+
+Needs data-model 4.26.0 (live at model.datasafe.dev): the new kind, answer fields and basis are checked against the
+loaded model before any write.
+
+### Added (plan 128): a document's date and kind in the conversation
+- **Reading.** `parseConversationItems` keeps `proposed-document` on `received`. `conversationOf` adds
+  `proposedDocuments` (`open`, `confirmed`, `corrected`, `skipped`, `not-pending`, `replaced`, with `applied`) and
+  `documentAnswers` (her `which-document-kind` / `which-document-date` answers, by candidate).
+- **The document.** `pendingFieldsOf(document)` reads `hdsDocumentPending`, minus a stale entry. `documentKindRefusal`,
+  `proposedFieldsOf`, `documentProposalRefusal` (R9 for a proposed document) and `documentUpdateOf` (the one
+  `events.update`: content with the pack's class and type, time and precision, the flag reduced or `null`).
+- **Her app.**
+  - `acceptProposedDocument(conn, rel, { about, candidateId, correction?, shownAt, note? })` applies only the pending
+    fields, then answers `confirm` / `correct` with `applied`, never `written`. A retry after the update went through
+    writes the answer.
+  - `autoSettleProposedDocuments` answers `skip` with `basis: 'not-pending'` when nothing is left to apply.
+- **The contact.**
+  - `writeProposedDocument(personConn, streams, content)`: checked, written only while the document waits for a
+    proposed field, idempotent per candidate. One open at a time: `replaces` is set, and the stale one is deleted.
+  - `writeQuestion` accepts the two document codes, naming a proposed document and only while the field is pending.
+  - `proposedDocumentItemsToDelete` (R10). `itemsToDeleteAtDone` leaves the document questions with their proposal.
+- **Constants.** `ITEM_KINDS.PROPOSED_DOCUMENT`, the two question codes, `BASES.NOT_PENDING`,
+  `NOTICE_CODES.SEVERAL_SAMPLING_DATES` / `NOTE_NOT_READ`, `ERROR_CODES.READING_FAILED`, `SPECIMEN_CODES` (with en,
+  fr, es labels), `DOCUMENT_PENDING_KEY`, `DOCUMENT_VALUES_KEY`, `PRINTED_IN_KEY`.
+
+### Added (plan 128): her note, the document's values
+- **`note`** on `acceptProposedValues` (first answer), `answerQuestion`, `answerProposedValues` and
+  `acceptProposedDocument`. `notesToRemove(conv, taskStatus, { now, unshared })` and `removeNotes(conn, rel, …)` remove
+  it after `done`, or 24 h after the answer when the work was already done, on `not-mine` or unshare.
+- **`hdsDocumentValues`.** `acceptProposedValues` adds the values written to the document's index as `source`
+  (`indexDocumentValues`, best effort, dangling entries dropped).
+- **`hdsPrintedIn`.** `autoMarkDuplicates` marks each matched event of hers with the document (`markPrintedIn`), and
+  returns `matchedEventIds`. Nothing is written on the document.
+- **`not-mine`** removes both, after deleting the written values.
+
+Tests: `tests/cmcConversationDocument.test.js` (`[CNVD*]`, 8 cases), on an in-memory account that merges `clientData`
+on update and filters `events.get` on it.
+
 ## [2.61.0] - 2026-11-21
 
 Needs data-model 4.25.0 (live at model.datasafe.dev): the new answer basis and anchor field are checked against the
