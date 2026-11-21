@@ -222,15 +222,15 @@ export async function stopSharingStream (
 
 /**
  * Share streams with a connection again (the person's own decision). Adds each stream not
- * shared now, at `opts.level` (default `read`), and writes `content.hds = { added, message? }`.
- * Throws `HDSLibError` when every stream is already shared, when the relationship has no
- * collectors stream, or when the platform did not apply the change.
+ * shared now, at `opts.levels[streamId]`, else `opts.level` (default `read`), and writes
+ * `content.hds = { added, message? }`. Throws `HDSLibError` when every stream is already shared,
+ * when the relationship has no collectors stream, or when the platform did not apply the change.
  */
 export async function shareStreamsAgain (
   connection: pryv.Connection,
   rel: ScopeRelationship,
   streamIds: string[],
-  opts: ScopeChangeOptions & { level?: string } = {}
+  opts: ScopeChangeOptions & { level?: string; levels?: Record<string, string> } = {}
 ): Promise<ScopeChangeResult> {
   const collectorStreamId = requireCollectorStream(rel, 'shareStreamsAgain');
   const now = personPermissions(rel.grantedPermissions);
@@ -238,8 +238,7 @@ export async function shareStreamsAgain (
   if (back.length === 0) {
     throw new HDSLibError('shareStreamsAgain: every stream is already shared', { reason: 'already-shared', streamIds });
   }
-  const level = opts.level ?? 'read';
-  const newPermissions = [...now, ...back.map(streamId => ({ streamId, level }))];
+  const newPermissions = [...now, ...back.map(streamId => ({ streamId, level: opts.levels?.[streamId] ?? opts.level ?? 'read' }))];
   const hds: ScopeUpdateHds = { added: back, ...(opts.message ? { message: opts.message } : {}) };
   return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
 }

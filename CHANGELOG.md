@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [2.59.0] - 2026-11-21
+
+### Added
+- **`cmcConversation`**, the standard conversation of a CMC relationship (data-model 4.22.0,
+  `documentation/CONVERSATION.md`, plan 128 P1): questions, proposed values and answers between the person and a
+  contact, the items on her account in two children of `conversation-items`, the pointers over CMC as five
+  `notification/alert-cmc` kinds.
+  - The person's app: `ensureConversationStreams` (children `conv-<12 base36>`, `contribute` on `received`, `read` on
+    `sent`, one scope update), `listConversationItems` + `conversationOf` (R2, the void rule of R3, `replaces`,
+    `which-date` and `is-this-yours` settled), `proposalRefusal` (R8 / R9, engine bound to the relationship's app
+    through `vouchedEnginesFor`), `acceptProposedValues` (her app writes the values she confirmed or corrected, looked
+    up by `sourceKey` first, then the answers with `written`, then their alerts), `answerQuestion` (`not-mine` deletes
+    what was written), `answerProposedValues`, `autoConfirmIdentity` + `profileMatch` (`basis: profile-match`),
+    `cleanupConversationStreams`, `cleanupOrphanConversationStreams`.
+  - A contact, through its grant: `writeProposedValues` (idempotent per `candidateId`, R5), `writeQuestion`,
+    `postConversationAlert`, `deleteConversationItems`, `itemsToDeleteAtDone` (R10).
+  - Both: `checkConversationItem` / `checkAnswerFor` (the pack's schema and § What a writer MUST include),
+    `checkConversationAlertHds` against `CONVERSATION_ALERT_HDS_SCHEMA` (the published `hds-conversation-alert.json`,
+    a test compares them), `buildConversationAlertContent` (fixed words), `parseConversationAlerts` (duplicate keys
+    per kind), `taskStatusOf` (R4), `conversationStreamLabel`.
+  Tests `[CNV1]`..`[CNV50]`, among them a round trip `[CNV40]`.
+- **`utils/schemaCheck.ts`**: a JSON Schema checker for the pack's portable subset, interpreted at run time (no
+  generated code, so no `unsafe-eval` under a CSP).
+- **`cmcScope.shareStreamsAgain`** takes `levels` (a level per stream), so several streams are granted at different
+  levels in one scope update.
+
 ## [2.58.0] - 2026-11-20
 
 ### Added
