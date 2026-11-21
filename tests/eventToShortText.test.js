@@ -2,7 +2,7 @@ import { assert } from './test-utils/deps-node.js';
 // Import via the package entry point, like every other test file: a default import
 // straight from the .ts resolves to the module namespace under webpack (no .unhook),
 // which failed the browser suite while Node passed.
-import { eventToShortText, eventToShortTextWithOrigin, HDSSettings } from '../ts/index.ts';
+import { eventToShortText, eventToShortTextWithOrigin, HDSSettings, compositeParts } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 import { setPreferredLocales, resetPreferredLocales } from '../ts/localizeText.ts';
 
@@ -951,6 +951,62 @@ describe('[ESTX] eventToShortText', () => {
         type: 'attributes/ethnicity'
       };
       assert.equal(eventToShortText(event), 'White, not-a-category');
+    });
+  });
+
+  describe('[EST30] allergies (data-model 4.21.0, plan 133)', () => {
+    const peanut = { label: 'Peanut', description: 'x', hdsId: 'allergen:762952008', codes: [{ system: 'SNOMED-CT', code: '762952008' }] };
+
+    it('[EST30a] coded: the allergen label, not the status', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'active' } };
+      assert.equal(eventToShortText(event), 'Peanut');
+    });
+
+    it('[EST30b] coded: a high criticality and a status that is not active are said', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'resolved', criticality: 'high' } };
+      assert.equal(eventToShortText(event), 'Peanut — Resolved, high risk');
+    });
+
+    it('[EST30c] coded: a localized allergen label', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { ...peanut, label: { en: 'Peanut', fr: 'Arachide' } }, status: 'active' } };
+      assert.equal(eventToShortText(event), 'Peanut');
+    });
+
+    it('[EST30d] basic: the name as written', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: ' Lactose ', status: 'inactive', type: 'intolerance' } };
+      assert.equal(eventToShortText(event), 'Lactose — Inactive');
+    });
+
+    it('[EST30e] compositeParts: the allergen label and the categories as labels', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'active', categories: ['food', 'medication'], reactions: [{ manifestations: [{ text: 'hives' }] }] } };
+      const parts = compositeParts(event);
+      assert.deepEqual(parts.map((p) => p.key), ['allergen', 'status', 'categories']);
+      assert.equal(parts[0].value, 'Peanut');
+      assert.equal(parts[1].value, 'Active');
+      assert.equal(parts[2].value, 'Food, Medication');
+    });
+
+    it('[EST30f] compositeParts: no categories part for an empty list, a value with no option as written', () => {
+      const empty = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: 'Kiwi', status: 'active', categories: [] } };
+      assert.deepEqual(compositeParts(empty).map((p) => p.key), ['name', 'status']);
+      const unknown = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: 'Kiwi', status: 'active', categories: ['food', 'not-an-option'] } };
+      assert.equal(compositeParts(unknown).find((p) => p.key === 'categories').value, 'Food, not-an-option');
+    });
+
+    it('[EST30g] compositeParts: a localized allergen label; a list or an object in another field is left out', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { ...peanut, label: { en: 'Peanut', fr: 'Arachide' } }, status: ['active'], notes: { text: 'x' } } };
+      const parts = compositeParts(event);
+      assert.deepEqual(parts.map((p) => p.key), ['allergen']);
+      assert.equal(parts[0].value, 'Peanut');
+    });
+
+    it('[EST30h] no allergen and no name, or no content: the generic text, never a dash', () => {
+      const noName = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: '  ', status: 'resolved', criticality: 'high' } };
+      assert.ok(!String(eventToShortText(noName)).includes('—'));
+      const coded = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { hdsId: 'allergen:x' }, status: 'active' } };
+      assert.ok(!String(eventToShortText(coded)).includes('—'));
+      const noContent = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: null };
+      assert.ok(!String(eventToShortText(noContent)).includes('—'));
     });
   });
 });

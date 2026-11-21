@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- **Allergies read as their allergen** (data-model 4.21.0, plan 133): `eventToShortText` gives `allergy/coded-v1` the
+  chosen allergen's label and `allergy/basic-v1` its name, then a status that is not active and a high criticality
+  ("Peanut — Resolved, high risk"); the composite path read the first string field, the raw status. `compositeParts`
+  now shows a `datasource-search` field as the entry's label and a `multi-select` field as its options' labels (both
+  were left out). Tests `[EST30a]` to `[EST30h]`.
+
 ## [2.59.0] - 2026-11-21
 
 ### Added
