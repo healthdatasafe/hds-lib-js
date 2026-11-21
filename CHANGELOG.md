@@ -2,12 +2,35 @@
 
 ## [Unreleased]
 
+Proposed as 2.60.0 (minor). The converter changes are needed to read the Creighton notation of data-model's
+cervical-fluid converter v1 (plan 131).
+
 ### Added
+- **Versioned converter packs.** `converters.ensureEngine(itemKey)` fetches
+  `{modelBaseUrl}/converters/{itemKey}/pack-{v}.json`, v the highest of the converter index's `versions` this hds-lib
+  supports (`SUPPORTED_CONVERTER_VERSIONS`: cervical-fluid v1, mood v0, any other v0; `packVersionFor`). A newer
+  version is never fetched, so a future pack shape cannot reach this release. A model without `versions` (published
+  before the versioned packs), or a missing file (404, logged), reads `pack-latest.json` as before; any other failure
+  throws. data-model keeps `pack-latest.json` frozen at the v0 pack, so hds-lib before this version keeps reading the
+  codes it understands.
+- **`source.modelVersion` is the method's model version** (`MethodDef.modelVersion`, set by data-model on every method
+  of a pack). It was the converter version: in the cervical-fluid v1 pack Creighton is model v1 and every other
+  method model v0. An explicit `modelVersion` argument to `convertMethodToEvent` still wins; a pack without it falls
+  back to the converter version.
+- **Option flags** on `ComponentOption`: `produce: false` options convert to a vector but `fromVector` never returns
+  them (single-component methods); `offer: false` is for pickers, the engine does not read it; `parts`, the parsed
+  code of a notation (Creighton).
+- `toVector` accepts a single-component observation stored as `{ <field>: value }` (`{ mucus: '10KL' }`, the shape
+  bridges store).
 - **Allergies read as their allergen** (data-model 4.21.0, plan 133): `eventToShortText` gives `allergy/coded-v1` the
   chosen allergen's label and `allergy/basic-v1` its name, then a status that is not active and a high criticality
   ("Peanut — Resolved, high risk"); the composite path read the first string field, the raw status. `compositeParts`
   now shows a `datasource-search` field as the entry's label and a `multi-select` field as its options' labels (both
   were left out). Tests `[EST30a]` to `[EST30h]`.
+
+### Fixed
+- `eventToShortText` labels a code stored in another case (Creighton `6ck`) for a case-insensitive method, and a
+  `{ <field>: value }` observation, like the option itself.
 
 ## [2.59.0] - 2026-11-21
 

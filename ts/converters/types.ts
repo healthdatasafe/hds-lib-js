@@ -21,6 +21,15 @@ export interface ComponentOption {
   label: I18nString;
   vector: Partial<ObservationVector>;
   vectorMerge?: Partial<Record<string, 'max' | 'override'>>;
+  /**
+   * `false`: pickers do not propose the option; stored data carrying it still converts and displays (data-model
+   * cervical-fluid Creighton, plan 131). Absent: true. The engine does not read it; pickers do.
+   */
+  offer?: boolean;
+  /** `false`: `fromVector` never returns the option (single-component methods); `toVector` still accepts it. Absent: true. */
+  produce?: boolean;
+  /** The parsed code, for methods whose values are a notation (Creighton: category, base, consistency, colour, lubricative). */
+  parts?: Record<string, string | boolean | null>;
 }
 
 /** A component within a method definition (e.g. mucus type, bleeding level) */
@@ -52,6 +61,12 @@ export interface MethodDef {
    * `'none'` (data-model 3.24.0, cervical-fluid pack). See `temperatureRuleOf`.
    */
   temperatureRule?: string;
+  /**
+   * The version of this method's model in the pack (data-model, `pack-{converterVersion}.json`): the pack of
+   * converter version vN holds each method at its newest model version not above vN. Written to `source.modelVersion`.
+   * Absent from `pack-latest.json`.
+   */
+  modelVersion?: string;
 }
 
 /** A coverline rule as the pack declares it (data only; the parameters are hds-lib's `TEMPERATURE_RULES`). */

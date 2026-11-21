@@ -72,8 +72,11 @@ function buildLookupConverter (def: MethodDef, dims: readonly string[], w: Dimen
   const single = comps.length === 1;
 
   let vocabulary: VocabEntry[];
+  // What fromVector may return: options marked `produce: false` are read, never produced (plan 131).
+  let producible: VocabEntry[] | undefined;
   if (single && !def.observations) {
     vocabulary = comps[0].options.map(o => ({ observation: o.value, vector: vec(o.vector, dims) }));
+    producible = comps[0].options.filter(o => o.produce !== false).map(o => ({ observation: o.value, vector: vec(o.vector, dims) }));
   } else if (def.observations) {
     vocabulary = def.observations.map(o => ({ observation: single ? o.select[comps[0].field] : { ...o.select }, vector: vec(o.vector, dims) }));
   } else {
@@ -85,7 +88,10 @@ function buildLookupConverter (def: MethodDef, dims: readonly string[], w: Dimen
     toVector (observation: any): ObservationVector {
       let entry: VocabEntry | undefined;
       if (single) {
-        entry = vocabulary.find(e => valuesEqual(e.observation, observation, ci));
+        // Bridges store a single-component observation as `{ <field>: value }` (e.g. `{ mucus: '10KL' }`).
+        const field = comps[0].field;
+        const value = observation !== null && typeof observation === 'object' && field in observation ? observation[field] : observation;
+        entry = vocabulary.find(e => valuesEqual(e.observation, value, ci));
       } else {
         const obs = observation as Record<string, ObsValue>;
         entry = vocabulary.find(e => {
@@ -97,7 +103,7 @@ function buildLookupConverter (def: MethodDef, dims: readonly string[], w: Dimen
       return entry.vector;
     },
     fromVector (vector: ObservationVector): any {
-      return findClosest(vector, vocabulary, dims, w).observation;
+      return findClosest(vector, producible ?? vocabulary, dims, w).observation;
     },
     allObservations (): any[] {
       return vocabulary.map(e => e.observation);

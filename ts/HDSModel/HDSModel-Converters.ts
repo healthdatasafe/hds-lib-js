@@ -1,12 +1,48 @@
 import { HDSModel } from './HDSModel.ts';
+import * as logger from '../logger.ts';
 import { EuclidianDistanceEngine } from '../converters/EuclidianDistanceEngine.ts';
 import type { ConverterPack, ObservationVector, ConversionResult, SourceBlock } from '../converters/types.ts';
+
+/**
+ * The newest converter version this hds-lib reads, per item key. A version above it may carry what this engine
+ * does not know (cervical-fluid v1: options with `produce: false`), so it is never fetched. An item key not listed
+ * reads v0.
+ */
+export const SUPPORTED_CONVERTER_VERSIONS: Record<string, string> = { 'cervical-fluid': 'v1', mood: 'v0' };
+
+const versionNumber = (v: string): number => /^v\d+$/.test(v) ? Number(v.slice(1)) : NaN;
+
+/**
+ * The pack version to fetch: the highest of the model's published `versions` not above what this hds-lib supports.
+ * `null` (read `pack-latest.json`) when the model lists no versions (data-model before the versioned packs) or none
+ * this hds-lib supports.
+ */
+export function packVersionFor (itemKey: string, versions: unknown): string | null {
+  if (!Array.isArray(versions)) return null;
+  const max = versionNumber(SUPPORTED_CONVERTER_VERSIONS[itemKey] ?? 'v0');
+  const usable = versions.filter((v): v is string => typeof v === 'string' && versionNumber(v) <= max);
+  if (usable.length === 0) return null;
+  return usable.reduce((a, b) => (versionNumber(b) > versionNumber(a) ? b : a));
+}
+
+/** Fetch a converter pack. A 404 gives `null` when `missingOk`; any other failure throws. */
+async function fetchPack (url: string, missingOk: boolean): Promise<ConverterPack | null> {
+  const response = await fetch(url);
+  if (missingOk && response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Failed to fetch converter pack: ${url} (${response.status})`);
+  }
+  return await response.json();
+}
 
 /**
  * Converters — Extension of HDSModel
  *
  * Lazy-loads converter packs from the model's base URL:
- *   {modelBaseUrl}/converters/{itemKey}/pack-latest.json
+ *   {modelBaseUrl}/converters/{itemKey}/pack-{version}.json
+ * where `version` is the highest of the converter index's `versions` this hds-lib supports
+ * (`SUPPORTED_CONVERTER_VERSIONS`). A model without `versions` or without that file (404) is read from
+ * `pack-latest.json`, which data-model keeps frozen at the v0 pack for hds-lib before 2.60.0.
  *
  * The main pack.json only contains the converter index (item keys + versions).
  * Full converter data (dimensions + methods) is fetched on first use and cached.
@@ -53,7 +89,7 @@ export class HDSModelConverters {
 
   /**
    * Ensure a converter engine is loaded for the given item key.
-   * Fetches pack-latest.json on first call, returns cached engine on subsequent calls.
+   * Fetches the pack of the highest supported converter version on first call, returns cached engine on subsequent calls.
    */
   async ensureEngine (itemKey: string): Promise<EuclidianDistanceEngine> {
     if (this.#engines[itemKey]) return this.#engines[itemKey];
@@ -74,7 +110,8 @@ export class HDSModelConverters {
    * @param itemKey - converter item key (e.g. 'cervical-fluid', 'mood')
    * @param sourceMethod - source method id (e.g. 'mira', 'appleHealth')
    * @param dataFromSource - raw observation from the source method
-   * @param modelVersion - version of the model definition used (default: engine's version)
+   * @param modelVersion - version of the model definition used (default: the method's `modelVersion` in the pack,
+   *   else the engine's version)
    * @returns Pryv event-like object with type, streamIds, content
    */
   async convertMethodToEvent (itemKey: string, sourceMethod: string, dataFromSource: any, modelVersion?: string): Promise<any> {
@@ -87,7 +124,7 @@ export class HDSModelConverters {
       key: sourceMethod,
       sourceData: dataFromSource,
       engineVersion: engine.converterVersion,
-      modelVersion: modelVersion ?? engine.converterVersion,
+      modelVersion: modelVersion ?? engine.getMethodDef(sourceMethod)?.modelVersion ?? engine.converterVersion,
     };
 
     return {
@@ -145,13 +182,10 @@ export class HDSModelConverters {
     // Derive URL from model base URL
     const modelUrl = this.#model.modelUrl;
     const baseUrl = modelUrl.substring(0, modelUrl.lastIndexOf('/') + 1);
-    const packUrl = `${baseUrl}converters/${itemKey}/pack-latest.json`;
-
-    const response = await fetch(packUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch converter pack: ${packUrl} (${response.status})`);
-    }
-    const pack: ConverterPack = await response.json();
+    const version = packVersionFor(itemKey, converters[itemKey].versions);
+    let pack = version ? await fetchPack(`${baseUrl}converters/${itemKey}/pack-${version}.json`, true) : null;
+    if (version && !pack) logger.warn(`Converter pack ${itemKey} ${version} not found; reading pack-latest.json`);
+    pack ??= (await fetchPack(`${baseUrl}converters/${itemKey}/pack-latest.json`, false))!;
 
     if (pack.engine !== 'euclidian-distance') {
       throw new Error(`Unknown converter engine: "${pack.engine}" in pack for "${itemKey}"`);

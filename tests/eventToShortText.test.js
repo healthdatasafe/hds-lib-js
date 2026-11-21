@@ -732,6 +732,16 @@ describe('[ESTX] eventToShortText', () => {
       assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
       assert.ok(result.includes('10KL'), `Expected observation value, got: ${result}`);
     });
+
+    it('[EST21e] creighton code stored in another case or as { mucus } — same label', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'creighton', '10KL');
+      event.time = Date.now() / 1000;
+      const expected = eventToShortText(event);
+      event.content.source.sourceData = '10kl';
+      assert.equal(eventToShortText(event), expected);
+      event.content.source.sourceData = { mucus: '10kl' };
+      assert.equal(eventToShortText(event), expected);
+    });
   });
 
   // ─── Convertible: autoConvert via eventToShortText ──
