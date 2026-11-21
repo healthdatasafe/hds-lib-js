@@ -546,7 +546,7 @@ export function conversationOf (items: ConversationItem[], about: string): Docum
     if (target == null) return false;
     const allowed = target.kind === 'question' ? questionActions(target.content.code) : PV_ACTIONS;
     if (!allowed.has(a.content.action)) return false;
-    if (a.content.basis != null && a.content.basis !== 'profile-match') return false;
+    if (a.content.basis != null && !basisFits(a.content, target)) return false;
     return !covered(a).some(c => c.modified > a.created);
   };
   const counting = answers.filter(counts);
@@ -622,6 +622,16 @@ export function conversationOf (items: ConversationItem[], about: string): Docum
 const WRITING_ACTIONS = new Set(['confirm', 'correct']);
 const TIME_PRECISIONS = new Set(['day', 'month', 'year', 'unknown']);
 
+/** The automatic answers' bases (R3): `profile-match` confirms `is-this-yours`, `existing-value` marks proposed values `duplicate`. */
+export const BASES = { PROFILE_MATCH: 'profile-match', EXISTING_VALUE: 'existing-value' } as const;
+
+/** R3 / R8: an answer's `basis` fits what it answers; an unknown one, or one on the wrong target, never counts. */
+function basisFits (answer: Record<string, any>, target: ConversationItem): boolean {
+  if (answer.basis === BASES.PROFILE_MATCH) return answer.action === 'confirm' && target.kind === 'question' && target.content.code === QUESTION_CODES.IS_THIS_YOURS;
+  if (answer.basis === BASES.EXISTING_VALUE) return answer.action === 'duplicate' && target.kind === 'proposed-value';
+  return false;
+}
+
 /**
  * R10, on her account, once the work on the document is `done`: the item ids the contact deletes. Proposed values
  * written, skipped, marked duplicate or requested, and replaced; questions answered; an `is-this-yours` question
@@ -690,7 +700,8 @@ export function checkConversationItem (content: Record<string, any>): string[] {
     if (c.written != null && c.action !== 'confirm' && c.action !== 'correct') issues.push(`answer ${c.action}: no written`);
     if (c.action === 'correct' && (n !== 1 || c.written?.length !== 1)) issues.push('answer correct: exactly one candidateIds entry and its written entry');
     for (const w of c.written ?? []) if (!(c.candidateIds ?? []).includes(w.candidateId)) issues.push(`answer: written ${w.candidateId} is not in candidateIds`);
-    if (c.basis != null && c.action !== 'confirm') issues.push('answer: basis only with confirm');
+    if (c.basis === BASES.PROFILE_MATCH && c.action !== 'confirm') issues.push('answer: basis profile-match only with confirm');
+    if (c.basis === BASES.EXISTING_VALUE && (c.action !== 'duplicate' || n === 0)) issues.push('answer: basis existing-value only with duplicate, on candidates');
     if (c.timePrecision === 'unknown' && c.time != null) issues.push('answer: no time with timePrecision unknown');
     if (c.time != null && c.timePrecision == null) issues.push('answer: time needs timePrecision');
   }
@@ -720,13 +731,13 @@ export function checkAnswerFor (content: Record<string, any>, target: Conversati
       if (c.timePrecision == null) issues.push('answer which-date: timePrecision is required');
       else if (c.timePrecision !== 'unknown' && c.time == null) issues.push('answer which-date: time is required');
     }
-    if (c.basis != null && code !== QUESTION_CODES.IS_THIS_YOURS) issues.push('answer: basis only on is-this-yours');
+    if (c.basis != null && (c.basis !== BASES.PROFILE_MATCH || code !== QUESTION_CODES.IS_THIS_YOURS)) issues.push('answer: on a question, basis is profile-match on is-this-yours only');
   } else if (target.kind === 'proposed-value') {
     if (!PV_ACTIONS.has(c.action)) issues.push(`answer: ${c.action} does not answer a proposed value`);
     if (ids.length === 0) issues.push('answer to a proposed value: candidateIds is required');
     if (ids[0] !== target.content.candidateId) issues.push('answer: a batch starts with the candidate it replies to');
     if ((c.action === 'confirm' || c.action === 'correct') && (c.written == null || c.written.length === 0)) issues.push(`answer ${c.action}: written is required`);
-    if (c.basis != null) issues.push('answer to a proposed value: no basis');
+    if (c.basis != null && c.basis !== BASES.EXISTING_VALUE) issues.push('answer to a proposed value: basis existing-value only');
     for (const id of ids) {
       const pv = conv.proposedValues.find(p => p.candidateId === id);
       if (pv == null) { issues.push(`answer: candidate ${id} is not a proposed value of the document`); continue; }
@@ -778,8 +789,8 @@ export function checkValueProposal (p: { itemKey?: string; type?: string; conten
  */
 export function proposalRefusal (pv: ProposedValueView, engines: readonly string[]): ProposalRefusal | null {
   if (pv.state === 'replaced') return 'replaced';
-  // a skip settles nothing: a skipped value may still be confirmed
-  if (pv.state !== 'open' && pv.state !== 'skipped') return 'answered';
+  // a skip settles nothing, and a duplicate (automatic or tapped) may be added anyway: both may still be confirmed
+  if (pv.state !== 'open' && pv.state !== 'skipped' && pv.state !== 'duplicate') return 'answered';
   const c = pv.item.content;
   if (!CONFIRMABLE_STATUSES.includes(c.status)) return 'status';
   const issue = checkValueProposal(c.proposal);
@@ -796,12 +807,13 @@ export function proposalRefusal (pv: ProposedValueView, engines: readonly string
 export interface ProfileForMatch { name?: string | null; surname?: string | null; dateOfBirth?: string | null }
 
 function nameTokens (s: string): string[] {
-  return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(/[\s-]+/).filter(t => t.length > 0).sort();
+  return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(/[\s,-]+/).filter(t => t.length > 0).sort();
 }
 
 /**
  * R3, `basis: profile-match`: true only when the printed name holds exactly her full given and family names (case,
- * accents, hyphens, spaces and order aside; an initial never matches) and `birthDay` equals her birth date. A profile
+ * accents, hyphens, commas, spaces and order aside: "DUPONT, MARIE"; an initial never matches) and `birthDay` equals
+ * her birth date. A profile
  * without a given name, a family name or a birth date never matches.
  */
 export function profileMatch (identity: { name?: string; birthDay?: string } | null | undefined, profile: ProfileForMatch | null | undefined): boolean {
@@ -867,7 +879,9 @@ export function valueEventOf (pv: ConversationItem, opts: { correction?: ValueCo
   }
   clientData.related = { [c.about]: true };
   clientData.sourceKey = sourceKeyOf(c.extraction.engine, c.about, c.candidateId);
-  if (c.anchor != null) clientData.hdsSourceAnchor = c.anchor;
+  // the anchor is self-contained (PROVENANCE.md, 4.25.0): it names its document even when the contact left it out;
+  // one naming another document is dropped, never rewritten (R11)
+  if (c.anchor != null && (c.anchor.eventId == null || c.anchor.eventId === c.about)) clientData.hdsSourceAnchor = { ...c.anchor, eventId: c.about };
   clientData.hdsExtraction = { ...c.extraction, confirmedBy: 'person', ...(opts.correction ? { corrected: true } : {}) };
   event.clientData = clientData;
   return event;
@@ -1006,7 +1020,7 @@ export async function answerQuestion (
 export async function answerProposedValues (
   connection: pryv.Connection,
   rel: ConversationRelationship,
-  params: { about: string; candidateIds: string[]; action: 'skip' | 'request-item' | 'duplicate'; shownAt?: number }
+  params: { about: string; candidateIds: string[]; action: 'skip' | 'request-item' | 'duplicate'; shownAt?: number; basis?: 'existing-value' }
 ): Promise<AnswerWritten> {
   const { streams, collectorStreamId } = await personSide(connection, rel, 'answerProposedValues');
   const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
@@ -1015,7 +1029,8 @@ export async function answerProposedValues (
   if (params.shownAt != null && conv.proposedValues.some(p => params.candidateIds.includes(p.candidateId) && p.item.modified > params.shownAt!)) {
     throw new HDSLibError('answerProposedValues: a proposed value changed since it was shown', { reason: 'changed-since-shown' });
   }
-  const content = { kind: 'answer', inReplyTo: first.item.id, about: params.about, action: params.action, candidateIds: [...params.candidateIds] };
+  const content: Record<string, any> = { kind: 'answer', inReplyTo: first.item.id, about: params.about, action: params.action, candidateIds: [...params.candidateIds] };
+  if (params.basis != null) content.basis = params.basis;
   return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, first.item, conv), action: params.action, written: [] };
 }
 
@@ -1031,11 +1046,144 @@ export async function autoConfirmIdentity (
 ): Promise<AnswerWritten | null> {
   const { streams } = await personSide(connection, rel, 'autoConfirmIdentity');
   const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
-  if (conv.answers.some(a => a.content.basis != null)) return null;
+  if (conv.answers.some(a => a.content.basis === BASES.PROFILE_MATCH)) return null;
   const q = conv.questions.find(x => x.code === QUESTION_CODES.IS_THIS_YOURS && x.state === 'open');
   if (q == null || !profileMatch(q.item.content.context?.identity, params.profile)) return null;
   const res = await answerQuestion(connection, rel, { questionId: q.item.id, action: 'confirm', basis: 'profile-match', shownAt: q.item.modified });
   return { answerEventId: res.answerEventId, alertEventId: res.alertEventId, action: res.action, written: [] };
+}
+
+// ---- R3, `basis: existing-value`: a value she already has (CONVERSATION.md § A value she already has) ---- //
+
+const HOUR = 3600;
+const DAY = 24 * HOUR;
+const utcDay = (t: number): string => new Date(t * 1000).toISOString().slice(0, 10);
+const dayStart = (day: string): number => Date.parse(day + 'T00:00:00Z') / 1000;
+
+/** The day D a proposed value is compared on: its `proposal.time` at `day` precision, or her `which-date` answer at `day`. */
+function comparedDay (pv: ProposedValueView, conv: DocumentConversation): string | null {
+  const p = pv.item.content.proposal;
+  if (typeof p?.time === 'number') return p.clientData?.hdsTimePrecision === 'day' ? utcDay(p.time) : null;
+  const date = conv.candidateDates[pv.candidateId] ?? conv.documentDate;
+  return date?.timePrecision === 'day' && typeof date.time === 'number' ? utcDay(date.time) : null;
+}
+
+/** Her event lies on day D: at `day` precision on that UTC day; with an exact time, while D runs in some zone (or in its own). */
+export function onComparedDay (e: { time: number; clientData?: Record<string, any> }, day: string): boolean {
+  const precision = e.clientData?.hdsTimePrecision;
+  if (precision === 'day') return utcDay(e.time) === day;
+  if (precision != null && precision !== 'minute') return false;
+  const zone = e.clientData?.hdsTimeZone;
+  if (typeof zone === 'string') {
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(e.time * 1000)) === day;
+    } catch { /* an unknown zone: the window below */ }
+  }
+  const start = dayStart(day);
+  return e.time >= start - 14 * HOUR && e.time < start + DAY + 12 * HOUR;
+}
+
+/** `printed.value` as a plain number with one decimal separator (comma or point) and its last digit's half unit; else null. */
+function printedNumber (value: unknown): { n: number; halfUnit: number } | null {
+  if (typeof value !== 'string') return null;
+  const m = /^\s*([+-]?\d+)(?:[.,](\d+))?\s*$/.exec(value);
+  if (m == null) return null;
+  const decimals = m[2]?.length ?? 0;
+  return { n: Number(m[1] + (m[2] != null ? '.' + m[2] : '')), halfUnit: 0.5 * 10 ** -decimals };
+}
+
+const sig12 = (n: number): number => Number(n.toPrecision(12));
+const same = (a: unknown, b: unknown): boolean => (a ?? null) === (b ?? null);
+
+/** Her event holds the proposed value: same type and content, a converted other type within the printed tolerance, or the same coded result. */
+export function holdsProposedValue (e: { type: string; content?: any; clientData?: Record<string, any> }, pv: ConversationItem): boolean {
+  const p = pv.content.proposal;
+  if (e.type === p.type) {
+    if (p.type === 'lab-result/coded-v1') {
+      const codes = (c: any): string[] => (c?.analyte?.codes ?? []).map((x: any) => `${x?.system}|${x?.code}`);
+      if (!codes(p.content).some(k => codes(e.content).includes(k))) return false;
+      if (typeof p.content?.value === 'number' && typeof e.content?.value === 'number') {
+        return sig12(p.content.value) === sig12(e.content.value) && same(p.content.unit, e.content.unit) && same(p.content.comparator, e.content.comparator);
+      }
+      return typeof p.content?.valueText === 'string' && p.content.valueText === e.content?.valueText;
+    }
+    if (typeof p.content === 'number' && typeof e.content === 'number') {
+      return sig12(p.content) === sig12(e.content) && same(p.clientData?.hdsComparator, e.clientData?.hdsComparator);
+    }
+    return JSON.stringify(p.content) === JSON.stringify(e.content);
+  }
+  // another type of the same item: converted into the proposal's unit, within half the last printed digit (scaled)
+  const printed = printedNumber(pv.content.printed?.value);
+  if (printed == null || printed.n === 0 || typeof p.content !== 'number' || typeof e.content !== 'number') return false;
+  if (!same(p.clientData?.hdsComparator, e.clientData?.hdsComparator)) return false;
+  for (const system of ['metric', 'imperial'] as const) {
+    const converted = getModel().conversions.convert(e.type, e.content, system);
+    if (converted == null || converted.targetEventType !== p.type) continue;
+    // the conversion rounds to 2 decimals: allow for it too
+    const tolerance = printed.halfUnit * Math.abs(p.content / printed.n) + 0.005;
+    return Math.abs(converted.value - p.content) <= tolerance;
+  }
+  return false;
+}
+
+/**
+ * R3, the answer her app gives without a tap: `duplicate` with `basis: existing-value` on the document's proposed
+ * values already in her record (CONVERSATION.md § A value she already has). For any contact's proposals, only those
+ * she could confirm (`proposalRefusal` null for `engines`), and only while no `is-this-yours` is open or `not-mine`.
+ * Her events: on the item's stream, of one of its types, not written from this document by any engine, on day D,
+ * holding the value; one event per candidate over the document (candidates already answered keep theirs), an event
+ * fitting several going to its own UTC day first, then the nearest, then the first candidate. One answer for the run,
+ * `inReplyTo` the first matched. Null when nothing matched.
+ */
+export async function autoMarkDuplicates (
+  connection: pryv.Connection,
+  rel: ConversationRelationship,
+  params: { about: string; engines: readonly string[] }
+): Promise<(AnswerWritten & { candidateIds: string[] }) | null> {
+  const { streams } = await personSide(connection, rel, 'autoMarkDuplicates');
+  const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+  if (conv.identity === 'open' || conv.identity === 'not-mine') return null;
+  const settled = new Set(conv.answers.filter(a => a.content.basis === BASES.EXISTING_VALUE).flatMap(a => a.content.candidateIds ?? []));
+  const prior = conv.proposedValues.filter(p => settled.has(p.candidateId));
+  const open = conv.proposedValues.filter(p => p.state === 'open' && proposalRefusal(p, params.engines) == null);
+  const all = [...prior.map(pv => ({ pv, prior: true })), ...open.map(pv => ({ pv, prior: false }))]
+    .map(c => ({ ...c, day: comparedDay(c.pv, conv) }))
+    .filter((c): c is { pv: ProposedValueView; prior: boolean; day: string } => c.day != null);
+  if (!all.some(c => !c.prior)) return null;
+  const marker = `:document:${params.about}:`;
+  const cache = new Map<string, any[]>();
+  const pairs: Array<{ c: number; event: string; own: number; distance: number }> = [];
+  for (const [i, c] of all.entries()) {
+    const itemDef = getModel().itemsDefs.forKey(c.pv.item.content.proposal.itemKey, false);
+    if (itemDef == null) continue;
+    const streamId = itemDef.data.streamId;
+    const key = streamId + '|' + c.day;
+    if (!cache.has(key)) {
+      const start = dayStart(c.day);
+      cache.set(key, await connection.apiOne('events.get', { streams: [streamId], fromTime: start - 14 * HOUR, toTime: start + DAY + 12 * HOUR, limit: 500 } as any, 'events') as any[]);
+    }
+    for (const e of cache.get(key)!) {
+      if (e.trashed === true || !itemDef.eventTypes.includes(e.type)) continue;
+      if (typeof e.clientData?.sourceKey === 'string' && e.clientData.sourceKey.includes(marker)) continue;
+      if (!onComparedDay(e, c.day) || !holdsProposedValue(e, c.pv.item)) continue;
+      pairs.push({ c: i, event: e.id, own: utcDay(e.time) === c.day ? 0 : 1, distance: Math.abs(e.time - (dayStart(c.day) + 12 * HOUR)) });
+    }
+  }
+  // one for one: earlier answers keep their events, then the own day first, the nearest, the first candidate
+  pairs.sort((a, b) => Number(all[b.c].prior) - Number(all[a.c].prior) || a.own - b.own || a.distance - b.distance || a.c - b.c);
+  const takenEvents = new Set<string>();
+  const takenCandidates = new Set<number>();
+  for (const p of pairs) {
+    if (takenEvents.has(p.event) || takenCandidates.has(p.c)) continue;
+    takenEvents.add(p.event);
+    takenCandidates.add(p.c);
+  }
+  const matched = [...takenCandidates].filter(i => !all[i].prior).sort((a, b) => a - b).map(i => all[i].pv);
+  if (matched.length === 0) return null;
+  const candidateIds = matched.map(p => p.candidateId);
+  const shownAt = Math.max(...matched.map(p => p.item.modified));
+  const res = await answerProposedValues(connection, rel, { about: params.about, candidateIds, action: 'duplicate', basis: BASES.EXISTING_VALUE, shownAt });
+  return { ...res, candidateIds };
 }
 
 /** R3, `not-mine` after values were written: every value listed in the document's answers' `written`, deleted. */
