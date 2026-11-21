@@ -42,7 +42,7 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       assert.deepEqual(out, [{ streamId: 'health', level: 'read' }]);
     });
 
-    it('[CFS11] injects :hds:noop placeholder when permissions empty', () => {
+    it('[CFS11] injects the hds-noop placeholder when permissions empty', () => {
       const spec = basicSpec({ permissions: [] });
       const out = cmcFormSpec.deriveCmcPermissions(spec);
       assert.equal(out.length, 1);

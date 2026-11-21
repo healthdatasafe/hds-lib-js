@@ -1074,6 +1074,107 @@ export function documentUpdateOf (
   return { update, applied: (['time', 'kind'] as DocumentField[]).filter(f => applied.includes(f)) };
 }
 
+/**
+ * The `events.create` params of a document her app adds without its date or kind (DOCUMENTS.md § A document waiting
+ * for its date and kind): the fields she gives are written, the others pending. With neither, kind `other`, `time` the
+ * moment she adds it (`now`), no `hdsTimePrecision`, `hdsDocumentPending: ['time', 'kind']`. No `creation` (never the
+ * upload date). The file is attached by the caller (`createEventWithFile…`).
+ */
+export function pendingDocumentEvent (params: {
+  title: string;
+  language?: string;
+  streamIds?: string[];
+  documentKind?: string;
+  time?: number;
+  timePrecision?: string;
+  now?: number;
+}): { streamIds: string[]; type: string; time: number; content: Record<string, any>; clientData: Record<string, any> } {
+  const kind = params.documentKind != null && documentKindRefusal(params.documentKind) == null ? params.documentKind : null;
+  const dated = params.timePrecision != null && TIME_PRECISIONS.has(params.timePrecision) && (params.timePrecision === 'unknown' || typeof params.time === 'number');
+  const def = getModel().documentKinds.forKey(kind ?? 'other');
+  if (def == null) throw new HDSLibError('pendingDocumentEvent: the loaded data model has no document kinds (data-model 4.17.0 or later)');
+  const now = params.now ?? Math.floor(Date.now() / 1000);
+  const pending: DocumentField[] = [...(dated ? [] : ['time' as const]), ...(kind != null ? [] : ['kind' as const])];
+  const clientData: Record<string, any> = {};
+  if (dated) clientData.hdsTimePrecision = params.timePrecision;
+  if (pending.length > 0) clientData[DOCUMENT_PENDING_KEY] = pending;
+  return {
+    streamIds: params.streamIds ?? ['documents'],
+    type: 'file/xds-v1',
+    time: dated && params.timePrecision !== 'unknown' ? params.time! : now,
+    content: { class: { ...def.class }, type: [{ ...def.type }], title: params.title, language: params.language ?? 'und' },
+    clientData
+  };
+}
+
+/**
+ * Her own edit of a document's date or kind (her document viewer, 4.26.0): the `events.update` that writes them, and
+ * removes each written field from `hdsDocumentPending` (a stale entry too; `null` when none is left), so no contact's
+ * proposal overrides it. Unlike `documentUpdateOf`, it writes the fields whether pending or not. Null when `fields`
+ * holds nothing to write.
+ */
+export function documentEditOf (
+  document: { content?: any; clientData?: Record<string, any> },
+  fields: DocumentFields
+): Record<string, any> | null {
+  const update: Record<string, any> = {};
+  const clientData: Record<string, any> = {};
+  const written: DocumentField[] = [];
+  if (typeof fields.documentKind === 'string') {
+    const refusal = documentKindRefusal(fields.documentKind);
+    if (refusal != null) throw new HDSLibError(`documentEditOf: ${fields.documentKind} is ${refusal}`, { reason: refusal });
+    const kind = getModel().documentKinds.forKey(fields.documentKind)!;
+    update.content = { ...document.content, class: { ...kind.class }, type: [{ ...kind.type }] };
+    written.push('kind');
+  }
+  if (fields.timePrecision != null) {
+    if (!TIME_PRECISIONS.has(fields.timePrecision) || (fields.timePrecision !== 'unknown' && typeof fields.time !== 'number')) {
+      throw new HDSLibError('documentEditOf: timePrecision day, month, year or unknown, with time unless unknown', { reason: 'invalid-time' });
+    }
+    if (fields.timePrecision !== 'unknown') update.time = fields.time;
+    clientData.hdsTimePrecision = fields.timePrecision;
+    written.push('time');
+  }
+  if (written.length === 0) return null;
+  const flag = document.clientData?.[DOCUMENT_PENDING_KEY];
+  if (Array.isArray(flag)) {
+    const rest = flag.filter((f: unknown) => (f === 'time' || f === 'kind') && !written.includes(f));
+    clientData[DOCUMENT_PENDING_KEY] = rest.length > 0 ? rest : null;
+  }
+  update.clientData = clientData;
+  return update;
+}
+
+/** A document's values (PROVENANCE.md): read from it (`source`), and already in her record and printed in it (`matched`). */
+export interface DocumentValues { source: any[]; matched: any[] }
+
+/**
+ * The value events tied to a document, for its view (4.26.0): `source`, the values read from it, from its
+ * `hdsDocumentValues` index and from the events whose `clientData.related` names it (an item value, not a
+ * conversation item, an alert or another document); `matched`, the values she already had that it prints, from their
+ * `hdsPrintedIn`. Dangling ids, trashed events and events the connection cannot read are skipped. Sorted by time.
+ */
+export async function listDocumentValues (connection: pryv.Connection, documentId: string): Promise<DocumentValues> {
+  const isValue = (e: any): boolean => {
+    if (e == null || e.trashed === true || e.id === documentId) return false;
+    if (e.type === ET_CONVERSATION || e.type === ET_ALERT || e.type === 'file/xds-v1') return false;
+    try { return getModel().itemsDefs.forEvent(e, false) != null; } catch { return false; }
+  };
+  const query = async (path: string): Promise<any[]> =>
+    (await bestEffort(async () => await connection.apiOne('events.get', { clientData: [{ path, eq: true }], limit: 1000 } as any, 'events') as any[])) ?? [];
+  const source = new Map<string, any>();
+  for (const e of await query(`related.${documentId}`)) if (isValue(e)) source.set(e.id, e);
+  const doc = await readEvent(connection, documentId).catch(() => null);
+  for (const [id, role] of Object.entries(doc?.clientData?.[DOCUMENT_VALUES_KEY] ?? {})) {
+    if (role !== 'source' || source.has(id)) continue;
+    const e = await readEvent(connection, id).catch(() => null);
+    if (isValue(e) && e.clientData?.related?.[documentId] === true) source.set(id, e);
+  }
+  const matched = (await query(`${PRINTED_IN_KEY}.${documentId}`)).filter(e => isValue(e) && !source.has(e.id));
+  const byTime = (a: any, b: any): number => (a.time ?? 0) - (b.time ?? 0);
+  return { source: [...source.values()].sort(byTime), matched: matched.sort(byTime) };
+}
+
 // ---- writing a value (her app) ---- //
 
 /** The `clientData.sourceKey` of a value written from a proposal: `<engine>:document:<document event id>:<candidateId>`. */
@@ -1546,6 +1647,28 @@ export async function acceptProposedDocument (
   const content: Record<string, any> = { kind: 'answer', inReplyTo: pd.item.id, about: params.about, action, candidateIds: [pd.candidateId], applied };
   if (params.note != null) content.note = params.note;
   return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action, written: [], applied };
+}
+
+/**
+ * Her tapped `skip` on a proposed document ("Later"), or her comment alone on it (`note`: a `skip` with a note, with
+ * every effect of a skip). Refused when the proposal changed since `shownAt`. It writes nothing on the document; the
+ * proposal stays and she may confirm it later.
+ */
+export async function skipProposedDocument (
+  connection: pryv.Connection,
+  rel: ConversationRelationship,
+  params: { about: string; candidateId: string; shownAt?: number; note?: string }
+): Promise<AnswerWritten> {
+  const { streams, collectorStreamId } = await personSide(connection, rel, 'skipProposedDocument');
+  const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+  const pd = conv.proposedDocuments.find(p => p.candidateId === params.candidateId);
+  if (pd == null) throw new HDSLibError('skipProposedDocument: unknown candidate', { reason: 'unknown-candidate' });
+  if (params.shownAt != null && pd.item.modified > params.shownAt) {
+    throw new HDSLibError('skipProposedDocument: the proposal changed since it was shown', { reason: 'changed-since-shown' });
+  }
+  const content: Record<string, any> = { kind: 'answer', inReplyTo: pd.item.id, about: params.about, action: 'skip', candidateIds: [pd.candidateId] };
+  if (params.note != null) content.note = params.note;
+  return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action: 'skip', written: [] };
 }
 
 /**

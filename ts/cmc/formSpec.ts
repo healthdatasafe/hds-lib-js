@@ -19,9 +19,10 @@
  *   side, so the snapshot must live with the patient's accept event).
  *
  * Chat-only data sets (Q-F4 lock): when a FormSpec has no real
- * permissions, `deriveCmcPermissions` injects the `:hds:noop` placeholder
- * so `cmc.createInvite`'s non-empty-permissions check passes. The
- * patient's hds-webapp provisions `:hds:noop` on first launch.
+ * permissions, `deriveCmcPermissions` injects the `hds-noop` placeholder
+ * (`HDS_NOOP_STREAM_ID`) so `cmc.createInvite`'s non-empty-permissions
+ * check passes. The patient's hds-webapp provisions `hds-noop` on first
+ * launch.
  */
 
 import { cmc, pryv } from '../patchedPryv.ts';
@@ -563,7 +564,7 @@ export async function provisionHdsNoop (connection: pryv.Connection): Promise<vo
 
 /**
  * Doctor-side helper: did the FormSpec produce a chat-only invite (i.e.
- * its only granted permission is `:hds:noop`)? Used by listInviteRecordsFor
+ * its only granted permission is `hds-noop`)? Used by listInviteRecordsFor
  * + PatientsTable to surface "chat-only relationship" badges.
  */
 export function isChatOnlyFormSpec (formSpec: FormSpec | null | undefined): boolean {

@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [2.63.0] - 2026-11-21
+
+Requests from plan 135 (the person's side of data-model 4.26.0). No contract change.
+
+### Added
+- **`skipProposedDocument(conn, rel, { about, candidateId, shownAt?, note? })`.** Her tapped "Later" on a proposed
+  document, or her comment alone (a `skip` with a `note`). `answerProposedValues` finds proposed values only. The
+  proposal stays, and she may confirm it later.
+- **`pendingDocumentEvent({ title, language?, streamIds?, documentKind?, time?, timePrecision?, now? })`.** The
+  `events.create` params of a document added without its date or kind. The fields she gives are written, and the
+  others go in `hdsDocumentPending`: kind `other`, the moment added, no `hdsTimePrecision`. There is no `creation`:
+  it's never the upload date. The caller attaches the file.
+- **`documentEditOf(document, { documentKind?, time?, timePrecision? })`.** Her own edit of a document's date or kind.
+  It writes the fields whether they are pending or not, and removes each one from the flag (`null` when none is
+  left). No contact's proposal then overrides it.
+- **`listDocumentValues(conn, documentId)` → `{ source, matched }`.** The document view's values:
+  - `source` from its `hdsDocumentValues` index and from the item values whose `related` names the document;
+  - `matched` from `hdsPrintedIn`.
+
+  Dangling ids, trashed events, conversation items and alerts are left out.
+
+### Fixed
+- Stale `:hds:noop` mentions in `formSpec.ts` and a test title: the placeholder stream is `hds-noop`.
+
 ## [2.62.0] - 2026-11-21
 
 Needs data-model 4.26.0 (live at model.datasafe.dev): the new kind, answer fields and basis are checked against the
