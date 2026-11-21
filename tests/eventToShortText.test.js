@@ -985,5 +985,28 @@ describe('[ESTX] eventToShortText', () => {
       assert.equal(parts[1].value, 'Active');
       assert.equal(parts[2].value, 'Food, Medication');
     });
+
+    it('[EST30f] compositeParts: no categories part for an empty list, a value with no option as written', () => {
+      const empty = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: 'Kiwi', status: 'active', categories: [] } };
+      assert.deepEqual(compositeParts(empty).map((p) => p.key), ['name', 'status']);
+      const unknown = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: 'Kiwi', status: 'active', categories: ['food', 'not-an-option'] } };
+      assert.equal(compositeParts(unknown).find((p) => p.key === 'categories').value, 'Food, not-an-option');
+    });
+
+    it('[EST30g] compositeParts: a localized allergen label; a list or an object in another field is left out', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { ...peanut, label: { en: 'Peanut', fr: 'Arachide' } }, status: ['active'], notes: { text: 'x' } } };
+      const parts = compositeParts(event);
+      assert.deepEqual(parts.map((p) => p.key), ['allergen']);
+      assert.equal(parts[0].value, 'Peanut');
+    });
+
+    it('[EST30h] no allergen and no name, or no content: the generic text, never a dash', () => {
+      const noName = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: '  ', status: 'resolved', criticality: 'high' } };
+      assert.ok(!String(eventToShortText(noName)).includes('—'));
+      const coded = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { hdsId: 'allergen:x' }, status: 'active' } };
+      assert.ok(!String(eventToShortText(coded)).includes('—'));
+      const noContent = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: null };
+      assert.ok(!String(eventToShortText(noContent)).includes('—'));
+    });
   });
 });
