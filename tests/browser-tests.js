@@ -18,6 +18,7 @@ import './cmcFormSpec.test.js';
 import './cmcItemReminders.test.js';
 import './cmcConversation.test.js';
 import './cmcConversationExisting.test.js';
+import './cmcConversationDocument.test.js';
 import './cmcScope.test.js';
 import './codedMedicationTemplate.test.js';
 import './connectors.test.js';
