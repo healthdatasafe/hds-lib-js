@@ -3,8 +3,10 @@ import { cmcConversation as cv } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 import { schemaIssues } from '../ts/utils/schemaCheck.ts';
 
-const modelURL = 'https://model.datasafe.dev/pack.json';
-const ALERT_SCHEMA_URL = 'https://model.datasafe.dev/json-schemas/hds-conversation-alert.json';
+// HDS_TEST_MODEL_BASE: a data-model build served locally, to test against a model before it is published
+const MODEL_BASE = globalThis.process?.env?.HDS_TEST_MODEL_BASE ?? 'https://model.datasafe.dev';
+const modelURL = `${MODEL_BASE}/pack.json`;
+const ALERT_SCHEMA_URL = `${MODEL_BASE}/json-schemas/hds-conversation-alert.json`;
 const COLLECTORS = ':_cmc:apps:hds-patient:collectors:reader--api-x';
 const CONTACT_COLLECTORS = ':_cmc:apps:hds-bridge-reader:collectors:anna--api-x';
 const CHANNEL = [
@@ -379,7 +381,7 @@ describe('[CNV] cmcConversation', function () {
         hdsTimePrecision: 'day',
         related: { [DOC]: true },
         sourceKey: 'hds-reader:document:' + DOC + ':c1',
-        hdsSourceAnchor: { attachmentId: 'att1', page: 1, bbox: [8.5, 41.2, 83, 2.1] },
+        hdsSourceAnchor: { attachmentId: 'att1', page: 1, bbox: [8.5, 41.2, 83, 2.1], eventId: DOC },
         hdsExtraction: { ...extraction, confirmedBy: 'person' }
       });
       assert.strictEqual(person.events.get(res.answers[1].written[0].eventId).clientData.hdsExtraction.corrected, true);

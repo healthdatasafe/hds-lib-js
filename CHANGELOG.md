@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+Needs data-model 4.25.0 (healthdatasafe/data-model#105): the new answer basis and anchor field are checked against
+the loaded model before any write.
+
+### Added (plan 128): a value she already has, `cmcConversation.autoMarkDuplicates`
+- **What it does.** `autoMarkDuplicates(conn, rel, { about, engines })` is her app's automatic `duplicate`, with
+  `basis: 'existing-value'`, on the document's proposed values she already holds (CONVERSATION.md § A value she
+  already has).
+  - It runs for any contact's proposals; it takes no app code.
+  - Only on proposals she could confirm (`proposalRefusal` null for `engines`), and only while no `is-this-yours` is
+    open or `not-mine`.
+  - It writes one answer per run. Returns `{ answerEventId, alertEventId, candidateIds, … }`, or null when nothing
+    matched.
+- **What counts as already there.**
+  - The item's stream, its types, never a value written from this document (`sourceKey`).
+  - Day D at `day` precision only, from `proposal.time` or her `which-date` answer.
+  - Her day-precision events on UTC day D. Her exact-time events in `[D − 14 h, D+1 + 12 h)`, or on day D in their
+    `hdsTimeZone`.
+  - The same value (`holdsProposedValue`): the same type to 12 significant digits with its comparator; another type
+    through `HDSModelConversions` (metric / imperial) within the printed digit's half unit, scaled; coded results by
+    `system` + `code`.
+  - One for one per document, with the contract's tie-break; candidates already answered keep their events.
+  - Exported helpers: `onComparedDay`, `holdsProposedValue`, `BASES`.
+- **Answers.**
+  - `answerProposedValues` takes `basis`.
+  - A `duplicate` stays confirmable (`proposalRefusal` null), so she can add it anyway; a later `confirm` writes it
+    and settles it for good.
+  - `conversationOf` counts a basis only on its own target (`profile-match` on an `is-this-yours` confirm,
+    `existing-value` on a `duplicate` of proposed values). `checkConversationItem` and `checkAnswerFor` check each.
+  - `autoConfirmIdentity` is no longer blocked by an `existing-value` answer.
+
+### Changed (plan 128)
+- **Self-contained anchor.** `valueEventOf` writes `hdsSourceAnchor.eventId` = the document (data-model 4.25.0), and
+  drops an anchor that names another document (R11).
+- **Profile match.** `profileMatch` ignores commas ("DUPONT, MARIE-CLAIRE", printed by some labs).
+- **Tests.** `tests/cmcConversationExisting.test.js` (`[CNVX*]`): the comparison's vectors (window edges, time
+  zone, comparator, conversion, coded), one for one, the identity gate, add anyway, the basis rules, the anchor.
+  `HDS_TEST_MODEL_BASE` points the conversation tests at a local data-model build before it is published.
+
 ## [2.60.0] - 2026-11-21
 
 The converter changes are needed to read the Creighton notation of data-model's cervical-fluid converter v1
