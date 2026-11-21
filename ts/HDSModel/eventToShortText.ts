@@ -265,7 +265,21 @@ export function compositeParts (event: any): CompositePart[] {
 }
 
 function compositePartText (value: any, def: any): string | null {
-  if (value == null || typeof value === 'object') return null;
+  if (value == null) return null;
+  // A multi-select field (data-model 4.21.0, allergy `categories`): its options' labels, joined
+  if (Array.isArray(value)) {
+    if (def?.type !== 'multi-select' || value.length === 0) return null;
+    return value.map((v: any) => {
+      const opt = Array.isArray(def.options) ? def.options.find((o: any) => o.value === v) : null;
+      if (!opt?.label) return String(v);
+      return typeof opt.label === 'string' ? opt.label : (localizeText(opt.label) || String(v));
+    }).join(', ');
+  }
+  if (typeof value === 'object') {
+    // A datasource-search field (allergy `allergen`): the chosen entry's label
+    if (def?.type !== 'datasource-search' || value.label == null) return null;
+    return typeof value.label === 'string' ? value.label : (localizeText(value.label) || null);
+  }
   if (typeof value === 'string' && value.trim() === '') return null;
   if (def?.type === 'select' && Array.isArray(def.options)) {
     let opt = def.options.find((o: any) => o.value === value);
@@ -275,6 +289,34 @@ function compositePartText (value: any, def: any): string | null {
   }
   if (typeof value === 'number') return new Intl.NumberFormat(getPreferredLocales()[0]).format(value);
   return String(value);
+}
+
+const ALLERGY_CODED = 'allergy/coded-v1';
+const ALLERGY_BASIC = 'allergy/basic-v1';
+const HIGH_RISK = { en: 'high risk', fr: 'risque élevé', es: 'riesgo alto' };
+
+/**
+ * An allergy as its allergen (the coded entry's label, or the name as written), then what changes how it reads: a
+ * status that is not `active` (its option label, "Resolved") and a `high` criticality. `null` when there is no
+ * allergen, so the generic path runs.
+ */
+function allergyShortText (content: any, itemDef: any): string | null {
+  if (content == null || typeof content !== 'object') return null;
+  let name: string | null = null;
+  const allergen = content.allergen;
+  if (allergen != null && typeof allergen === 'object' && allergen.label != null) {
+    name = typeof allergen.label === 'string' ? allergen.label : (localizeText(allergen.label) || null);
+  } else if (typeof content.name === 'string' && content.name.trim() !== '') {
+    name = content.name.trim();
+  }
+  if (!name) return null;
+  const composite = itemDef?.data?.composite ?? {};
+  const parts: string[] = [];
+  if (content.status === 'inactive' || content.status === 'resolved') {
+    parts.push(compositePartText(content.status, composite.status) ?? content.status);
+  }
+  if (content.criticality === 'high') parts.push(localizeText(HIGH_RISK));
+  return parts.length > 0 ? `${name} — ${parts.join(', ')}` : name;
 }
 
 /** A vocabulary value's localized label, the value itself when the pack has none. */
@@ -320,6 +362,13 @@ function shortTextWithOrigin (event: any): ShortTextResult {
   // composite item would otherwise read "Type of visit: …" or the first string of the content.
   if (event.type === ENCOUNTER_VISIT || event.type === PROVIDER_PRACTITIONER || event.type === PROVIDER_ORGANIZATION) {
     const text = encounterShortText(event, itemDef, model);
+    if (text) return { text, origin: null };
+  }
+
+  // Allergies (data-model 4.21.0, plan 133): eventType-driven, "Peanut — high risk", "Lactose — Resolved". The
+  // composite would otherwise read its first string field, the status.
+  if (event.type === ALLERGY_CODED || event.type === ALLERGY_BASIC) {
+    const text = allergyShortText(content, itemDef);
     if (text) return { text, origin: null };
   }
 

@@ -2,7 +2,7 @@ import { assert } from './test-utils/deps-node.js';
 // Import via the package entry point, like every other test file: a default import
 // straight from the .ts resolves to the module namespace under webpack (no .unhook),
 // which failed the browser suite while Node passed.
-import { eventToShortText, eventToShortTextWithOrigin, HDSSettings } from '../ts/index.ts';
+import { eventToShortText, eventToShortTextWithOrigin, HDSSettings, compositeParts } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 import { setPreferredLocales, resetPreferredLocales } from '../ts/localizeText.ts';
 
@@ -951,6 +951,39 @@ describe('[ESTX] eventToShortText', () => {
         type: 'attributes/ethnicity'
       };
       assert.equal(eventToShortText(event), 'White, not-a-category');
+    });
+  });
+
+  describe('[EST30] allergies (data-model 4.21.0, plan 133)', () => {
+    const peanut = { label: 'Peanut', description: 'x', hdsId: 'allergen:762952008', codes: [{ system: 'SNOMED-CT', code: '762952008' }] };
+
+    it('[EST30a] coded: the allergen label, not the status', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'active' } };
+      assert.equal(eventToShortText(event), 'Peanut');
+    });
+
+    it('[EST30b] coded: a high criticality and a status that is not active are said', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'resolved', criticality: 'high' } };
+      assert.equal(eventToShortText(event), 'Peanut — Resolved, high risk');
+    });
+
+    it('[EST30c] coded: a localized allergen label', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { ...peanut, label: { en: 'Peanut', fr: 'Arachide' } }, status: 'active' } };
+      assert.equal(eventToShortText(event), 'Peanut');
+    });
+
+    it('[EST30d] basic: the name as written', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: ' Lactose ', status: 'inactive', type: 'intolerance' } };
+      assert.equal(eventToShortText(event), 'Lactose — Inactive');
+    });
+
+    it('[EST30e] compositeParts: the allergen label and the categories as labels', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'active', categories: ['food', 'medication'], reactions: [{ manifestations: [{ text: 'hives' }] }] } };
+      const parts = compositeParts(event);
+      assert.deepEqual(parts.map((p) => p.key), ['allergen', 'status', 'categories']);
+      assert.equal(parts[0].value, 'Peanut');
+      assert.equal(parts[1].value, 'Active');
+      assert.equal(parts[2].value, 'Food, Medication');
     });
   });
 });
