@@ -34,7 +34,6 @@
   generated code, so no `unsafe-eval` under a CSP).
 - **`cmcScope.shareStreamsAgain`** takes `levels` (a level per stream), so several streams are granted at different
   levels in one scope update.
->>>>>>> origin/main
 
 ## [2.58.0] - 2026-11-20
 
