@@ -241,6 +241,41 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     assert.strictEqual(conv.proposedValues[0].state, 'skipped', 'a comment alone is a skip');
   });
 
+  it('[CNVD9] a tapped skip on a proposed document (and a comment alone): settles nothing, she confirms later', async () => {
+    const { person, rel, streams, DOC, conv, proposed } = await setup();
+    await cv.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'laboratory-report', time: D, timePrecision: 'day' }));
+    const res = await cv.skipProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock, note: 'I will check the date' });
+    assert.strictEqual(res.action, 'skip');
+    let c = await conv();
+    assert.deepStrictEqual([c.proposedDocuments[0].state, c.answers.at(-1).content.note, c.answers.at(-1).content.basis], ['skipped', 'I will check the date', undefined]);
+    assert.deepStrictEqual(cv.proposedDocumentItemsToDelete(c), [], 'a skipped one stays');
+    await assert.rejects(cv.skipProposedDocument(person, rel, { about: DOC, candidateId: 'nope' }), /unknown candidate/);
+    await cv.acceptProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock });
+    c = await conv();
+    assert.strictEqual(c.proposedDocuments[0].state, 'confirmed');
+  });
+
+  it('[CNVD10] her app writes a pending document, and her own edit clears the flag field by field', async () => {
+    const all = cv.pendingDocumentEvent({ title: 'IMG_1.jpg', now: ADDED });
+    assert.deepStrictEqual([all.time, all.clientData, all.content.language, all.content.creation], [ADDED, { hdsDocumentPending: ['time', 'kind'] }, 'und', undefined]);
+    assert.strictEqual(getModel().documentKinds.forContent(all.content).key, 'other');
+    const dated = cv.pendingDocumentEvent({ title: 'x', time: D, timePrecision: 'day', now: ADDED });
+    assert.deepStrictEqual([dated.time, dated.clientData], [D, { hdsTimePrecision: 'day', hdsDocumentPending: ['kind'] }]);
+    const both = cv.pendingDocumentEvent({ title: 'x', documentKind: 'laboratory-report', time: D, timePrecision: 'day' });
+    assert.deepStrictEqual(both.clientData, { hdsTimePrecision: 'day' }, 'nothing pending');
+    assert.deepStrictEqual(cv.pendingFieldsOf({ ...all, id: 'x' }), ['time', 'kind']);
+    // her own edit of the date: written whatever is pending, the field leaves the flag
+    const edit = cv.documentEditOf(all, { time: D, timePrecision: 'day' });
+    assert.deepStrictEqual(edit, { time: D, clientData: { hdsTimePrecision: 'day', hdsDocumentPending: ['kind'] } });
+    const kindEdit = cv.documentEditOf({ ...all, clientData: { hdsDocumentPending: ['kind'] } }, { documentKind: 'laboratory-report' });
+    assert.strictEqual(kindEdit.clientData.hdsDocumentPending, null, 'the last field: null');
+    assert.strictEqual(getModel().documentKinds.forContent(kindEdit.content).key, 'laboratory-report');
+    assert.strictEqual(kindEdit.content.title, 'IMG_1.jpg');
+    assert.strictEqual(cv.documentEditOf({ content: {}, clientData: {} }, { documentKind: 'other' }).clientData.hdsDocumentPending, undefined, 'no flag: none written');
+    assert.strictEqual(cv.documentEditOf(all, {}), null);
+    assert.throws(() => cv.documentEditOf(all, { documentKind: 'no-such-kind' }), /unknown-kind/);
+  });
+
   it('[CNVD8] the document lists the values written from it (source); a value she had gets hdsPrintedIn, nothing on the document; not-mine removes both', async () => {
     const { person, rel, streams, DOC, document } = await setup([]);
     const streamOf = (k) => getModel().itemsDefs.forKey(k).data.streamId;
@@ -258,6 +293,9 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     assert.deepStrictEqual(doc.clientData.hdsDocumentValues, { [c2]: 'source' }, 'source only: the matched value is not on the document');
     const found = await person.apiOne('events.get', { clientData: [{ path: `hdsPrintedIn.${DOC}`, eq: true }] }, 'events');
     assert.deepStrictEqual(found.map(e => e.id), [mine.id], 'the document view finds matched values with one query');
+    // the reader helper: source (index and related), matched (hdsPrintedIn); no conversation item, no alert
+    const listed = await cv.listDocumentValues(person, DOC);
+    assert.deepStrictEqual([listed.source.map(e => e.id), listed.matched.map(e => e.id)], [[c2], [mine.id]]);
     // not-mine: the written value deleted, its entry and the hdsPrintedIn link removed
     const qid = await cv.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'is-this-yours' });
     await cv.answerQuestion(person, rel, { questionId: qid, action: 'not-mine', shownAt: person.clock });
