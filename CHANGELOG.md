@@ -2,8 +2,10 @@
 
 ## [Unreleased]
 
-Needs data-model 4.25.0 (healthdatasafe/data-model#105): the new answer basis and anchor field are checked against
-the loaded model before any write.
+## [2.61.0] - 2026-11-21
+
+Needs data-model 4.25.0 (live at model.datasafe.dev): the new answer basis and anchor field are checked against the
+loaded model before any write.
 
 ### Added (plan 128): a value she already has, `cmcConversation.autoMarkDuplicates`
 - **What it does.** `autoMarkDuplicates(conn, rel, { about, engines })` is her app's automatic `duplicate`, with
