@@ -183,23 +183,30 @@ export function buildConversationAlertContent (hds: Record<string, unknown>): Re
  */
 export function parseConversationAlerts (events: Array<{ id: string; type: string; time?: number; content?: Record<string, any> | null }>): ConversationAlert[] {
   const kinds = new Set<string>(Object.values(CONVERSATION_ALERT_KINDS));
-  const seen = new Set<string>();
-  const out: ConversationAlert[] = [];
+  const ids = new Set<string>();
+  const byKey = new Map<string, number>();
+  const out: Array<ConversationAlert | null> = [];
   const sorted = [...(events ?? [])].sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
   for (const e of sorted) {
-    if (e.type !== ET_ALERT) continue;
+    if (e.type !== ET_ALERT || ids.has(e.id)) continue;
     const c = e.content ?? {};
     const hds = c.hds;
     if (hds == null || typeof hds !== 'object' || !kinds.has(hds.kind)) continue;
+    ids.add(e.id);
     const from = c.from && typeof c.from.username === 'string' ? { username: c.from.username, host: String(c.from.host ?? '') } : null;
     const direction = from ? 'received' : 'sent';
     const key = direction + ':' + alertKey(hds);
-    if (seen.has(e.id) || seen.has(key)) continue;
-    seen.add(e.id);
-    seen.add(key);
-    out.push({ alertEventId: e.id, kind: hds.kind, hds, time: e.time ?? 0, direction, from });
+    const alert: ConversationAlert = { alertEventId: e.id, kind: hds.kind, hds, time: e.time ?? 0, direction, from };
+    const earlier = byKey.get(key);
+    if (earlier != null) {
+      // a `task-status` repeated later (a restarted contact reusing an attempt) is the newer state (R4): keep the latest
+      if (hds.kind !== 'task-status') continue;
+      out[earlier] = null;
+    }
+    byKey.set(key, out.length);
+    out.push(alert);
   }
-  return out;
+  return out.filter((a): a is ConversationAlert => a != null);
 }
 
 function alertKey (hds: Record<string, any>): string {
@@ -415,20 +422,32 @@ export function parseConversationItems (events: any[], streams: ConversationStre
   return out.sort((a, b) => a.created - b.created || a.time - b.time);
 }
 
-/** The items of one relationship's children (either side, through a grant or her token), of one document when `about`. */
+/**
+ * The items of one relationship's children (either side, through a grant or her token), of one document when
+ * `about`. Every page is read: her answers stay on `sent` for the life of the relationship, and an answer left out
+ * would let a written candidate be proposed again (R5).
+ */
 export async function listConversationItems (
   connection: pryv.Connection,
   streams: ConversationStreams,
-  opts: { about?: string; limit?: number } = {}
+  opts: { about?: string } = {}
 ): Promise<ConversationItem[]> {
-  const events = await connection.apiOne('events.get', {
-    streams: [streams.received, streams.sent],
-    types: [ET_CONVERSATION],
-    limit: opts.limit ?? 1000
-  }, 'events') as any[];
+  const events: any[] = [];
+  for (let skip = 0; ; skip += ITEMS_PAGE) {
+    const page = await connection.apiOne('events.get', {
+      streams: [streams.received, streams.sent],
+      types: [ET_CONVERSATION],
+      limit: ITEMS_PAGE,
+      skip
+    } as any, 'events') as any[];
+    events.push(...page);
+    if (page.length < ITEMS_PAGE) break;
+  }
   const items = parseConversationItems(events, streams);
   return opts.about == null ? items : items.filter(i => i.about === opts.about);
 }
+
+const ITEMS_PAGE = 500;
 
 export type ProposedValueState = 'open' | 'confirmed' | 'corrected' | 'skipped' | 'requested' | 'duplicate' | 'replaced';
 
@@ -465,7 +484,17 @@ export interface DocumentConversation {
   questions: QuestionView[];
   /** Every answer, those that do not count included (void, or an action not allowed for what they answer). */
   answers: ConversationItem[];
-  /** `is-this-yours`: none asked, asked and not confirmed, every one confirmed, or `not-mine` (the latest wins). */
+  /** Every item of the document on the `received` child, duplicates included (R10 deletes them all). */
+  received: ConversationItem[];
+  /**
+   * Every candidate her app wrote (the `written` entries of her `confirm` and `correct` answers), by candidateId → the
+   * value's event id, also when its proposed value was deleted since (R10): never proposed again (R5).
+   */
+  writtenCandidates: Record<string, string>;
+  /**
+   * `is-this-yours`: none asked, asked and not confirmed, every one confirmed, or `not-mine` (the latest wins). A
+   * `not-mine` stays `not-mine` once its question is deleted (R10).
+   */
   identity: 'not-asked' | 'open' | 'confirmed' | 'not-mine';
   /** The `which-date` answer about the whole document. */
   documentDate: AnsweredDate | null;
@@ -530,7 +559,7 @@ export function conversationOf (items: ConversationItem[], about: string): Docum
   const proposedValues: ProposedValueView[] = [...pvByCandidate.values()].map(item => {
     const candidateId = item.content.candidateId;
     const onIt = counting.filter(a => byId.get(a.content.inReplyTo)?.kind === 'proposed-value' && (a.content.candidateIds ?? []).includes(candidateId));
-    const writing = onIt.find(a => (a.content.written ?? []).some((w: any) => w?.candidateId === candidateId));
+    const writing = onIt.find(a => WRITING_ACTIONS.has(a.content.action) && (a.content.written ?? []).some((w: any) => w?.candidateId === candidateId));
     if (writing) {
       const w = writing.content.written.find((x: any) => x?.candidateId === candidateId);
       return { item, candidateId, state: writing.content.action === 'correct' ? 'corrected' : 'confirmed', answer: writing, writtenEventId: w.eventId, replacedBy: null };
@@ -559,36 +588,60 @@ export function conversationOf (items: ConversationItem[], about: string): Docum
     if (settled.includes('not-mine')) identity = 'not-mine';
     else identity = settled.every(a => a === 'confirm') ? 'confirmed' : 'open';
   }
+  // a `not-mine` whose question was deleted since (R10) still holds, unless a later identity confirmation counts
+  const orphanNotMine = answers.filter(a => a.content.action === 'not-mine' && !byId.has(a.content.inReplyTo)).at(-1);
+  if (orphanNotMine != null) {
+    const laterConfirm = counting.some(a => a.content.action === 'confirm' && a.created > orphanNotMine.created &&
+      byId.get(a.content.inReplyTo)?.content.code === QUESTION_CODES.IS_THIS_YOURS);
+    if (!laterConfirm) identity = 'not-mine';
+  }
 
   let documentDate: AnsweredDate | null = null;
   const candidateDates: Record<string, AnsweredDate> = {};
   for (const q of questions) {
     if (q.code !== QUESTION_CODES.WHICH_DATE || q.answer?.content.action !== 'confirm') continue;
-    const date: AnsweredDate = { timePrecision: q.answer.content.timePrecision };
-    if (q.answer.content.time != null) date.time = q.answer.content.time;
+    const { time, timePrecision } = q.answer.content;
+    // R8: an unknown precision is read as absent, so the answer gives no date
+    if (!TIME_PRECISIONS.has(timePrecision) || (timePrecision !== 'unknown' && typeof time !== 'number')) continue;
+    const date: AnsweredDate = timePrecision === 'unknown' ? { timePrecision } : { time, timePrecision };
     if (typeof q.item.content.candidateId === 'string') candidateDates[q.item.content.candidateId] = date;
     else documentDate = date;
   }
-  return { about, proposedValues, questions, answers, identity, documentDate, candidateDates };
+
+  const writtenCandidates: Record<string, string> = {};
+  for (const a of answers) {
+    if (!WRITING_ACTIONS.has(a.content.action)) continue;
+    for (const w of a.content.written ?? []) {
+      if (typeof w?.candidateId === 'string' && typeof w.eventId === 'string') writtenCandidates[w.candidateId] = w.eventId;
+    }
+  }
+  const received = mine.filter(i => i.direction === 'received');
+  return { about, proposedValues, questions, answers, received, writtenCandidates, identity, documentDate, candidateDates };
 }
+
+const WRITING_ACTIONS = new Set(['confirm', 'correct']);
+const TIME_PRECISIONS = new Set(['day', 'month', 'year', 'unknown']);
 
 /**
  * R10, on her account, once the work on the document is `done`: the item ids the contact deletes. Proposed values
  * written, skipped, marked duplicate or requested, and replaced; questions answered; an `is-this-yours` question
- * carrying `context.identity` always. Open and kept-aside proposed values stay.
+ * carrying `context.identity` always; and any other proposed-value event of the document (a duplicate of a candidate
+ * written twice by a racing retry). Open and kept-aside proposed values stay.
  */
 export function itemsToDeleteAtDone (conv: DocumentConversation): string[] {
-  const out: string[] = [];
-  for (const pv of conv.proposedValues) if (pv.state !== 'open') out.push(pv.item.id);
+  const out = new Set<string>();
+  const shown = new Set(conv.proposedValues.map(p => p.item.id));
+  for (const pv of conv.proposedValues) if (pv.state !== 'open') out.add(pv.item.id);
+  for (const i of conv.received) if (i.kind === 'proposed-value' && !shown.has(i.id)) out.add(i.id);
   for (const q of conv.questions) {
-    if (q.state !== 'open' || (q.code === QUESTION_CODES.IS_THIS_YOURS && q.item.content.context?.identity != null)) out.push(q.item.id);
+    if (q.state !== 'open' || (q.code === QUESTION_CODES.IS_THIS_YOURS && q.item.content.context?.identity != null)) out.add(q.item.id);
   }
-  return out;
+  return [...out];
 }
 
-/** R10: every item of the document (on `not-mine`, `document-unshared` or a document gone), answers left out. */
+/** R10: every item of the document on the `received` child (on `not-mine`, `document-unshared` or a document gone). */
 export function itemsOfDocument (conv: DocumentConversation): string[] {
-  return [...conv.proposedValues.map(p => p.item.id), ...conv.questions.map(q => q.item.id)];
+  return conv.received.map(i => i.id);
 }
 
 // ---- items: what a writer MUST include ---- //
@@ -770,6 +823,14 @@ export function sourceKeyOf (engine: string, about: string, candidateId: string)
 }
 
 const PROPOSAL_CLIENT_DATA_KEYS = ['hdsRefRange', 'hdsFlag', 'hdsInterpretation', 'hdsComparator', 'hdsTimePrecision'];
+const INTERPRETATIONS = new Set(['H', 'L', 'N', 'A', 'HH', 'LL']);
+
+function knownClientDataValue (key: string, value: unknown): boolean {
+  if (key === 'hdsInterpretation') return INTERPRETATIONS.has(value as string);
+  if (key === 'hdsComparator') return COMPARATORS.has(value as string);
+  if (key === 'hdsTimePrecision') return TIME_PRECISIONS.has(value as string);
+  return true;
+}
 
 /** A correction she made: the value written instead of the proposal's (checked like a proposal, R9). */
 export interface ValueCorrection {
@@ -792,11 +853,14 @@ export function valueEventOf (pv: ConversationItem, opts: { correction?: ValueCo
   const itemDef = getModel().itemsDefs.forKey(source.itemKey);
   const clientData: Record<string, any> = {};
   const carried = opts.correction?.clientData ?? p.clientData ?? {};
-  for (const k of PROPOSAL_CLIENT_DATA_KEYS) if (carried[k] != null) clientData[k] = carried[k];
+  // R8: a value this version does not know is read as absent, never written on
+  for (const k of PROPOSAL_CLIENT_DATA_KEYS) if (carried[k] != null && knownClientDataValue(k, carried[k])) clientData[k] = carried[k];
   const event: Record<string, any> = { streamIds: [itemDef!.data.streamId], type: source.type, content: source.content };
   if (p.time != null) {
     event.time = p.time;
-    clientData.hdsTimePrecision = p.clientData?.hdsTimePrecision;
+    const precision = p.clientData?.hdsTimePrecision;
+    if (TIME_PRECISIONS.has(precision)) clientData.hdsTimePrecision = precision;
+    else delete clientData.hdsTimePrecision;
   } else if (opts.date != null) {
     if (opts.date.time != null && opts.date.timePrecision !== 'unknown') event.time = opts.date.time;
     clientData.hdsTimePrecision = opts.date.timePrecision;
@@ -896,6 +960,8 @@ function acceptRefusal (
     if (decision.correction == null) return 'no-correction';
     const issue = checkValueProposal(decision.correction);
     if (issue != null) return issue;
+    const comparator = decision.correction.clientData?.hdsComparator;
+    if (comparator != null && !COMPARATORS.has(comparator as string)) return 'comparator';
   }
   const date = conv.candidateDates[pv.candidateId] ?? conv.documentDate;
   if (pv.item.content.proposal.time == null && date == null) return 'no-date';
@@ -905,8 +971,9 @@ function acceptRefusal (
 /**
  * Answer one question (her tap, or her app on a profile match with `basis`): `choose` (+ `option`), `confirm` on
  * `which-date` (+ `timePrecision`, `time` unless `unknown`), `confirm` or `not-mine` on `is-this-yours`, `skip` on
- * any. Refused when the question changed since `shownAt`. An answer to a question writes no value; after `not-mine`
- * the values written from the document are deleted (R3), returned in `deletedValueIds`.
+ * any. Refused when the question, or the proposed value it is about, changed since `shownAt`. An answer to a question
+ * writes no value; after `not-mine` the values written from the document are deleted (R3), returned in
+ * `deletedValueIds`, before the alert is posted (so a failed alert never leaves them).
  */
 export async function answerQuestion (
   connection: pryv.Connection,
@@ -917,30 +984,37 @@ export async function answerQuestion (
   if (typeof params?.shownAt !== 'number') throw new HDSLibError('answerQuestion: shownAt is required');
   const question = await receivedItem(connection, streams, params.questionId, 'question', 'answerQuestion');
   const conv = conversationOf(await listConversationItems(connection, streams, { about: question.about }), question.about);
-  const current = conv.questions.find(q => q.item.id === question.id)!.item;
-  if (current.modified > params.shownAt) throw new HDSLibError('answerQuestion: the question changed since it was shown', { reason: 'changed-since-shown' });
+  const current = conv.questions.find(q => q.item.id === question.id)?.item ?? question;
+  const about = conv.proposedValues.find(p => p.candidateId === question.content.candidateId)?.item;
+  if (current.modified > params.shownAt || (about != null && about.modified > params.shownAt)) {
+    throw new HDSLibError('answerQuestion: the question changed since it was shown', { reason: 'changed-since-shown' });
+  }
   const content: Record<string, any> = { kind: 'answer', inReplyTo: question.id, about: question.about, action: params.action };
   if (question.content.candidateId != null) content.candidateIds = [question.content.candidateId];
   for (const k of ['option', 'time', 'timePrecision', 'basis'] as const) if (params[k] != null) content[k] = params[k];
-  const res = await writeAnswer(connection, streams.sent, collectorStreamId, content, current, conv);
+  const answerEventId = await writeAnswerEvent(connection, streams.sent, content, current, conv);
   let deletedValueIds: string[] = [];
   if (params.action === 'not-mine') deletedValueIds = await deleteWrittenValues(connection, conv);
-  return { ...res, action: params.action, written: [], deletedValueIds };
+  const { alertEventId } = await announceAnswer(connection, collectorStreamId, answerEventId, content);
+  return { answerEventId, alertEventId, action: params.action, written: [], deletedValueIds };
 }
 
 /**
  * Answer proposed values without writing one: `skip`, `request-item` (a kept-aside or unmapped one) or `duplicate`.
- * One answer, `inReplyTo` the first candidate.
+ * One answer, `inReplyTo` the first candidate. With `shownAt`, refused when one of them changed since it was shown.
  */
 export async function answerProposedValues (
   connection: pryv.Connection,
   rel: ConversationRelationship,
-  params: { about: string; candidateIds: string[]; action: 'skip' | 'request-item' | 'duplicate' }
+  params: { about: string; candidateIds: string[]; action: 'skip' | 'request-item' | 'duplicate'; shownAt?: number }
 ): Promise<AnswerWritten> {
   const { streams, collectorStreamId } = await personSide(connection, rel, 'answerProposedValues');
   const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
   const first = conv.proposedValues.find(p => p.candidateId === params.candidateIds?.[0]);
   if (first == null) throw new HDSLibError('answerProposedValues: unknown candidate', { reason: 'unknown-candidate' });
+  if (params.shownAt != null && conv.proposedValues.some(p => params.candidateIds.includes(p.candidateId) && p.item.modified > params.shownAt!)) {
+    throw new HDSLibError('answerProposedValues: a proposed value changed since it was shown', { reason: 'changed-since-shown' });
+  }
   const content = { kind: 'answer', inReplyTo: first.item.id, about: params.about, action: params.action, candidateIds: [...params.candidateIds] };
   return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, first.item, conv), action: params.action, written: [] };
 }
@@ -1000,17 +1074,32 @@ async function writeAnswer (
   target: ConversationItem,
   conv: DocumentConversation
 ): Promise<{ answerEventId: string; alertEventId: string }> {
+  const answerEventId = await writeAnswerEvent(connection, sentStreamId, content, target, conv);
+  return { answerEventId, ...await announceAnswer(connection, collectorStreamId, answerEventId, content) };
+}
+
+/** The answer event on the `sent` child, checked first, with `related` mirroring every id it names (R1). */
+async function writeAnswerEvent (
+  connection: pryv.Connection,
+  sentStreamId: string,
+  content: Record<string, any>,
+  target: ConversationItem,
+  conv: DocumentConversation
+): Promise<string> {
   const issues = checkAnswerFor(content, target, conv);
   if (issues.length > 0) throw new HDSLibError('invalid answer: ' + issues.join('; '), { reason: 'invalid-answer', issues });
   const related: Record<string, boolean> = { [content.about]: true, [content.inReplyTo]: true };
   for (const w of content.written ?? []) related[w.eventId] = true;
   const answer = await connection.apiOne('events.create', { streamIds: [sentStreamId], type: ET_CONVERSATION, content, clientData: { related } } as any, 'event') as { id: string };
+  return answer.id;
+}
+
+async function announceAnswer (connection: pryv.Connection, collectorStreamId: string, answerEventId: string, content: Record<string, any>): Promise<{ alertEventId: string }> {
   try {
-    const { alertEventId } = await postConversationAlert(connection, collectorStreamId, { kind: 'answer', eventId: answer.id, inReplyTo: content.inReplyTo, about: content.about });
-    return { answerEventId: answer.id, alertEventId };
+    return await postConversationAlert(connection, collectorStreamId, { kind: 'answer', eventId: answerEventId, inReplyTo: content.inReplyTo, about: content.about });
   } catch (e) {
     // written, not announced: post the alert again (`postConversationAlert`), never the answer
-    throw new HDSLibError('the answer was written, its alert was not posted', { reason: 'alert-not-posted', answerEventId: answer.id, error: e });
+    throw new HDSLibError('the answer was written, its alert was not posted', { reason: 'alert-not-posted', answerEventId, error: e });
   }
 }
 
@@ -1042,9 +1131,12 @@ export async function listConversationAlerts (connection: pryv.Connection, colle
 export async function writeQuestion (personConnection: pryv.Connection, streams: ConversationStreams, content: Record<string, any>): Promise<string> {
   const issues = checkConversationItem(content);
   if (content?.kind !== 'question') issues.push('writeQuestion: kind must be question');
-  if (issues.length === 0 && content.candidateId != null) {
+  if (issues.length === 0) {
     const items = await listConversationItems(personConnection, streams, { about: content.about });
-    if (!items.some(i => i.kind === 'proposed-value' && i.content.candidateId === content.candidateId)) issues.push(`question: candidate ${content.candidateId} is not a proposed value of the document`);
+    if (conversationOf(items, content.about).identity === 'not-mine') notMine('writeQuestion');
+    if (content.candidateId != null && !items.some(i => i.kind === 'proposed-value' && i.content.candidateId === content.candidateId)) {
+      issues.push(`question: candidate ${content.candidateId} is not a proposed value of the document`);
+    }
   }
   if (issues.length > 0) throw new HDSLibError('writeQuestion: ' + issues.join('; '), { reason: 'invalid-item', issues });
   const event = await personConnection.apiOne('events.create', {
@@ -1066,10 +1158,12 @@ export interface ProposedValuesWritten {
  * new candidate is created, an unanswered one rewritten in place, one already answered or written left alone. Each
  * is checked first (schema, § What a writer MUST include, `replaces` naming a proposed value of the document that she
  * answered a question about and that was not written); nothing is written when one fails. The contact then posts one
- * `proposed-values` alert for the batch (`count`: created + updated).
+ * `proposed-values` alert for the batch (`count`: created + updated). A candidate her app wrote is never proposed
+ * again, also once its proposed value was deleted (R5, from her answers); a document she answered `not-mine` is refused.
  */
 export async function writeProposedValues (personConnection: pryv.Connection, streams: ConversationStreams, about: string, contents: Array<Record<string, any>>): Promise<ProposedValuesWritten> {
   const conv = conversationOf(await listConversationItems(personConnection, streams, { about }), about);
+  if (conv.identity === 'not-mine') notMine('writeProposedValues');
   const issues: string[] = [];
   const seen = new Set<string>();
   for (const c of contents ?? []) {
@@ -1089,7 +1183,10 @@ export async function writeProposedValues (personConnection: pryv.Connection, st
   const out: ProposedValuesWritten = { created: [], updated: [], skipped: [] };
   for (const c of contents) {
     const existing = conv.proposedValues.find(p => p.candidateId === c.candidateId);
-    if (existing?.writtenEventId != null) { out.skipped.push({ candidateId: c.candidateId, reason: 'written' }); continue; }
+    if (existing?.writtenEventId != null || Object.hasOwn(conv.writtenCandidates, c.candidateId)) {
+      out.skipped.push({ candidateId: c.candidateId, reason: 'written' });
+      continue;
+    }
     if (existing != null && (existing.state !== 'open' || conv.answers.some(a => (a.content.candidateIds ?? []).includes(c.candidateId)))) {
       out.skipped.push({ candidateId: c.candidateId, reason: 'answered' });
       continue;
@@ -1112,6 +1209,11 @@ export async function deleteConversationItems (personConnection: pryv.Connection
 }
 
 // ---- internals ---- //
+
+/** R3 / R10: once she answered `not-mine`, the contact writes nothing more about the document. */
+function notMine (fn: string): never {
+  throw new HDSLibError(`${fn}: the person answered that this document is not hers`, { reason: 'not-mine' });
+}
 
 /** Pryv trashes on the first delete and deletes on the second: both, a resource already gone counting as done. */
 async function deleteTwice (connection: pryv.Connection, method: 'events.delete' | 'streams.delete', params: Record<string, unknown>): Promise<void> {

@@ -89,7 +89,7 @@ function account ({ streams = [], events = [], accesses = [], tokenType = 'perso
           .filter(e => params.fromTime == null || e.time >= params.fromTime)
           .filter(e => params.toTime == null || e.time <= params.toTime)
           .map(e => structuredClone(e))
-          .slice(0, params.limit ?? Infinity));
+          .slice(params.skip ?? 0, (params.skip ?? 0) + (params.limit ?? Infinity)));
       }
       default:
         throw new Error('unexpected ' + method);
@@ -198,9 +198,16 @@ describe('[CNV] cmcConversation', function () {
         a('x1', 6, { kind: 'answer', eventId: 'ans', inReplyTo: 'q', about: DOC }),
         a('d1', 7, { kind: 'document-shared', eventId: DOC }, true)
       ]);
-      assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.direction]), [['t1', 'received'], ['t2', 'received'], ['p1', 'received'], ['q1', 'received'], ['x1', 'sent']]);
+      assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.direction]), [['t1', 'received'], ['t2b', 'received'], ['p1', 'received'], ['q1', 'received'], ['x1', 'sent']]);
       assert.strictEqual(cv.taskStatusOf(parsed, DOC).hds.status, 'reading');
       assert.strictEqual(cv.taskStatusOf(parsed, 'other'), null);
+      // a restarted contact reuses attempt 1: its later `reading` is the state, not the earlier `done` (R4)
+      const restarted = cv.parseConversationAlerts([
+        a('r1', 1, { kind: 'task-status', about: DOC, status: 'reading', attempt: 1 }, true),
+        a('r2', 2, { kind: 'task-status', about: DOC, status: 'done', attempt: 1 }, true),
+        a('r3', 3, { kind: 'task-status', about: DOC, status: 'reading', attempt: 1 }, true)
+      ]);
+      assert.strictEqual(cv.taskStatusOf(restarted, DOC).hds.status, 'reading');
     });
   });
 
@@ -292,6 +299,34 @@ describe('[CNV] cmcConversation', function () {
       assert.strictEqual(cv.conversationOf(items, DOC).proposedValues[0].state, 'skipped');
       items[0].modified = 3;
       assert.strictEqual(cv.conversationOf(items, DOC).proposedValues[0].state, 'open');
+    });
+
+    it('[CNV33] R10 sets hold every received item (a duplicate candidate included); a written entry counts only on confirm or correct', () => {
+      const streams = { received: 'conv-rrrrrrrrrrrr', sent: 'conv-ssssssssssss' };
+      const e = (id, streamIds, content, t) => ({ id, streamIds, type: 'message/hds-conversation-v1', content, time: t, created: t, modified: t });
+      const items = cv.parseConversationItems([
+        e('p1', [streams.received], pv('c1'), 1),
+        e('p1b', [streams.received], pv('c1'), 2), // a racing retry created it twice
+        e('a1', [streams.sent], { kind: 'answer', about: DOC, inReplyTo: 'p1b', action: 'skip', candidateIds: ['c1'], written: [{ candidateId: 'c1', eventId: 'v' }] }, 3)
+      ], streams);
+      const conv = cv.conversationOf(items, DOC);
+      assert.strictEqual(conv.proposedValues[0].state, 'skipped', 'a skip carrying written is not a confirmation');
+      assert.deepStrictEqual(conv.writtenCandidates, {});
+      assert.deepStrictEqual(cv.itemsOfDocument(conv).sort(), ['p1', 'p1b']);
+      assert.deepStrictEqual(cv.itemsToDeleteAtDone(conv).sort(), ['p1', 'p1b']);
+    });
+
+    it('[CNV34] R8 on writing: unknown clientData values are dropped; an unknown which-date precision gives no date', () => {
+      const item = { id: 'p1', about: DOC, content: pv('c1', { proposal: { ...pv('c1').proposal, clientData: { hdsTimePrecision: 'week', hdsInterpretation: 'Z', hdsFlag: 'H' } } }) };
+      const ev = cv.valueEventOf(item);
+      assert.deepStrictEqual([ev.clientData.hdsTimePrecision, ev.clientData.hdsInterpretation, ev.clientData.hdsFlag], [undefined, undefined, 'H']);
+      const streams = { received: 'conv-rrrrrrrrrrrr', sent: 'conv-ssssssssssss' };
+      const e = (id, streamIds, content, t) => ({ id, streamIds, type: 'message/hds-conversation-v1', content, time: t, created: t, modified: t });
+      const conv = cv.conversationOf(cv.parseConversationItems([
+        e('q', [streams.received], { kind: 'question', about: DOC, code: 'which-date' }, 1),
+        e('a', [streams.sent], { kind: 'answer', about: DOC, inReplyTo: 'q', action: 'confirm', time: 5, timePrecision: 'fortnight' }, 2)
+      ], streams), DOC);
+      assert.strictEqual(conv.documentDate, null);
     });
   });
 
@@ -455,6 +490,59 @@ describe('[CNV] cmcConversation', function () {
       await cv.answerProposedValues(person, r, { about: DOC, candidateIds: ['c2'], action: 'skip' });
       const conv = cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC }), DOC);
       assert.deepStrictEqual(conv.proposedValues.map(p => [p.candidateId, p.state, cv.proposalRefusal(p, ENGINES)]), [['k1', 'requested', 'answered'], ['c2', 'skipped', null]]);
+    });
+  });
+
+  describe('[CNV-K] after R10 deleted items', () => {
+    it('[CNV46] a written candidate is never proposed again once its proposed value is gone; a not-mine holds once its question is gone', async () => {
+      const { person, rel: r, streams } = await setup();
+      await cv.writeProposedValues(person, streams, DOC, [pv('c1')]);
+      await cv.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+      await cv.deleteConversationItems(person, cv.itemsToDeleteAtDone(cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC }), DOC)));
+      const again = await cv.writeProposedValues(person, streams, DOC, [pv('c1')]);
+      assert.deepStrictEqual([again.created, again.skipped], [[], [{ candidateId: 'c1', reason: 'written' }]]);
+
+      const DOC2 = 'ckdoc0000002';
+      const q = await cv.writeQuestion(person, streams, { ...identityQuestion, about: DOC2 });
+      await cv.answerQuestion(person, r, { questionId: q, action: 'not-mine', shownAt: person.clock });
+      await cv.deleteConversationItems(person, cv.itemsOfDocument(cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC2 }), DOC2)));
+      assert.strictEqual(cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC2 }), DOC2).identity, 'not-mine');
+      await assert.rejects(cv.writeProposedValues(person, streams, DOC2, [pv('c1', { about: DOC2 })]), (e) => e.innerObject?.reason === 'not-mine');
+      await assert.rejects(cv.writeQuestion(person, streams, { ...identityQuestion, about: DOC2 }), (e) => e.innerObject?.reason === 'not-mine');
+    });
+
+    it('[CNV47] not-mine deletes the written values even when its alert fails; answers bind to the candidate shown', async () => {
+      const { person, rel: r, streams } = await setup();
+      await cv.writeProposedValues(person, streams, DOC, [pv('c1'), pv('c2')]);
+      const res = await cv.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+      const valueId = res.answers[0].written[0].eventId;
+      const q = await cv.writeQuestion(person, streams, identityQuestion);
+      const apiOne = person.apiOne;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'notification/alert-cmc') throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      await assert.rejects(cv.answerQuestion(person, r, { questionId: q, action: 'not-mine', shownAt: person.clock }), (e) => e.innerObject?.reason === 'alert-not-posted');
+      assert.ok(!person.events.has(valueId), 'deleted before the alert');
+      person.apiOne = apiOne;
+
+      const D3 = 'ckdoc0000003';
+      await cv.writeProposedValues(person, streams, D3, [pv('c2', { about: D3 })]);
+      const shown = person.clock;
+      await cv.writeProposedValues(person, streams, D3, [pv('c2', { about: D3, printed: { label: 'Ferritine', value: '50' } })]);
+      await assert.rejects(cv.answerProposedValues(person, r, { about: D3, candidateIds: ['c2'], action: 'skip', shownAt: shown }), (e) => e.innerObject?.reason === 'changed-since-shown');
+      const qu = await cv.writeQuestion(person, streams, { kind: 'question', about: D3, code: 'which-unit', candidateId: 'c2', options: ['ug/L'] });
+      const shown2 = person.clock;
+      await cv.writeProposedValues(person, streams, D3, [pv('c2', { about: D3, printed: { label: 'Ferritine', value: '51' } })]);
+      await assert.rejects(cv.answerQuestion(person, r, { questionId: qu, action: 'choose', option: 'ug/L', shownAt: shown2 }), (e) => e.innerObject?.reason === 'changed-since-shown');
+    });
+
+    it('[CNV48] items are read page by page', async () => {
+      const { person, streams } = await setup();
+      const many = Array.from({ length: 1200 }, (_, i) => pv('c' + i));
+      await cv.writeProposedValues(person, streams, DOC, many);
+      assert.strictEqual((await cv.listConversationItems(person, streams, { about: DOC })).length, 1200);
+      assert.ok(person.calls.filter(c => c.method === 'events.get' && c.params.types?.[0] === 'message/hds-conversation-v1').length >= 3);
     });
   });
 

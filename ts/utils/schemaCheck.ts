@@ -6,8 +6,9 @@
  * Keywords: type, enum, const, required, properties, additionalProperties, minProperties, maxProperties, items (one
  * schema or a tuple), additionalItems, minItems, maxItems, uniqueItems, minLength, maxLength, pattern, minimum,
  * maximum, exclusiveMinimum, exclusiveMaximum (draft-04 boolean or draft-06 number), multipleOf, oneOf, anyOf,
- * allOf, not. Anything else (format, $ref, ...) is not checked: a writer uses this to fail early with a readable
- * message, the platform still validates the event content on write.
+ * allOf, not. Anything else (format, $ref, ...) is not checked. The cores never validate HDS event types (they load
+ * pryv's dictionary, which has none of them, and accept unknown types as they come), so a writer's check is the only
+ * one: `_notes/open-pryv.io/event-types-dictionary.md` in the HDS workspace.
  */
 
 export type JsonSchema = Record<string, any> | boolean;
