@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.63.1] - 2026-11-23
 
 ### Fixed
 
@@ -1773,7 +1773,7 @@ not a mechanical fix.
   formatter. Tolerates a scalar as well, so an event written before the item became multi-valued still
   renders its label rather than raw content.
 
-## [Unreleased]
+## [2.63.1] - 2026-11-23
 
 ## [1.3.6] - 2026-07-30
 
@@ -2058,7 +2058,7 @@ Callers can pin to `github:healthdatasafe/hds-lib-js#0fedc1d` (the last pre-1.0 
 
 For the doctor-side form-storage migration, see `doctor-dashboard/app/formSpecAdapter.ts` (CollectorRequest ↔ FormSpec translators) and `doctor-dashboard/app/cmcDoctor.ts` (`saveFormSpec` / `listInviteRecordsFor` / etc.) for the reference port.
 
-## [Unreleased]
+## [2.63.1] - 2026-11-23
 
 ### Removed
 
