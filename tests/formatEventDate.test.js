@@ -171,6 +171,29 @@ describe('[FED] formatEventDate', function () {
       assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'approx', hdsTimeText: 'printemps 1998' })), 'vers printemps 1998');
     });
 
+    it('[FEDP4b] approx: the "about" word follows opts.locale, not the preferred locale (B-2026-11-21-19)', () => {
+      setPreferredLocales(['en']);
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'approx', hdsTimeText: 'printemps 1998' }), { locale: 'fr' }), 'vers printemps 1998');
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'approx' }), { locale: 'fr-CH' }), 'vers 1999');
+      setPreferredLocales(['fr']);
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'approx', hdsTimeText: 'spring 1998' }), { locale: 'en' }), 'about spring 1998');
+      // a locale with no translation falls back to the preferred locales
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'approx' }), { locale: 'de' }), 'vers 1999');
+    });
+
+    it('[FEDP8] unknown: "date unknown", never the recording moment, whatever the options (B-2026-11-21-15)', async () => {
+      await HDSSettings.hookToConnection(createMockConnection([
+        { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }
+      ]), 'test-stream');
+      setPreferredLocales(['en']);
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'unknown' })), 'date unknown');
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'unknown' }), { weekday: true, year: false }), 'date unknown');
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'unknown' }), { locale: 'fr' }), 'date inconnue');
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'unknown' }), { locale: 'es' }), 'fecha desconocida');
+      setPreferredLocales(['fr']);
+      assert.strictEqual(formatEventDate(ev({ hdsTimePrecision: 'unknown' })), 'date inconnue');
+    });
+
     it('[FEDP5] day: the date in the resolved format, read in UTC', async () => {
       await HDSSettings.hookToConnection(createMockConnection([
         { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }

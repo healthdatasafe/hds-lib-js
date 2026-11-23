@@ -31,7 +31,7 @@ export interface FormatEventDateOptions {
   year?: boolean;
   /** Put the short weekday name first, in `locale` (default `false`): `Mon 15.01.2024`. */
   weekday?: boolean;
-  /** Locale of the weekday name; defaults to the first preferred locale. */
+  /** Locale of the words (weekday, month, "about", "date unknown"); defaults to the first preferred locale. */
   locale?: string;
 }
 
@@ -60,7 +60,7 @@ function formatDayParts (p: DayParts, fmt: DateFormat | null, opts: FormatEventD
 export interface EventDateSource {
   time: number;
   clientData?: {
-    /** data-model `documentation/PARTIAL-DATES.md`: `minute`, `day`, `month`, `year` or `approx`. */
+    /** data-model `documentation/PARTIAL-DATES.md`: `minute`, `day`, `month`, `year`, `approx` or `unknown`. */
     hdsTimePrecision?: string;
     /** The date as the source wrote it; shown after "about" for `approx`. */
     hdsTimeText?: string;
@@ -71,6 +71,16 @@ export interface EventDateSource {
 }
 
 const ABOUT = { en: 'about', fr: 'vers', es: 'hacia' };
+const DATE_UNKNOWN = { en: 'date unknown', fr: 'date inconnue', es: 'fecha desconocida' };
+
+/** `texts` in `locale` (or its language, `fr` for `fr-CH`) when given and translated, else in the preferred locales. */
+function wordIn (texts: Record<string, string>, locale: string | undefined): string {
+  if (locale) {
+    const word = texts[locale] ?? texts[locale.split('-')[0].toLowerCase()];
+    if (word) return word;
+  }
+  return localizeText(texts) || texts.en;
+}
 
 /** Calendar day of `d` in an IANA zone, or null when the zone is unknown. */
 function dayPartsInZone (d: Date, timeZone: string): DayParts | null {
@@ -94,8 +104,9 @@ function utcDayParts (d: Date): DayParts {
  *
  * Given an event, honours its partial date (data-model `PARTIAL-DATES.md`, `clientData.hdsTimePrecision`), read in
  * UTC: `day` the date, `month` "March 1999", `year` "1997" (`opts.year` ignored), `approx` "about spring 1998" from
- * `hdsTimeText` (else "about 1998"); `minute` with `hdsTimeZone` takes the day in that zone. Without a precision, or
- * with an unknown one, the event's date reads as its timestamp's.
+ * `hdsTimeText` (else "about 1998"); `unknown` "date unknown", never the recording moment its `time` holds;
+ * `minute` with `hdsTimeZone` takes the day in that zone. Without a precision, or with one it does not know, the
+ * event's date reads as its timestamp's. The words follow `opts.locale` when given, else the preferred locales.
  */
 export function formatEventDate (timeOrEvent: number | EventDateSource, opts: FormatEventDateOptions = {}): string {
   const timeSec = typeof timeOrEvent === 'number' ? timeOrEvent : timeOrEvent.time;
@@ -114,8 +125,10 @@ export function formatEventDate (timeOrEvent: number | EventDateSource, opts: Fo
       const text = typeof clientData.hdsTimeText === 'string' && clientData.hdsTimeText.trim() !== ''
         ? clientData.hdsTimeText.trim()
         : String(d.getUTCFullYear());
-      return (localizeText(ABOUT) || ABOUT.en) + ' ' + text;
+      return wordIn(ABOUT, opts.locale) + ' ' + text;
     }
+    case 'unknown':
+      return wordIn(DATE_UNKNOWN, opts.locale);
     case 'minute': {
       const zoned = typeof clientData.hdsTimeZone === 'string' ? dayPartsInZone(d, clientData.hdsTimeZone) : null;
       if (zoned) return formatDayParts(zoned, fmt, opts);
@@ -153,11 +166,11 @@ function formatContentDate (content: unknown): string | null {
 /**
  * Format an event's time as a date + time string.
  * Used for checkbox events where the event time IS the data. A partial date (`hdsTimePrecision` other than
- * `minute`) has no time of day: its date only.
+ * `minute`) has no time of day: its date only; `unknown` "date unknown".
  */
 export function formatEventDateTime (event: EventDateSource): string {
   const precision = event.clientData?.hdsTimePrecision;
-  if (precision === 'day' || precision === 'month' || precision === 'year' || precision === 'approx') {
+  if (precision === 'day' || precision === 'month' || precision === 'year' || precision === 'approx' || precision === 'unknown') {
     return formatEventDate(event);
   }
   const d = new Date(event.time * 1000);
