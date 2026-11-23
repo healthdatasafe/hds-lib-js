@@ -1019,4 +1019,35 @@ describe('[ESTX] eventToShortText', () => {
       assert.ok(!String(eventToShortText(noContent)).includes('—'));
     });
   });
+
+  describe('[EST31] no known allergy (data-model 4.28.0, plan 133)', () => {
+    afterEach(() => { resetPreferredLocales(); });
+
+    const nka = (content, streamIds = ['allergy']) => ({ streamIds, type: 'allergy/none-known-v1', content });
+
+    it('[EST31a] reads as the scope option label, not the raw value', () => {
+      assert.equal(eventToShortText(nka({ scope: 'all' })), 'All allergens');
+      assert.equal(eventToShortText(nka({ scope: 'medication', verificationStatus: 'confirmed', notes: 'checked' })), 'Medications');
+      assert.equal(eventToShortText(nka({ scope: 'food' })), 'Food');
+      assert.equal(eventToShortText(nka({ scope: 'environment' })), 'Environment (pollen, animals, dust…)');
+    });
+
+    it('[EST31b] the scope label is localized', () => {
+      setPreferredLocales(['fr']);
+      assert.equal(eventToShortText(nka({ scope: 'all' })), 'Tous les allergènes');
+      assert.equal(eventToShortText(nka({ scope: 'medication' })), 'Médicaments');
+      assert.equal(eventToShortText(nka({ scope: 'food' })), 'Aliments');
+      assert.equal(eventToShortText(nka({ scope: 'environment' })), 'Environnement (pollens, animaux, poussière…)');
+    });
+
+    it('[EST31c] no item definition, or a value with no option: the value as written', () => {
+      assert.equal(eventToShortText(nka({ scope: 'medication' }, ['not-a-stream'])), 'medication');
+      assert.equal(eventToShortText(nka({ scope: 'insects' })), 'insects');
+    });
+
+    it('[EST31d] no scope: the generic path', () => {
+      assert.equal(eventToShortText(nka({ notes: 'asked at intake' })), 'asked at intake');
+      assert.equal(eventToShortText(nka(null)), null);
+    });
+  });
 });

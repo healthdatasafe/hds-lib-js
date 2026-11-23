@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `eventToShortText`: a no known allergy (`allergy/none-known-v1`, data-model 4.28.0) reads as its scope's localized option label ("Medications", "Médicaments") instead of the raw value (`medication`); the value as written when the item is not loaded (plan 133).
+
 ## [2.63.0] - 2026-11-21
 
 Requests from plan 135 (the person's side of data-model 4.26.0). No contract change.

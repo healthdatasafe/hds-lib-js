@@ -314,6 +314,18 @@ function allergyShortText (content: any, itemDef: any): string | null {
   return parts.length > 0 ? `${name} — ${parts.join(', ')}` : name;
 }
 
+const ALLERGY_NONE_KNOWN = 'allergy/none-known-v1';
+
+/**
+ * A no known allergy (data-model 4.28.0) as its scope's option label ("Medications"), read after the item label "No
+ * known allergy"; the value as written when the item is not loaded. `null` when there is no scope, so the generic path
+ * runs.
+ */
+function allergyNoneKnownShortText (content: any, itemDef: any): string | null {
+  if (content == null || typeof content !== 'object' || typeof content.scope !== 'string') return null;
+  return compositePartText(content.scope, itemDef?.data?.composite?.scope);
+}
+
 /** A vocabulary value's localized label, the value itself when the pack has none. */
 function vocabularyLabel (vocabulary: string, value: string): string {
   try {
@@ -364,6 +376,11 @@ function shortTextWithOrigin (event: any): ShortTextResult {
   // composite would otherwise read its first string field, the status.
   if (event.type === ALLERGY_CODED || event.type === ALLERGY_BASIC) {
     const text = allergyShortText(content, itemDef);
+    if (text) return { text, origin: null };
+  }
+  // A no known allergy (plan 133): its scope, "Medications"; the composite would read the raw `medication`.
+  if (event.type === ALLERGY_NONE_KNOWN) {
+    const text = allergyNoneKnownShortText(content, itemDef);
     if (text) return { text, origin: null };
   }
 
