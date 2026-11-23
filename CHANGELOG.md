@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2.63.1] - 2026-11-23
+
+### Fixed
+
+- `eventToShortText`: a no known allergy (`allergy/none-known-v1`, data-model 4.28.0) reads as its scope's localized option label ("Medications", "Médicaments") instead of the raw value (`medication`); the value as written when the item is not loaded (plan 133).
 
 ## [2.63.0] - 2026-11-21
 
@@ -1769,7 +1773,7 @@ not a mechanical fix.
   formatter. Tolerates a scalar as well, so an event written before the item became multi-valued still
   renders its label rather than raw content.
 
-## [Unreleased]
+## [2.63.1] - 2026-11-23
 
 ## [1.3.6] - 2026-07-30
 
@@ -2054,7 +2058,7 @@ Callers can pin to `github:healthdatasafe/hds-lib-js#0fedc1d` (the last pre-1.0 
 
 For the doctor-side form-storage migration, see `doctor-dashboard/app/formSpecAdapter.ts` (CollectorRequest ↔ FormSpec translators) and `doctor-dashboard/app/cmcDoctor.ts` (`saveFormSpec` / `listInviteRecordsFor` / etc.) for the reference port.
 
-## [Unreleased]
+## [2.63.1] - 2026-11-23
 
 ### Removed
 
