@@ -351,6 +351,11 @@ describe('[ESTX] eventToShortText', () => {
     assert.equal(eventToShortText({ ...base, clientData: { hdsTimePrecision: 'day' } }), '1999-03-01');
   });
 
+  it('[EST16a4] checkbox with an unknown date reads "date unknown", not its recording moment (B-2026-11-21-15)', () => {
+    const base = { content: null, streamIds: ['fertility-cycles-start'], type: 'activity/plain', time: 920289600 };
+    assert.equal(eventToShortText({ ...base, clientData: { hdsTimePrecision: 'unknown' } }), 'date unknown');
+  });
+
   it('[EST16b] medication with plain string label (not i18n object)', () => {
     const event = {
       content: {

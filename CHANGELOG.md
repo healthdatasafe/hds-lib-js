@@ -6,6 +6,15 @@
 
 - `eventToShortText`: a no known allergy (`allergy/none-known-v1`, data-model 4.28.0) reads as its scope's localized option label ("Medications", "Médicaments") instead of the raw value (`medication`); the value as written when the item is not loaded (plan 133).
 
+### Fixed
+- **`formatEventDate` / `formatEventDateTime` / `eventToShortText` read `hdsTimePrecision: unknown`** (data-model
+  4.19.0, PARTIAL-DATES.md § A date nobody knows): "date unknown" ("date inconnue", "fecha desconocida"), never the
+  recording moment `time` holds, and no time of day. Before, an unknown-dated event showed its recording moment as its
+  date (B-2026-11-21-15).
+- **The "about" word of an `approx` date follows `opts.locale`** when it is given (its language for a regional tag
+  such as `fr-CH`), like the month name and the weekday; it came from the preferred locales only, so
+  `{ locale: 'fr' }` read "about printemps 1998" in an English app (B-2026-11-21-19).
+
 ## [2.63.0] - 2026-11-21
 
 Requests from plan 135 (the person's side of data-model 4.26.0). No contract change.
