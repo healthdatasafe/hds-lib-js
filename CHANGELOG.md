@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- `labValueToFhir` on a `lab-result/coded-v1` result follows the FHIR blocks of data-model 4.31.0 (planned, plan 133;
+  BLOOD-CHEMISTRY.md § Cross-system): `valueQuantity.unit` is the unit as printed (`unitText`), else the UCUM code
+  itself (before: a readable form of it), so the value reads back unchanged; a semi-quantitative result also returns
+  `printedResult` `{ coding?, text }` (its `valueCodes` were dropped before), for the `printed-result` extension,
+  beside the readable `note`. No other library code calls it.
+
 ## [2.63.1] - 2026-11-23
 
 ### Fixed

@@ -235,14 +235,20 @@ describe('[LABR] lab results', () => {
     assert.deepEqual(labValueToFhir(ferritin(30)), { valueQuantity: { value: 30, unit: 'ng/mL' } });
     assert.equal(labValueToFhir(ferritin(1.5, { hdsComparator: '=' })), null);
     assert.deepEqual(labValueToFhir(coded({ analyte: hiv, value: 20, comparator: '<', unit: '{copies}/mL' })),
-      { valueQuantity: { value: 20, comparator: '<', unit: 'copies/mL', system: 'http://unitsofmeasure.org', code: '{copies}/mL' } });
+      { valueQuantity: { value: 20, comparator: '<', unit: '{copies}/mL', system: 'http://unitsofmeasure.org', code: '{copies}/mL' } });
+    // the unit as printed when there is one
+    assert.deepEqual(labValueToFhir(coded({ analyte: hiv, value: 20, unit: '{copies}/mL', unitText: 'copies/ml' })),
+      { valueQuantity: { value: 20, unit: 'copies/ml', system: 'http://unitsofmeasure.org', code: '{copies}/mL' } });
     const negative = { system: 'http://snomed.info/sct', version: 'http://snomed.info/sct/900000000000207008', code: '260385009', display: 'Negative' };
     const labCode = { system: 'urn:oid:1.2.3', code: 'NEG' };
     assert.deepEqual(labValueToFhir(coded({ analyte: hiv, valueText: 'négatif', valueCodes: [negative, labCode] })),
       { valueCodeableConcept: { coding: [negative, labCode], text: 'négatif' } });
     assert.deepEqual(labValueToFhir(coded({ analyte: hiv, valueText: '1:160' })), { valueString: '1:160' });
     assert.deepEqual(labValueToFhir(coded({ analyte: hiv, value: 3.2, unit: '{index}', valueText: 'positive' })),
-      { valueQuantity: { value: 3.2, unit: 'index', system: 'http://unitsofmeasure.org', code: '{index}' }, note: 'positive' });
+      { valueQuantity: { value: 3.2, unit: '{index}', system: 'http://unitsofmeasure.org', code: '{index}' }, printedResult: { text: 'positive' }, note: 'positive' });
+    // a semi-quantitative result keeps its result codes in the printed result
+    assert.deepEqual(labValueToFhir(coded({ analyte: hiv, value: 3.2, unit: '{index}', valueText: 'positive', valueCodes: [negative] })),
+      { valueQuantity: { value: 3.2, unit: '{index}', system: 'http://unitsofmeasure.org', code: '{index}' }, printedResult: { coding: [negative], text: 'positive' }, note: 'positive' });
     // an item event reads as it displays: a fraction stored 0..1 exports as a percentage
     assert.deepEqual(labValueToFhir({ streamIds: ['body-blood-hba1c'], type: 'ratio/proportion', content: 0.057, clientData: { hdsComparator: '<' } }),
       { valueQuantity: { value: 5.7, comparator: '<', unit: '%' } });
