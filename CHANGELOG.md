@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- `labValueToFhir` on a `lab-result/coded-v1` result follows the FHIR blocks of data-model 4.31.0 (plan 133;
+  BLOOD-CHEMISTRY.md § Cross-system): `valueQuantity.unit` is the unit as printed (`unitText`), else the UCUM code
+  itself (before: a readable form of it), so the value reads back unchanged; a semi-quantitative result also returns
+  `printedResult` `{ coding?, text }` (its `valueCodes` were dropped before), for the `printed-result` extension,
+  beside the readable `note`. No other library code calls it.
+
 ## [2.63.2] - 2026-11-23
 
 ### Fixed
@@ -1784,7 +1794,7 @@ not a mechanical fix.
   formatter. Tolerates a scalar as well, so an event written before the item became multi-valued still
   renders its label rather than raw content.
 
-## [2.63.1] - 2026-11-23
+## [Unreleased]
 
 ## [1.3.6] - 2026-07-30
 
@@ -2069,7 +2079,7 @@ Callers can pin to `github:healthdatasafe/hds-lib-js#0fedc1d` (the last pre-1.0 
 
 For the doctor-side form-storage migration, see `doctor-dashboard/app/formSpecAdapter.ts` (CollectorRequest ↔ FormSpec translators) and `doctor-dashboard/app/cmcDoctor.ts` (`saveFormSpec` / `listInviteRecordsFor` / etc.) for the reference port.
 
-## [2.63.1] - 2026-11-23
+## [Unreleased]
 
 ### Removed
 

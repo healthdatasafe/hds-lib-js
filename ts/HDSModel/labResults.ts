@@ -108,7 +108,13 @@ export interface LabFhirValue {
   valueQuantity?: { value: number; comparator?: LabComparator; unit?: string; system?: string; code?: string };
   valueString?: string;
   valueCodeableConcept?: { coding: LabCoding[]; text?: string };
-  /** The printed text of a semi-quantitative result (a `value` and a `valueText`), for `Observation.note`. */
+  /**
+   * The printed result of a semi-quantitative result (a `value` and a `valueText`): `valueCodes` and `valueText`, for
+   * the `printed-result` extension (`https://hds.ngo/fhir/StructureDefinition/printed-result`, data-model
+   * BLOOD-CHEMISTRY.md § Cross-system).
+   */
+  printedResult?: { coding?: LabCoding[]; text: string };
+  /** The same printed text, readable, for `Observation.note` (a reader that ignores the extension). */
   note?: string;
 }
 
@@ -128,19 +134,21 @@ export function labValueToFhir (event: LabEventLike, model: any = getModel()): L
     const c = event.content;
     if (c == null || typeof c !== 'object') return null;
     const text = typeof c.valueText === 'string' ? c.valueText : null;
+    const coding = Array.isArray(c.valueCodes) && c.valueCodes.length > 0
+      ? c.valueCodes.map(({ system, code, version, display }: LabCoding) =>
+        ({ system, code, ...(version ? { version } : {}), ...(display ? { display } : {}) }))
+      : null;
     if (typeof c.value === 'number') {
       const q: LabFhirValue['valueQuantity'] = { value: c.value };
       if (comparator) q.comparator = comparator;
-      const unit = labUnitText(c);
-      if (unit) q.unit = unit;
+      // the unit as printed, else the UCUM code itself, so that the value reads back unchanged
+      const unit = typeof c.unitText === 'string' && c.unitText !== '' ? c.unitText : c.unit;
+      if (typeof unit === 'string' && unit !== '') q.unit = unit;
       if (typeof c.unit === 'string') { q.system = UCUM_SYSTEM; q.code = c.unit; }
-      return text ? { valueQuantity: q, note: text } : { valueQuantity: q };
+      if (!text) return { valueQuantity: q };
+      return { valueQuantity: q, printedResult: { ...(coding ? { coding } : {}), text }, note: text };
     }
-    if (Array.isArray(c.valueCodes) && c.valueCodes.length > 0) {
-      const coding = c.valueCodes.map(({ system, code, version, display }: LabCoding) =>
-        ({ system, code, ...(version ? { version } : {}), ...(display ? { display } : {}) }));
-      return { valueCodeableConcept: { coding, ...(text ? { text } : {}) } };
-    }
+    if (coding) return { valueCodeableConcept: { coding, ...(text ? { text } : {}) } };
     return text ? { valueString: text } : null;
   }
   const value = labNumberOf(event);
