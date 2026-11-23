@@ -4,17 +4,13 @@
 
 ### Changed
 
-- `labValueToFhir` on a `lab-result/coded-v1` result follows the FHIR blocks of data-model 4.31.0 (planned, plan 133;
+- `labValueToFhir` on a `lab-result/coded-v1` result follows the FHIR blocks of data-model 4.31.0 (plan 133;
   BLOOD-CHEMISTRY.md § Cross-system): `valueQuantity.unit` is the unit as printed (`unitText`), else the UCUM code
   itself (before: a readable form of it), so the value reads back unchanged; a semi-quantitative result also returns
   `printedResult` `{ coding?, text }` (its `valueCodes` were dropped before), for the `printed-result` extension,
   beside the readable `note`. No other library code calls it.
 
-## [2.63.1] - 2026-11-23
-
-### Fixed
-
-- `eventToShortText`: a no known allergy (`allergy/none-known-v1`, data-model 4.28.0) reads as its scope's localized option label ("Medications", "Médicaments") instead of the raw value (`medication`); the value as written when the item is not loaded (plan 133).
+## [2.63.2] - 2026-11-23
 
 ### Fixed
 - **`formatEventDate` / `formatEventDateTime` / `eventToShortText` read `hdsTimePrecision: unknown`** (data-model
@@ -24,6 +20,12 @@
 - **The "about" word of an `approx` date follows `opts.locale`** when it is given (its language for a regional tag
   such as `fr-CH`), like the month name and the weekday; it came from the preferred locales only, so
   `{ locale: 'fr' }` read "about printemps 1998" in an English app (B-2026-11-21-19).
+
+## [2.63.1] - 2026-11-23
+
+### Fixed
+
+- `eventToShortText`: a no known allergy (`allergy/none-known-v1`, data-model 4.28.0) reads as its scope's localized option label ("Medications", "Médicaments") instead of the raw value (`medication`); the value as written when the item is not loaded (plan 133).
 
 ## [2.63.0] - 2026-11-21
 
