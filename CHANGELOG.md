@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Document kinds with a `detail` code (plan 141, data-model 4.32.0).** A kind no CH Term pair names has the class and
+  type of another kind plus `detail`, a Coding of an HDS code system, written as the second entry of `type`. The pack
+  lists them in `documentKinds.detailKinds`, which an earlier version does not read: it never offers one, and reads a
+  stored one as the other kind. `documentKinds.getAll`, `forKey` and `label` include them. `documentKinds.forContent`
+  gives such a kind only when its `detail` is in the document's `type`, else the kind without one.
+  `documentKinds.codingsFor(key)` gives the `class` and whole `type` to write: use it in place of `[kind.type]`, which
+  loses the kind. `documentUpdateOf`, `documentEditOf` and `pendingDocumentEvent` do. Inert on an earlier pack. **A
+  consumer that offers `getAll()` and writes `[kind.type]` itself moves to `codingsFor` with this version.**
+- `eventToShortText` of a charted stamp (`fertility/chart-stamp-v1`): "Yellow with a baby"; it read the charting method.
+
 ## [2.65.0] - 2026-11-24
 
 ### Added

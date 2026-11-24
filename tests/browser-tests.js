@@ -11,6 +11,7 @@ import './appScope.test.js';
 import './apptemplatesRequest.test.js';
 import './attachmentsItems.test.js';
 import './bridgeAccess.test.js';
+import './chartStamp.test.js';
 import './cmcConstants.test.js';
 import './cmcDataExport.test.js';
 import './cmcDocuments.test.js';

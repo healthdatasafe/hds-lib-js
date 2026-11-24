@@ -1047,7 +1047,7 @@ export interface DocumentFields { documentKind?: string; time?: number; timePrec
 
 /**
  * The `events.update` of the document (CONVERSATION.md § Writing a document's date and kind) for `fields`, applied
- * only where pending: the whole `content` with `class` and `type` from the pack's kind (`type` = `[kind.type]`), `time`
+ * only where pending: the whole `content` with `class` and `type` from the pack's kind (`codingsFor`), `time`
  * and `clientData.hdsTimePrecision` (with `unknown`, the time stays), and `hdsDocumentPending` reduced (`null` when
  * empty; `events.update` merges `clientData`). Null `update` when nothing is applied.
  */
@@ -1060,8 +1060,7 @@ export function documentUpdateOf (
   const update: Record<string, any> = {};
   const clientData: Record<string, any> = {};
   if (pending.includes('kind') && typeof fields.documentKind === 'string' && documentKindRefusal(fields.documentKind) == null) {
-    const kind = getModel().documentKinds.forKey(fields.documentKind)!;
-    update.content = { ...document.content, class: { ...kind.class }, type: [{ ...kind.type }] };
+    update.content = { ...document.content, ...getModel().documentKinds.codingsFor(fields.documentKind)! };
     applied.push('kind');
   }
   if (pending.includes('time') && TIME_PRECISIONS.has(fields.timePrecision as string) && (fields.timePrecision === 'unknown' || typeof fields.time === 'number')) {
@@ -1093,8 +1092,8 @@ export function pendingDocumentEvent (params: {
 }): { streamIds: string[]; type: string; time: number; content: Record<string, any>; clientData: Record<string, any> } {
   const kind = params.documentKind != null && documentKindRefusal(params.documentKind) == null ? params.documentKind : null;
   const dated = params.timePrecision != null && TIME_PRECISIONS.has(params.timePrecision) && (params.timePrecision === 'unknown' || typeof params.time === 'number');
-  const def = getModel().documentKinds.forKey(kind ?? 'other');
-  if (def == null) throw new HDSLibError('pendingDocumentEvent: the loaded data model has no document kinds (data-model 4.17.0 or later)');
+  const codings = getModel().documentKinds.codingsFor(kind ?? 'other');
+  if (codings == null) throw new HDSLibError('pendingDocumentEvent: the loaded data model has no document kinds (data-model 4.17.0 or later)');
   const now = params.now ?? Math.floor(Date.now() / 1000);
   const pending: DocumentField[] = [...(dated ? [] : ['time' as const]), ...(kind != null ? [] : ['kind' as const])];
   const clientData: Record<string, any> = {};
@@ -1104,7 +1103,7 @@ export function pendingDocumentEvent (params: {
     streamIds: params.streamIds ?? ['documents'],
     type: 'file/xds-v1',
     time: dated && params.timePrecision !== 'unknown' ? params.time! : now,
-    content: { class: { ...def.class }, type: [{ ...def.type }], title: params.title, language: params.language ?? 'und' },
+    content: { ...codings, title: params.title, language: params.language ?? 'und' },
     clientData
   };
 }
@@ -1125,8 +1124,7 @@ export function documentEditOf (
   if (typeof fields.documentKind === 'string') {
     const refusal = documentKindRefusal(fields.documentKind);
     if (refusal != null) throw new HDSLibError(`documentEditOf: ${fields.documentKind} is ${refusal}`, { reason: refusal });
-    const kind = getModel().documentKinds.forKey(fields.documentKind)!;
-    update.content = { ...document.content, class: { ...kind.class }, type: [{ ...kind.type }] };
+    update.content = { ...document.content, ...getModel().documentKinds.codingsFor(fields.documentKind)! };
     written.push('kind');
   }
   if (fields.timePrecision != null) {
