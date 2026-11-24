@@ -196,6 +196,7 @@ const HDSLib = {
   cmcDocuments,
   cmcItemReminders,
   cmcConversation,
+  cmcText,
   appDescription
 };
 export default HDSLib;
