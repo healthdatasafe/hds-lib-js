@@ -18022,14 +18022,83 @@ function applyReverseFactor(value, factor) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HDSModelConverters = void 0;
+exports.HDSModelConverters = exports.SUPPORTED_CONVERTER_VERSIONS = void 0;
+exports.packVersionFor = packVersionFor;
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 const EuclidianDistanceEngine_ts_1 = __webpack_require__(/*! ../converters/EuclidianDistanceEngine.js */ "./ts/converters/EuclidianDistanceEngine.ts");
+/**
+ * The newest converter version this hds-lib reads, per item key. A version above it may carry what this engine
+ * does not know (cervical-fluid v1: options with `produce: false`), so it is never fetched. An item key not listed
+ * reads v0.
+ */
+exports.SUPPORTED_CONVERTER_VERSIONS = { 'cervical-fluid': 'v1', mood: 'v0' };
+const versionNumber = (v) => /^v\d+$/.test(v) ? Number(v.slice(1)) : NaN;
+/**
+ * The pack version to fetch: the highest of the model's published `versions` not above what this hds-lib supports.
+ * `null` (read `pack-latest.json`) when the model lists no versions (data-model before the versioned packs) or none
+ * this hds-lib supports.
+ */
+function packVersionFor(itemKey, versions) {
+    if (!Array.isArray(versions))
+        return null;
+    const max = versionNumber(exports.SUPPORTED_CONVERTER_VERSIONS[itemKey] ?? 'v0');
+    const usable = versions.filter((v) => typeof v === 'string' && versionNumber(v) <= max);
+    if (usable.length === 0)
+        return null;
+    return usable.reduce((a, b) => (versionNumber(b) > versionNumber(a) ? b : a));
+}
+/** Fetch a converter pack. A 404 gives `null` when `missingOk`; any other failure throws. */
+async function fetchPack(url, missingOk) {
+    const response = await fetch(url);
+    if (missingOk && response.status === 404)
+        return null;
+    if (!response.ok) {
+        throw new Error(`Failed to fetch converter pack: ${url} (${response.status})`);
+    }
+    return await response.json();
+}
 /**
  * Converters — Extension of HDSModel
  *
  * Lazy-loads converter packs from the model's base URL:
- *   {modelBaseUrl}/converters/{itemKey}/pack-latest.json
+ *   {modelBaseUrl}/converters/{itemKey}/pack-{version}.json
+ * where `version` is the highest of the converter index's `versions` this hds-lib supports
+ * (`SUPPORTED_CONVERTER_VERSIONS`). A model without `versions` or without that file (404) is read from
+ * `pack-latest.json`, which data-model keeps frozen at the v0 pack for hds-lib before 2.60.0.
  *
  * The main pack.json only contains the converter index (item keys + versions).
  * Full converter data (dimensions + methods) is fetched on first use and cached.
@@ -18070,7 +18139,7 @@ class HDSModelConverters {
     }
     /**
      * Ensure a converter engine is loaded for the given item key.
-     * Fetches pack-latest.json on first call, returns cached engine on subsequent calls.
+     * Fetches the pack of the highest supported converter version on first call, returns cached engine on subsequent calls.
      */
     async ensureEngine(itemKey) {
         if (this.#engines[itemKey])
@@ -18092,7 +18161,8 @@ class HDSModelConverters {
      * @param itemKey - converter item key (e.g. 'cervical-fluid', 'mood')
      * @param sourceMethod - source method id (e.g. 'mira', 'appleHealth')
      * @param dataFromSource - raw observation from the source method
-     * @param modelVersion - version of the model definition used (default: engine's version)
+     * @param modelVersion - version of the model definition used (default: the method's `modelVersion` in the pack,
+     *   else the engine's version)
      * @returns Pryv event-like object with type, streamIds, content
      */
     async convertMethodToEvent(itemKey, sourceMethod, dataFromSource, modelVersion) {
@@ -18103,7 +18173,7 @@ class HDSModelConverters {
             key: sourceMethod,
             sourceData: dataFromSource,
             engineVersion: engine.converterVersion,
-            modelVersion: modelVersion ?? engine.converterVersion,
+            modelVersion: modelVersion ?? engine.getMethodDef(sourceMethod)?.modelVersion ?? engine.converterVersion,
         };
         return {
             type: engine.eventType,
@@ -18153,12 +18223,11 @@ class HDSModelConverters {
         // Derive URL from model base URL
         const modelUrl = this.#model.modelUrl;
         const baseUrl = modelUrl.substring(0, modelUrl.lastIndexOf('/') + 1);
-        const packUrl = `${baseUrl}converters/${itemKey}/pack-latest.json`;
-        const response = await fetch(packUrl);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch converter pack: ${packUrl} (${response.status})`);
-        }
-        const pack = await response.json();
+        const version = packVersionFor(itemKey, converters[itemKey].versions);
+        let pack = version ? await fetchPack(`${baseUrl}converters/${itemKey}/pack-${version}.json`, true) : null;
+        if (version && !pack)
+            logger.warn(`Converter pack ${itemKey} ${version} not found; reading pack-latest.json`);
+        pack ??= (await fetchPack(`${baseUrl}converters/${itemKey}/pack-latest.json`, false));
         if (pack.engine !== 'euclidian-distance') {
             throw new Error(`Unknown converter engine: "${pack.engine}" in pack for "${itemKey}"`);
         }
@@ -19961,6 +20030,16 @@ function formatDayParts(p, fmt, opts) {
     return name ? name + ' ' + text : text;
 }
 const ABOUT = { en: 'about', fr: 'vers', es: 'hacia' };
+const DATE_UNKNOWN = { en: 'date unknown', fr: 'date inconnue', es: 'fecha desconocida' };
+/** `texts` in `locale` (or its language, `fr` for `fr-CH`) when given and translated, else in the preferred locales. */
+function wordIn(texts, locale) {
+    if (locale) {
+        const word = texts[locale] ?? texts[locale.split('-')[0].toLowerCase()];
+        if (word)
+            return word;
+    }
+    return (0, localizeText_ts_1.localizeText)(texts) || texts.en;
+}
 /** Calendar day of `d` in an IANA zone, or null when the zone is unknown. */
 function dayPartsInZone(d, timeZone) {
     try {
@@ -19982,8 +20061,9 @@ function utcDayParts(d) {
  *
  * Given an event, honours its partial date (data-model `PARTIAL-DATES.md`, `clientData.hdsTimePrecision`), read in
  * UTC: `day` the date, `month` "March 1999", `year` "1997" (`opts.year` ignored), `approx` "about spring 1998" from
- * `hdsTimeText` (else "about 1998"); `minute` with `hdsTimeZone` takes the day in that zone. Without a precision, or
- * with an unknown one, the event's date reads as its timestamp's.
+ * `hdsTimeText` (else "about 1998"); `unknown` "date unknown", never the recording moment its `time` holds;
+ * `minute` with `hdsTimeZone` takes the day in that zone. Without a precision, or with one it does not know, the
+ * event's date reads as its timestamp's. The words follow `opts.locale` when given, else the preferred locales.
  */
 function formatEventDate(timeOrEvent, opts = {}) {
     const timeSec = typeof timeOrEvent === 'number' ? timeOrEvent : timeOrEvent.time;
@@ -20002,8 +20082,10 @@ function formatEventDate(timeOrEvent, opts = {}) {
             const text = typeof clientData.hdsTimeText === 'string' && clientData.hdsTimeText.trim() !== ''
                 ? clientData.hdsTimeText.trim()
                 : String(d.getUTCFullYear());
-            return ((0, localizeText_ts_1.localizeText)(ABOUT) || ABOUT.en) + ' ' + text;
+            return wordIn(ABOUT, opts.locale) + ' ' + text;
         }
+        case 'unknown':
+            return wordIn(DATE_UNKNOWN, opts.locale);
         case 'minute': {
             const zoned = typeof clientData.hdsTimeZone === 'string' ? dayPartsInZone(d, clientData.hdsTimeZone) : null;
             if (zoned)
@@ -20043,11 +20125,11 @@ function formatContentDate(content) {
 /**
  * Format an event's time as a date + time string.
  * Used for checkbox events where the event time IS the data. A partial date (`hdsTimePrecision` other than
- * `minute`) has no time of day: its date only.
+ * `minute`) has no time of day: its date only; `unknown` "date unknown".
  */
 function formatEventDateTime(event) {
     const precision = event.clientData?.hdsTimePrecision;
-    if (precision === 'day' || precision === 'month' || precision === 'year' || precision === 'approx') {
+    if (precision === 'day' || precision === 'month' || precision === 'year' || precision === 'approx' || precision === 'unknown') {
         return formatEventDate(event);
     }
     const d = new Date(event.time * 1000);
@@ -20120,9 +20202,27 @@ function compositeParts(event) {
     }
     return parts;
 }
+/** A label as text: a string as it is, a localized one in the preferred language, `fallback` when there is none. */
+function labelText(label, fallback) {
+    if (label == null)
+        return fallback;
+    if (typeof label === 'string')
+        return label;
+    return (0, localizeText_ts_1.localizeText)(label);
+}
 function compositePartText(value, def) {
-    if (value == null || typeof value === 'object')
+    if (value == null)
         return null;
+    // A multi-select field (data-model 4.21.0, allergy `categories`): its options' labels, joined; a value with no
+    // option as written
+    if (Array.isArray(value)) {
+        if (def?.type !== 'multi-select' || value.length === 0)
+            return null;
+        return value.map((v) => labelText(def.options?.find((o) => o.value === v)?.label, String(v))).join(', ');
+    }
+    // A datasource-search field (allergy `allergen`): the chosen entry's label
+    if (typeof value === 'object')
+        return def?.type === 'datasource-search' ? labelText(value.label, null) : null;
     if (typeof value === 'string' && value.trim() === '')
         return null;
     if (def?.type === 'select' && Array.isArray(def.options)) {
@@ -20136,6 +20236,40 @@ function compositePartText(value, def) {
     if (typeof value === 'number')
         return new Intl.NumberFormat((0, localizeText_ts_1.getPreferredLocales)()[0]).format(value);
     return String(value);
+}
+const ALLERGY_CODED = 'allergy/coded-v1';
+const ALLERGY_BASIC = 'allergy/basic-v1';
+const HIGH_RISK = { en: 'high risk', fr: 'risque élevé', es: 'riesgo alto' };
+/**
+ * An allergy as its allergen (the coded entry's label, or the name as written), then what changes how it reads: a
+ * status that is not `active` (its option label, "Resolved") and a `high` criticality. `null` when there is no
+ * allergen, so the generic path runs.
+ */
+function allergyShortText(content, itemDef) {
+    if (content == null || typeof content !== 'object')
+        return null;
+    const name = labelText(content.allergen?.label, null) ?? (typeof content.name === 'string' ? content.name.trim() : '');
+    if (!name)
+        return null;
+    const parts = [];
+    if (content.status === 'inactive' || content.status === 'resolved') {
+        // a non-empty string: compositePartText gives its option label, or the value itself
+        parts.push(compositePartText(content.status, itemDef?.data?.composite?.status));
+    }
+    if (content.criticality === 'high')
+        parts.push((0, localizeText_ts_1.localizeText)(HIGH_RISK));
+    return parts.length > 0 ? `${name} — ${parts.join(', ')}` : name;
+}
+const ALLERGY_NONE_KNOWN = 'allergy/none-known-v1';
+/**
+ * A no known allergy (data-model 4.28.0) as its scope's option label ("Medications"), read after the item label "No
+ * known allergy"; the value as written when the item is not loaded. `null` when there is no scope, so the generic path
+ * runs.
+ */
+function allergyNoneKnownShortText(content, itemDef) {
+    if (content == null || typeof content !== 'object' || typeof content.scope !== 'string')
+        return null;
+    return compositePartText(content.scope, itemDef?.data?.composite?.scope);
 }
 /** A vocabulary value's localized label, the value itself when the pack has none. */
 function vocabularyLabel(vocabulary, value) {
@@ -20179,6 +20313,19 @@ function shortTextWithOrigin(event) {
     // composite item would otherwise read "Type of visit: …" or the first string of the content.
     if (event.type === encounters_ts_1.ENCOUNTER_VISIT || event.type === encounters_ts_1.PROVIDER_PRACTITIONER || event.type === encounters_ts_1.PROVIDER_ORGANIZATION) {
         const text = (0, encounters_ts_1.encounterShortText)(event, itemDef, model);
+        if (text)
+            return { text, origin: null };
+    }
+    // Allergies (data-model 4.21.0, plan 133): eventType-driven, "Peanut — high risk", "Lactose — Resolved". The
+    // composite would otherwise read its first string field, the status.
+    if (event.type === ALLERGY_CODED || event.type === ALLERGY_BASIC) {
+        const text = allergyShortText(content, itemDef);
+        if (text)
+            return { text, origin: null };
+    }
+    // A no known allergy (plan 133): its scope, "Medications"; the composite would read the raw `medication`.
+    if (event.type === ALLERGY_NONE_KNOWN) {
+        const text = allergyNoneKnownShortText(content, itemDef);
         if (text)
             return { text, origin: null };
     }
@@ -20801,6 +20948,9 @@ function resolveObservationLabel(engine, methodId, data) {
     const def = engine?.getMethodDef(methodId);
     if (!def?.components)
         return typeof data === 'string' ? data : JSON.stringify(data);
+    // A case-insensitive method (Creighton) converts '6ck' as '6CK': label it the same way.
+    const matches = (o, val) => o.value === val ||
+        (!!def.caseInsensitive && typeof o.value === 'string' && typeof val === 'string' && o.value.toUpperCase() === val.toUpperCase());
     if (typeof data === 'object' && data !== null) {
         // Multi-component: resolve each field
         const parts = [];
@@ -20808,7 +20958,7 @@ function resolveObservationLabel(engine, methodId, data) {
             const val = data[comp.field];
             if (val === undefined)
                 continue;
-            const opt = comp.options.find((o) => o.value === val);
+            const opt = comp.options.find((o) => matches(o, val));
             if (opt?.label) {
                 parts.push((0, localizeText_ts_1.localizeText)(opt.label) || String(val));
             }
@@ -20820,7 +20970,7 @@ function resolveObservationLabel(engine, methodId, data) {
     }
     // Single-component: look up in first component's options
     for (const comp of def.components) {
-        const opt = comp.options.find((o) => o.value === data);
+        const opt = comp.options.find((o) => matches(o, data));
         if (opt?.label) {
             return (0, localizeText_ts_1.localizeText)(opt.label) || String(data);
         }
@@ -21099,23 +21249,27 @@ function labValueToFhir(event, model = (0, HDSModelInitAndSingleton_ts_1.getMode
         if (c == null || typeof c !== 'object')
             return null;
         const text = typeof c.valueText === 'string' ? c.valueText : null;
+        const coding = Array.isArray(c.valueCodes) && c.valueCodes.length > 0
+            ? c.valueCodes.map(({ system, code, version, display }) => ({ system, code, ...(version ? { version } : {}), ...(display ? { display } : {}) }))
+            : null;
         if (typeof c.value === 'number') {
             const q = { value: c.value };
             if (comparator)
                 q.comparator = comparator;
-            const unit = labUnitText(c);
-            if (unit)
+            // the unit as printed, else the UCUM code itself, so that the value reads back unchanged
+            const unit = typeof c.unitText === 'string' && c.unitText !== '' ? c.unitText : c.unit;
+            if (typeof unit === 'string' && unit !== '')
                 q.unit = unit;
             if (typeof c.unit === 'string') {
                 q.system = UCUM_SYSTEM;
                 q.code = c.unit;
             }
-            return text ? { valueQuantity: q, note: text } : { valueQuantity: q };
+            if (!text)
+                return { valueQuantity: q };
+            return { valueQuantity: q, printedResult: { ...(coding ? { coding } : {}), text }, note: text };
         }
-        if (Array.isArray(c.valueCodes) && c.valueCodes.length > 0) {
-            const coding = c.valueCodes.map(({ system, code, version, display }) => ({ system, code, ...(version ? { version } : {}), ...(display ? { display } : {}) }));
+        if (coding)
             return { valueCodeableConcept: { coding, ...(text ? { text } : {}) } };
-        }
         return text ? { valueString: text } : null;
     }
     const value = labNumberOf(event);
@@ -26026,17 +26180,53 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.offerStreamsToCreate = offerStreamsToCreate;
 exports.offerStreamsToApiCalls = offerStreamsToApiCalls;
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+const APP_SUFFIX = '-app';
+/**
+ * The app bases a grant names (the app-streams convention: a base `{base}` with its `{base}-app` under it): one per
+ * granted `{base}-app` that the model does not know, whose base the model does not know either.
+ */
+function appBasesOf(permissions, modelStreams) {
+    const bases = new Set();
+    for (const perm of permissions) {
+        const id = perm?.streamId;
+        if (typeof id !== 'string' || id.startsWith(':') || !id.endsWith(APP_SUFFIX))
+            continue;
+        const base = id.slice(0, -APP_SUFFIX.length);
+        if (base === '' || modelStreams.getDataById(id, false) != null || modelStreams.getDataById(base, false) != null)
+            continue;
+        bases.add(base);
+    }
+    // longest first, so a stream goes under the closest base
+    return [...bases].sort((a, b) => b.length - a.length);
+}
 /**
  * Resolve the granted permissions into streams to create, ancestors first.
  *
  * Insertion order is parent-before-child, so the batch applies top-down with no
  * separate sort.
+ *
+ * An app's own tree: when the grant names a `{base}-app` stream the model does not know, every granted stream the
+ * model does not know whose id starts with `{base}-` (the `-app` one included) is created under `{base}`, and `{base}`
+ * is created first (named by its id) even when it is not granted. The HDS Reader's grant (`hds-reader-inbox`,
+ * `hds-reader-dialogue`, `hds-reader-app`) thus gives `hds-reader/` with the three under it (data-model
+ * `documentation/HDS-READER.md`), while the requester holds nothing on `hds-reader` itself. A grant with no
+ * `{base}-app` keeps its unknown streams at the root, as before.
+ *
+ * A stream the model knows takes the model's name; a granted one it does not know takes the permission's
+ * `defaultName` when it carries one, else its id.
  */
 function offerStreamsToCreate(permissions, modelStreams) {
     const wanted = new Map();
-    const add = (id, { granted = false } = {}) => {
-        if (wanted.has(id))
+    const appBases = appBasesOf(permissions, modelStreams);
+    const add = (id, { granted = false, defaultName } = {}) => {
+        const name = typeof defaultName === 'string' && defaultName.trim() !== '' ? defaultName.trim() : id;
+        const already = wanted.get(id);
+        if (already !== undefined) {
+            // an app base added ahead of its granted `-…` stream, then granted itself: keep its own name
+            if (granted && already.name === id)
+                already.name = name;
             return;
+        }
         const data = modelStreams.getDataById(id, false);
         if (data == null) {
             // Unknown to the model. What reaches here is the requester's OWN root
@@ -26045,9 +26235,17 @@ function offerStreamsToCreate(permissions, modelStreams) {
             // Only ever create an id the user explicitly granted, never an inferred
             // ancestor: inventing a hierarchy inside someone else's subtree is the
             // requester's business, not ours. Hence `granted` is not defaulted true.
+            // The one exception is the base of an app tree the grant itself names (see above).
             if (!granted)
                 return;
-            wanted.set(id, { id, name: id });
+            const base = appBases.find((b) => id.startsWith(b + '-'));
+            if (base === undefined) {
+                wanted.set(id, { id, name });
+                return;
+            }
+            if (!wanted.has(base))
+                wanted.set(base, { id: base, name: base });
+            wanted.set(id, { id, name, parentId: base });
             return;
         }
         wanted.set(id, { id, name: data.name ?? id, parentId: data.parentId ?? undefined });
@@ -26067,7 +26265,7 @@ function offerStreamsToCreate(permissions, modelStreams) {
             const message = e instanceof Error ? e.message : String(e);
             logger.warn(`offerStreams: could not resolve ancestors of "${streamId}":`, message);
         }
-        add(streamId, { granted: true });
+        add(streamId, { granted: true, defaultName: perm.defaultName });
     }
     return [...wanted.values()];
 }
@@ -26618,6 +26816,43 @@ async function createTolerant(connection, id, parentId, name) {
 
 /***/ },
 
+/***/ "./ts/cmc/cmcText.ts"
+/*!***************************!*\
+  !*** ./ts/cmc/cmcText.ts ***!
+  \***************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.cmcText = cmcText;
+/**
+ * A per-locale text as the CMC plugin accepts it: its validator takes keys of 2 or 3 lowercase letters only
+ * (open-pryv.io `components/cmc/src/validators.ts`), and refuses the whole event otherwise. A regional locale travels
+ * under its language (`pt-BR` as `pt`) unless the text has that language itself; readers find it there (`pt` is read for
+ * `pt-BR`, see `localizeText`).
+ */
+function cmcText(texts) {
+    const out = {};
+    const regional = [];
+    for (const [locale, text] of Object.entries(texts)) {
+        if (typeof text !== 'string')
+            continue;
+        if (/^[a-z]{2,3}$/.test(locale))
+            out[locale] = text;
+        else
+            regional.push([locale.split(/[-_]/)[0].toLowerCase(), text]);
+    }
+    for (const [language, text] of regional) {
+        if (/^[a-z]{2,3}$/.test(language))
+            out[language] ??= text;
+    }
+    return out;
+}
+
+
+/***/ },
+
 /***/ "./ts/cmc/constants.ts"
 /*!*****************************!*\
   !*** ./ts/cmc/constants.ts ***!
@@ -26651,8 +26886,16 @@ exports.CMC_APP_CODES = {
     COLLECTOR: 'hds-collector',
     /** bridge-mira service-account scope (Mira API ingest). */
     BRIDGE_MIRA: 'hds-bridge-mira',
-    /** bridge-athena service-account scope (Athena/EHR ingest; CMC wiring pending). */
-    BRIDGE_ATHENA: 'hds-bridge-athena'
+    /**
+     * bridge-athenahealth service-account scope (Athena/EHR ingest; CMC wiring pending).
+     * Equals `connectorCmcAppCode('bridge-athenahealth')`, the catalogue id's rule.
+     */
+    BRIDGE_ATHENA: 'hds-bridge-athenahealth',
+    /**
+     * HDS Reader engine (plan 128): reads a document sent to its inbox, asks in its dialogue, writes confirmed values.
+     * Equals `connectorCmcAppCode('bridge-reader')`. Its streams: data-model `documentation/HDS-READER.md`.
+     */
+    BRIDGE_READER: 'hds-bridge-reader'
 };
 /** Well-known CMC consent event types. */
 exports.CMC_EVENT_TYPES = {
@@ -26686,11 +26929,2088 @@ function extractAppSubScopeSuffix(streamId, appCode) {
 
 /***/ },
 
+/***/ "./ts/cmc/conversation.ts"
+/*!********************************!*\
+  !*** ./ts/cmc/conversation.ts ***!
+  \********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * The standard conversation of a CMC relationship: questions, proposed values and answers between the person and a
+ * contact (a doctor, the HDS Reader, a third party's service). data-model 4.22.0, `documentation/CONVERSATION.md`
+ * (the wire contract, the source of truth for every rule named R1..R12 below) and `CUSTOM-FIELDS-AND-SYSTEM.md` (the
+ * five alert kinds).
+ *
+ * The items live on the person's account, in two children of the `explicitGrantOnly` root `conversation-items`, one
+ * pair per relationship, created by her app:
+ *
+ *   conversation-items/conv-<12 base36>   name = id
+ *     clientData.hdsConversationItems = { relationship, direction: 'received' | 'sent' }
+ *
+ * - `received`, granted `contribute`: the contact's `question`, `proposed-value` and (4.26.0) `proposed-document`
+ *   events;
+ * - `sent`, granted `read`: her `answer` events.
+ *
+ * What travels over CMC is a pointer: a `notification/alert-cmc` whose `hds` block carries kinds, event ids, codes
+ * and counts only, with fixed words. **Her app writes the values** she confirmed (`acceptProposedValues`), never the
+ * contact.
+ *
+ * Both sides are here, as in `documents.ts`: the person's app (streams, reading, answering, writing values) and the
+ * primitives a contact uses through its grant (`writeQuestion`, `writeProposedValues`, `postConversationAlert`),
+ * which lib-bridge-js wraps for bridges. Writers validate (R8): every item against the pack's
+ * `message/hds-conversation-v1` and the contract's conditional rules, every alert's `hds` against
+ * `hds-conversation-alert.json` (mirrored here as `CONVERSATION_ALERT_HDS_SCHEMA`). Readers never validate: they
+ * dispatch on `kind` and skip what they do not know.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.BASES = exports.CONVERSATION_ALERT_HDS_SCHEMA = exports.VOUCHED_ENGINES = exports.CONFIRMABLE_STATUSES = exports.ERROR_CODES = exports.NOTICE_CODES = exports.ANSWER_ACTIONS = exports.TASK_STATUSES = exports.NOTE_MAX_LENGTH = exports.PRINTED_IN_KEY = exports.DOCUMENT_VALUES_KEY = exports.DOCUMENT_PENDING_KEY = exports.SPECIMEN_CODES = exports.QUESTION_CODES = exports.ITEM_KINDS = exports.CONVERSATION_ALERT_KINDS = exports.ET_CONVERSATION = exports.CONVERSATION_STREAM_PREFIX = exports.CONVERSATION_ROOT_ID = void 0;
+exports.vouchedEnginesFor = vouchedEnginesFor;
+exports.checkConversationAlertHds = checkConversationAlertHds;
+exports.buildConversationAlertContent = buildConversationAlertContent;
+exports.parseConversationAlerts = parseConversationAlerts;
+exports.taskStatusOf = taskStatusOf;
+exports.newConversationStreamId = newConversationStreamId;
+exports.isConversationStreamId = isConversationStreamId;
+exports.conversationStreamsIn = conversationStreamsIn;
+exports.conversationStreamsOf = conversationStreamsOf;
+exports.conversationStreamLabel = conversationStreamLabel;
+exports.listConversationStreams = listConversationStreams;
+exports.conversationStreamsFor = conversationStreamsFor;
+exports.ensureConversationRoot = ensureConversationRoot;
+exports.ensureConversationStreams = ensureConversationStreams;
+exports.cleanupConversationStreams = cleanupConversationStreams;
+exports.cleanupOrphanConversationStreams = cleanupOrphanConversationStreams;
+exports.parseConversationItems = parseConversationItems;
+exports.listConversationItems = listConversationItems;
+exports.conversationOf = conversationOf;
+exports.itemsToDeleteAtDone = itemsToDeleteAtDone;
+exports.proposedDocumentItemsToDelete = proposedDocumentItemsToDelete;
+exports.itemsOfDocument = itemsOfDocument;
+exports.checkConversationItem = checkConversationItem;
+exports.checkAnswerFor = checkAnswerFor;
+exports.checkValueProposal = checkValueProposal;
+exports.proposalRefusal = proposalRefusal;
+exports.profileMatch = profileMatch;
+exports.documentKindRefusal = documentKindRefusal;
+exports.pendingFieldsOf = pendingFieldsOf;
+exports.proposedFieldsOf = proposedFieldsOf;
+exports.documentProposalRefusal = documentProposalRefusal;
+exports.documentUpdateOf = documentUpdateOf;
+exports.pendingDocumentEvent = pendingDocumentEvent;
+exports.documentEditOf = documentEditOf;
+exports.listDocumentValues = listDocumentValues;
+exports.sourceKeyOf = sourceKeyOf;
+exports.valueEventOf = valueEventOf;
+exports.acceptProposedValues = acceptProposedValues;
+exports.answerQuestion = answerQuestion;
+exports.answerProposedValues = answerProposedValues;
+exports.autoConfirmIdentity = autoConfirmIdentity;
+exports.onComparedDay = onComparedDay;
+exports.holdsProposedValue = holdsProposedValue;
+exports.autoMarkDuplicates = autoMarkDuplicates;
+exports.indexDocumentValues = indexDocumentValues;
+exports.markPrintedIn = markPrintedIn;
+exports.acceptProposedDocument = acceptProposedDocument;
+exports.skipProposedDocument = skipProposedDocument;
+exports.autoSettleProposedDocuments = autoSettleProposedDocuments;
+exports.notesToRemove = notesToRemove;
+exports.removeNotes = removeNotes;
+exports.postConversationAlert = postConversationAlert;
+exports.listConversationAlerts = listConversationAlerts;
+exports.writeQuestion = writeQuestion;
+exports.writeProposedValues = writeProposedValues;
+exports.writeProposedDocument = writeProposedDocument;
+exports.deleteConversationItems = deleteConversationItems;
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const schemaCheck_ts_1 = __webpack_require__(/*! ../utils/schemaCheck.js */ "./ts/utils/schemaCheck.ts");
+const appScope_ts_1 = __webpack_require__(/*! ./appScope.js */ "./ts/cmc/appScope.ts");
+const cmcText_ts_1 = __webpack_require__(/*! ./cmcText.js */ "./ts/cmc/cmcText.ts");
+const dataExport_ts_1 = __webpack_require__(/*! ./dataExport.js */ "./ts/cmc/dataExport.ts");
+const documents_ts_1 = __webpack_require__(/*! ./documents.js */ "./ts/cmc/documents.ts");
+const scope_ts_1 = __webpack_require__(/*! ./scope.js */ "./ts/cmc/scope.ts");
+exports.CONVERSATION_ROOT_ID = 'conversation-items';
+exports.CONVERSATION_STREAM_PREFIX = 'conv-';
+exports.ET_CONVERSATION = 'message/hds-conversation-v1';
+exports.CONVERSATION_ALERT_KINDS = {
+    TASK_STATUS: 'task-status',
+    NOTICE: 'notice',
+    QUESTION: 'question',
+    PROPOSED_VALUES: 'proposed-values',
+    ANSWER: 'answer'
+};
+exports.ITEM_KINDS = { QUESTION: 'question', PROPOSED_VALUE: 'proposed-value', PROPOSED_DOCUMENT: 'proposed-document', ANSWER: 'answer' };
+exports.QUESTION_CODES = {
+    WHICH_SPECIMEN: 'which-specimen',
+    WHICH_UNIT: 'which-unit',
+    WHICH_ANALYTE: 'which-analyte',
+    IS_FASTING: 'is-fasting',
+    WHICH_DATE: 'which-date',
+    IS_THIS_YOURS: 'is-this-yours',
+    /** 4.26.0: the kind of a document waiting for it, about a `proposed-document`. */
+    WHICH_DOCUMENT_KIND: 'which-document-kind',
+    /** 4.26.0: the date of a document waiting for it, about a `proposed-document`. */
+    WHICH_DOCUMENT_DATE: 'which-document-date'
+};
+/** The options of `which-specimen`, registered in CONVERSATION.md § Specimen codes (4.26.0), with their labels. */
+exports.SPECIMEN_CODES = {
+    'serum-plasma': { en: 'Serum or plasma', fr: 'Sérum ou plasma', es: 'Suero o plasma' },
+    'whole-blood': { en: 'Whole blood', fr: 'Sang total', es: 'Sangre total' },
+    'citrated-plasma': { en: 'Citrated plasma (coagulation)', fr: 'Plasma citraté (coagulation)', es: 'Plasma citratado (coagulación)' },
+    rbc: { en: 'Red blood cells', fr: 'Globules rouges', es: 'Glóbulos rojos' },
+    urine: { en: 'Urine', fr: 'Urine', es: 'Orina' },
+    'urine-24h': { en: '24-hour urine', fr: 'Urines de 24 heures', es: 'Orina de 24 horas' },
+    semen: { en: 'Semen', fr: 'Sperme', es: 'Semen' },
+    csf: { en: 'Cerebrospinal fluid', fr: 'Liquide céphalorachidien', es: 'Líquido cefalorraquídeo' },
+    stool: { en: 'Stool', fr: 'Selles', es: 'Heces' },
+    saliva: { en: 'Saliva', fr: 'Salive', es: 'Saliva' }
+};
+/** The document `clientData` keys of 4.26.0 (DOCUMENTS.md, PROVENANCE.md). */
+exports.DOCUMENT_PENDING_KEY = 'hdsDocumentPending';
+exports.DOCUMENT_VALUES_KEY = 'hdsDocumentValues';
+exports.PRINTED_IN_KEY = 'hdsPrintedIn';
+/** `answer.note`: her comment, plain text (CONVERSATION.md § Her note). */
+exports.NOTE_MAX_LENGTH = 1000;
+exports.TASK_STATUSES = ['received', 'reading', 'awaiting-answers', 'done', 'error'];
+exports.ANSWER_ACTIONS = ['confirm', 'correct', 'not-mine', 'skip', 'choose', 'request-item', 'duplicate'];
+exports.NOTICE_CODES = {
+    NO_RESULT_FOUND: 'no-result-found',
+    TYPED_TEXT_NOT_READ: 'typed-text-not-read',
+    SEVERAL_SAMPLING_DATES: 'several-sampling-dates',
+    /** 4.26.0: the contact does not read her notes, once per document. */
+    NOTE_NOT_READ: 'note-not-read'
+};
+exports.ERROR_CODES = { NO_ATTACHMENT: 'no-attachment', WRITE_FAILED: 'write-failed', READING_FAILED: 'reading-failed' };
+/** `proposed-value.status` values her app may offer to confirm; any other (or unknown, R8) is shown, not confirmable. */
+exports.CONFIRMABLE_STATUSES = ['clear', 'check'];
+/**
+ * R9, the engine bound to the relationship: the engines whose proposals a relationship's app is vouched for, by CMC
+ * app code. In 4.22.0, `hds-reader` from the HDS Reader's relationship only.
+ */
+exports.VOUCHED_ENGINES = { 'hds-bridge-reader': ['hds-reader'] };
+/** The engines vouched for a relationship's app (`VOUCHED_ENGINES`); none for an unknown app. */
+function vouchedEnginesFor(appCode) {
+    return appCode != null && Object.hasOwn(exports.VOUCHED_ENGINES, appCode) ? [...exports.VOUCHED_ENGINES[appCode]] : [];
+}
+// ---- the alert `hds` block: published schema, mirrored ---- //
+const ID = { type: 'string', maxLength: 64, pattern: '^[a-zA-Z0-9_-]+$' };
+const CODE = { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,63}$' };
+const COUNT = { type: 'integer', minimum: 0 };
+function alertBranch(kind, required, properties) {
+    return { type: 'object', additionalProperties: false, required: ['kind', ...required], properties: { kind: { type: 'string', enum: [kind] }, ...properties } };
+}
+/**
+ * `json-schemas/hds-conversation-alert.json` of data-model 4.22.0 (descriptions left out). The cores do not validate
+ * `hds`, so every writer checks it; `tests/cmcConversation.test.js` compares this copy with the published one.
+ */
+exports.CONVERSATION_ALERT_HDS_SCHEMA = {
+    type: 'object',
+    required: ['kind'],
+    oneOf: [
+        alertBranch('task-status', ['about', 'status', 'attempt'], {
+            about: ID,
+            status: { type: 'string', enum: [...exports.TASK_STATUSES] },
+            attempt: { type: 'integer', minimum: 1 },
+            counts: { type: 'object', additionalProperties: false, properties: { proposed: COUNT, questions: COUNT, keptAside: COUNT, dropped: COUNT } },
+            errorCode: CODE
+        }),
+        alertBranch('notice', ['code'], { code: CODE, about: ID }),
+        alertBranch('question', ['eventId', 'about'], { eventId: ID, about: ID }),
+        alertBranch('proposed-values', ['about', 'count'], { about: ID, count: { type: 'integer', minimum: 1 } }),
+        alertBranch('answer', ['eventId', 'inReplyTo', 'about'], { eventId: ID, inReplyTo: ID, about: ID })
+    ]
+};
+/** The issues of an alert's `hds` block: the published schema, plus `errorCode` MUST with `status: error`. */
+function checkConversationAlertHds(hds) {
+    const issues = (0, schemaCheck_ts_1.schemaIssues)(exports.CONVERSATION_ALERT_HDS_SCHEMA, hds, 'hds');
+    const h = hds;
+    if (h?.kind === 'task-status' && h.status === 'error' && h.errorCode == null)
+        issues.push('hds: errorCode is required with status error');
+    return issues;
+}
+/**
+ * Alert content for one conversation kind (R12): the kind's fixed `title` and `body` in every language the contract
+ * defines, `code: hds-<kind>`, and the checked `hds` block. Never anything about the document.
+ */
+function buildConversationAlertContent(hds) {
+    const issues = checkConversationAlertHds(hds);
+    if (issues.length > 0)
+        throw new errors_ts_1.HDSLibError('buildConversationAlertContent: invalid hds block: ' + issues.join('; '), { reason: 'invalid-alert', issues });
+    const kind = hds.kind;
+    return { level: 'info', title: (0, cmcText_ts_1.cmcText)(ALERT_TEXT[kind].title), body: (0, cmcText_ts_1.cmcText)(ALERT_TEXT[kind].body), code: 'hds-' + kind, hds: { ...hds } };
+}
+/**
+ * Pure part of `listConversationAlerts`: the conversation alerts, oldest first, a duplicate (two devices) kept once
+ * per direction, keyed as CUSTOM-FIELDS-AND-SYSTEM.md says: `task-status` by (about, attempt, status), `notice` by
+ * (code, about), `question` and `answer` by eventId, `proposed-values` by about (a wake-up).
+ */
+function parseConversationAlerts(events) {
+    const kinds = new Set(Object.values(exports.CONVERSATION_ALERT_KINDS));
+    const ids = new Set();
+    const byKey = new Map();
+    const out = [];
+    const sorted = [...(events ?? [])].sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
+    for (const e of sorted) {
+        if (e.type !== dataExport_ts_1.ET_ALERT || ids.has(e.id))
+            continue;
+        const c = e.content ?? {};
+        const hds = c.hds;
+        if (hds == null || typeof hds !== 'object' || !kinds.has(hds.kind))
+            continue;
+        ids.add(e.id);
+        const from = c.from && typeof c.from.username === 'string' ? { username: c.from.username, host: String(c.from.host ?? '') } : null;
+        const direction = from ? 'received' : 'sent';
+        const key = direction + ':' + alertKey(hds);
+        const alert = { alertEventId: e.id, kind: hds.kind, hds, time: e.time ?? 0, direction, from };
+        const earlier = byKey.get(key);
+        if (earlier != null) {
+            // a `task-status` repeated later (a restarted contact reusing an attempt) is the newer state (R4): keep the latest
+            if (hds.kind !== 'task-status')
+                continue;
+            out[earlier] = null;
+        }
+        byKey.set(key, out.length);
+        out.push(alert);
+    }
+    return out.filter((a) => a != null);
+}
+function alertKey(hds) {
+    switch (hds.kind) {
+        case 'task-status': return ['task-status', hds.about, hds.attempt, hds.status].join('|');
+        case 'notice': return ['notice', hds.code, hds.about ?? ''].join('|');
+        case 'proposed-values': return ['proposed-values', hds.about].join('|');
+        default: return [hds.kind, hds.eventId].join('|');
+    }
+}
+/**
+ * R4: the state of the work on one document, the latest `task-status` of `direction` (default `received`, the
+ * contact's as her app reads them) by alert time, `attempt` breaking a tie. Null when none. An unknown `status` is
+ * read as in progress (R8) by the caller.
+ */
+function taskStatusOf(alerts, about, direction = 'received') {
+    let best = null;
+    for (const a of alerts ?? []) {
+        if (a.kind !== 'task-status' || a.direction !== direction || a.hds.about !== about)
+            continue;
+        if (best == null || a.time > best.time || (a.time === best.time && (a.hds.attempt ?? 0) > (best.hds.attempt ?? 0)))
+            best = a;
+    }
+    return best;
+}
+// ---- streams ---- //
+/** A new conversation child id: `conv-` + 12 lowercase base36 characters, random. */
+function newConversationStreamId() {
+    const bytes = new Uint8Array(12);
+    globalThis.crypto.getRandomValues(bytes);
+    return exports.CONVERSATION_STREAM_PREFIX + Array.from(bytes, b => (b % 36).toString(36)).join('');
+}
+function isConversationStreamId(streamId) {
+    return typeof streamId === 'string' && /^conv-[a-z0-9]{12}$/.test(streamId);
+}
+/** The conversation children in a stream tree (`streams.get` output, any depth), with a valid `hdsConversationItems`. */
+function conversationStreamsIn(streams) {
+    const out = [];
+    const walk = (list) => {
+        for (const s of list ?? []) {
+            const info = s.clientData?.hdsConversationItems;
+            if (s.parentId === exports.CONVERSATION_ROOT_ID && isConversationStreamId(s.id) && typeof info?.relationship === 'string' &&
+                (info.direction === 'received' || info.direction === 'sent')) {
+                out.push({ id: s.id, relationship: info.relationship, direction: info.direction });
+            }
+            if (Array.isArray(s.children))
+                walk(s.children);
+        }
+    };
+    walk(streams);
+    return out;
+}
+/**
+ * The conversation children of a grant: `contribute` on a `conv-` id is the received one, `read` the sent one. A
+ * contact reads its own two children this way; the person's app gets them from her streams (`conversationStreamsFor`).
+ */
+function conversationStreamsOf(perms) {
+    let received = null;
+    let sent = null;
+    for (const p of perms ?? []) {
+        if (!isConversationStreamId(p.streamId))
+            continue;
+        if (p.level === 'contribute' || p.level === 'manage')
+            received ??= p.streamId;
+        else if ((p.level ?? 'read') === 'read')
+            sent ??= p.streamId;
+    }
+    return { received, sent };
+}
+/** The label of a child (its name is never shown), from `direction` and the viewer's side. */
+function conversationStreamLabel(direction, viewer, locale = 'en') {
+    const labels = STREAM_LABELS[direction][viewer];
+    return labels[locale] ?? labels.en;
+}
+/** The children in the person's account. Empty when the root does not exist yet. */
+async function listConversationStreams(connection, opts = {}) {
+    try {
+        const params = { parentId: exports.CONVERSATION_ROOT_ID };
+        if (opts.includeTrashed === true)
+            params.state = 'all';
+        const streams = await connection.apiOne('streams.get', params, 'streams');
+        return conversationStreamsIn(streams);
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) === 'unknown-referenced-resource')
+            return [];
+        throw e;
+    }
+}
+/** The relationship's two children in the person's account, or null when either is missing. */
+async function conversationStreamsFor(connection, relationship) {
+    const base = (0, documents_ts_1.relationshipIdOf)(relationship);
+    const mine = (await listConversationStreams(connection)).filter(s => s.relationship === base);
+    const received = mine.find(s => s.direction === 'received')?.id;
+    const sent = mine.find(s => s.direction === 'sent')?.id;
+    return received != null && sent != null ? { received, sent } : null;
+}
+/** Create the `conversation-items` root (with its model name) if missing. Idempotent. */
+async function ensureConversationRoot(connection) {
+    let name = 'Conversation items';
+    try {
+        name = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(exports.CONVERSATION_ROOT_ID).name ?? name;
+    }
+    catch { /* model not loaded */ }
+    try {
+        await connection.apiOne('streams.create', { id: exports.CONVERSATION_ROOT_ID, name });
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'item-already-exists')
+            throw e;
+    }
+}
+/**
+ * The relationship's two children, created when missing (root first), and the contact granted `contribute` on
+ * `received` and `read` on `sent`, one child at a time, never the root, in one scope update waited for. Call it when
+ * she accepts a contact that declares the conversation, or before its first item. Pass a freshly read relationship
+ * (the scope update writes the whole permission set from `rel.grantedPermissions`).
+ */
+async function ensureConversationStreams(connection, rel, opts = {}) {
+    if (!rel?.accessId)
+        throw new errors_ts_1.HDSLibError('ensureConversationStreams: the relationship\'s accessId is required');
+    const relationship = (0, documents_ts_1.relationshipIdOf)(rel.accessId);
+    const granted = conversationStreamsOf(rel.grantedPermissions);
+    const existing = (await listConversationStreams(connection)).filter(s => s.relationship === relationship);
+    const ids = {};
+    for (const direction of ['received', 'sent']) {
+        const fromGrant = granted[direction];
+        ids[direction] = (fromGrant != null && existing.some(s => s.id === fromGrant)) ? fromGrant : existing.find(s => s.direction === direction)?.id;
+        if (ids[direction] == null) {
+            await ensureConversationRoot(connection);
+            const id = newConversationStreamId();
+            // pryv's typings take flat clientData values only
+            await connection.apiOne('streams.create', {
+                id,
+                name: id,
+                parentId: exports.CONVERSATION_ROOT_ID,
+                clientData: { hdsConversationItems: { relationship, direction } }
+            }, 'stream');
+            ids[direction] = id;
+        }
+    }
+    const streams = ids;
+    const levels = { [streams.received]: 'contribute', [streams.sent]: 'read' };
+    const missing = Object.keys(levels).filter(id => !(rel.grantedPermissions ?? []).some(p => p.streamId === id && p.level === levels[id]));
+    if (missing.length === 0)
+        return { ...streams, scopeUpdate: null };
+    const scopeUpdate = await (0, scope_ts_1.shareStreamsAgain)(connection, rel, missing, { ...opts, levels, waitForCompletion: true });
+    return { ...streams, scopeUpdate };
+}
+/** When a relationship ends: both children deleted with `mergeEventsWithParent: false`. The values she wrote stay. */
+async function cleanupConversationStreams(connection, relationship) {
+    const base = (0, documents_ts_1.relationshipIdOf)(relationship);
+    const mine = (await listConversationStreams(connection, { includeTrashed: true })).filter(s => s.relationship === base);
+    for (const s of mine)
+        await deleteTwice(connection, 'streams.delete', { id: s.id, mergeEventsWithParent: false });
+    return mine.map(s => s.id);
+}
+/**
+ * Delete every child whose relationship no longer exists (after a restore, accesses are not restored). Without
+ * `liveRelationships` they are read from the accounts' accesses, which needs a personal token.
+ */
+async function cleanupOrphanConversationStreams(connection, liveRelationships) {
+    const children = await listConversationStreams(connection, { includeTrashed: true });
+    if (children.length === 0)
+        return [];
+    if (liveRelationships == null) {
+        const info = await connection.accessInfo();
+        if (info?.type !== 'personal')
+            throw new errors_ts_1.HDSLibError('cleanupOrphanConversationStreams: reading the live relationships needs a personal token', { reason: 'not-personal' });
+        const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses');
+        liveRelationships = accesses.map(a => a.id);
+    }
+    const live = new Set(liveRelationships.map(documents_ts_1.relationshipIdOf));
+    const deleted = [];
+    for (const r of [...new Set(children.map(s => s.relationship))].filter(r => !live.has(r))) {
+        deleted.push(...await cleanupConversationStreams(connection, r));
+    }
+    return deleted;
+}
+// ---- items: reading ---- //
+/**
+ * Pure part of `listConversationItems`: the items a reader keeps (R2): a `question` or `proposed-value` only on a
+ * `received` child, an `answer` only on a `sent` child, each of `streams` (one relationship's children, or several).
+ * Trashed events, other types, unknown kinds (R8) and items without `about` are skipped. Oldest first.
+ */
+function parseConversationItems(events, streams) {
+    const children = Array.isArray(streams)
+        ? streams
+        : [{ id: streams.received, direction: 'received', relationship: '' }, { id: streams.sent, direction: 'sent', relationship: '' }];
+    const direction = new Map(children.map(s => [s.id, s.direction]));
+    const out = [];
+    for (const e of events ?? []) {
+        if (e?.type !== exports.ET_CONVERSATION || e.trashed === true)
+            continue;
+        const c = e.content;
+        if (c == null || typeof c !== 'object' || typeof c.about !== 'string')
+            continue;
+        const on = (e.streamIds ?? []).filter((id) => direction.has(id));
+        if (on.length !== 1)
+            continue;
+        const dir = direction.get(on[0]);
+        const allowed = dir === 'received' ? (c.kind === 'question' || c.kind === 'proposed-value' || c.kind === 'proposed-document') : c.kind === 'answer';
+        if (!allowed)
+            continue;
+        out.push({
+            id: e.id,
+            streamId: on[0],
+            direction: dir,
+            kind: c.kind,
+            about: c.about,
+            time: e.time ?? 0,
+            created: e.created ?? e.time ?? 0,
+            modified: e.modified ?? e.created ?? e.time ?? 0,
+            content: c
+        });
+    }
+    return out.sort((a, b) => a.created - b.created || a.time - b.time);
+}
+/**
+ * The items of one relationship's children (either side, through a grant or her token), of one document when
+ * `about`. Every page is read: her answers stay on `sent` for the life of the relationship, and an answer left out
+ * would let a written candidate be proposed again (R5).
+ */
+async function listConversationItems(connection, streams, opts = {}) {
+    const events = [];
+    for (let skip = 0;; skip += ITEMS_PAGE) {
+        const page = await connection.apiOne('events.get', {
+            streams: [streams.received, streams.sent],
+            types: [exports.ET_CONVERSATION],
+            limit: ITEMS_PAGE,
+            skip
+        }, 'events');
+        events.push(...page);
+        if (page.length < ITEMS_PAGE)
+            break;
+    }
+    const items = parseConversationItems(events, streams);
+    return opts.about == null ? items : items.filter(i => i.about === opts.about);
+}
+const ITEMS_PAGE = 500;
+const PV_ACTIONS = new Set(['confirm', 'correct', 'skip', 'request-item', 'duplicate']);
+const PD_ACTIONS = new Set(['confirm', 'correct', 'skip']);
+const CHOOSE_CODES = new Set([exports.QUESTION_CODES.WHICH_SPECIMEN, exports.QUESTION_CODES.WHICH_UNIT, exports.QUESTION_CODES.WHICH_ANALYTE, exports.QUESTION_CODES.IS_FASTING]);
+const DOCUMENT_CODES = new Set([exports.QUESTION_CODES.WHICH_DOCUMENT_KIND, exports.QUESTION_CODES.WHICH_DOCUMENT_DATE]);
+const KNOWN_CODES = new Set(Object.values(exports.QUESTION_CODES));
+/** The actions an answer to a question with `code` may carry (§ Answers, by what they answer). */
+function questionActions(code) {
+    if (CHOOSE_CODES.has(code) || code === exports.QUESTION_CODES.WHICH_DOCUMENT_KIND)
+        return new Set(['choose', 'skip']);
+    if (code === exports.QUESTION_CODES.WHICH_DATE || code === exports.QUESTION_CODES.WHICH_DOCUMENT_DATE)
+        return new Set(['confirm', 'skip']);
+    if (code === exports.QUESTION_CODES.IS_THIS_YOURS)
+        return new Set(['confirm', 'not-mine', 'skip']);
+    return new Set(['skip']);
+}
+/**
+ * Settle one document's conversation from its items (either side). An answer counts when its action is allowed for
+ * what it answers and it is not void (R3: no event it covers was modified after the answer was created). A proposed
+ * value with a `written` entry is confirmed or corrected for good; otherwise its latest counting answer decides, and
+ * a later proposed value naming it in `replaces` makes it `replaced`.
+ */
+function conversationOf(items, about) {
+    const mine = (items ?? []).filter(i => i.about === about);
+    const byId = new Map(mine.map(i => [i.id, i]));
+    const latestByCandidate = (kind) => {
+        const out = new Map();
+        for (const i of mine) {
+            if (i.kind !== kind || typeof i.content.candidateId !== 'string')
+                continue;
+            const prev = out.get(i.content.candidateId);
+            if (prev == null || i.modified > prev.modified)
+                out.set(i.content.candidateId, i);
+        }
+        return out;
+    };
+    const pvByCandidate = latestByCandidate('proposed-value');
+    const pdByCandidate = latestByCandidate('proposed-document');
+    const answers = mine.filter(i => i.kind === 'answer');
+    const covered = (a) => {
+        const out = [];
+        const target = byId.get(a.content.inReplyTo);
+        if (target)
+            out.push(target);
+        for (const c of [...(a.content.candidateIds ?? []), target?.content.candidateId]) {
+            const pv = typeof c === 'string' ? (pvByCandidate.get(c) ?? pdByCandidate.get(c)) : undefined;
+            if (pv && !out.includes(pv))
+                out.push(pv);
+        }
+        return out;
+    };
+    const counts = (a) => {
+        const target = byId.get(a.content.inReplyTo);
+        if (target == null)
+            return false;
+        const allowed = target.kind === 'question' ? questionActions(target.content.code) : target.kind === 'proposed-document' ? PD_ACTIONS : PV_ACTIONS;
+        if (!allowed.has(a.content.action))
+            return false;
+        if (a.content.basis != null && !basisFits(a.content, target))
+            return false;
+        return !covered(a).some(c => c.modified > a.created);
+    };
+    const counting = answers.filter(counts);
+    const replacedBy = new Map();
+    for (const pv of [...pvByCandidate.values(), ...pdByCandidate.values()]) {
+        if (typeof pv.content.replaces === 'string')
+            replacedBy.set(pv.content.replaces, pv.content.candidateId);
+    }
+    // 4.26.0: answered means an answer whose inReplyTo is the proposed document (a which-document-date answer naming it
+    // in candidateIds answers its question, not the proposal)
+    const proposedDocuments = [...pdByCandidate.values()].map(item => {
+        const candidateId = item.content.candidateId;
+        const onIt = counting.filter(a => byId.get(a.content.inReplyTo)?.kind === 'proposed-document' && (a.content.candidateIds ?? []).includes(candidateId));
+        const writing = onIt.filter(a => WRITING_ACTIONS.has(a.content.action) && Array.isArray(a.content.applied)).at(-1);
+        if (writing) {
+            const applied = writing.content.applied.filter((f) => f === 'time' || f === 'kind');
+            return { item, candidateId, state: writing.content.action === 'correct' ? 'corrected' : 'confirmed', answer: writing, applied, replacedBy: null };
+        }
+        const latest = onIt.filter(a => a.content.action === 'skip').at(-1) ?? null;
+        const replacement = replacedBy.get(candidateId) ?? null;
+        let state = 'open';
+        if (replacement != null)
+            state = 'replaced';
+        else if (latest != null)
+            state = latest.content.basis === exports.BASES.NOT_PENDING ? 'not-pending' : 'skipped';
+        return { item, candidateId, state, answer: latest, applied: null, replacedBy: replacement };
+    });
+    const proposedValues = [...pvByCandidate.values()].map(item => {
+        const candidateId = item.content.candidateId;
+        const onIt = counting.filter(a => byId.get(a.content.inReplyTo)?.kind === 'proposed-value' && (a.content.candidateIds ?? []).includes(candidateId));
+        const writing = onIt.find(a => WRITING_ACTIONS.has(a.content.action) && (a.content.written ?? []).some((w) => w?.candidateId === candidateId));
+        if (writing) {
+            const w = writing.content.written.find((x) => x?.candidateId === candidateId);
+            return { item, candidateId, state: writing.content.action === 'correct' ? 'corrected' : 'confirmed', answer: writing, writtenEventId: w.eventId, replacedBy: null };
+        }
+        const latest = onIt.filter(a => a.content.action !== 'confirm' && a.content.action !== 'correct').at(-1) ?? null;
+        const replacement = replacedBy.get(candidateId) ?? null;
+        let state = 'open';
+        if (replacement != null)
+            state = 'replaced';
+        else if (latest?.content.action === 'skip')
+            state = 'skipped';
+        else if (latest?.content.action === 'request-item')
+            state = 'requested';
+        else if (latest?.content.action === 'duplicate')
+            state = 'duplicate';
+        return { item, candidateId, state, answer: latest, writtenEventId: null, replacedBy: replacement };
+    });
+    const questions = mine.filter(i => i.kind === 'question').map(item => {
+        const answer = counting.filter(a => a.content.inReplyTo === item.id && a.content.action !== 'skip').at(-1) ??
+            counting.filter(a => a.content.inReplyTo === item.id).at(-1) ?? null;
+        const state = answer == null ? 'open' : answer.content.action === 'skip' ? 'skipped' : 'answered';
+        return { item, code: item.content.code, answerable: KNOWN_CODES.has(item.content.code), answer, state };
+    });
+    let identity = 'not-asked';
+    const identityQuestions = questions.filter(q => q.code === exports.QUESTION_CODES.IS_THIS_YOURS);
+    if (identityQuestions.length > 0) {
+        const settled = identityQuestions.map(q => counting.filter(a => a.content.inReplyTo === q.item.id && a.content.action !== 'skip').at(-1)?.content.action);
+        if (settled.includes('not-mine'))
+            identity = 'not-mine';
+        else
+            identity = settled.every(a => a === 'confirm') ? 'confirmed' : 'open';
+    }
+    // a `not-mine` whose question was deleted since (R10) still holds, unless a later identity confirmation counts
+    const orphanNotMine = answers.filter(a => a.content.action === 'not-mine' && !byId.has(a.content.inReplyTo)).at(-1);
+    if (orphanNotMine != null) {
+        const laterConfirm = counting.some(a => a.content.action === 'confirm' && a.created > orphanNotMine.created &&
+            byId.get(a.content.inReplyTo)?.content.code === exports.QUESTION_CODES.IS_THIS_YOURS);
+        if (!laterConfirm)
+            identity = 'not-mine';
+    }
+    let documentDate = null;
+    const candidateDates = {};
+    for (const q of questions) {
+        if (q.code !== exports.QUESTION_CODES.WHICH_DATE || q.answer?.content.action !== 'confirm')
+            continue;
+        const { time, timePrecision } = q.answer.content;
+        // R8: an unknown precision is read as absent, so the answer gives no date
+        if (!TIME_PRECISIONS.has(timePrecision) || (timePrecision !== 'unknown' && typeof time !== 'number'))
+            continue;
+        const date = timePrecision === 'unknown' ? { timePrecision } : { time, timePrecision };
+        if (typeof q.item.content.candidateId === 'string')
+            candidateDates[q.item.content.candidateId] = date;
+        else
+            documentDate = date;
+    }
+    const documentAnswers = {};
+    for (const q of questions) {
+        const cid = q.item.content.candidateId;
+        if (!DOCUMENT_CODES.has(q.code) || typeof cid !== 'string' || q.answer == null)
+            continue;
+        const a = q.answer.content;
+        const into = documentAnswers[cid] ??= {};
+        if (q.code === exports.QUESTION_CODES.WHICH_DOCUMENT_KIND && a.action === 'choose' && typeof a.option === 'string')
+            into.documentKind = a.option;
+        if (q.code === exports.QUESTION_CODES.WHICH_DOCUMENT_DATE && a.action === 'confirm' && TIME_PRECISIONS.has(a.timePrecision) &&
+            (a.timePrecision === 'unknown' || typeof a.time === 'number')) {
+            into.date = a.timePrecision === 'unknown' ? { timePrecision: a.timePrecision } : { time: a.time, timePrecision: a.timePrecision };
+        }
+    }
+    const writtenCandidates = {};
+    for (const a of answers) {
+        if (!WRITING_ACTIONS.has(a.content.action))
+            continue;
+        for (const w of a.content.written ?? []) {
+            if (typeof w?.candidateId === 'string' && typeof w.eventId === 'string')
+                writtenCandidates[w.candidateId] = w.eventId;
+        }
+    }
+    const received = mine.filter(i => i.direction === 'received');
+    return { about, proposedValues, questions, answers, received, writtenCandidates, identity, documentDate, candidateDates, proposedDocuments, documentAnswers };
+}
+const WRITING_ACTIONS = new Set(['confirm', 'correct']);
+const TIME_PRECISIONS = new Set(['day', 'month', 'year', 'unknown']);
+/** The automatic answers' bases (R3): `profile-match` confirms `is-this-yours`, `existing-value` marks proposed values `duplicate`. */
+exports.BASES = { PROFILE_MATCH: 'profile-match', EXISTING_VALUE: 'existing-value', NOT_PENDING: 'not-pending' };
+/** R3 / R8: an answer's `basis` fits what it answers; an unknown one, or one on the wrong target, never counts. */
+function basisFits(answer, target) {
+    if (answer.basis === exports.BASES.PROFILE_MATCH)
+        return answer.action === 'confirm' && target.kind === 'question' && target.content.code === exports.QUESTION_CODES.IS_THIS_YOURS;
+    if (answer.basis === exports.BASES.EXISTING_VALUE)
+        return answer.action === 'duplicate' && target.kind === 'proposed-value';
+    if (answer.basis === exports.BASES.NOT_PENDING)
+        return answer.action === 'skip' && target.kind === 'proposed-document';
+    return false;
+}
+/**
+ * R10, on her account, once the work on the document is `done`: the item ids the contact deletes. Proposed values
+ * written, skipped, marked duplicate or requested, and replaced; questions answered; an `is-this-yours` question
+ * carrying `context.identity` always; and any other proposed-value event of the document (a duplicate of a candidate
+ * written twice by a racing retry). Open and kept-aside proposed values stay.
+ */
+function itemsToDeleteAtDone(conv) {
+    const out = new Set();
+    const shown = new Set(conv.proposedValues.map(p => p.item.id));
+    for (const pv of conv.proposedValues)
+        if (pv.state !== 'open')
+            out.add(pv.item.id);
+    for (const i of conv.received)
+        if (i.kind === 'proposed-value' && !shown.has(i.id))
+            out.add(i.id);
+    for (const q of conv.questions) {
+        // the two document questions go with their proposed document (`proposedDocumentItemsToDelete`), which outlives `done`
+        if (DOCUMENT_CODES.has(q.code))
+            continue;
+        if (q.state !== 'open' || (q.code === exports.QUESTION_CODES.IS_THIS_YOURS && q.item.content.context?.identity != null))
+            out.add(q.item.id);
+    }
+    return [...out];
+}
+/**
+ * R10, 4.26.0, whenever it happens (not only at `done`): a proposed document answered `confirm`, `correct` or `skip`
+ * with `basis: not-pending`, or replaced, with the `which-document-kind` / `which-document-date` questions about it,
+ * and any other `proposed-document` event of the document left by a racing retry. One she skipped herself, or open,
+ * stays.
+ */
+function proposedDocumentItemsToDelete(conv) {
+    const out = new Set();
+    const shown = new Set(conv.proposedDocuments.map(p => p.item.id));
+    const gone = new Set();
+    for (const pd of conv.proposedDocuments) {
+        if (pd.state === 'open' || pd.state === 'skipped')
+            continue;
+        out.add(pd.item.id);
+        gone.add(pd.candidateId);
+    }
+    for (const i of conv.received)
+        if (i.kind === 'proposed-document' && !shown.has(i.id))
+            out.add(i.id);
+    for (const q of conv.questions)
+        if (DOCUMENT_CODES.has(q.code) && gone.has(q.item.content.candidateId))
+            out.add(q.item.id);
+    return [...out];
+}
+/** R10: every item of the document on the `received` child (on `not-mine`, `document-unshared` or a document gone). */
+function itemsOfDocument(conv) {
+    return conv.received.map(i => i.id);
+}
+// ---- items: what a writer MUST include ---- //
+/**
+ * The issues of one `message/hds-conversation-v1` content, before it is written: the pack's schema (the model must
+ * be loaded, data-model >= 4.22.0) and the conditions of § What a writer MUST include that hold on the event alone.
+ * The conditions between events are checked by the write helpers (`checkAnswerFor`, `writeQuestion`,
+ * `writeProposedValues`).
+ */
+function checkConversationItem(content) {
+    let def = null;
+    try {
+        def = (0, HDSModelInitAndSingleton_ts_1.getModel)().eventTypes.getEventTypeDefinition(exports.ET_CONVERSATION);
+    }
+    catch { /* model not loaded */ }
+    if (def == null)
+        return [`the loaded data model has no ${exports.ET_CONVERSATION} (data-model 4.22.0 or later)`];
+    const issues = (0, schemaCheck_ts_1.schemaIssues)(def, content, 'content');
+    if (issues.length > 0)
+        return issues;
+    const c = content;
+    if (c.kind === 'question') {
+        const code = c.code;
+        const has = (k) => c[k] != null;
+        if (CHOOSE_CODES.has(code)) {
+            if (!has('candidateId'))
+                issues.push(`question ${code}: candidateId is required`);
+            if (!has('options'))
+                issues.push(`question ${code}: options are required`);
+            if (has('context'))
+                issues.push(`question ${code}: no context`);
+            if (code === exports.QUESTION_CODES.IS_FASTING && has('options') && [...c.options].sort().join(',') !== 'no,yes')
+                issues.push('question is-fasting: options must be exactly yes, no');
+        }
+        else if (code === exports.QUESTION_CODES.WHICH_DATE) {
+            if (has('options'))
+                issues.push('question which-date: no options');
+            if (c.context != null && Object.keys(c.context).some(k => k !== 'dates'))
+                issues.push('question which-date: context holds dates only');
+        }
+        else if (code === exports.QUESTION_CODES.IS_THIS_YOURS) {
+            if (has('candidateId') || has('options'))
+                issues.push('question is-this-yours: no candidateId, no options');
+            if (c.context?.dates != null)
+                issues.push('question is-this-yours: context holds identity and anchor only');
+        }
+        else if (code === exports.QUESTION_CODES.WHICH_DOCUMENT_KIND) {
+            if (!has('candidateId'))
+                issues.push('question which-document-kind: candidateId (a proposed-document) is required');
+            if (!has('options') || c.options.length < 2 || c.options.length > 8)
+                issues.push('question which-document-kind: 2 to 8 options');
+            else
+                for (const o of c.options)
+                    if (documentKindRefusal(o) != null)
+                        issues.push(`question which-document-kind: ${o} is not a document kind of the pack`);
+            if (has('context'))
+                issues.push('question which-document-kind: no context');
+        }
+        else if (code === exports.QUESTION_CODES.WHICH_DOCUMENT_DATE) {
+            if (!has('candidateId'))
+                issues.push('question which-document-date: candidateId (a proposed-document) is required');
+            if (has('options'))
+                issues.push('question which-document-date: no options');
+            if (c.context != null && Object.keys(c.context).some(k => k !== 'dates'))
+                issues.push('question which-document-date: context holds dates only');
+        }
+        else if (typeof code === 'string' && code.startsWith('x-')) {
+            if (has('context'))
+                issues.push(`question ${code}: context is for is-this-yours and the date questions only`);
+        }
+        else {
+            issues.push(`question: unknown code "${code}" (bare codes are HDS's; a third party's start with x-<vendor>-)`);
+        }
+    }
+    else if (c.kind === 'proposed-value') {
+        if ((c.status === 'kept-aside' || c.status === 'unmapped') && c.reason == null)
+            issues.push(`proposed-value ${c.status}: reason is required`);
+        const p = c.proposal;
+        if (p?.time != null && p.clientData?.hdsTimePrecision == null)
+            issues.push('proposed-value: proposal with time needs clientData.hdsTimePrecision');
+        if (p?.clientData?.hdsTimePrecision === 'unknown' && c.replaces == null)
+            issues.push('proposed-value: hdsTimePrecision unknown only on a re-proposal (replaces)');
+    }
+    else if (c.kind === 'proposed-document') {
+        const p = c.proposal ?? {};
+        if (p.documentKind != null) {
+            const refusal = documentKindRefusal(p.documentKind);
+            if (refusal != null)
+                issues.push(`proposed-document: documentKind ${p.documentKind} is ${refusal}`);
+        }
+        if ((p.time == null) !== (p.timePrecision == null))
+            issues.push('proposed-document: proposal.time and proposal.timePrecision go together');
+        if (typeof p.time === 'number' && ((p.time % DAY) + DAY) % DAY !== 12 * HOUR)
+            issues.push('proposed-document: proposal.time at 12:00 UTC at the start of its period');
+        if (c.anchor?.eventId != null && c.anchor.eventId !== c.about)
+            issues.push('proposed-document: anchor.eventId must be about');
+    }
+    else if (c.kind === 'answer') {
+        const n = c.candidateIds?.length ?? 0;
+        if (c.action === 'choose' && c.option == null)
+            issues.push('answer choose: option is required');
+        if (c.action !== 'choose' && c.option != null)
+            issues.push('answer: option only with choose');
+        if (c.written != null && c.action !== 'confirm' && c.action !== 'correct')
+            issues.push(`answer ${c.action}: no written`);
+        if (c.applied != null && c.action !== 'confirm' && c.action !== 'correct')
+            issues.push(`answer ${c.action}: no applied`);
+        if (c.applied != null && c.written != null)
+            issues.push('answer: applied (a proposed document) never with written');
+        if (c.applied != null && n !== 1)
+            issues.push('answer: applied names exactly one proposed document');
+        if (c.action === 'correct' && c.applied == null && (n !== 1 || c.written?.length !== 1))
+            issues.push('answer correct: exactly one candidateIds entry and its written entry');
+        if (c.basis === exports.BASES.NOT_PENDING && (c.action !== 'skip' || n !== 1))
+            issues.push('answer: basis not-pending only with skip, on one proposed document');
+        for (const w of c.written ?? [])
+            if (!(c.candidateIds ?? []).includes(w.candidateId))
+                issues.push(`answer: written ${w.candidateId} is not in candidateIds`);
+        if (c.basis === exports.BASES.PROFILE_MATCH && c.action !== 'confirm')
+            issues.push('answer: basis profile-match only with confirm');
+        if (c.basis === exports.BASES.EXISTING_VALUE && (c.action !== 'duplicate' || n === 0))
+            issues.push('answer: basis existing-value only with duplicate, on candidates');
+        if (c.timePrecision === 'unknown' && c.time != null)
+            issues.push('answer: no time with timePrecision unknown');
+        if (c.time != null && c.timePrecision == null)
+            issues.push('answer: time needs timePrecision');
+    }
+    return issues;
+}
+/**
+ * The issues of an answer given what it answers (`target`: the question or the first proposed value it replies to)
+ * and the document's conversation: § Answers, by what they answer, and § What a writer MUST include.
+ */
+function checkAnswerFor(content, target, conv) {
+    const issues = checkConversationItem(content);
+    if (issues.length > 0)
+        return issues;
+    const c = content;
+    if (c.inReplyTo !== target.id)
+        issues.push('answer: inReplyTo is not the target');
+    if (c.about !== target.about)
+        issues.push('answer: about is not the target\'s document');
+    const ids = c.candidateIds ?? [];
+    if (target.kind === 'question') {
+        const code = target.content.code;
+        if (!questionActions(code).has(c.action))
+            issues.push(`answer: ${c.action} does not answer ${code}`);
+        if (c.written != null)
+            issues.push('answer to a question: no written (it writes no value)');
+        const qc = target.content.candidateId;
+        if (qc != null && !(ids.length === 1 && ids[0] === qc))
+            issues.push('answer: candidateIds must name the question\'s candidate');
+        if (qc == null && ids.length > 0)
+            issues.push('answer: the question has no candidate');
+        if (c.action === 'choose' && !(target.content.options ?? []).includes(c.option))
+            issues.push('answer choose: option is not one of the question\'s options');
+        if ((code === exports.QUESTION_CODES.WHICH_DATE || code === exports.QUESTION_CODES.WHICH_DOCUMENT_DATE) && c.action === 'confirm') {
+            if (c.timePrecision == null)
+                issues.push(`answer ${code}: timePrecision is required`);
+            else if (c.timePrecision !== 'unknown' && c.time == null)
+                issues.push(`answer ${code}: time is required`);
+        }
+        if (c.applied != null)
+            issues.push('answer to a question: no applied');
+        if (c.basis != null && (c.basis !== exports.BASES.PROFILE_MATCH || code !== exports.QUESTION_CODES.IS_THIS_YOURS))
+            issues.push('answer: on a question, basis is profile-match on is-this-yours only');
+    }
+    else if (target.kind === 'proposed-document') {
+        if (!PD_ACTIONS.has(c.action))
+            issues.push(`answer: ${c.action} does not answer a proposed document`);
+        if (!(ids.length === 1 && ids[0] === target.content.candidateId))
+            issues.push('answer: candidateIds must name the proposed document');
+        if (c.written != null)
+            issues.push('answer to a proposed document: no written (applied)');
+        if ((c.action === 'confirm' || c.action === 'correct') && !(Array.isArray(c.applied) && c.applied.length > 0))
+            issues.push(`answer ${c.action}: applied is required`);
+        if (c.basis != null && c.basis !== exports.BASES.NOT_PENDING)
+            issues.push('answer to a proposed document: basis not-pending only');
+    }
+    else if (target.kind === 'proposed-value') {
+        if (!PV_ACTIONS.has(c.action))
+            issues.push(`answer: ${c.action} does not answer a proposed value`);
+        if (c.applied != null)
+            issues.push('answer to a proposed value: no applied');
+        if (ids.length === 0)
+            issues.push('answer to a proposed value: candidateIds is required');
+        if (ids[0] !== target.content.candidateId)
+            issues.push('answer: a batch starts with the candidate it replies to');
+        if ((c.action === 'confirm' || c.action === 'correct') && (c.written == null || c.written.length === 0))
+            issues.push(`answer ${c.action}: written is required`);
+        if (c.basis != null && c.basis !== exports.BASES.EXISTING_VALUE)
+            issues.push('answer to a proposed value: basis existing-value only');
+        for (const id of ids) {
+            const pv = conv.proposedValues.find(p => p.candidateId === id);
+            if (pv == null) {
+                issues.push(`answer: candidate ${id} is not a proposed value of the document`);
+                continue;
+            }
+            if (c.action === 'request-item' && !['kept-aside', 'unmapped'].includes(pv.item.content.status))
+                issues.push(`answer request-item: candidate ${id} is not kept-aside or unmapped`);
+        }
+    }
+    else {
+        issues.push('answer: the target is not a question, a proposed value or a proposed document');
+    }
+    return issues;
+}
+const COMPARATORS = new Set(['<', '<=', '>', '>=']);
+/**
+ * R9, the value alone: `itemKey` an item of the loaded pack on `type`, whose own `type` is neither `system` nor
+ * `attachments` and whose stream is not under an `explicitGrantOnly` root (an `imported` item is allowed), and
+ * `content` valid for `type`. Also used for a correction. Null when it may be written.
+ */
+function checkValueProposal(p) {
+    if (p == null || typeof p.itemKey !== 'string' || typeof p.type !== 'string')
+        return 'no-proposal';
+    let itemDef = null;
+    let typeDef = null;
+    try {
+        itemDef = (0, HDSModelInitAndSingleton_ts_1.getModel)().itemsDefs.forKey(p.itemKey, false);
+        typeDef = (0, HDSModelInitAndSingleton_ts_1.getModel)().eventTypes.getEventTypeDefinition(p.type);
+    }
+    catch { /* model not loaded */ }
+    if (itemDef == null)
+        return 'unknown-item';
+    if (itemDef.isSystem || itemDef.isAttachments)
+        return 'item-not-allowed';
+    try {
+        if ((0, HDSModelInitAndSingleton_ts_1.getModel)().streams.isExplicitGrantOnly(itemDef.data.streamId))
+            return 'item-not-allowed';
+    }
+    catch {
+        return 'item-not-allowed';
+    }
+    if (!itemDef.eventTypes.includes(p.type))
+        return 'type-not-of-item';
+    if (typeDef == null)
+        return 'unknown-type';
+    if ((0, schemaCheck_ts_1.schemaIssues)(typeDef, p.content, 'content').length > 0)
+        return 'invalid-content';
+    return null;
+}
+/**
+ * Whether her app may offer to confirm a proposed value (R8, R9): open, a confirmable `status`, a proposal that
+ * passes `checkValueProposal`, a known comparator, and an `extraction.engine` among `engines` (the ones vouched for
+ * this relationship's app, `vouchedEnginesFor`). Null when confirmable; else why it is shown, not confirmable. Its
+ * date is checked when it is written (`acceptProposedValues`).
+ */
+function proposalRefusal(pv, engines) {
+    if (pv.state === 'replaced')
+        return 'replaced';
+    // a skip settles nothing, and a duplicate (automatic or tapped) may be added anyway: both may still be confirmed
+    if (pv.state !== 'open' && pv.state !== 'skipped' && pv.state !== 'duplicate')
+        return 'answered';
+    const c = pv.item.content;
+    if (!exports.CONFIRMABLE_STATUSES.includes(c.status))
+        return 'status';
+    const issue = checkValueProposal(c.proposal);
+    if (issue != null)
+        return issue;
+    const comparator = c.proposal.clientData?.hdsComparator;
+    if (comparator != null && !COMPARATORS.has(comparator))
+        return 'comparator';
+    if (!(engines ?? []).includes(c.extraction?.engine))
+        return 'engine-not-vouched';
+    return null;
+}
+function nameTokens(s) {
+    return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(/[\s,-]+/).filter(t => t.length > 0).sort();
+}
+/**
+ * R3, `basis: profile-match`: true only when the printed name holds exactly her full given and family names (case,
+ * accents, hyphens, commas, spaces and order aside: "DUPONT, MARIE"; an initial never matches) and `birthDay` equals
+ * her birth date. A profile
+ * without a given name, a family name or a birth date never matches.
+ */
+function profileMatch(identity, profile) {
+    const given = profile?.name?.trim();
+    const family = profile?.surname?.trim();
+    const born = profile?.dateOfBirth?.trim().slice(0, 10);
+    if (!given || !family || !born || !identity?.name || !identity.birthDay)
+        return false;
+    if (identity.birthDay !== born)
+        return false;
+    const printed = nameTokens(identity.name);
+    const mine = nameTokens(given + ' ' + family);
+    return printed.length === mine.length && printed.every((t, i) => t === mine[i]);
+}
+// ---- 4.26.0: a document's date and kind (DOCUMENTS.md § A document waiting for its date and kind) ---- //
+/** Why a kind key cannot be proposed: unknown to the loaded pack, or deprecated; null when it can. */
+function documentKindRefusal(key) {
+    if (typeof key !== 'string')
+        return 'unknown-kind';
+    let kind = null;
+    try {
+        kind = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forKey(key);
+    }
+    catch { /* model not loaded */ }
+    if (kind == null)
+        return 'unknown-kind';
+    return kind.deprecated ? 'deprecated-kind' : null;
+}
+/**
+ * The fields of a document still waiting for her: `clientData.hdsDocumentPending`, less a stale entry (an older app
+ * set the field and left the flag): `time` counts only while the event has no `hdsTimePrecision`, `kind` only while its
+ * kind is still `other`. Empty for a document that is not a `file/xds-v1` event, trashed, or carries no flag.
+ */
+function pendingFieldsOf(document) {
+    if (document?.type !== 'file/xds-v1' || document.trashed === true)
+        return [];
+    const flag = document.clientData?.[exports.DOCUMENT_PENDING_KEY];
+    if (!Array.isArray(flag))
+        return [];
+    const out = [];
+    if (flag.includes('time') && document.clientData?.hdsTimePrecision == null)
+        out.push('time');
+    if (flag.includes('kind')) {
+        let kind = null;
+        try {
+            kind = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forContent(document.content);
+        }
+        catch { /* model not loaded */ }
+        if (kind?.key === 'other')
+            out.push('kind');
+    }
+    return out;
+}
+/** The fields a proposed document proposes: `kind` with `documentKind`, `time` with `time`. */
+function proposedFieldsOf(pd) {
+    const p = pd.content?.proposal ?? {};
+    const out = [];
+    if (typeof p.time === 'number')
+        out.push('time');
+    if (typeof p.documentKind === 'string')
+        out.push('kind');
+    return out;
+}
+/**
+ * R9 for a proposed document (4.26.0), before it is shown and before it is applied: not answered nor replaced, the
+ * document hers (`identity` not `not-mine`), its kind a non-deprecated kind of the pack, `document` a `file/xds-v1`
+ * event, not trashed, with at least one field still pending (her answers to the two document questions count as
+ * proposed fields). No engine binding applies. Null when she may confirm it.
+ */
+function documentProposalRefusal(pd, document, conv) {
+    if (pd.state === 'replaced')
+        return 'replaced';
+    if (pd.state !== 'open' && pd.state !== 'skipped')
+        return 'answered';
+    if (conv?.identity === 'not-mine')
+        return 'not-mine';
+    const kind = pd.item.content.proposal?.documentKind;
+    if (kind != null) {
+        const refusal = documentKindRefusal(kind);
+        if (refusal != null)
+            return refusal;
+    }
+    if (document?.type !== 'file/xds-v1' || document.trashed === true)
+        return 'not-a-document';
+    const pending = pendingFieldsOf(document);
+    const answered = conv?.documentAnswers[pd.candidateId];
+    const fields = new Set([...proposedFieldsOf(pd.item), ...(answered?.documentKind ? ['kind'] : []), ...(answered?.date ? ['time'] : [])]);
+    return pending.some(f => fields.has(f)) ? null : 'nothing-pending';
+}
+/**
+ * The `events.update` of the document (CONVERSATION.md § Writing a document's date and kind) for `fields`, applied
+ * only where pending: the whole `content` with `class` and `type` from the pack's kind (`type` = `[kind.type]`), `time`
+ * and `clientData.hdsTimePrecision` (with `unknown`, the time stays), and `hdsDocumentPending` reduced (`null` when
+ * empty; `events.update` merges `clientData`). Null `update` when nothing is applied.
+ */
+function documentUpdateOf(document, fields) {
+    const pending = pendingFieldsOf(document);
+    const applied = [];
+    const update = {};
+    const clientData = {};
+    if (pending.includes('kind') && typeof fields.documentKind === 'string' && documentKindRefusal(fields.documentKind) == null) {
+        const kind = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forKey(fields.documentKind);
+        update.content = { ...document.content, class: { ...kind.class }, type: [{ ...kind.type }] };
+        applied.push('kind');
+    }
+    if (pending.includes('time') && TIME_PRECISIONS.has(fields.timePrecision) && (fields.timePrecision === 'unknown' || typeof fields.time === 'number')) {
+        if (fields.timePrecision !== 'unknown')
+            update.time = fields.time;
+        clientData.hdsTimePrecision = fields.timePrecision;
+        applied.push('time');
+    }
+    if (applied.length === 0)
+        return { update: null, applied };
+    const rest = pending.filter(f => !applied.includes(f));
+    clientData[exports.DOCUMENT_PENDING_KEY] = rest.length > 0 ? rest : null;
+    update.clientData = clientData;
+    return { update, applied: ['time', 'kind'].filter(f => applied.includes(f)) };
+}
+/**
+ * The `events.create` params of a document her app adds without its date or kind (DOCUMENTS.md § A document waiting
+ * for its date and kind): the fields she gives are written, the others pending. With neither, kind `other`, `time` the
+ * moment she adds it (`now`), no `hdsTimePrecision`, `hdsDocumentPending: ['time', 'kind']`. No `creation` (never the
+ * upload date). The file is attached by the caller (`createEventWithFile…`).
+ */
+function pendingDocumentEvent(params) {
+    const kind = params.documentKind != null && documentKindRefusal(params.documentKind) == null ? params.documentKind : null;
+    const dated = params.timePrecision != null && TIME_PRECISIONS.has(params.timePrecision) && (params.timePrecision === 'unknown' || typeof params.time === 'number');
+    const def = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forKey(kind ?? 'other');
+    if (def == null)
+        throw new errors_ts_1.HDSLibError('pendingDocumentEvent: the loaded data model has no document kinds (data-model 4.17.0 or later)');
+    const now = params.now ?? Math.floor(Date.now() / 1000);
+    const pending = [...(dated ? [] : ['time']), ...(kind != null ? [] : ['kind'])];
+    const clientData = {};
+    if (dated)
+        clientData.hdsTimePrecision = params.timePrecision;
+    if (pending.length > 0)
+        clientData[exports.DOCUMENT_PENDING_KEY] = pending;
+    return {
+        streamIds: params.streamIds ?? ['documents'],
+        type: 'file/xds-v1',
+        time: dated && params.timePrecision !== 'unknown' ? params.time : now,
+        content: { class: { ...def.class }, type: [{ ...def.type }], title: params.title, language: params.language ?? 'und' },
+        clientData
+    };
+}
+/**
+ * Her own edit of a document's date or kind (her document viewer, 4.26.0): the `events.update` that writes them, and
+ * removes each written field from `hdsDocumentPending` (a stale entry too; `null` when none is left), so no contact's
+ * proposal overrides it. Unlike `documentUpdateOf`, it writes the fields whether pending or not. Null when `fields`
+ * holds nothing to write.
+ */
+function documentEditOf(document, fields) {
+    const update = {};
+    const clientData = {};
+    const written = [];
+    if (typeof fields.documentKind === 'string') {
+        const refusal = documentKindRefusal(fields.documentKind);
+        if (refusal != null)
+            throw new errors_ts_1.HDSLibError(`documentEditOf: ${fields.documentKind} is ${refusal}`, { reason: refusal });
+        const kind = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forKey(fields.documentKind);
+        update.content = { ...document.content, class: { ...kind.class }, type: [{ ...kind.type }] };
+        written.push('kind');
+    }
+    if (fields.timePrecision != null) {
+        if (!TIME_PRECISIONS.has(fields.timePrecision) || (fields.timePrecision !== 'unknown' && typeof fields.time !== 'number')) {
+            throw new errors_ts_1.HDSLibError('documentEditOf: timePrecision day, month, year or unknown, with time unless unknown', { reason: 'invalid-time' });
+        }
+        if (fields.timePrecision !== 'unknown')
+            update.time = fields.time;
+        clientData.hdsTimePrecision = fields.timePrecision;
+        written.push('time');
+    }
+    if (written.length === 0)
+        return null;
+    const flag = document.clientData?.[exports.DOCUMENT_PENDING_KEY];
+    if (Array.isArray(flag)) {
+        const rest = flag.filter((f) => (f === 'time' || f === 'kind') && !written.includes(f));
+        clientData[exports.DOCUMENT_PENDING_KEY] = rest.length > 0 ? rest : null;
+    }
+    update.clientData = clientData;
+    return update;
+}
+/**
+ * The value events tied to a document, for its view (4.26.0): `source`, the values read from it, from its
+ * `hdsDocumentValues` index and from the events whose `clientData.related` names it (an item value, not a
+ * conversation item, an alert or another document); `matched`, the values she already had that it prints, from their
+ * `hdsPrintedIn`. Dangling ids, trashed events and events the connection cannot read are skipped. Sorted by time.
+ */
+async function listDocumentValues(connection, documentId) {
+    const isValue = (e) => {
+        if (e == null || e.trashed === true || e.id === documentId)
+            return false;
+        if (e.type === exports.ET_CONVERSATION || e.type === dataExport_ts_1.ET_ALERT || e.type === 'file/xds-v1')
+            return false;
+        try {
+            return (0, HDSModelInitAndSingleton_ts_1.getModel)().itemsDefs.forEvent(e, false) != null;
+        }
+        catch {
+            return false;
+        }
+    };
+    const query = async (path) => (await bestEffort(async () => await connection.apiOne('events.get', { clientData: [{ path, eq: true }], limit: 1000 }, 'events'))) ?? [];
+    const source = new Map();
+    for (const e of await query(`related.${documentId}`))
+        if (isValue(e))
+            source.set(e.id, e);
+    const doc = await readEvent(connection, documentId).catch(() => null);
+    for (const [id, role] of Object.entries(doc?.clientData?.[exports.DOCUMENT_VALUES_KEY] ?? {})) {
+        if (role !== 'source' || source.has(id))
+            continue;
+        const e = await readEvent(connection, id).catch(() => null);
+        if (isValue(e) && e.clientData?.related?.[documentId] === true)
+            source.set(id, e);
+    }
+    const matched = (await query(`${exports.PRINTED_IN_KEY}.${documentId}`)).filter(e => isValue(e) && !source.has(e.id));
+    const byTime = (a, b) => (a.time ?? 0) - (b.time ?? 0);
+    return { source: [...source.values()].sort(byTime), matched: matched.sort(byTime) };
+}
+// ---- writing a value (her app) ---- //
+/** The `clientData.sourceKey` of a value written from a proposal: `<engine>:document:<document event id>:<candidateId>`. */
+function sourceKeyOf(engine, about, candidateId) {
+    return `${engine}:document:${about}:${candidateId}`;
+}
+const PROPOSAL_CLIENT_DATA_KEYS = ['hdsRefRange', 'hdsFlag', 'hdsInterpretation', 'hdsComparator', 'hdsTimePrecision'];
+const INTERPRETATIONS = new Set(['H', 'L', 'N', 'A', 'HH', 'LL']);
+function knownClientDataValue(key, value) {
+    if (key === 'hdsInterpretation')
+        return INTERPRETATIONS.has(value);
+    if (key === 'hdsComparator')
+        return COMPARATORS.has(value);
+    if (key === 'hdsTimePrecision')
+        return TIME_PRECISIONS.has(value);
+    return true;
+}
+/**
+ * The value event her app writes for a proposed value (§ Writing a value): the item's stream, the proposal's (or her
+ * correction's) type and content, the time from the proposal or from `date` (her `which-date` answer; `unknown`:
+ * no time), the proposal's clientData keys, `related`, `sourceKey`, `hdsSourceAnchor` and `hdsExtraction`.
+ */
+function valueEventOf(pv, opts = {}) {
+    const c = pv.content;
+    const p = c.proposal;
+    const source = opts.correction ?? p;
+    const itemDef = (0, HDSModelInitAndSingleton_ts_1.getModel)().itemsDefs.forKey(source.itemKey);
+    const clientData = {};
+    const carried = opts.correction?.clientData ?? p.clientData ?? {};
+    // R8: a value this version does not know is read as absent, never written on
+    for (const k of PROPOSAL_CLIENT_DATA_KEYS)
+        if (carried[k] != null && knownClientDataValue(k, carried[k]))
+            clientData[k] = carried[k];
+    const event = { streamIds: [itemDef.data.streamId], type: source.type, content: source.content };
+    if (p.time != null) {
+        event.time = p.time;
+        const precision = p.clientData?.hdsTimePrecision;
+        if (TIME_PRECISIONS.has(precision))
+            clientData.hdsTimePrecision = precision;
+        else
+            delete clientData.hdsTimePrecision;
+    }
+    else if (opts.date != null) {
+        if (opts.date.time != null && opts.date.timePrecision !== 'unknown')
+            event.time = opts.date.time;
+        clientData.hdsTimePrecision = opts.date.timePrecision;
+    }
+    clientData.related = { [c.about]: true };
+    clientData.sourceKey = sourceKeyOf(c.extraction.engine, c.about, c.candidateId);
+    // the anchor is self-contained (PROVENANCE.md, 4.25.0): it names its document even when the contact left it out;
+    // one naming another document is dropped, never rewritten (R11)
+    if (c.anchor != null && (c.anchor.eventId == null || c.anchor.eventId === c.about))
+        clientData.hdsSourceAnchor = { ...c.anchor, eventId: c.about };
+    clientData.hdsExtraction = { ...c.extraction, confirmedBy: 'person', ...(opts.correction ? { corrected: true } : {}) };
+    event.clientData = clientData;
+    return event;
+}
+/** The value already written for `sourceKey` on `streamId` (trashed included, left as it is), or null. */
+async function findBySourceKey(connection, streamId, sourceKey, time) {
+    const params = { streams: [streamId], state: 'all', limit: 500 };
+    if (time != null) {
+        params.fromTime = time - 1;
+        params.toTime = time + 1;
+    }
+    const events = await connection.apiOne('events.get', params, 'events');
+    return events.find(e => e.clientData?.sourceKey === sourceKey)?.id ?? null;
+}
+/**
+ * Her app writes the values she confirmed or corrected (§ Writing a value, R3, R9), then the answers, then their
+ * alerts. In order: the document's items read again; a candidate is refused when it changed since `shownAt` (Unix
+ * seconds, when the cards were shown), when an `is-this-yours` question is not confirmed (or answered `not-mine`),
+ * when it has no date (its `proposal.time` or a `which-date` answer), or when R9 refuses it (or the correction);
+ * each accepted value is looked up by `sourceKey` and written only when missing; one answer carries every
+ * confirmation (`inReplyTo` the first), each correction its own; each answer's alert on the relationship's collectors
+ * stream. Refused candidates are returned, the others written. A failure after a value was written throws with
+ * `reason: 'write-failed'`: calling again finds the values by `sourceKey` and writes none twice.
+ */
+async function acceptProposedValues(connection, rel, params) {
+    const { streams, collectorStreamId } = await personSide(connection, rel, 'acceptProposedValues');
+    if (typeof params?.shownAt !== 'number')
+        throw new errors_ts_1.HDSLibError('acceptProposedValues: shownAt is required');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    const refused = [];
+    const accepted = [];
+    for (const decision of params.decisions ?? []) {
+        const reason = acceptRefusal(conv, decision, params);
+        if (typeof reason === 'string')
+            refused.push({ candidateId: decision.candidateId, reason });
+        else
+            accepted.push(reason);
+    }
+    const written = new Map();
+    try {
+        for (const { pv, event } of accepted) {
+            const found = await findBySourceKey(connection, event.streamIds[0], event.clientData.sourceKey, event.time);
+            written.set(pv.candidateId, found ?? (await connection.apiOne('events.create', event, 'event')).id);
+        }
+    }
+    catch (e) {
+        throw new errors_ts_1.HDSLibError('acceptProposedValues: a value was not written', { reason: 'write-failed', written: Object.fromEntries(written), error: e });
+    }
+    const groups = [];
+    const confirms = accepted.filter(a => a.decision.action === 'confirm').map(a => a.pv);
+    if (confirms.length > 0)
+        groups.push({ action: 'confirm', pvs: confirms });
+    for (const a of accepted.filter(a => a.decision.action === 'correct'))
+        groups.push({ action: 'correct', pvs: [a.pv] });
+    const answers = [];
+    for (const [i, g] of groups.entries()) {
+        const w = g.pvs.map(pv => ({ candidateId: pv.candidateId, eventId: written.get(pv.candidateId) }));
+        const content = { kind: 'answer', inReplyTo: g.pvs[0].item.id, about: params.about, action: g.action, candidateIds: g.pvs.map(p => p.candidateId), written: w };
+        if (i === 0 && params.note != null)
+            content.note = params.note;
+        answers.push({ ...await writeAnswer(connection, streams.sent, collectorStreamId, content, g.pvs[0].item, conv), action: g.action, written: w });
+    }
+    // 4.26.0: the document lists the values written from it (best effort, after the answers)
+    await indexDocumentValues(connection, params.about, [...written.values()]);
+    return { answers, refused };
+}
+function acceptRefusal(conv, decision, params) {
+    const pv = conv.proposedValues.find(p => p.candidateId === decision.candidateId);
+    if (pv == null)
+        return 'unknown-candidate';
+    if (pv.item.modified > params.shownAt)
+        return 'changed-since-shown';
+    if (conv.identity === 'not-mine')
+        return 'not-mine';
+    if (conv.identity === 'open')
+        return 'identity-not-confirmed';
+    const refusal = proposalRefusal(pv, params.engines);
+    if (refusal != null)
+        return refusal;
+    if (decision.action === 'correct') {
+        if (decision.correction == null)
+            return 'no-correction';
+        const issue = checkValueProposal(decision.correction);
+        if (issue != null)
+            return issue;
+        const comparator = decision.correction.clientData?.hdsComparator;
+        if (comparator != null && !COMPARATORS.has(comparator))
+            return 'comparator';
+    }
+    const date = conv.candidateDates[pv.candidateId] ?? conv.documentDate;
+    if (pv.item.content.proposal.time == null && date == null)
+        return 'no-date';
+    return { pv, decision, event: valueEventOf(pv.item, { correction: decision.action === 'correct' ? decision.correction : undefined, date }) };
+}
+/**
+ * Answer one question (her tap, or her app on a profile match with `basis`): `choose` (+ `option`), `confirm` on
+ * `which-date` (+ `timePrecision`, `time` unless `unknown`), `confirm` or `not-mine` on `is-this-yours`, `skip` on
+ * any. Refused when the question, or the proposed value it is about, changed since `shownAt`. An answer to a question
+ * writes no value; after `not-mine` the values written from the document are deleted (R3), returned in
+ * `deletedValueIds`, before the alert is posted (so a failed alert never leaves them).
+ */
+async function answerQuestion(connection, rel, params) {
+    const { streams, collectorStreamId } = await personSide(connection, rel, 'answerQuestion');
+    if (typeof params?.shownAt !== 'number')
+        throw new errors_ts_1.HDSLibError('answerQuestion: shownAt is required');
+    const question = await receivedItem(connection, streams, params.questionId, 'question', 'answerQuestion');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: question.about }), question.about);
+    const current = conv.questions.find(q => q.item.id === question.id)?.item ?? question;
+    const cid = question.content.candidateId;
+    const about = (conv.proposedValues.find(p => p.candidateId === cid) ?? conv.proposedDocuments.find(p => p.candidateId === cid))?.item;
+    if (current.modified > params.shownAt || (about != null && about.modified > params.shownAt)) {
+        throw new errors_ts_1.HDSLibError('answerQuestion: the question changed since it was shown', { reason: 'changed-since-shown' });
+    }
+    const content = { kind: 'answer', inReplyTo: question.id, about: question.about, action: params.action };
+    if (cid != null)
+        content.candidateIds = [cid];
+    for (const k of ['option', 'time', 'timePrecision', 'basis', 'note'])
+        if (params[k] != null)
+            content[k] = params[k];
+    const answerEventId = await writeAnswerEvent(connection, streams.sent, content, current, conv);
+    let deletedValueIds = [];
+    if (params.action === 'not-mine')
+        deletedValueIds = await deleteWrittenValues(connection, conv);
+    const { alertEventId } = await announceAnswer(connection, collectorStreamId, answerEventId, content);
+    return { answerEventId, alertEventId, action: params.action, written: [], deletedValueIds };
+}
+/**
+ * Answer proposed values without writing one: `skip`, `request-item` (a kept-aside or unmapped one) or `duplicate`.
+ * One answer, `inReplyTo` the first candidate. With `shownAt`, refused when one of them changed since it was shown.
+ */
+async function answerProposedValues(connection, rel, params) {
+    const { streams, collectorStreamId } = await personSide(connection, rel, 'answerProposedValues');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    const first = conv.proposedValues.find(p => p.candidateId === params.candidateIds?.[0]);
+    if (first == null)
+        throw new errors_ts_1.HDSLibError('answerProposedValues: unknown candidate', { reason: 'unknown-candidate' });
+    if (params.shownAt != null && conv.proposedValues.some(p => params.candidateIds.includes(p.candidateId) && p.item.modified > params.shownAt)) {
+        throw new errors_ts_1.HDSLibError('answerProposedValues: a proposed value changed since it was shown', { reason: 'changed-since-shown' });
+    }
+    const content = { kind: 'answer', inReplyTo: first.item.id, about: params.about, action: params.action, candidateIds: [...params.candidateIds] };
+    if (params.basis != null)
+        content.basis = params.basis;
+    if (params.note != null)
+        content.note = params.note;
+    return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, first.item, conv), action: params.action, written: [] };
+}
+/**
+ * R3, the answer her app gives without a tap: `confirm` with `basis: profile-match` on the document's open
+ * `is-this-yours` question when `profileMatch` holds, at most one automatic answer per document. Returns null when
+ * nothing was answered.
+ */
+async function autoConfirmIdentity(connection, rel, params) {
+    const { streams } = await personSide(connection, rel, 'autoConfirmIdentity');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    if (conv.answers.some(a => a.content.basis === exports.BASES.PROFILE_MATCH))
+        return null;
+    const q = conv.questions.find(x => x.code === exports.QUESTION_CODES.IS_THIS_YOURS && x.state === 'open');
+    if (q == null || !profileMatch(q.item.content.context?.identity, params.profile))
+        return null;
+    const res = await answerQuestion(connection, rel, { questionId: q.item.id, action: 'confirm', basis: 'profile-match', shownAt: q.item.modified });
+    return { answerEventId: res.answerEventId, alertEventId: res.alertEventId, action: res.action, written: [] };
+}
+// ---- R3, `basis: existing-value`: a value she already has (CONVERSATION.md § A value she already has) ---- //
+const HOUR = 3600;
+const DAY = 24 * HOUR;
+const utcDay = (t) => new Date(t * 1000).toISOString().slice(0, 10);
+const dayStart = (day) => Date.parse(day + 'T00:00:00Z') / 1000;
+/** The day D a proposed value is compared on: its `proposal.time` at `day` precision, or her `which-date` answer at `day`. */
+function comparedDay(pv, conv) {
+    const p = pv.item.content.proposal;
+    if (typeof p?.time === 'number')
+        return p.clientData?.hdsTimePrecision === 'day' ? utcDay(p.time) : null;
+    const date = conv.candidateDates[pv.candidateId] ?? conv.documentDate;
+    return date?.timePrecision === 'day' && typeof date.time === 'number' ? utcDay(date.time) : null;
+}
+/** Her event lies on day D: at `day` precision on that UTC day; with an exact time, while D runs in some zone (or in its own). */
+function onComparedDay(e, day) {
+    const precision = e.clientData?.hdsTimePrecision;
+    if (precision === 'day')
+        return utcDay(e.time) === day;
+    if (precision != null && precision !== 'minute')
+        return false;
+    const zone = e.clientData?.hdsTimeZone;
+    if (typeof zone === 'string') {
+        try {
+            return new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(e.time * 1000)) === day;
+        }
+        catch { /* an unknown zone: the window below */ }
+    }
+    const start = dayStart(day);
+    return e.time >= start - 14 * HOUR && e.time < start + DAY + 12 * HOUR;
+}
+/** `printed.value` as a plain number with one decimal separator (comma or point) and its last digit's half unit; else null. */
+function printedNumber(value) {
+    if (typeof value !== 'string')
+        return null;
+    const m = /^\s*([+-]?\d+)(?:[.,](\d+))?\s*$/.exec(value);
+    if (m == null)
+        return null;
+    const decimals = m[2]?.length ?? 0;
+    return { n: Number(m[1] + (m[2] != null ? '.' + m[2] : '')), halfUnit: 0.5 * 10 ** -decimals };
+}
+const sig12 = (n) => Number(n.toPrecision(12));
+const same = (a, b) => (a ?? null) === (b ?? null);
+/** Her event holds the proposed value: same type and content, a converted other type within the printed tolerance, or the same coded result. */
+function holdsProposedValue(e, pv) {
+    const p = pv.content.proposal;
+    if (e.type === p.type) {
+        if (p.type === 'lab-result/coded-v1') {
+            const codes = (c) => (c?.analyte?.codes ?? []).map((x) => `${x?.system}|${x?.code}`);
+            if (!codes(p.content).some(k => codes(e.content).includes(k)))
+                return false;
+            if (typeof p.content?.value === 'number' && typeof e.content?.value === 'number') {
+                return sig12(p.content.value) === sig12(e.content.value) && same(p.content.unit, e.content.unit) && same(p.content.comparator, e.content.comparator);
+            }
+            return typeof p.content?.valueText === 'string' && p.content.valueText === e.content?.valueText;
+        }
+        if (typeof p.content === 'number' && typeof e.content === 'number') {
+            return sig12(p.content) === sig12(e.content) && same(p.clientData?.hdsComparator, e.clientData?.hdsComparator);
+        }
+        return JSON.stringify(p.content) === JSON.stringify(e.content);
+    }
+    // another type of the same item: converted into the proposal's unit, within half the last printed digit (scaled)
+    const printed = printedNumber(pv.content.printed?.value);
+    if (printed == null || printed.n === 0 || typeof p.content !== 'number' || typeof e.content !== 'number')
+        return false;
+    if (!same(p.clientData?.hdsComparator, e.clientData?.hdsComparator))
+        return false;
+    for (const system of ['metric', 'imperial']) {
+        const converted = (0, HDSModelInitAndSingleton_ts_1.getModel)().conversions.convert(e.type, e.content, system);
+        if (converted == null || converted.targetEventType !== p.type)
+            continue;
+        // the conversion rounds to 2 decimals: allow for it too
+        const tolerance = printed.halfUnit * Math.abs(p.content / printed.n) + 0.005;
+        return Math.abs(converted.value - p.content) <= tolerance;
+    }
+    return false;
+}
+/**
+ * R3, the answer her app gives without a tap: `duplicate` with `basis: existing-value` on the document's proposed
+ * values already in her record (CONVERSATION.md § A value she already has). For any contact's proposals, only those
+ * she could confirm (`proposalRefusal` null for `engines`), and only while no `is-this-yours` is open or `not-mine`.
+ * Her events: on the item's stream, of one of its types, not written from this document by any engine, on day D,
+ * holding the value; one event per candidate over the document (candidates already answered keep theirs), an event
+ * fitting several going to its own UTC day first, then the nearest, then the first candidate. One answer for the run,
+ * `inReplyTo` the first matched. Null when nothing matched.
+ */
+async function autoMarkDuplicates(connection, rel, params) {
+    const { streams } = await personSide(connection, rel, 'autoMarkDuplicates');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    if (conv.identity === 'open' || conv.identity === 'not-mine')
+        return null;
+    const settled = new Set(conv.answers.filter(a => a.content.basis === exports.BASES.EXISTING_VALUE).flatMap(a => a.content.candidateIds ?? []));
+    const prior = conv.proposedValues.filter(p => settled.has(p.candidateId));
+    const open = conv.proposedValues.filter(p => p.state === 'open' && proposalRefusal(p, params.engines) == null);
+    const all = [...prior.map(pv => ({ pv, prior: true })), ...open.map(pv => ({ pv, prior: false }))]
+        .map(c => ({ ...c, day: comparedDay(c.pv, conv) }))
+        .filter((c) => c.day != null);
+    if (!all.some(c => !c.prior))
+        return null;
+    const marker = `:document:${params.about}:`;
+    const cache = new Map();
+    const pairs = [];
+    for (const [i, c] of all.entries()) {
+        const itemDef = (0, HDSModelInitAndSingleton_ts_1.getModel)().itemsDefs.forKey(c.pv.item.content.proposal.itemKey, false);
+        if (itemDef == null)
+            continue;
+        const streamId = itemDef.data.streamId;
+        const key = streamId + '|' + c.day;
+        if (!cache.has(key)) {
+            const start = dayStart(c.day);
+            cache.set(key, await connection.apiOne('events.get', { streams: [streamId], fromTime: start - 14 * HOUR, toTime: start + DAY + 12 * HOUR, limit: 500 }, 'events'));
+        }
+        for (const e of cache.get(key)) {
+            if (e.trashed === true || !itemDef.eventTypes.includes(e.type))
+                continue;
+            if (typeof e.clientData?.sourceKey === 'string' && e.clientData.sourceKey.includes(marker))
+                continue;
+            if (!onComparedDay(e, c.day) || !holdsProposedValue(e, c.pv.item))
+                continue;
+            pairs.push({ c: i, event: e.id, own: utcDay(e.time) === c.day ? 0 : 1, distance: Math.abs(e.time - (dayStart(c.day) + 12 * HOUR)) });
+        }
+    }
+    // one for one: earlier answers keep their events, then the own day first, the nearest, the first candidate
+    pairs.sort((a, b) => Number(all[b.c].prior) - Number(all[a.c].prior) || a.own - b.own || a.distance - b.distance || a.c - b.c);
+    const takenEvents = new Set();
+    const eventOf = new Map();
+    for (const p of pairs) {
+        if (takenEvents.has(p.event) || eventOf.has(p.c))
+            continue;
+        takenEvents.add(p.event);
+        eventOf.set(p.c, p.event);
+    }
+    const fresh = [...eventOf.keys()].filter(i => !all[i].prior).sort((a, b) => a - b);
+    const matched = fresh.map(i => all[i].pv);
+    if (matched.length === 0)
+        return null;
+    const candidateIds = matched.map(p => p.candidateId);
+    const shownAt = Math.max(...matched.map(p => p.item.modified));
+    const res = await answerProposedValues(connection, rel, { about: params.about, candidateIds, action: 'duplicate', basis: exports.BASES.EXISTING_VALUE, shownAt });
+    // 4.26.0: each matched event of hers names the document in hdsPrintedIn (best effort, after the answer)
+    const matchedEventIds = fresh.map(i => eventOf.get(i));
+    await markPrintedIn(connection, params.about, matchedEventIds);
+    return { ...res, candidateIds, matchedEventIds };
+}
+/**
+ * R3, `not-mine` after values were written: every value listed in the document's answers' `written`, deleted; then
+ * (4.26.0, best effort) their entries in the document's `hdsDocumentValues`, and the document in the `hdsPrintedIn` of
+ * her events.
+ */
+async function deleteWrittenValues(connection, conv) {
+    const ids = [...new Set(conv.answers.flatMap(a => (a.content.written ?? []).map((w) => w.eventId)))];
+    for (const id of ids)
+        await deleteTwice(connection, 'events.delete', { id });
+    await bestEffort(async () => {
+        const doc = await readEvent(connection, conv.about);
+        const index = doc?.clientData?.[exports.DOCUMENT_VALUES_KEY];
+        if (index != null && typeof index === 'object') {
+            const kept = Object.fromEntries(Object.entries(index).filter(([id]) => !ids.includes(id)));
+            await connection.apiOne('events.update', { id: conv.about, update: { clientData: { [exports.DOCUMENT_VALUES_KEY]: Object.keys(kept).length > 0 ? kept : null } } }, 'event');
+        }
+    });
+    await bestEffort(async () => {
+        const printed = await connection.apiOne('events.get', { clientData: [{ path: `${exports.PRINTED_IN_KEY}.${conv.about}`, eq: true }], limit: 1000 }, 'events');
+        for (const e of printed ?? []) {
+            const { [conv.about]: _gone, ...rest } = e.clientData?.[exports.PRINTED_IN_KEY] ?? {};
+            await connection.apiOne('events.update', { id: e.id, update: { clientData: { [exports.PRINTED_IN_KEY]: Object.keys(rest).length > 0 ? rest : null } } }, 'event');
+        }
+    });
+    return ids;
+}
+/**
+ * 4.26.0, after the answer and best effort: the values her app wrote from the document, added to its
+ * `clientData.hdsDocumentValues` as `source` (PROVENANCE.md), the whole object written after a fresh read, the
+ * dangling entries it finds (deleted, trashed) dropped. Returns the index written, or null when nothing was.
+ */
+async function indexDocumentValues(connection, about, eventIds) {
+    if (eventIds.length === 0)
+        return null;
+    return await bestEffort(async () => {
+        const doc = await readEvent(connection, about);
+        if (doc?.type !== 'file/xds-v1')
+            return null;
+        const index = { ...(doc.clientData?.[exports.DOCUMENT_VALUES_KEY] ?? {}) };
+        for (const id of Object.keys(index)) {
+            const e = eventIds.includes(id) ? { trashed: false } : await readEvent(connection, id);
+            if (e == null || e.trashed === true)
+                delete index[id];
+        }
+        for (const id of eventIds)
+            index[id] = 'source';
+        await connection.apiOne('events.update', { id: about, update: { clientData: { [exports.DOCUMENT_VALUES_KEY]: index } } }, 'event');
+        return index;
+    });
+}
+/**
+ * 4.26.0, best effort: the document added to the `clientData.hdsPrintedIn` of her events an automatic `duplicate`
+ * matched (PROVENANCE.md): found in the document, not read from it. Nothing is written on the document.
+ */
+async function markPrintedIn(connection, about, eventIds) {
+    const done = [];
+    for (const id of eventIds) {
+        await bestEffort(async () => {
+            const e = await readEvent(connection, id);
+            if (e == null || e.trashed === true || e.clientData?.[exports.PRINTED_IN_KEY]?.[about] === true)
+                return;
+            await connection.apiOne('events.update', { id, update: { clientData: { [exports.PRINTED_IN_KEY]: { ...(e.clientData?.[exports.PRINTED_IN_KEY] ?? {}), [about]: true } } } }, 'event');
+            done.push(id);
+        });
+    }
+    return done;
+}
+/**
+ * Her app confirms (or corrects) a proposed document (CONVERSATION.md § Writing a document's date and kind, 4.26.0):
+ * the conversation and the document read again; refused when the proposal or a question about it changed since
+ * `shownAt`, or by `documentProposalRefusal`; each field from her `correction`, else the proposal, else her answers to
+ * the two document questions; applied only where still pending (one `events.update`); then the answer, `applied`
+ * listing the fields, and its alert. When nothing is applied: `nothing-pending`, except on a retry after the update
+ * went through (the document already holds every field), which writes the answer.
+ */
+async function acceptProposedDocument(connection, rel, params) {
+    const { streams, collectorStreamId } = await personSide(connection, rel, 'acceptProposedDocument');
+    if (typeof params?.shownAt !== 'number')
+        throw new errors_ts_1.HDSLibError('acceptProposedDocument: shownAt is required');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    const pd = conv.proposedDocuments.find(p => p.candidateId === params.candidateId);
+    if (pd == null)
+        throw new errors_ts_1.HDSLibError('acceptProposedDocument: unknown candidate', { reason: 'unknown-candidate' });
+    const asked = conv.questions.filter(q => DOCUMENT_CODES.has(q.code) && q.item.content.candidateId === pd.candidateId);
+    if (pd.item.modified > params.shownAt || asked.some(q => q.item.modified > params.shownAt)) {
+        throw new errors_ts_1.HDSLibError('acceptProposedDocument: the proposal changed since it was shown', { reason: 'changed-since-shown' });
+    }
+    const document = await readEvent(connection, params.about);
+    const fields = documentFieldsOf(pd, conv, params.correction);
+    const refusal = documentProposalRefusal(pd, document, conv);
+    let applied = [];
+    if (refusal === 'nothing-pending' && document != null && holdsDocumentFields(document, fields)) {
+        applied = proposedOrAnswered(fields); // a retry: the update went through, the answer did not
+    }
+    else if (refusal != null) {
+        throw new errors_ts_1.HDSLibError('acceptProposedDocument: ' + refusal, { reason: refusal });
+    }
+    else {
+        const { update, applied: written } = documentUpdateOf(document, fields);
+        if (update == null)
+            throw new errors_ts_1.HDSLibError('acceptProposedDocument: nothing to apply', { reason: 'nothing-pending' });
+        await connection.apiOne('events.update', { id: params.about, update }, 'event');
+        applied = written;
+    }
+    const action = params.correction != null ? 'correct' : 'confirm';
+    const content = { kind: 'answer', inReplyTo: pd.item.id, about: params.about, action, candidateIds: [pd.candidateId], applied };
+    if (params.note != null)
+        content.note = params.note;
+    return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action, written: [], applied };
+}
+/**
+ * Her tapped `skip` on a proposed document ("Later"), or her comment alone on it (`note`: a `skip` with a note, with
+ * every effect of a skip). Refused when the proposal changed since `shownAt`. It writes nothing on the document; the
+ * proposal stays and she may confirm it later.
+ */
+async function skipProposedDocument(connection, rel, params) {
+    const { streams, collectorStreamId } = await personSide(connection, rel, 'skipProposedDocument');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    const pd = conv.proposedDocuments.find(p => p.candidateId === params.candidateId);
+    if (pd == null)
+        throw new errors_ts_1.HDSLibError('skipProposedDocument: unknown candidate', { reason: 'unknown-candidate' });
+    if (params.shownAt != null && pd.item.modified > params.shownAt) {
+        throw new errors_ts_1.HDSLibError('skipProposedDocument: the proposal changed since it was shown', { reason: 'changed-since-shown' });
+    }
+    const content = { kind: 'answer', inReplyTo: pd.item.id, about: params.about, action: 'skip', candidateIds: [pd.candidateId] };
+    if (params.note != null)
+        content.note = params.note;
+    return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action: 'skip', written: [] };
+}
+/**
+ * R3, the answer her app gives without a tap (4.26.0): `skip` with `basis: not-pending` on each open proposed
+ * document none of whose fields is pending on the document any more (she set them, or confirmed another contact's).
+ * Returns the answers written.
+ */
+async function autoSettleProposedDocuments(connection, rel, params) {
+    const { streams, collectorStreamId } = await personSide(connection, rel, 'autoSettleProposedDocuments');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    const open = conv.proposedDocuments.filter(p => p.state === 'open');
+    if (open.length === 0)
+        return [];
+    const document = await readEvent(connection, params.about);
+    const out = [];
+    for (const pd of open) {
+        if (documentProposalRefusal(pd, document, conv) !== 'nothing-pending')
+            continue;
+        const content = { kind: 'answer', inReplyTo: pd.item.id, about: params.about, action: 'skip', candidateIds: [pd.candidateId], basis: exports.BASES.NOT_PENDING };
+        out.push({ ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action: 'skip', written: [] });
+    }
+    return out;
+}
+/** The fields to apply for a proposed document: her correction, else the proposal, else her answers to its questions. */
+function documentFieldsOf(pd, conv, correction) {
+    const p = pd.item.content.proposal ?? {};
+    const answered = conv.documentAnswers[pd.candidateId] ?? {};
+    const out = {};
+    const kind = correction?.documentKind ?? p.documentKind ?? answered.documentKind;
+    if (kind != null)
+        out.documentKind = kind;
+    if (correction?.timePrecision != null) {
+        out.time = correction.time;
+        out.timePrecision = correction.timePrecision;
+    }
+    else if (typeof p.time === 'number') {
+        out.time = p.time;
+        out.timePrecision = p.timePrecision;
+    }
+    else if (answered.date != null) {
+        out.time = answered.date.time;
+        out.timePrecision = answered.date.timePrecision;
+    }
+    return out;
+}
+function proposedOrAnswered(fields) {
+    return ['time', 'kind'].filter(f => f === 'time' ? fields.timePrecision != null : fields.documentKind != null);
+}
+/** The document already holds every field of `fields` (the update of a confirmation went through). */
+function holdsDocumentFields(document, fields) {
+    const wanted = proposedOrAnswered(fields);
+    if (wanted.length === 0)
+        return false;
+    if (wanted.includes('kind')) {
+        let kind = null;
+        try {
+            kind = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forContent(document.content);
+        }
+        catch { /* model not loaded */ }
+        if (kind?.key !== fields.documentKind)
+            return false;
+    }
+    if (wanted.includes('time')) {
+        if (document.clientData?.hdsTimePrecision !== fields.timePrecision)
+            return false;
+        if (fields.timePrecision !== 'unknown' && document.time !== fields.time)
+            return false;
+    }
+    return true;
+}
+// ---- 4.26.0: her note (CONVERSATION.md § Her note) ---- //
+/**
+ * The answers whose `note` her app removes now: once the contact's latest `task-status` (`status`) is `done` and later
+ * than the answer; or 24 h after the answer when the work was already `done`, when she answered `not-mine`, or when the
+ * document was unshared (`unshared`).
+ */
+function notesToRemove(conv, status, opts = {}) {
+    const now = opts.now ?? Math.floor(Date.now() / 1000);
+    const doneAt = status?.hds?.status === 'done' ? status.time : null;
+    return conv.answers.filter(a => {
+        if (typeof a.content.note !== 'string')
+            return false;
+        if (doneAt != null && doneAt > a.created)
+            return true;
+        return now - a.created >= DAY && (doneAt != null || conv.identity === 'not-mine' || opts.unshared === true);
+    });
+}
+/**
+ * Remove `note` from her answers about a document when `notesToRemove` says so (an `events.update` of the answer,
+ * writing nothing else). Returns the answer ids updated.
+ */
+async function removeNotes(connection, rel, params) {
+    const { streams, collectorStreamId } = await personSide(connection, rel, 'removeNotes');
+    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    if (!conv.answers.some(a => typeof a.content.note === 'string'))
+        return [];
+    const status = taskStatusOf(await listConversationAlerts(connection, collectorStreamId), params.about);
+    const out = [];
+    for (const a of notesToRemove(conv, status, params)) {
+        const { note: _note, ...content } = a.content;
+        await connection.apiOne('events.update', { id: a.id, update: { content } }, 'event');
+        out.push(a.id);
+    }
+    return out;
+}
+async function readEvent(connection, id) {
+    try {
+        return await connection.apiOne('events.getOne', { id }, 'event');
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) === 'unknown-resource')
+            return null;
+        throw e;
+    }
+}
+async function bestEffort(fn) {
+    try {
+        return await fn();
+    }
+    catch {
+        return null;
+    }
+}
+async function personSide(connection, rel, fn) {
+    if (!rel?.accessId)
+        throw new errors_ts_1.HDSLibError(`${fn}: the relationship's accessId is required`);
+    if (!rel.localCollectorStreamId)
+        throw new errors_ts_1.HDSLibError(`${fn}: the relationship has no collectors stream (no system channel)`, { reason: 'no-collector-stream' });
+    const streams = await conversationStreamsFor(connection, rel.accessId);
+    if (streams == null)
+        throw new errors_ts_1.HDSLibError(`${fn}: the relationship has no conversation children`, { reason: 'no-conversation' });
+    return { streams, collectorStreamId: rel.localCollectorStreamId };
+}
+/** R11: a pointer resolves only on the relationship's `received` child, to the expected kind. */
+async function receivedItem(connection, streams, eventId, kind, fn) {
+    let event = null;
+    try {
+        event = await connection.apiOne('events.getOne', { id: eventId }, 'event');
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'unknown-resource')
+            throw e;
+    }
+    const item = parseConversationItems(event ? [event] : [], streams)[0];
+    if (item == null || item.direction !== 'received' || item.kind !== kind)
+        throw new errors_ts_1.HDSLibError(`${fn}: no ${kind} ${eventId} in this conversation`, { reason: 'not-in-conversation', eventId });
+    return item;
+}
+async function writeAnswer(connection, sentStreamId, collectorStreamId, content, target, conv) {
+    const answerEventId = await writeAnswerEvent(connection, sentStreamId, content, target, conv);
+    return { answerEventId, ...await announceAnswer(connection, collectorStreamId, answerEventId, content) };
+}
+/** The answer event on the `sent` child, checked first, with `related` mirroring every id it names (R1). */
+async function writeAnswerEvent(connection, sentStreamId, content, target, conv) {
+    const issues = checkAnswerFor(content, target, conv);
+    if (issues.length > 0)
+        throw new errors_ts_1.HDSLibError('invalid answer: ' + issues.join('; '), { reason: 'invalid-answer', issues });
+    const related = { [content.about]: true, [content.inReplyTo]: true };
+    for (const w of content.written ?? [])
+        related[w.eventId] = true;
+    const answer = await connection.apiOne('events.create', { streamIds: [sentStreamId], type: exports.ET_CONVERSATION, content, clientData: { related } }, 'event');
+    return answer.id;
+}
+async function announceAnswer(connection, collectorStreamId, answerEventId, content) {
+    try {
+        return await postConversationAlert(connection, collectorStreamId, { kind: 'answer', eventId: answerEventId, inReplyTo: content.inReplyTo, about: content.about });
+    }
+    catch (e) {
+        // written, not announced: post the alert again (`postConversationAlert`), never the answer
+        throw new errors_ts_1.HDSLibError('the answer was written, its alert was not posted', { reason: 'alert-not-posted', answerEventId, error: e });
+    }
+}
+// ---- both sides: alerts ---- //
+/** Post a conversation alert on the own collectors stream (the plugin delivers it to the peer). `hds` is checked. */
+async function postConversationAlert(connection, collectorStreamId, hds) {
+    if (!collectorStreamId)
+        throw new errors_ts_1.HDSLibError('postConversationAlert: collectorStreamId is required', { reason: 'no-collector-stream' });
+    const content = buildConversationAlertContent(hds);
+    const event = await connection.apiOne('events.create', { streamIds: [collectorStreamId], type: dataExport_ts_1.ET_ALERT, content }, 'event');
+    return { alertEventId: event.id };
+}
+/** The conversation alerts on one collectors stream (either side), as `parseConversationAlerts` returns them. */
+async function listConversationAlerts(connection, collectorStreamId, opts = {}) {
+    const params = { streams: [collectorStreamId], types: [dataExport_ts_1.ET_ALERT], limit: opts.limit ?? 500 };
+    if (opts.fromTime != null)
+        params.fromTime = opts.fromTime;
+    const events = await connection.apiOne('events.get', params, 'events');
+    return parseConversationAlerts(events);
+}
+// ---- the contact's side (through its grant on the person's children) ---- //
+/**
+ * Write one question on the person's `received` child, checked (schema, § Question codes; a `candidateId` must name
+ * a proposed value of the same document on that child), with `clientData.related.<about>` (R1). The contact then
+ * posts its `question` alert (`postConversationAlert`). Returns the event id.
+ */
+async function writeQuestion(personConnection, streams, content) {
+    const issues = checkConversationItem(content);
+    if (content?.kind !== 'question')
+        issues.push('writeQuestion: kind must be question');
+    if (issues.length === 0) {
+        const items = await listConversationItems(personConnection, streams, { about: content.about });
+        if (conversationOf(items, content.about).identity === 'not-mine')
+            notMine('writeQuestion');
+        const documentCode = DOCUMENT_CODES.has(content.code);
+        const kind = documentCode ? 'proposed-document' : 'proposed-value';
+        if (content.candidateId != null && !items.some(i => i.kind === kind && i.content.candidateId === content.candidateId)) {
+            issues.push(`question: candidate ${content.candidateId} is not a ${documentCode ? 'proposed document' : 'proposed value'} of the document`);
+        }
+        // 4.26.0: a document question only while the document waits for that field
+        if (documentCode) {
+            const field = content.code === exports.QUESTION_CODES.WHICH_DOCUMENT_KIND ? 'kind' : 'time';
+            if (!pendingFieldsOf(await readEvent(personConnection, content.about)).includes(field))
+                issues.push(`question ${content.code}: the document's ${field} is not pending`);
+        }
+    }
+    if (issues.length > 0)
+        throw new errors_ts_1.HDSLibError('writeQuestion: ' + issues.join('; '), { reason: 'invalid-item', issues });
+    const event = await personConnection.apiOne('events.create', {
+        streamIds: [streams.received], type: exports.ET_CONVERSATION, content, clientData: { related: { [content.about]: true } }
+    }, 'event');
+    return event.id;
+}
+/**
+ * Write the proposed values of one document on the person's `received` child (R5: idempotent per `candidateId`): a
+ * new candidate is created, an unanswered one rewritten in place, one already answered or written left alone. Each
+ * is checked first (schema, § What a writer MUST include, `replaces` naming a proposed value of the document that she
+ * answered a question about and that was not written); nothing is written when one fails. The contact then posts one
+ * `proposed-values` alert for the batch (`count`: created + updated). A candidate her app wrote is never proposed
+ * again, also once its proposed value was deleted (R5, from her answers); a document she answered `not-mine` is refused.
+ */
+async function writeProposedValues(personConnection, streams, about, contents) {
+    const conv = conversationOf(await listConversationItems(personConnection, streams, { about }), about);
+    if (conv.identity === 'not-mine')
+        notMine('writeProposedValues');
+    const issues = [];
+    const seen = new Set();
+    for (const c of contents ?? []) {
+        const own = checkConversationItem(c);
+        if (c?.kind !== 'proposed-value')
+            own.push('kind must be proposed-value');
+        if (c?.about !== about)
+            own.push('about is not the document of the batch');
+        if (seen.has(c?.candidateId))
+            own.push('candidateId listed twice');
+        seen.add(c?.candidateId);
+        if (own.length === 0 && c.replaces != null) {
+            const old = conv.proposedValues.find(p => p.candidateId === c.replaces);
+            const asked = conv.questions.some(q => q.item.content.candidateId === c.replaces && q.state === 'answered');
+            if (old == null || old.writtenEventId != null || !asked)
+                own.push(`replaces ${c.replaces}: not a proposed value of the document answered by a question and not written`);
+        }
+        issues.push(...own.map(i => `${c?.candidateId ?? '?'}: ${i}`));
+    }
+    if (issues.length > 0)
+        throw new errors_ts_1.HDSLibError('writeProposedValues: ' + issues.join('; '), { reason: 'invalid-item', issues });
+    const out = { created: [], updated: [], skipped: [] };
+    for (const c of contents) {
+        const existing = conv.proposedValues.find(p => p.candidateId === c.candidateId);
+        if (existing?.writtenEventId != null || Object.hasOwn(conv.writtenCandidates, c.candidateId)) {
+            out.skipped.push({ candidateId: c.candidateId, reason: 'written' });
+            continue;
+        }
+        if (existing != null && (existing.state !== 'open' || conv.answers.some(a => (a.content.candidateIds ?? []).includes(c.candidateId)))) {
+            out.skipped.push({ candidateId: c.candidateId, reason: 'answered' });
+            continue;
+        }
+        const clientData = { related: { [about]: true } };
+        if (existing != null) {
+            await personConnection.apiOne('events.update', { id: existing.item.id, update: { content: c, clientData } }, 'event');
+            out.updated.push({ candidateId: c.candidateId, eventId: existing.item.id });
+        }
+        else {
+            const event = await personConnection.apiOne('events.create', { streamIds: [streams.received], type: exports.ET_CONVERSATION, content: c, clientData }, 'event');
+            out.created.push({ candidateId: c.candidateId, eventId: event.id });
+        }
+    }
+    return out;
+}
+/**
+ * Write the contact's proposed date and kind for a document on the person's `received` child (4.26.0, CONVERSATION.md
+ * § A document's date and kind): checked first (schema, the kind a non-deprecated pack kind, the time at 12:00 UTC),
+ * written only while the document's `hdsDocumentPending` holds a proposed field (read through the contact's grant on
+ * the shared document), idempotent per `candidateId` (an unanswered one rewritten in place, an answered one left
+ * alone). One open at a time: a new candidate gets `replaces` = the open one it supersedes, which is deleted at once.
+ * The contact then posts a `proposed-values` alert (`count` 1). A document she answered `not-mine` is refused.
+ */
+async function writeProposedDocument(personConnection, streams, content) {
+    const issues = checkConversationItem(content);
+    if (content?.kind !== 'proposed-document')
+        issues.push('kind must be proposed-document');
+    if (issues.length > 0)
+        throw new errors_ts_1.HDSLibError('writeProposedDocument: ' + issues.join('; '), { reason: 'invalid-item', issues });
+    const about = content.about;
+    const conv = conversationOf(await listConversationItems(personConnection, streams, { about }), about);
+    if (conv.identity === 'not-mine')
+        notMine('writeProposedDocument');
+    const pending = pendingFieldsOf(await readEvent(personConnection, about));
+    if (!proposedFieldsOf({ content }).some(f => pending.includes(f)))
+        return { outcome: 'skipped', eventId: null, reason: 'nothing-pending', deleted: [] };
+    const answeredIds = new Set(conv.answers.filter(a => (a.content.candidateIds ?? []).length > 0).flatMap(a => a.content.candidateIds));
+    const existing = conv.proposedDocuments.find(p => p.candidateId === content.candidateId);
+    if (existing != null && (existing.state !== 'open' || answeredIds.has(existing.candidateId))) {
+        return { outcome: 'skipped', eventId: existing.item.id, reason: 'answered', deleted: [] };
+    }
+    const clientData = { related: { [about]: true } };
+    if (existing != null) {
+        await personConnection.apiOne('events.update', { id: existing.item.id, update: { content, clientData } }, 'event');
+        return { outcome: 'updated', eventId: existing.item.id, deleted: [] };
+    }
+    const stale = conv.proposedDocuments.filter(p => p.state === 'open' && !conv.answers.some(a => a.content.inReplyTo === p.item.id));
+    const body = stale.length > 0 && content.replaces == null ? { ...content, replaces: stale.at(-1).candidateId } : content;
+    const event = await personConnection.apiOne('events.create', { streamIds: [streams.received], type: exports.ET_CONVERSATION, content: body, clientData }, 'event');
+    const deleted = [];
+    for (const p of stale) {
+        const questions = conv.questions.filter(q => DOCUMENT_CODES.has(q.code) && q.item.content.candidateId === p.candidateId).map(q => q.item.id);
+        for (const id of [p.item.id, ...questions]) {
+            await deleteTwice(personConnection, 'events.delete', { id });
+            deleted.push(id);
+        }
+    }
+    return { outcome: 'created', eventId: event.id, deleted };
+}
+/** R10: delete items on the person's `received` child (trashed, then deleted). An item already gone is skipped. */
+async function deleteConversationItems(personConnection, eventIds) {
+    for (const id of eventIds ?? [])
+        await deleteTwice(personConnection, 'events.delete', { id });
+}
+// ---- internals ---- //
+/** R3 / R10: once she answered `not-mine`, the contact writes nothing more about the document. */
+function notMine(fn) {
+    throw new errors_ts_1.HDSLibError(`${fn}: the person answered that this document is not hers`, { reason: 'not-mine' });
+}
+/** Pryv trashes on the first delete and deletes on the second: both, a resource already gone counting as done. */
+async function deleteTwice(connection, method, params) {
+    for (let i = 0; i < 2; i++) {
+        try {
+            await connection.apiOne(method, params);
+        }
+        catch (e) {
+            if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'unknown-resource')
+                throw e;
+            return;
+        }
+    }
+}
+const ALERT_TEXT = {
+    'task-status': {
+        title: { en: 'Document update', fr: 'Suivi du document' },
+        body: { en: 'Your contact updated the status of a document.', fr: 'Votre contact a mis à jour l\'état d\'un document.' }
+    },
+    notice: {
+        title: { en: 'Message', fr: 'Message' },
+        body: { en: 'Your contact sent you a message.', fr: 'Votre contact vous a envoyé un message.' }
+    },
+    question: {
+        title: { en: 'Question', fr: 'Question' },
+        body: { en: 'Your contact asks you a question.', fr: 'Votre contact vous pose une question.' }
+    },
+    'proposed-values': {
+        title: { en: 'Proposed values', fr: 'Valeurs proposées' },
+        body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.' }
+    },
+    answer: {
+        title: { en: 'Answer', fr: 'Réponse' },
+        body: { en: 'The person answered.', fr: 'La personne a répondu.' }
+    }
+};
+const STREAM_LABELS = {
+    received: {
+        person: { en: 'Received in conversations', fr: 'Reçu dans les conversations', es: 'Recibido en las conversaciones' },
+        contact: { en: 'Items you send', fr: 'Éléments que vous envoyez', es: 'Elementos que usted envía' }
+    },
+    sent: {
+        person: { en: 'Your answers', fr: 'Vos réponses', es: 'Sus respuestas' },
+        contact: { en: 'Answers shared with you', fr: 'Réponses partagées avec vous', es: 'Respuestas compartidas con usted' }
+    }
+};
+
+
+/***/ },
+
 /***/ "./ts/cmc/dataExport.ts"
 /*!******************************!*\
   !*** ./ts/cmc/dataExport.ts ***!
   \******************************/
-(__unused_webpack_module, exports) {
+(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
 
@@ -26724,6 +29044,7 @@ exports.requestDataExport = requestDataExport;
 exports.fulfillDataExportRequest = fulfillDataExportRequest;
 exports.listDataExportRequests = listDataExportRequests;
 exports.parseDataExportEvents = parseDataExportEvents;
+const cmcText_ts_1 = __webpack_require__(/*! ./cmcText.js */ "./ts/cmc/cmcText.ts");
 exports.DATA_EXPORT_KIND = 'data-export-request';
 /** `ackId` prefix that marks an alert as a data-export request (the `hds` block is authoritative). */
 exports.DATA_EXPORT_ACK_PREFIX = 'hds-data-export:';
@@ -26741,8 +29062,8 @@ function buildDataExportRequestContent(params) {
         lines.push(params.note);
     return {
         level: 'info',
-        title: { [locale]: TEXT[locale]?.title ?? TEXT.en.title },
-        body: { [locale]: lines.join('\n') },
+        title: (0, cmcText_ts_1.cmcText)({ [locale]: TEXT[locale]?.title ?? TEXT.en.title }),
+        body: (0, cmcText_ts_1.cmcText)({ [locale]: lines.join('\n') }),
         ackRequired: true,
         ackId,
         hds: {
@@ -26937,6 +29258,7 @@ const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 const appScope_ts_1 = __webpack_require__(/*! ./appScope.js */ "./ts/cmc/appScope.ts");
+const cmcText_ts_1 = __webpack_require__(/*! ./cmcText.js */ "./ts/cmc/cmcText.ts");
 const dataExport_ts_1 = __webpack_require__(/*! ./dataExport.js */ "./ts/cmc/dataExport.ts");
 const formSpec_ts_1 = __webpack_require__(/*! ./formSpec.js */ "./ts/cmc/formSpec.ts");
 const scope_ts_1 = __webpack_require__(/*! ./scope.js */ "./ts/cmc/scope.ts");
@@ -27014,8 +29336,8 @@ function buildDocumentAlertContent(kind, eventId, locale = 'en') {
     const lang = TEXT[kind][locale] ? locale : 'en';
     return {
         level: 'info',
-        title: { [lang]: text.title },
-        body: { [lang]: text.body },
+        title: (0, cmcText_ts_1.cmcText)({ [lang]: text.title }),
+        body: (0, cmcText_ts_1.cmcText)({ [lang]: text.body }),
         code: 'hds-' + kind,
         hds: { kind, eventId }
     };
@@ -27442,9 +29764,10 @@ const TEXT = {
  *   side, so the snapshot must live with the patient's accept event).
  *
  * Chat-only data sets (Q-F4 lock): when a FormSpec has no real
- * permissions, `deriveCmcPermissions` injects the `:hds:noop` placeholder
- * so `cmc.createInvite`'s non-empty-permissions check passes. The
- * patient's hds-webapp provisions `:hds:noop` on first launch.
+ * permissions, `deriveCmcPermissions` injects the `hds-noop` placeholder
+ * (`HDS_NOOP_STREAM_ID`) so `cmc.createInvite`'s non-empty-permissions
+ * check passes. The patient's hds-webapp provisions `hds-noop` on first
+ * launch.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -27499,6 +29822,7 @@ const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patc
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 const constants_ts_1 = __webpack_require__(/*! ./constants.js */ "./ts/cmc/constants.ts");
+const cmcText_ts_1 = __webpack_require__(/*! ./cmcText.js */ "./ts/cmc/cmcText.ts");
 /**
  * Event type for the canonical FormSpec template event on the doctor side.
  *
@@ -27741,9 +30065,9 @@ async function createInviteWithFormSpec(connection, params) {
     }
     const requesterMeta = Object.assign({ displayName: params.displayName, appId: params.appCode }, params.requesterMeta ?? {});
     const request = {
-        title: params.title ?? params.formSpec.title ?? { en: params.displayName },
-        description: params.description ?? params.formSpec.description ?? { en: '' },
-        consent: params.consent ?? params.formSpec.consent ?? { en: '' },
+        title: (0, cmcText_ts_1.cmcText)(params.title ?? params.formSpec.title ?? { en: params.displayName }),
+        description: (0, cmcText_ts_1.cmcText)(params.description ?? params.formSpec.description ?? { en: '' }),
+        consent: (0, cmcText_ts_1.cmcText)(params.consent ?? params.formSpec.consent ?? { en: '' }),
         permissions: params.requestedPermissions
     };
     if (params.features)
@@ -27863,7 +30187,7 @@ async function provisionHdsNoop(connection) {
 }
 /**
  * Doctor-side helper: did the FormSpec produce a chat-only invite (i.e.
- * its only granted permission is `:hds:noop`)? Used by listInviteRecordsFor
+ * its only granted permission is `hds-noop`)? Used by listInviteRecordsFor
  * + PatientsTable to surface "chat-only relationship" badges.
  */
 function isChatOnlyFormSpec(formSpec) {
@@ -27910,6 +30234,7 @@ exports.postItemReminder = postItemReminder;
 exports.listItemReminders = listItemReminders;
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const cmcText_ts_1 = __webpack_require__(/*! ./cmcText.js */ "./ts/cmc/cmcText.ts");
 const dataExport_ts_1 = __webpack_require__(/*! ./dataExport.js */ "./ts/cmc/dataExport.ts");
 exports.ITEM_REMINDER_KIND = 'item-reminder';
 const READ_LEVELS = new Set(['read', 'contribute', 'manage']);
@@ -27921,8 +30246,8 @@ function buildItemReminderContent(itemKey, locale = 'en') {
     const lang = Object.hasOwn(TEXT, locale) ? locale : 'en';
     return {
         level: 'info',
-        title: { [lang]: TEXT[lang].title },
-        body: { [lang]: TEXT[lang].body },
+        title: (0, cmcText_ts_1.cmcText)({ [lang]: TEXT[lang].title }),
+        body: (0, cmcText_ts_1.cmcText)({ [lang]: TEXT[lang].body }),
         code: 'hds-' + exports.ITEM_REMINDER_KIND,
         hds: { kind: exports.ITEM_REMINDER_KIND, itemKey }
     };
@@ -28220,9 +30545,9 @@ async function stopSharingStream(connection, rel, streamId, opts = {}) {
 }
 /**
  * Share streams with a connection again (the person's own decision). Adds each stream not
- * shared now, at `opts.level` (default `read`), and writes `content.hds = { added, message? }`.
- * Throws `HDSLibError` when every stream is already shared, when the relationship has no
- * collectors stream, or when the platform did not apply the change.
+ * shared now, at `opts.levels[streamId]`, else `opts.level` (default `read`), and writes
+ * `content.hds = { added, message? }`. Throws `HDSLibError` when every stream is already shared,
+ * when the relationship has no collectors stream, or when the platform did not apply the change.
  */
 async function shareStreamsAgain(connection, rel, streamIds, opts = {}) {
     const collectorStreamId = requireCollectorStream(rel, 'shareStreamsAgain');
@@ -28231,8 +30556,7 @@ async function shareStreamsAgain(connection, rel, streamIds, opts = {}) {
     if (back.length === 0) {
         throw new errors_ts_1.HDSLibError('shareStreamsAgain: every stream is already shared', { reason: 'already-shared', streamIds });
     }
-    const level = opts.level ?? 'read';
-    const newPermissions = [...now, ...back.map(streamId => ({ streamId, level }))];
+    const newPermissions = [...now, ...back.map(streamId => ({ streamId, level: opts.levels?.[streamId] ?? opts.level ?? 'read' }))];
     const hds = { added: back, ...(opts.message ? { message: opts.message } : {}) };
     return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
 }
@@ -28645,8 +30969,11 @@ function buildLookupConverter(def, dims, w) {
     const ci = def.caseInsensitive ?? false;
     const single = comps.length === 1;
     let vocabulary;
+    // What fromVector may return: options marked `produce: false` are read, never produced (plan 131).
+    let producible;
     if (single && !def.observations) {
         vocabulary = comps[0].options.map(o => ({ observation: o.value, vector: vec(o.vector, dims) }));
+        producible = comps[0].options.filter(o => o.produce !== false).map(o => ({ observation: o.value, vector: vec(o.vector, dims) }));
     }
     else if (def.observations) {
         vocabulary = def.observations.map(o => ({ observation: single ? o.select[comps[0].field] : { ...o.select }, vector: vec(o.vector, dims) }));
@@ -28659,7 +30986,10 @@ function buildLookupConverter(def, dims, w) {
         toVector(observation) {
             let entry;
             if (single) {
-                entry = vocabulary.find(e => valuesEqual(e.observation, observation, ci));
+                // Bridges store a single-component observation as `{ <field>: value }` (e.g. `{ mucus: '10KL' }`).
+                const field = comps[0].field;
+                const value = observation !== null && typeof observation === 'object' && field in observation ? observation[field] : observation;
+                entry = vocabulary.find(e => valuesEqual(e.observation, value, ci));
             }
             else {
                 const obs = observation;
@@ -28673,7 +31003,7 @@ function buildLookupConverter(def, dims, w) {
             return entry.vector;
         },
         fromVector(vector) {
-            return findClosest(vector, vocabulary, dims, w).observation;
+            return findClosest(vector, producible ?? vocabulary, dims, w).observation;
         },
         allObservations() {
             return vocabulary.map(e => e.observation);
@@ -28987,10 +31317,12 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.contentEventIds = exports.DOCUMENT_UNIQUE_ID_KEY = exports.IDENTIFIER_SYSTEM_URI = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.appDescription = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = void 0;
+exports.appDescription = exports.cmcText = exports.cmcConversation = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
+const cmcText_ts_1 = __webpack_require__(/*! ./cmc/cmcText.js */ "./ts/cmc/cmcText.ts");
+Object.defineProperty(exports, "cmcText", ({ enumerable: true, get: function () { return cmcText_ts_1.cmcText; } }));
 const settings = __importStar(__webpack_require__(/*! ./settings.js */ "./ts/settings.ts"));
 exports.settings = settings;
 const patchedPryv_ts_1 = __webpack_require__(/*! ./patchedPryv.js */ "./ts/patchedPryv.ts");
@@ -29112,6 +31444,8 @@ const cmcDocuments = __importStar(__webpack_require__(/*! ./cmc/documents.js */ 
 exports.cmcDocuments = cmcDocuments;
 const cmcItemReminders = __importStar(__webpack_require__(/*! ./cmc/itemReminders.js */ "./ts/cmc/itemReminders.ts"));
 exports.cmcItemReminders = cmcItemReminders;
+const cmcConversation = __importStar(__webpack_require__(/*! ./cmc/conversation.js */ "./ts/cmc/conversation.ts"));
+exports.cmcConversation = cmcConversation;
 const appDescription = __importStar(__webpack_require__(/*! ./appDescription.js */ "./ts/appDescription.ts"));
 exports.appDescription = appDescription;
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
@@ -29206,6 +31540,8 @@ const HDSLib = {
     cmcScope,
     cmcDocuments,
     cmcItemReminders,
+    cmcConversation,
+    cmcText: cmcText_ts_1.cmcText,
     appDescription
 };
 exports["default"] = HDSLib;
@@ -29225,6 +31561,7 @@ exports["default"] = HDSLib;
  * basic localization functions
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.matchLocale = matchLocale;
 exports.onPreferredLocalesChange = onPreferredLocalesChange;
 exports.getPreferredLocales = getPreferredLocales;
 exports.getSupportedLocales = getSupportedLocales;
@@ -29233,8 +31570,21 @@ exports.localizeText = localizeText;
 exports.setPreferredLocales = setPreferredLocales;
 exports.validateLocalizableText = validateLocalizableText;
 const errors_ts_1 = __webpack_require__(/*! ./errors.js */ "./ts/errors.ts");
-const supportedLocales = ['en', 'fr', 'es'];
+const supportedLocales = ['en', 'fr', 'es', 'it', 'pt', 'pt-BR'];
 Object.freeze(supportedLocales);
+/** Read next when a text is missing in the key's locale: the two Portuguese stand in for each other before another language does. */
+const closeLocales = { pt: ['pt-BR'], 'pt-BR': ['pt'] };
+/**
+ * The supported locale a language tag stands for, or null: the tag itself whatever its case (`pt-br` is `pt-BR`),
+ * else its language (`fr-CH` is `fr`, `pt-PT` is `pt`).
+ */
+function matchLocale(tag) {
+    if (typeof tag !== 'string')
+        return null;
+    const wanted = tag.trim().replace(/_/g, '-').toLowerCase();
+    const exact = supportedLocales.find((l) => l.toLowerCase() === wanted);
+    return exact ?? supportedLocales.find((l) => l === wanted.split('-')[0]) ?? null;
+}
 let preferredLocales = [...supportedLocales];
 const localesListeners = new Set();
 /**
@@ -29287,17 +31637,18 @@ function localizeText(textItem) {
     return other;
 }
 /**
- * Change prefferedLocal order
+ * Change the preferred locales order. Each entry is matched with `matchLocale()`; an entry hds-lib does not support is
+ * ignored, so a language stored by a newer app never hides the supported ones listed with it. With no supported entry
+ * the order does not change.
  */
 function setPreferredLocales(arrayOfLocals) {
     if (!Array.isArray(arrayOfLocals)) {
         throw new errors_ts_1.HDSLibError('setPreferredLocales takes an array of language codes');
     }
-    const unsupportedLocales = arrayOfLocals.filter(l => (supportedLocales.indexOf(l) < 0));
-    if (unsupportedLocales.length > 0) {
-        throw new errors_ts_1.HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
-    }
-    const next = [...new Set([...arrayOfLocals, ...preferredLocales])];
+    const matched = arrayOfLocals.map(matchLocale).filter((l) => l != null);
+    // a close locale comes right after its own, unless the caller listed it
+    const wanted = matched.flatMap((l) => [l, ...(closeLocales[l] ?? []).filter((c) => !matched.includes(c))]);
+    const next = [...new Set([...wanted, ...preferredLocales])];
     // Compare BEFORE assigning so listeners fire only on a real change.
     const changed = next.length !== preferredLocales.length || next.some((l, i) => l !== preferredLocales[i]);
     preferredLocales = next;
@@ -29466,10 +31817,11 @@ exports.delegation = _delegation;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.onPreferredLocalesChange = exports.setPreferredLocales = void 0;
+exports.onPreferredLocalesChange = exports.setPreferredLocales = exports.matchLocale = void 0;
 exports.setServiceInfoURL = setServiceInfoURL;
 exports.getServiceInfoURL = getServiceInfoURL;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
+Object.defineProperty(exports, "matchLocale", ({ enumerable: true, get: function () { return localizeText_ts_1.matchLocale; } }));
 Object.defineProperty(exports, "setPreferredLocales", ({ enumerable: true, get: function () { return localizeText_ts_1.setPreferredLocales; } }));
 Object.defineProperty(exports, "onPreferredLocalesChange", ({ enumerable: true, get: function () { return localizeText_ts_1.onPreferredLocalesChange; } }));
 // Production HDS registry. Apps targeting another platform (demo, local
@@ -29552,7 +31904,7 @@ function browserDefaults() {
         return {};
     const result = {};
     try {
-        const lang = navigator.language?.split('-')[0];
+        const lang = (0, localizeText_ts_1.matchLocale)(navigator.language) ?? navigator.language?.split('-')[0];
         if (lang)
             result.preferredLocales = [lang];
     }
@@ -30008,7 +32360,7 @@ function browserDefaults() {
         return {};
     const result = {};
     try {
-        const lang = navigator.language?.split('-')[0];
+        const lang = (0, localizeText_ts_1.matchLocale)(navigator.language) ?? navigator.language?.split('-')[0];
         if (lang)
             result.preferredLocales = [lang];
     }
@@ -31091,6 +33443,190 @@ function durationToLabel(seconds) {
     }
     const n = Math.round(seconds / 60);
     return n === 1 ? '1 minute' : `${n} minutes`;
+}
+
+
+/***/ },
+
+/***/ "./ts/utils/schemaCheck.ts"
+/*!*********************************!*\
+  !*** ./ts/utils/schemaCheck.ts ***!
+  \*********************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * A small JSON Schema checker for the schemas the data model publishes (draft-04 / draft-07, the portable subset the
+ * pack uses), interpreted at run time: no generated code, so it runs under a Content-Security-Policy without
+ * `unsafe-eval` (see scripts/build-validators.mjs for why hds-lib carries no runtime Ajv).
+ *
+ * Keywords: type, enum, const, required, properties, additionalProperties, minProperties, maxProperties, items (one
+ * schema or a tuple), additionalItems, minItems, maxItems, uniqueItems, minLength, maxLength, pattern, minimum,
+ * maximum, exclusiveMinimum, exclusiveMaximum (draft-04 boolean or draft-06 number), multipleOf, oneOf, anyOf,
+ * allOf, not. Anything else (format, $ref, ...) is not checked. The cores never validate HDS event types (they load
+ * pryv's dictionary, which has none of them, and accept unknown types as they come), so a writer's check is the only
+ * one: `_notes/open-pryv.io/event-types-dictionary.md` in the HDS workspace.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.schemaIssues = schemaIssues;
+/** The issues of `value` against `schema`, as `path: message` strings; empty when it conforms. */
+function schemaIssues(schema, value, path = '') {
+    if (schema === true || schema == null)
+        return [];
+    if (schema === false)
+        return [`${at(path)}: not allowed`];
+    const s = schema;
+    const out = [];
+    if (s.type != null && !matchesType(s.type, value)) {
+        return [`${at(path)}: must be ${Array.isArray(s.type) ? s.type.join(' or ') : s.type}`];
+    }
+    if (Array.isArray(s.enum) && !s.enum.some((e) => sameValue(e, value)))
+        out.push(`${at(path)}: must be one of ${s.enum.map((e) => JSON.stringify(e)).join(', ')}`);
+    if ('const' in s && !sameValue(s.const, value))
+        out.push(`${at(path)}: must be ${JSON.stringify(s.const)}`);
+    if (typeof value === 'string') {
+        const length = [...value].length;
+        if (s.minLength != null && length < s.minLength)
+            out.push(`${at(path)}: shorter than ${s.minLength}`);
+        if (s.maxLength != null && length > s.maxLength)
+            out.push(`${at(path)}: longer than ${s.maxLength}`);
+        if (typeof s.pattern === 'string' && !patternOf(s.pattern).test(value))
+            out.push(`${at(path)}: does not match ${s.pattern}`);
+    }
+    if (typeof value === 'number') {
+        if (s.minimum != null && (value < s.minimum || (s.exclusiveMinimum === true && value === s.minimum)))
+            out.push(`${at(path)}: below ${s.minimum}`);
+        if (s.maximum != null && (value > s.maximum || (s.exclusiveMaximum === true && value === s.maximum)))
+            out.push(`${at(path)}: above ${s.maximum}`);
+        if (typeof s.exclusiveMinimum === 'number' && value <= s.exclusiveMinimum)
+            out.push(`${at(path)}: not above ${s.exclusiveMinimum}`);
+        if (typeof s.exclusiveMaximum === 'number' && value >= s.exclusiveMaximum)
+            out.push(`${at(path)}: not below ${s.exclusiveMaximum}`);
+        if (typeof s.multipleOf === 'number' && s.multipleOf > 0 && Math.abs(value / s.multipleOf - Math.round(value / s.multipleOf)) > 1e-9)
+            out.push(`${at(path)}: not a multiple of ${s.multipleOf}`);
+    }
+    if (Array.isArray(value)) {
+        if (s.minItems != null && value.length < s.minItems)
+            out.push(`${at(path)}: fewer than ${s.minItems} items`);
+        if (s.maxItems != null && value.length > s.maxItems)
+            out.push(`${at(path)}: more than ${s.maxItems} items`);
+        if (s.uniqueItems === true && value.some((v, i) => value.findIndex(w => sameValue(v, w)) !== i))
+            out.push(`${at(path)}: items are not unique`);
+        if (Array.isArray(s.items)) {
+            value.forEach((v, i) => {
+                if (i < s.items.length)
+                    out.push(...schemaIssues(s.items[i], v, `${path}[${i}]`));
+                else if (s.additionalItems === false)
+                    out.push(`${at(path)}[${i}]: not allowed`);
+                else if (s.additionalItems != null)
+                    out.push(...schemaIssues(s.additionalItems, v, `${path}[${i}]`));
+            });
+        }
+        else if (s.items != null) {
+            value.forEach((v, i) => out.push(...schemaIssues(s.items, v, `${path}[${i}]`)));
+        }
+    }
+    if (isObject(value)) {
+        const keys = Object.keys(value);
+        if (s.minProperties != null && keys.length < s.minProperties)
+            out.push(`${at(path)}: fewer than ${s.minProperties} properties`);
+        if (s.maxProperties != null && keys.length > s.maxProperties)
+            out.push(`${at(path)}: more than ${s.maxProperties} properties`);
+        for (const r of s.required ?? [])
+            if (!Object.hasOwn(value, r))
+                out.push(`${at(path)}: ${r} is required`);
+        const props = s.properties ?? {};
+        for (const k of keys) {
+            const child = path === '' ? k : `${path}.${k}`;
+            if (Object.hasOwn(props, k))
+                out.push(...schemaIssues(props[k], value[k], child));
+            else if (s.additionalProperties === false)
+                out.push(`${at(child)}: not allowed`);
+            else if (s.additionalProperties != null && s.additionalProperties !== true)
+                out.push(...schemaIssues(s.additionalProperties, value[k], child));
+        }
+    }
+    if (Array.isArray(s.allOf))
+        for (const sub of s.allOf)
+            out.push(...schemaIssues(sub, value, path));
+    if (Array.isArray(s.anyOf) && !s.anyOf.some((sub) => schemaIssues(sub, value, path).length === 0))
+        out.push(`${at(path)}: matches none of the allowed shapes`);
+    if (Array.isArray(s.oneOf))
+        out.push(...oneOfIssues(s.oneOf, value, path));
+    if (s.not != null && schemaIssues(s.not, value, path).length === 0)
+        out.push(`${at(path)}: matches a forbidden shape`);
+    return out;
+}
+/**
+ * `oneOf`: exactly one branch. When none matches and the branches are told apart by one property's `enum` (the
+ * `kind` of the conversation types), the issues of the branch the value names are returned, which reads better than
+ * "matches none".
+ */
+function oneOfIssues(branches, value, path) {
+    const results = branches.map(b => schemaIssues(b, value, path));
+    const passing = results.filter(r => r.length === 0).length;
+    if (passing === 1)
+        return [];
+    if (passing > 1)
+        return [`${at(path)}: matches more than one shape`];
+    if (isObject(value)) {
+        for (let i = 0; i < branches.length; i++) {
+            const b = branches[i];
+            if (typeof b !== 'object' || b == null)
+                continue;
+            const named = Object.entries(b.properties ?? {}).some(([k, p]) => Array.isArray(p?.enum) && p.enum.length === 1 && Object.hasOwn(value, k) && sameValue(p.enum[0], value[k]));
+            if (named)
+                return results[i];
+        }
+    }
+    return [`${at(path)}: matches none of the allowed shapes`];
+}
+function at(path) {
+    return path === '' ? '(root)' : path;
+}
+function isObject(v) {
+    return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+function matchesType(type, value) {
+    const types = Array.isArray(type) ? type : [type];
+    return types.some(t => {
+        switch (t) {
+            case 'object': return isObject(value);
+            case 'array': return Array.isArray(value);
+            case 'string': return typeof value === 'string';
+            case 'number': return typeof value === 'number' && Number.isFinite(value);
+            case 'integer': return typeof value === 'number' && Number.isInteger(value);
+            case 'boolean': return typeof value === 'boolean';
+            case 'null': return value === null;
+            default: return true;
+        }
+    });
+}
+function sameValue(a, b) {
+    if (a === b)
+        return true;
+    if (typeof a !== 'object' || typeof b !== 'object' || a == null || b == null)
+        return false;
+    if (Array.isArray(a) !== Array.isArray(b))
+        return false;
+    const ka = Object.keys(a);
+    const kb = Object.keys(b);
+    return ka.length === kb.length && ka.every(k => Object.hasOwn(b, k) && sameValue(a[k], b[k]));
+}
+const patterns = new Map();
+function patternOf(pattern) {
+    let re = patterns.get(pattern);
+    if (re == null) {
+        try {
+            re = new RegExp(pattern, 'u');
+        }
+        catch {
+            re = new RegExp(pattern);
+        }
+        patterns.set(pattern, re);
+    }
+    return re;
 }
 
 
@@ -46831,6 +49367,8 @@ describe('[BAU] Bridge access update — missing permission streams', function (
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/cmc/constants.ts */ "./ts/cmc/constants.ts");
+/* harmony import */ var _ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/connectors.ts */ "./ts/appTemplates/connectors.ts");
+
 
 
 
@@ -46843,11 +49381,17 @@ __webpack_require__.r(__webpack_exports__);
 
 describe('[CCST] cmcConstants', function () {
   describe('[CCSA] CMC_APP_CODES', function () {
-    it('[CCS01] PATIENT, COLLECTOR, BRIDGE_MIRA, BRIDGE_ATHENA match locked values', () => {
+    it('[CCS01] PATIENT, COLLECTOR, BRIDGE_MIRA, BRIDGE_ATHENA, BRIDGE_READER match locked values', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.PATIENT, 'hds-patient');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.COLLECTOR, 'hds-collector');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_MIRA, 'hds-bridge-mira');
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_ATHENA, 'hds-bridge-athena');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_ATHENA, 'hds-bridge-athenahealth');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_READER, 'hds-bridge-reader');
+    });
+    it('[CCS02] bridge app codes follow the catalogue rule (connectorCmcAppCode)', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_MIRA, (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_2__.connectorCmcAppCode)('bridge-mira'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_ATHENA, (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_2__.connectorCmcAppCode)('bridge-athenahealth'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_cmc_constants_ts__WEBPACK_IMPORTED_MODULE_1__.CMC_APP_CODES.BRIDGE_READER, (0,_ts_appTemplates_connectors_ts__WEBPACK_IMPORTED_MODULE_2__.connectorCmcAppCode)('bridge-reader'));
     });
   });
 
@@ -46898,6 +49442,1117 @@ describe('[CCST] cmcConstants', function () {
         ':_cmc:apps:hds-collector:abc'
       );
     });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcConversation.test.js"
+/*!***************************************!*\
+  !*** ./tests/cmcConversation.test.js ***!
+  \***************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_utils_schemaCheck_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/utils/schemaCheck.ts */ "./ts/utils/schemaCheck.ts");
+
+
+
+
+
+// HDS_TEST_MODEL_BASE: a data-model build served locally, to test against a model before it is published
+const MODEL_BASE = globalThis.process?.env?.HDS_TEST_MODEL_BASE ?? 'https://model.datasafe.dev';
+const modelURL = `${MODEL_BASE}/pack.json`;
+const ALERT_SCHEMA_URL = `${MODEL_BASE}/json-schemas/hds-conversation-alert.json`;
+const COLLECTORS = ':_cmc:apps:hds-patient:collectors:reader--api-x';
+const CONTACT_COLLECTORS = ':_cmc:apps:hds-bridge-reader:collectors:anna--api-x';
+const CHANNEL = [
+  { streamId: ':_cmc:inbox', level: 'create-only' },
+  { streamId: COLLECTORS, level: 'contribute' }
+];
+const ENGINES = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.vouchedEnginesFor('hds-bridge-reader');
+const DOC = 'ckdoc0000001';
+
+function apiError (id) {
+  const e = new Error(id);
+  e.innerObject = { id };
+  return e;
+}
+
+/** An account as the platform keeps it, with a clock: `created` / `modified` in seconds, scope updates applied. */
+function account ({ streams = [], events = [], accesses = [], tokenType = 'personal' } = {}) {
+  const state = { streams: [...streams], events: new Map(events.map(e => [e.id, { ...e }])), calls: [], grant: null, n: 0, clock: 1000 };
+  const tick = () => ++state.clock;
+  state.accessInfo = async () => ({ type: tokenType });
+  state.apiOne = async function (method, params, key) {
+    state.calls.push({ method, params });
+    const out = (k, v) => key ? v : { [k]: v };
+    switch (method) {
+      case 'streams.get':
+        if (params.parentId && !state.streams.find(s => s.id === params.parentId)) throw apiError('unknown-referenced-resource');
+        return out('streams', state.streams.filter(s => s.parentId === (params.parentId ?? null)).filter(s => params.state === 'all' || !s.trashed));
+      case 'streams.create': {
+        if (state.streams.find(s => s.id === params.id)) throw apiError('item-already-exists');
+        const s = { parentId: null, ...params };
+        state.streams.push(s);
+        return out('stream', s);
+      }
+      case 'streams.delete': {
+        const s = state.streams.find(x => x.id === params.id);
+        if (!s) throw apiError('unknown-resource');
+        if (!s.trashed) { s.trashed = true; return out('stream', s); }
+        state.streams = state.streams.filter(x => x.id !== params.id);
+        for (const [id, e] of state.events) {
+          if (!e.streamIds.includes(params.id)) continue;
+          e.streamIds = e.streamIds.filter(x => x !== params.id);
+          if (e.streamIds.length === 0) state.events.delete(id);
+        }
+        return out('streamDeletion', { id: params.id });
+      }
+      case 'events.create': {
+        const now = tick();
+        const e = { id: 'ev-' + (++state.n), time: now, ...structuredClone(params), created: now, modified: now };
+        state.events.set(e.id, e);
+        return out('event', structuredClone(e));
+      }
+      case 'events.getOne': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        if (e.type === 'consent/scope-update-cmc' && e.content.applied == null) {
+          e.content = { ...e.content, applied: true, status: 'completed' };
+          state.grant = e.content.newPermissions;
+        }
+        return out('event', structuredClone(e));
+      }
+      case 'events.update': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        Object.assign(e, structuredClone(params.update), { modified: tick() });
+        return out('event', structuredClone(e));
+      }
+      case 'events.delete': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        if (!e.trashed) { e.trashed = true; return out('event', e); }
+        state.events.delete(params.id);
+        return out('eventDeletion', { id: params.id });
+      }
+      case 'accesses.get':
+        return out('accesses', accesses);
+      case 'events.get': {
+        const inTree = (id) => params.streams.includes(id) || params.streams.some(p => state.streams.find(s => s.id === id)?.parentId === p);
+        return out('events', [...state.events.values()]
+          .filter(e => params.state === 'all' || !e.trashed)
+          .filter(e => e.streamIds.some(inTree))
+          .filter(e => !params.types || params.types.includes(e.type))
+          .filter(e => params.fromTime == null || e.time >= params.fromTime)
+          .filter(e => params.toTime == null || e.time <= params.toTime)
+          .map(e => structuredClone(e))
+          .slice(params.skip ?? 0, (params.skip ?? 0) + (params.limit ?? Infinity)));
+      }
+      default:
+        throw new Error('unexpected ' + method);
+    }
+  };
+  return state;
+}
+
+const rel = (grant = [{ streamId: 'body-weight', level: 'read' }]) => ({ accessId: 'acc-1:2', localCollectorStreamId: COLLECTORS, grantedPermissions: [...grant, ...CHANNEL] });
+const alertsOf = (conn) => [...conn.events.values()].filter(e => e.type === 'notification/alert-cmc');
+const extraction = { engine: 'hds-reader', engineVersion: '0.3.0', kbVersion: '0.4.0', backend: 'text-layer' };
+
+function pv (candidateId, over = {}) {
+  return {
+    kind: 'proposed-value',
+    about: DOC,
+    candidateId,
+    printed: { label: 'Ferritine', value: '48', unit: 'ng/mL', refRange: '30 - 400' },
+    anchor: { attachmentId: 'att1', page: 1, bbox: [8.5, 41.2, 83, 2.1] },
+    proposal: {
+      itemKey: 'body-blood-serum-ferritin',
+      type: 'concentration/ug-l',
+      content: 48,
+      time: 1773316800,
+      clientData: { hdsTimePrecision: 'day', hdsRefRange: { lowerLimit: 30, upperLimit: 400, text: '30 - 400' } }
+    },
+    status: 'clear',
+    extraction,
+    ...over
+  };
+}
+const noProposal = ({ proposal, ...rest }) => rest;
+const identityQuestion = { kind: 'question', about: DOC, code: 'is-this-yours', context: { identity: { name: 'DUPONT Marie-Claire', birthDate: '14.03.1985', birthDay: '1985-03-14' } } };
+const PROFILE = { name: 'Marie Claire', surname: 'Dupont', dateOfBirth: '1985-03-14' };
+
+/** The person's account with the relationship's two children granted, and the contact's view of them. */
+async function setup () {
+  const person = account();
+  const contact = account();
+  const r = rel();
+  const ensured = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ensureConversationStreams(person, r);
+  const streams = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationStreamsOf(person.grant);
+  return { person, contact, rel: { ...r, grantedPermissions: person.grant.concat(CHANNEL) }, streams, ensured };
+}
+
+describe('[CNV] cmcConversation', function () {
+  before(async function () {
+    this.timeout(20000);
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+  });
+
+  describe('[CNV-S] schemaCheck', () => {
+    it('[CNV1] the portable subset: types, required, additionalProperties, patterns, tuples, oneOf by kind', () => {
+      const schema = {
+        type: 'object',
+        required: ['kind'],
+        oneOf: [
+          { type: 'object', additionalProperties: false, required: ['kind', 'n'], properties: { kind: { type: 'string', enum: ['a'] }, n: { type: 'integer', minimum: 1 } } },
+          { type: 'object', additionalProperties: false, required: ['kind', 'b'], properties: { kind: { type: 'string', enum: ['b'] }, b: { type: 'array', items: [{ type: 'number' }, { type: 'number' }], additionalItems: false, minItems: 2 } } }
+        ]
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((0,_ts_utils_schemaCheck_ts__WEBPACK_IMPORTED_MODULE_3__.schemaIssues)(schema, { kind: 'a', n: 2 }), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((0,_ts_utils_schemaCheck_ts__WEBPACK_IMPORTED_MODULE_3__.schemaIssues)(schema, { kind: 'a', n: 0 }), ['n: below 1']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((0,_ts_utils_schemaCheck_ts__WEBPACK_IMPORTED_MODULE_3__.schemaIssues)(schema, { kind: 'b', b: [1, 2, 3] }), ['b[2]: not allowed']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((0,_ts_utils_schemaCheck_ts__WEBPACK_IMPORTED_MODULE_3__.schemaIssues)(schema, { kind: 'a', n: 1, x: 1 }), ['x: not allowed']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((0,_ts_utils_schemaCheck_ts__WEBPACK_IMPORTED_MODULE_3__.schemaIssues)(schema, { kind: 'c' }), ['(root): matches none of the allowed shapes']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((0,_ts_utils_schemaCheck_ts__WEBPACK_IMPORTED_MODULE_3__.schemaIssues)({ type: 'string', pattern: '^[!-~]{1,4}$' }, 'été'), ['(root): does not match ^[!-~]{1,4}$']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((0,_ts_utils_schemaCheck_ts__WEBPACK_IMPORTED_MODULE_3__.schemaIssues)({ type: ['number', 'object'] }, 'x'), ['(root): must be number or object']);
+    });
+  });
+
+  describe('[CNV-A] alerts', () => {
+    it('[CNV10] the mirrored hds schema equals the published one (descriptions aside)', async () => {
+      const published = await (await fetch(ALERT_SCHEMA_URL)).json();
+      const strip = (o) => Array.isArray(o)
+        ? o.map(strip)
+        : (o && typeof o === 'object')
+            ? Object.fromEntries(Object.entries(o).filter(([k]) => !['description', 'title', '$id', '$schema'].includes(k)).map(([k, v]) => [k, strip(v)]))
+            : o;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(strip(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.CONVERSATION_ALERT_HDS_SCHEMA), strip(published));
+    });
+
+    it('[CNV11] alert content: fixed words in en and fr, code, checked hds; never a value', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent({ kind: 'proposed-values', about: DOC, count: 2 }), {
+        level: 'info',
+        title: { en: 'Proposed values', fr: 'Valeurs proposées' },
+        body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.' },
+        code: 'hds-proposed-values',
+        hds: { kind: 'proposed-values', about: DOC, count: 2 }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent({ kind: 'proposed-values', about: DOC, count: 2, value: 48 }), (e) => e.innerObject?.reason === 'invalid-alert');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent({ kind: 'task-status', about: DOC, status: 'error', attempt: 1 }), /errorCode is required/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent({ kind: 'notice', code: 'Not A Code' }));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent({ kind: 'job' }));
+    });
+
+    it('[CNV12] parse: duplicates kept once per key, direction from `from`; the state is the latest task-status by time', () => {
+      const a = (id, time, hds, from) => ({ id, time, type: 'notification/alert-cmc', content: { hds, ...(from ? { from: { username: 'reader', host: 'x' } } : {}) } });
+      const parsed = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationAlerts([
+        a('t2', 2, { kind: 'task-status', about: DOC, status: 'reading', attempt: 1 }, true),
+        a('t1', 1, { kind: 'task-status', about: DOC, status: 'received', attempt: 1 }, true),
+        a('t2b', 2, { kind: 'task-status', about: DOC, status: 'reading', attempt: 1 }, true), // second device
+        a('p1', 3, { kind: 'proposed-values', about: DOC, count: 2 }, true),
+        a('p2', 4, { kind: 'proposed-values', about: DOC, count: 1 }, true),
+        a('q1', 5, { kind: 'question', eventId: 'q', about: DOC }, true),
+        a('x1', 6, { kind: 'answer', eventId: 'ans', inReplyTo: 'q', about: DOC }),
+        a('d1', 7, { kind: 'document-shared', eventId: DOC }, true)
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(parsed.map(p => [p.alertEventId, p.direction]), [['t1', 'received'], ['t2b', 'received'], ['p1', 'received'], ['q1', 'received'], ['x1', 'sent']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.taskStatusOf(parsed, DOC).hds.status, 'reading');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.taskStatusOf(parsed, 'other'), null);
+      // a restarted contact reuses attempt 1: its later `reading` is the state, not the earlier `done` (R4)
+      const restarted = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationAlerts([
+        a('r1', 1, { kind: 'task-status', about: DOC, status: 'reading', attempt: 1 }, true),
+        a('r2', 2, { kind: 'task-status', about: DOC, status: 'done', attempt: 1 }, true),
+        a('r3', 3, { kind: 'task-status', about: DOC, status: 'reading', attempt: 1 }, true)
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.taskStatusOf(restarted, DOC).hds.status, 'reading');
+    });
+  });
+
+  describe('[CNV-R] writer rules', () => {
+    it('[CNV20] the pack schema and the conditions on one event', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(pv('c1')), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(identityQuestion), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...pv('c1'), confidence: 0.9 }).join(), /confidence: not allowed/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(pv('c1', { status: 'kept-aside' })).join(), /reason is required/);
+      const noPrecision = pv('c1');
+      delete noPrecision.proposal.clientData.hdsTimePrecision;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(noPrecision).join(), /hdsTimePrecision/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'question', about: DOC, code: 'which-unit', candidateId: 'c1' }).join(), /options are required/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'question', about: DOC, code: 'is-fasting', candidateId: 'c1', options: ['yes', 'maybe'] }).join(), /exactly yes, no/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...identityQuestion, candidateId: 'c1' }).join(), /no candidateId/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'question', about: DOC, code: 'which-date', context: { identity: { name: 'X' } } }).join(), /dates only/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'question', about: DOC, code: 'what-colour' }).join(), /unknown code/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'question', about: DOC, code: 'x-acme-consent' }), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'answer', inReplyTo: 'q', about: DOC, action: 'skip', written: [{ candidateId: 'c', eventId: 'e' }], candidateIds: ['c'] }).join(), /no written/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'answer', inReplyTo: 'q', about: DOC, action: 'correct', candidateIds: ['a', 'b'], written: [{ candidateId: 'a', eventId: 'e' }] }).join(), /exactly one/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'answer', inReplyTo: 'q', about: DOC, action: 'choose' }).join(), /option is required/);
+    });
+
+    it('[CNV21] R9: the value alone', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48 }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: '48' }), 'invalid-content');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'body-blood-serum-ferritin', type: 'mass/kg', content: 48 }), 'type-not-of-item');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'no-such-item', type: 'mass/kg', content: 48 }), 'unknown-item');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'sync-status', type: 'x/y', content: {} }), 'item-not-allowed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'document', type: 'file/xds-v1', content: {} }), 'item-not-allowed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'genetics-variant', type: 'x/y', content: {} }), 'item-not-allowed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal(null), 'no-proposal');
+    });
+
+    it('[CNV22] profile match: full names in any order, accents, hyphens; an initial or no birth date never matches', () => {
+      const id = { name: 'DUPONT Marie-Claire', birthDay: '1985-03-14' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch(id, PROFILE), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch({ name: 'Dupônt marie claire', birthDay: '1985-03-14' }, PROFILE), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch({ name: 'DUPONT M.', birthDay: '1985-03-14' }, PROFILE), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch({ name: 'DUPONT Marie', birthDay: '1985-03-14' }, PROFILE), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch({ name: 'DUPONT Marie-Claire' }, PROFILE), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch(id, { ...PROFILE, dateOfBirth: null }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch(id, { ...PROFILE, dateOfBirth: '1985-03-15' }), false);
+    });
+
+    it('[CNV23] labels from direction and viewer, never the name; ids conv- and 12 base36', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationStreamLabel('received', 'person', 'fr'), 'Reçu dans les conversations');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationStreamLabel('sent', 'contact', 'de'), 'Answers shared with you');
+      const id = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.newConversationStreamId();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(id, /^conv-[a-z0-9]{12}$/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.isConversationStreamId(id) && !_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.isConversationStreamId('conv-x'));
+    });
+  });
+
+  describe('[CNV-P] streams and reading', () => {
+    it('[CNV30] first time: root and two children created, contribute on received and read on sent in one scope update', async () => {
+      const { person, ensured, streams } = await setup();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(person.streams.find(s => s.id === 'conversation-items'), { parentId: null, id: 'conversation-items', name: 'Conversation items' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(streams, { received: ensured.received, sent: ensured.sent });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(person.streams.find(s => s.id === ensured.received).clientData, { hdsConversationItems: { relationship: 'acc-1', direction: 'received' } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(person.grant, [{ streamId: 'body-weight', level: 'read' }, { streamId: ensured.received, level: 'contribute' }, { streamId: ensured.sent, level: 'read' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual([...person.events.values()].filter(e => e.type === 'consent/scope-update-cmc').length, 1);
+      const again = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ensureConversationStreams(person, { ...rel(), grantedPermissions: person.grant.concat(CHANNEL) });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([again.received, again.sent, again.scopeUpdate], [ensured.received, ensured.sent, null]);
+    });
+
+    it('[CNV31] R2: a kind on the wrong child, another type, a trashed item or one outside the children is not read', () => {
+      const streams = { received: 'conv-rrrrrrrrrrrr', sent: 'conv-ssssssssssss' };
+      const e = (id, streamIds, content, extra = {}) => ({ id, streamIds, type: 'message/hds-conversation-v1', content, time: 1, created: 1, modified: 1, ...extra });
+      const items = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationItems([
+        e('a', [streams.received], pv('c1')),
+        e('b', [streams.sent], pv('c2')),
+        e('c', [streams.received], { kind: 'answer', about: DOC, inReplyTo: 'a', action: 'skip' }),
+        e('d', ['conv-oooooooooooo'], pv('c3')),
+        e('f', [streams.received], pv('c4'), { trashed: true }),
+        e('g', [streams.received], { kind: 'summary', about: DOC }),
+        { ...e('h', [streams.received], pv('c5')), type: 'message/hds-reader-v1' }
+      ], streams);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(items.map(i => i.id), ['a']);
+    });
+
+    it('[CNV32] R3 void: an answer is void once an event it covers was modified after it', () => {
+      const streams = { received: 'conv-rrrrrrrrrrrr', sent: 'conv-ssssssssssss' };
+      const e = (id, streamIds, content, t) => ({ id, streamIds, type: 'message/hds-conversation-v1', content, time: t, created: t, modified: t });
+      const items = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationItems([
+        e('p1', [streams.received], pv('c1'), 1),
+        e('a1', [streams.sent], { kind: 'answer', about: DOC, inReplyTo: 'p1', action: 'skip', candidateIds: ['c1'] }, 2)
+      ], streams);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(items, DOC).proposedValues[0].state, 'skipped');
+      items[0].modified = 3;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(items, DOC).proposedValues[0].state, 'open');
+    });
+
+    it('[CNV33] R10 sets hold every received item (a duplicate candidate included); a written entry counts only on confirm or correct', () => {
+      const streams = { received: 'conv-rrrrrrrrrrrr', sent: 'conv-ssssssssssss' };
+      const e = (id, streamIds, content, t) => ({ id, streamIds, type: 'message/hds-conversation-v1', content, time: t, created: t, modified: t });
+      const items = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationItems([
+        e('p1', [streams.received], pv('c1'), 1),
+        e('p1b', [streams.received], pv('c1'), 2), // a racing retry created it twice
+        e('a1', [streams.sent], { kind: 'answer', about: DOC, inReplyTo: 'p1b', action: 'skip', candidateIds: ['c1'], written: [{ candidateId: 'c1', eventId: 'v' }] }, 3)
+      ], streams);
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(items, DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conv.proposedValues[0].state, 'skipped', 'a skip carrying written is not a confirmation');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conv.writtenCandidates, {});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.itemsOfDocument(conv).sort(), ['p1', 'p1b']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.itemsToDeleteAtDone(conv).sort(), ['p1', 'p1b']);
+    });
+
+    it('[CNV34] R8 on writing: unknown clientData values are dropped; an unknown which-date precision gives no date', () => {
+      const item = { id: 'p1', about: DOC, content: pv('c1', { proposal: { ...pv('c1').proposal, clientData: { hdsTimePrecision: 'week', hdsInterpretation: 'Z', hdsFlag: 'H' } } }) };
+      const ev = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.valueEventOf(item);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([ev.clientData.hdsTimePrecision, ev.clientData.hdsInterpretation, ev.clientData.hdsFlag], [undefined, undefined, 'H']);
+      const streams = { received: 'conv-rrrrrrrrrrrr', sent: 'conv-ssssssssssss' };
+      const e = (id, streamIds, content, t) => ({ id, streamIds, type: 'message/hds-conversation-v1', content, time: t, created: t, modified: t });
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationItems([
+        e('q', [streams.received], { kind: 'question', about: DOC, code: 'which-date' }, 1),
+        e('a', [streams.sent], { kind: 'answer', about: DOC, inReplyTo: 'q', action: 'confirm', time: 5, timePrecision: 'fortnight' }, 2)
+      ], streams), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conv.documentDate, null);
+    });
+  });
+
+  describe('[CNV-T] a round trip', () => {
+    it('[CNV40] the contact proposes and asks; her app reads, confirms her identity from her profile, confirms one value, corrects one, writes them; the contact reads the answers', async () => {
+      const { person, contact, rel: r, streams } = await setup();
+
+      // the contact, through its grant on her children, then its own collectors stream
+      const pvs = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1'), pv('c2', { printed: { label: 'Ferritine', value: '84' }, proposal: { ...pv('c2').proposal, content: 84 }, status: 'check' })]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(pvs.created.map(c => c.candidateId), ['c1', 'c2']);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.postConversationAlert(contact, CONTACT_COLLECTORS, { kind: 'proposed-values', about: DOC, count: 2 });
+      const qId = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, identityQuestion);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.postConversationAlert(contact, CONTACT_COLLECTORS, { kind: 'question', eventId: qId, about: DOC });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.postConversationAlert(contact, CONTACT_COLLECTORS, { kind: 'task-status', about: DOC, status: 'awaiting-answers', attempt: 1, counts: { proposed: 2, questions: 1, keptAside: 0, dropped: 4 } });
+      for (const a of alertsOf(contact)) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!JSON.stringify(a.content).includes('48'), 'R6: no value over CMC');
+      for (const id of [...pvs.created.map(c => c.eventId), qId]) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(person.events.get(id).clientData, { related: { [DOC]: true } });
+
+      // her app shows them
+      const shown = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      const shownAt = person.clock;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(shown.proposedValues.map(p => [p.candidateId, p.state, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.proposalRefusal(p, ENGINES)]), [['c1', 'open', null], ['c2', 'open', null]]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.proposalRefusal(shown.proposedValues[0], ['other-engine']), 'engine-not-vouched');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(shown.identity, 'open');
+
+      // R3: nothing written before her identity is confirmed
+      const early = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(early, { answers: [], refused: [{ candidateId: 'c1', reason: 'identity-not-confirmed' }] });
+      const auto = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoConfirmIdentity(person, r, { about: DOC, profile: PROFILE });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(auto?.answerEventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoConfirmIdentity(person, r, { about: DOC, profile: PROFILE }), null, 'at most one automatic answer');
+
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, {
+        about: DOC,
+        shownAt,
+        engines: ENGINES,
+        decisions: [
+          { candidateId: 'c1', action: 'confirm' },
+          { candidateId: 'c2', action: 'correct', correction: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48 } },
+          { candidateId: 'nope', action: 'confirm' }
+        ]
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.refused, [{ candidateId: 'nope', reason: 'unknown-candidate' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.answers.map(a => [a.action, a.written.map(w => w.candidateId)]), [['confirm', ['c1']], ['correct', ['c2']]]);
+
+      // the values: on the item's stream, written by her app, with their provenance
+      const v1 = person.events.get(res.answers[0].written[0].eventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([v1.streamIds, v1.type, v1.content, v1.time], [['body-blood-serum-ferritin'], 'concentration/ug-l', 48, 1773316800]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(v1.clientData, {
+        hdsRefRange: { lowerLimit: 30, upperLimit: 400, text: '30 - 400' },
+        hdsTimePrecision: 'day',
+        related: { [DOC]: true },
+        sourceKey: 'hds-reader:document:' + DOC + ':c1',
+        hdsSourceAnchor: { attachmentId: 'att1', page: 1, bbox: [8.5, 41.2, 83, 2.1], eventId: DOC },
+        hdsExtraction: { ...extraction, confirmedBy: 'person' }
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(person.events.get(res.answers[1].written[0].eventId).clientData.hdsExtraction.corrected, true);
+      const answer = person.events.get(res.answers[0].answerEventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(answer.streamIds, [streams.sent]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(answer.clientData.related).sort(), [DOC, answer.content.inReplyTo, v1.id].sort());
+      const herAlerts = alertsOf(person).map(a => a.content.hds);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(herAlerts.map(h => h.kind), ['answer', 'answer', 'answer']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(alertsOf(person).every(a => a.streamIds[0] === COLLECTORS));
+
+      // the contact reads her answers (through its read grant on sent)
+      const seen = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(seen.proposedValues.map(p => [p.candidateId, p.state, p.writtenEventId]), [['c1', 'confirmed', v1.id], ['c2', 'corrected', res.answers[1].written[0].eventId]]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(seen.identity, 'confirmed');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.itemsToDeleteAtDone(seen).sort(), [...pvs.created.map(c => c.eventId), qId].sort());
+
+      // R5: written candidates are never proposed again; R3: nothing written twice
+      const again = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1')]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(again.skipped, [{ candidateId: 'c1', reason: 'written' }]);
+      const twice = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(twice.refused, [{ candidateId: 'c1', reason: 'answered' }]);
+    });
+
+    it('[CNV41] a write that failed half-way is retried without writing a value twice (sourceKey)', async () => {
+      const { person, rel: r, streams } = await setup();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1'), pv('c2')]);
+      const shownAt = person.clock;
+      const apiOne = person.apiOne;
+      let creates = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'concentration/ug-l' && ++creates === 2) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      const decisions = [{ candidateId: 'c1', action: 'confirm' }, { candidateId: 'c2', action: 'confirm' }];
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions, shownAt, engines: ENGINES }), (e) => e.innerObject?.reason === 'write-failed');
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions, shownAt, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual([...person.events.values()].filter(e => e.type === 'concentration/ug-l').length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.answers.length, 1);
+    });
+
+    it('[CNV42] which-unit: choose writes no value, the contact re-proposes with replaces, the old one is no longer confirmable', async () => {
+      const { person, rel: r, streams } = await setup();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [noProposal(pv('c1', { status: 'unit-missing' }))]);
+      const qId = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-unit', candidateId: 'c1', options: ['ug/L', 'ng/mL'] });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-unit', candidateId: 'zz', options: ['ug/L'] }), /not a proposed value/);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'choose', option: 'mmol/L', shownAt: person.clock }), (e) => e.innerObject?.reason === 'invalid-answer');
+      const before = person.events.size;
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'choose', option: 'ng/mL', shownAt: person.clock });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(person.events.size, before + 2, 'the answer and its alert, no value');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c9', { replaces: 'c8' })]), /replaces c8/);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1b', { replaces: 'c1' })]);
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conv.proposedValues.map(p => [p.candidateId, p.state, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.proposalRefusal(p, ENGINES)]), [['c1', 'replaced', 'replaced'], ['c1b', 'open', null]]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conv.questions.map(q => q.state), ['answered']);
+    });
+
+    it('[CNV43] not-mine: nothing more is written, the values already written are deleted', async () => {
+      const { person, rel: r, streams } = await setup();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1'), pv('c2')]);
+      const qId = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, identityQuestion);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'confirm', shownAt: person.clock });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+      const valueId = res.answers[0].written[0].eventId;
+      const no = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'not-mine', shownAt: person.clock });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(no.deletedValueIds, [valueId]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!person.events.has(valueId));
+      const after = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c2', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(after.refused, [{ candidateId: 'c2', reason: 'not-mine' }]);
+    });
+
+    it('[CNV44] dates: no date, no write; a which-date answer dates the value; unknown writes it without time; changed since shown is refused', async () => {
+      const { person, rel: r, streams } = await setup();
+      const undated = (id) => pv(id, { proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48, clientData: {} } });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [undated('c1')]);
+      const shownAt = person.clock;
+      const r1 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(r1.refused, [{ candidateId: 'c1', reason: 'no-date' }]);
+      const qId = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-date', context: { dates: [{ day: '2026-03-12', text: '12.03.2026', role: 'sampling' }] } });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'confirm', timePrecision: 'day', shownAt }), (e) => e.innerObject?.reason === 'changed-since-shown');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'confirm', time: 1773316800, timePrecision: 'day', shownAt: person.clock });
+      const r2 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+      const v = person.events.get(r2.answers[0].written[0].eventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([v.time, v.clientData.hdsTimePrecision], [1773316800, 'day']);
+
+      const { person: p2, rel: r2b, streams: s2 } = await setup();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(p2, s2, DOC, [undated('c1')]);
+      const q2 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(p2, s2, { kind: 'question', about: DOC, code: 'which-date' });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(p2, r2b, { questionId: q2, action: 'confirm', timePrecision: 'unknown', shownAt: p2.clock });
+      const r3 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(p2, r2b, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: p2.clock, engines: ENGINES });
+      const v2 = p2.events.get(r3.answers[0].written[0].eventId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(v2.clientData.hdsTimePrecision, 'unknown');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(p2.calls.find(c => c.method === 'events.create' && c.params.type === 'concentration/ug-l').params.time, undefined);
+
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(p2, s2, DOC, [pv('c3')]);
+      const shown = p2.clock;
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(p2, s2, DOC, [pv('c3', { printed: { label: 'Ferritine', value: '49' } })]);
+      const r4 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(p2, r2b, { about: DOC, decisions: [{ candidateId: 'c3', action: 'confirm' }], shownAt: shown, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(r4.refused, [{ candidateId: 'c3', reason: 'changed-since-shown' }]);
+    });
+
+    it('[CNV45] R11: a question id outside the relationship\'s received child is not answered; skip, request-item', async () => {
+      const { person, rel: r, streams } = await setup();
+      const foreign = await person.apiOne('events.create', { streamIds: ['body-weight'], type: 'message/hds-conversation-v1', content: identityQuestion }, 'event');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: foreign.id, action: 'confirm', shownAt: person.clock }), (e) => e.innerObject?.reason === 'not-in-conversation');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [noProposal(pv('k1', { status: 'kept-aside', reason: 'no-item', requestKey: 'body-blood-x' })), pv('c2')]);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerProposedValues(person, r, { about: DOC, candidateIds: ['c2'], action: 'request-item' }), /not kept-aside/);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerProposedValues(person, r, { about: DOC, candidateIds: ['k1'], action: 'request-item' });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerProposedValues(person, r, { about: DOC, candidateIds: ['c2'], action: 'skip' });
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conv.proposedValues.map(p => [p.candidateId, p.state, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.proposalRefusal(p, ENGINES)]), [['k1', 'requested', 'answered'], ['c2', 'skipped', null]]);
+    });
+  });
+
+  describe('[CNV-K] after R10 deleted items', () => {
+    it('[CNV46] a written candidate is never proposed again once its proposed value is gone; a not-mine holds once its question is gone', async () => {
+      const { person, rel: r, streams } = await setup();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1')]);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.deleteConversationItems(person, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.itemsToDeleteAtDone(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC)));
+      const again = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1')]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([again.created, again.skipped], [[], [{ candidateId: 'c1', reason: 'written' }]]);
+
+      const DOC2 = 'ckdoc0000002';
+      const q = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { ...identityQuestion, about: DOC2 });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: q, action: 'not-mine', shownAt: person.clock });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.deleteConversationItems(person, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.itemsOfDocument(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC2 }), DOC2)));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC2 }), DOC2).identity, 'not-mine');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC2, [pv('c1', { about: DOC2 })]), (e) => e.innerObject?.reason === 'not-mine');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { ...identityQuestion, about: DOC2 }), (e) => e.innerObject?.reason === 'not-mine');
+    });
+
+    it('[CNV47] not-mine deletes the written values even when its alert fails; answers bind to the candidate shown', async () => {
+      const { person, rel: r, streams } = await setup();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1'), pv('c2')]);
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+      const valueId = res.answers[0].written[0].eventId;
+      const q = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, identityQuestion);
+      const apiOne = person.apiOne;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'notification/alert-cmc') throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: q, action: 'not-mine', shownAt: person.clock }), (e) => e.innerObject?.reason === 'alert-not-posted');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!person.events.has(valueId), 'deleted before the alert');
+      person.apiOne = apiOne;
+
+      const D3 = 'ckdoc0000003';
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, D3, [pv('c2', { about: D3 })]);
+      const shown = person.clock;
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, D3, [pv('c2', { about: D3, printed: { label: 'Ferritine', value: '50' } })]);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerProposedValues(person, r, { about: D3, candidateIds: ['c2'], action: 'skip', shownAt: shown }), (e) => e.innerObject?.reason === 'changed-since-shown');
+      const qu = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: D3, code: 'which-unit', candidateId: 'c2', options: ['ug/L'] });
+      const shown2 = person.clock;
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, D3, [pv('c2', { about: D3, printed: { label: 'Ferritine', value: '51' } })]);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qu, action: 'choose', option: 'ug/L', shownAt: shown2 }), (e) => e.innerObject?.reason === 'changed-since-shown');
+    });
+
+    it('[CNV48] items are read page by page', async () => {
+      const { person, streams } = await setup();
+      const many = Array.from({ length: 1200 }, (_, i) => pv('c' + i));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, many);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC })).length, 1200);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(person.calls.filter(c => c.method === 'events.get' && c.params.types?.[0] === 'message/hds-conversation-v1').length >= 3);
+    });
+  });
+
+  describe('[CNV-C] cleanup', () => {
+    it('[CNV50] a relationship ends: both children deleted without merging; orphans after a restore', async () => {
+      const { person, streams } = await setup();
+      const value = await person.apiOne('events.create', { streamIds: ['body-blood-serum-ferritin'], type: 'concentration/ug-l', content: 48 }, 'event');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1')]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.cleanupOrphanConversationStreams(person, ['acc-1:3']), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.cleanupOrphanConversationStreams(person, ['acc-9'])).sort(), [streams.received, streams.sent].sort());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(person.streams.map(s => s.id), ['conversation-items']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(person.events.has(value.id), 'her values stay');
+      for (const c of person.calls.filter(c => c.method === 'streams.delete')) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.params.mergeEventsWithParent, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationStreams(account()), []);
+    });
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcConversationDocument.test.js"
+/*!***********************************************!*\
+  !*** ./tests/cmcConversationDocument.test.js ***!
+  \***********************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/**
+ * data-model 4.26.0, CONVERSATION.md: a document's date and kind (`proposed-document`, `which-document-kind`,
+ * `which-document-date`, `answer.applied`, `basis: not-pending`), her note (`answer.note`), and the document's values
+ * (`hdsDocumentValues` on the document, `hdsPrintedIn` on a value she already had). Needs a model ≥ 4.26.0
+ * (HDS_TEST_MODEL_BASE until it is published).
+ */
+
+
+
+
+const MODEL_BASE = globalThis.process?.env?.HDS_TEST_MODEL_BASE ?? 'https://model.datasafe.dev';
+const COLLECTORS = ':_cmc:apps:hds-patient:collectors:reader--api-x';
+const CHANNEL = [{ streamId: ':_cmc:inbox', level: 'create-only' }, { streamId: COLLECTORS, level: 'contribute' }];
+const ENGINES = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.vouchedEnginesFor('hds-bridge-reader');
+const D = 1773316800; // 2026-03-12T12:00:00Z
+const ADDED = 1773900000;
+
+function apiError (id) { const e = new Error(id); e.innerObject = { id }; return e; }
+
+/** Her account in memory: `events.update` merges `clientData` (a null key removed), `events.get` filters on it. */
+function account () {
+  const state = { streams: [], events: new Map(), grant: null, n: 0, clock: 1000 };
+  const tick = () => ++state.clock;
+  const atPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  state.apiOne = async function (method, params, key) {
+    const out = (k, v) => key ? v : { [k]: v };
+    switch (method) {
+      case 'streams.get':
+        if (params.parentId && !state.streams.find(s => s.id === params.parentId)) throw apiError('unknown-referenced-resource');
+        return out('streams', state.streams.filter(s => s.parentId === (params.parentId ?? null)));
+      case 'streams.create': {
+        if (state.streams.find(s => s.id === params.id)) throw apiError('item-already-exists');
+        state.streams.push({ parentId: null, ...params });
+        return out('stream', params);
+      }
+      case 'events.create': {
+        const now = tick();
+        const e = { id: 'ev-' + (++state.n), time: now, ...structuredClone(params), created: now, modified: now };
+        state.events.set(e.id, e);
+        return out('event', structuredClone(e));
+      }
+      case 'events.getOne': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        if (e.type === 'consent/scope-update-cmc' && e.content.applied == null) {
+          e.content = { ...e.content, applied: true, status: 'completed' };
+          state.grant = e.content.newPermissions;
+        }
+        return out('event', structuredClone(e));
+      }
+      case 'events.update': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        const { clientData, ...rest } = structuredClone(params.update);
+        Object.assign(e, rest);
+        if (clientData != null) {
+          e.clientData = { ...(e.clientData ?? {}) };
+          for (const [k, v] of Object.entries(clientData)) { if (v === null) delete e.clientData[k]; else e.clientData[k] = v; }
+        }
+        e.modified = tick();
+        return out('event', structuredClone(e));
+      }
+      case 'events.delete': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        if (e.trashed) state.events.delete(params.id); else e.trashed = true;
+        return out('event', {});
+      }
+      case 'events.get':
+        return out('events', [...state.events.values()]
+          .filter(e => params.state === 'all' || !e.trashed)
+          .filter(e => params.streams == null || e.streamIds.some(id => params.streams.includes(id)))
+          .filter(e => !params.types || params.types.includes(e.type))
+          .filter(e => params.fromTime == null || e.time >= params.fromTime)
+          .filter(e => params.toTime == null || e.time <= params.toTime)
+          .filter(e => (params.clientData ?? []).every(f => atPath(e.clientData, f.path) === f.eq))
+          .map(e => structuredClone(e)).slice(params.skip ?? 0, (params.skip ?? 0) + (params.limit ?? Infinity)));
+      case 'accesses.get':
+        return out('accesses', []);
+      default:
+        throw new Error('unexpected ' + method);
+    }
+  };
+  return state;
+}
+
+const extraction = { engine: 'hds-reader', engineVersion: '0.4.0', kbVersion: '0.4.0', backend: 'text-layer' };
+const kindOf = (key) => (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().documentKinds.forKey(key);
+
+/** Her placeholder document (DOCUMENTS.md): kind other, the moment added, both fields pending. */
+async function placeholder (person, pending = ['time', 'kind']) {
+  const other = kindOf('other');
+  return await person.apiOne('events.create', {
+    streamIds: ['documents'],
+    type: 'file/xds-v1',
+    time: ADDED,
+    content: { class: other.class, type: [other.type], title: 'IMG_2041.jpg', language: 'und' },
+    clientData: { hdsDocumentPending: pending }
+  }, 'event');
+}
+
+async function setup (pending) {
+  const person = account();
+  const r = { accessId: 'acc-1:2', localCollectorStreamId: COLLECTORS, grantedPermissions: [{ streamId: 'body-weight', level: 'read' }, ...CHANNEL] };
+  await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ensureConversationStreams(person, r);
+  const streams = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationStreamsOf(person.grant);
+  const rel = { ...r, grantedPermissions: person.grant.concat(CHANNEL) };
+  const doc = await placeholder(person, pending);
+  const DOC = doc.id;
+  const conv = async () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+  const document = () => person.apiOne('events.getOne', { id: DOC }, 'event');
+  const proposed = (candidateId, proposal, over = {}) => ({ kind: 'proposed-document', about: DOC, candidateId, proposal, status: 'clear', extraction, ...over });
+  return { person, rel, streams, DOC, conv, document, proposed };
+}
+
+describe('[CNVD] a document\'s date and kind, her note, the document\'s values (data-model 4.26.0)', function () {
+  before(async function () {
+    this.timeout(20000);
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(`${MODEL_BASE}/pack.json`);
+  });
+
+  it('[CNVD1] pending fields: the flag, less a stale entry (an older app set the date or the kind)', async () => {
+    const { document } = await setup();
+    const doc = await document();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingFieldsOf(doc), ['time', 'kind']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingFieldsOf({ ...doc, clientData: { ...doc.clientData, hdsTimePrecision: 'day' } }), ['kind'], 'time set by an older app');
+    const lab = kindOf('laboratory-report');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingFieldsOf({ ...doc, content: { ...doc.content, class: lab.class, type: [lab.type] } }), ['time'], 'kind set by an older app');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingFieldsOf({ ...doc, clientData: {} }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingFieldsOf({ ...doc, type: 'note/txt' }), []);
+  });
+
+  it('[CNVD2] the contact proposes; she confirms; her app applies the pending fields only, answers with applied, never written', async () => {
+    const { person, rel, streams, DOC, conv, document, proposed } = await setup();
+    const w = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'laboratory-report', time: D, timePrecision: 'day' }));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(w.outcome, 'created');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'laboratory-report', time: D, timePrecision: 'day' }))).outcome, 'updated', 'idempotent per candidate');
+    let c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(c.proposedDocuments.map(p => [p.candidateId, p.state]), [['d1', 'open']]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentProposalRefusal(c.proposedDocuments[0], await document(), c), null);
+    const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock, note: 'The follow-up blood test.' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.applied, ['time', 'kind']);
+    const doc = await document();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(doc.time, D);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(doc.clientData.hdsTimePrecision, 'day');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(doc.clientData.hdsDocumentPending, undefined, 'the flag is gone');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingFieldsOf(doc).length, 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().documentKinds.forContent(doc.content).key, 'laboratory-report');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(doc.content.title, 'IMG_2041.jpg', 'the rest of content kept');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(doc.streamIds, ['documents']);
+    c = await conv();
+    const answer = c.answers.at(-1).content;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([answer.action, answer.applied, answer.written, answer.note], ['confirm', ['time', 'kind'], undefined, 'The follow-up blood test.']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.proposedDocuments[0].state, 'confirmed');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.proposedDocumentItemsToDelete(c), [c.proposedDocuments[0].item.id]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'other' }))).reason, 'nothing-pending');
+  });
+
+  it('[CNVD3] her own edit wins; a second contact\'s proposal gets an automatic skip not-pending; a retry after the update writes confirm', async () => {
+    const { person, rel, streams, DOC, conv, document, proposed } = await setup(['time']);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { time: D, timePrecision: 'day' }));
+    // she sets the date herself in her viewer: the field leaves the flag
+    await person.apiOne('events.update', { id: DOC, update: { time: D + 86400, clientData: { hdsTimePrecision: 'day', hdsDocumentPending: null } } }, 'event');
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock }), /nothing-pending/);
+    const settled = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoSettleProposedDocuments(person, rel, { about: DOC });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(settled.length, 1);
+    let c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([c.proposedDocuments[0].state, c.answers.at(-1).content.basis], ['not-pending', 'not-pending']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await document()).time, D + 86400, 'never overwritten');
+    // a retry: the document already holds the proposal (the update went through, the answer did not)
+    const two = await setup(['time']);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(two.person, two.streams, two.proposed('d2', { time: D, timePrecision: 'day' }));
+    await two.person.apiOne('events.update', { id: two.DOC, update: { time: D, clientData: { hdsTimePrecision: 'day', hdsDocumentPending: null } } }, 'event');
+    const retry = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedDocument(two.person, two.rel, { about: two.DOC, candidateId: 'd2', shownAt: two.person.clock });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([retry.action, retry.applied], ['confirm', ['time']]);
+    c = await two.conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.proposedDocuments[0].state, 'confirmed');
+  });
+
+  it('[CNVD4] the two document questions: asked only while the field waits; her answers supply what the proposal lacks', async () => {
+    const { person, rel, streams, DOC, conv, document, proposed } = await setup();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'laboratory-report' }, { status: 'check' }));
+    const qid = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-document-date', candidateId: 'd1', context: { dates: [{ day: '2026-03-13', text: '13/03/26', role: 'report' }] } });
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-document-kind', candidateId: 'c-x', options: ['laboratory-report', 'other'] }), /not a proposed document/);
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-document-kind', candidateId: 'd1', options: ['laboratory-report', 'no-such-kind'] }), /not a document kind/);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, rel, { questionId: qid, action: 'confirm', time: D + 86400, timePrecision: 'day', shownAt: person.clock });
+    let c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(c.documentAnswers.d1, { date: { time: D + 86400, timePrecision: 'day' } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.proposedDocuments[0].state, 'open', 'a question answer is not an answer to the proposal');
+    const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.applied, ['time', 'kind']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await document()).time, D + 86400);
+    c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.proposedDocumentItemsToDelete(c).sort(), [c.proposedDocuments[0].item.id, qid].sort(), 'its questions go with it');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.itemsToDeleteAtDone(c).includes(qid), 'never at done');
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-document-date', candidateId: 'd1' }), /not pending/);
+  });
+
+  it('[CNVD5] a correction writes her own fields (correct, applied); one open at a time: a new candidate replaces the stale one', async () => {
+    const { person, rel, streams, DOC, conv, document, proposed } = await setup();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'laboratory-report' }));
+    const w2 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d2', { documentKind: 'laboratory-report', time: D, timePrecision: 'day' }));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(w2.deleted.length, 1, 'the stale one deleted at once');
+    let c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(c.proposedDocuments.map(p => [p.candidateId, p.item.content.replaces ?? null]), [['d2', 'd1']]);
+    const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedDocument(person, rel, { about: DOC, candidateId: 'd2', correction: { documentKind: 'discharge-summary', time: D - 86400, timePrecision: 'day' }, shownAt: person.clock });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.action, 'correct');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().documentKinds.forContent((await document()).content).key, 'discharge-summary');
+    c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.proposedDocuments[0].state, 'corrected');
+  });
+
+  it('[CNVD6] writer checks: kind key, 12:00 UTC, applied never with written, not-pending only on a skip', () => {
+    const base = { kind: 'proposed-document', about: 'doc1', candidateId: 'd1', status: 'clear' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...base, proposal: { documentKind: 'laboratory-report' } }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...base, proposal: { documentKind: 'no-such-kind' } }).length > 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...base, proposal: { time: D + 3600, timePrecision: 'day' } }).length > 0, 'not 12:00 UTC');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...base, proposal: { time: D } }).length > 0, 'a time without precision');
+    const answer = { kind: 'answer', inReplyTo: 'ev-1', about: 'doc1', candidateIds: ['d1'] };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'confirm', applied: ['kind'] }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'confirm', applied: ['kind'], written: [{ candidateId: 'd1', eventId: 'doc1' }] }).length > 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'skip', applied: ['kind'] }).length > 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'skip', basis: 'not-pending' }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'duplicate', basis: 'not-pending' }).length > 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'skip', note: 'x'.repeat(1001) }).length > 0, 'a note of at most 1000');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.SPECIMEN_CODES), ['serum-plasma', 'whole-blood', 'citrated-plasma', 'rbc', 'urine', 'urine-24h', 'semen', 'csf', 'stool', 'saliva']);
+  });
+
+  it('[CNVD7] her note: on an answer, removed once done is later than it, or 24 h after when the work was already done', () => {
+    const items = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationItems([
+      { id: 'p1', type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ET_CONVERSATION, streamIds: ['r'], time: 1, created: 1, modified: 1, content: { kind: 'proposed-value', about: 'doc1', candidateId: 'c1', printed: { label: 'X', value: '1' }, status: 'clear', extraction } },
+      { id: 'a1', type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ET_CONVERSATION, streamIds: ['s'], time: 100, created: 100, modified: 100, content: { kind: 'answer', inReplyTo: 'p1', about: 'doc1', action: 'skip', candidateIds: ['c1'], note: 'after lunch' } },
+      { id: 'a2', type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ET_CONVERSATION, streamIds: ['s'], time: 500, created: 500, modified: 500, content: { kind: 'answer', inReplyTo: 'p1', about: 'doc1', action: 'skip', candidateIds: ['c1'], note: 'later' } }
+    ], { received: 'r', sent: 's' });
+    const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(items, 'doc1');
+    const done = (time) => ({ alertEventId: 'x', kind: 'task-status', hds: { kind: 'task-status', about: 'doc1', status: 'done', attempt: 1 }, time, direction: 'received', from: null });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, null, { now: 600 }).map(a => a.id), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, done(300), { now: 600 }).map(a => a.id), ['a1'], 'done after a1, before a2');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, done(300), { now: 500 + 86400 }).map(a => a.id), ['a1', 'a2'], 'a2 24 h later');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, null, { now: 500 + 86400, unshared: true }).map(a => a.id), ['a1', 'a2']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conv.proposedValues[0].state, 'skipped', 'a comment alone is a skip');
+  });
+
+  it('[CNVD9] a tapped skip on a proposed document (and a comment alone): settles nothing, she confirms later', async () => {
+    const { person, rel, streams, DOC, conv, proposed } = await setup();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'laboratory-report', time: D, timePrecision: 'day' }));
+    const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.skipProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock, note: 'I will check the date' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.action, 'skip');
+    let c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([c.proposedDocuments[0].state, c.answers.at(-1).content.note, c.answers.at(-1).content.basis], ['skipped', 'I will check the date', undefined]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.proposedDocumentItemsToDelete(c), [], 'a skipped one stays');
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.skipProposedDocument(person, rel, { about: DOC, candidateId: 'nope' }), /unknown candidate/);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock });
+    c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.proposedDocuments[0].state, 'confirmed');
+  });
+
+  it('[CNVD10] her app writes a pending document, and her own edit clears the flag field by field', async () => {
+    const all = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingDocumentEvent({ title: 'IMG_1.jpg', now: ADDED });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([all.time, all.clientData, all.content.language, all.content.creation], [ADDED, { hdsDocumentPending: ['time', 'kind'] }, 'und', undefined]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().documentKinds.forContent(all.content).key, 'other');
+    const dated = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingDocumentEvent({ title: 'x', time: D, timePrecision: 'day', now: ADDED });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([dated.time, dated.clientData], [D, { hdsTimePrecision: 'day', hdsDocumentPending: ['kind'] }]);
+    const both = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingDocumentEvent({ title: 'x', documentKind: 'laboratory-report', time: D, timePrecision: 'day' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(both.clientData, { hdsTimePrecision: 'day' }, 'nothing pending');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.pendingFieldsOf({ ...all, id: 'x' }), ['time', 'kind']);
+    // her own edit of the date: written whatever is pending, the field leaves the flag
+    const edit = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentEditOf(all, { time: D, timePrecision: 'day' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(edit, { time: D, clientData: { hdsTimePrecision: 'day', hdsDocumentPending: ['kind'] } });
+    const kindEdit = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentEditOf({ ...all, clientData: { hdsDocumentPending: ['kind'] } }, { documentKind: 'laboratory-report' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(kindEdit.clientData.hdsDocumentPending, null, 'the last field: null');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().documentKinds.forContent(kindEdit.content).key, 'laboratory-report');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(kindEdit.content.title, 'IMG_1.jpg');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentEditOf({ content: {}, clientData: {} }, { documentKind: 'other' }).clientData.hdsDocumentPending, undefined, 'no flag: none written');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentEditOf(all, {}), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentEditOf(all, { documentKind: 'no-such-kind' }), /unknown-kind/);
+  });
+
+  it('[CNVD8] the document lists the values written from it (source); a value she had gets hdsPrintedIn, nothing on the document; not-mine removes both', async () => {
+    const { person, rel, streams, DOC, document } = await setup([]);
+    const streamOf = (k) => (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().itemsDefs.forKey(k).data.streamId;
+    const value = (candidateId, content) => ({ kind: 'proposed-value', about: DOC, candidateId, printed: { label: 'Ferritine', value: String(content), unit: 'µg/l' }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content, time: D, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value('c1', 48), value('c2', 84)]);
+    const mine = await person.apiOne('events.create', { streamIds: [streamOf('body-blood-serum-ferritin')], type: 'concentration/ug-l', content: 48, time: D, clientData: { hdsTimePrecision: 'day' } }, 'event');
+    const dup = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([dup.candidateIds, dup.matchedEventIds], [['c1'], [mine.id]]);
+    const matched = await person.apiOne('events.getOne', { id: mine.id }, 'event');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(matched.clientData.hdsPrintedIn, { [DOC]: true });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(matched.clientData.related, undefined, 'not its source');
+    const accepted = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, rel, { about: DOC, decisions: [{ candidateId: 'c2', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+    const c2 = accepted.answers[0].written[0].eventId;
+    let doc = await document();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(doc.clientData.hdsDocumentValues, { [c2]: 'source' }, 'source only: the matched value is not on the document');
+    const found = await person.apiOne('events.get', { clientData: [{ path: `hdsPrintedIn.${DOC}`, eq: true }] }, 'events');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(found.map(e => e.id), [mine.id], 'the document view finds matched values with one query');
+    // the reader helper: source (index and related), matched (hdsPrintedIn); no conversation item, no alert
+    const listed = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listDocumentValues(person, DOC);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([listed.source.map(e => e.id), listed.matched.map(e => e.id)], [[c2], [mine.id]]);
+    // not-mine: the written value deleted, its entry and the hdsPrintedIn link removed
+    const qid = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'is-this-yours' });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, rel, { questionId: qid, action: 'not-mine', shownAt: person.clock });
+    doc = await document();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(doc.clientData.hdsDocumentValues, undefined);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await person.apiOne('events.getOne', { id: mine.id }, 'event')).clientData.hdsPrintedIn, undefined);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/cmcConversationExisting.test.js"
+/*!***********************************************!*\
+  !*** ./tests/cmcConversationExisting.test.js ***!
+  \***********************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/**
+ * data-model 4.25.0, CONVERSATION.md § A value she already has (`basis: existing-value`), the self-contained
+ * `hdsSourceAnchor.eventId`, and the comma in the profile match. Needs a model ≥ 4.25.0 (HDS_TEST_MODEL_BASE until it is
+ * published).
+ */
+
+
+
+
+const MODEL_BASE = globalThis.process?.env?.HDS_TEST_MODEL_BASE ?? 'https://model.datasafe.dev';
+const COLLECTORS = ':_cmc:apps:hds-patient:collectors:reader--api-x';
+const CHANNEL = [{ streamId: ':_cmc:inbox', level: 'create-only' }, { streamId: COLLECTORS, level: 'contribute' }];
+const ENGINES = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.vouchedEnginesFor('hds-bridge-reader');
+const DOC = 'ckdoc0000001';
+const D = 1773316800; // 2026-03-12T12:00:00Z
+const DAY0 = Date.parse('2026-03-12T00:00:00Z') / 1000;
+const H = 3600;
+
+function apiError (id) { const e = new Error(id); e.innerObject = { id }; return e; }
+
+/** Her account in memory (the calls these helpers make). */
+function account () {
+  const state = { streams: [], events: new Map(), grant: null, n: 0, clock: 1000 };
+  const tick = () => ++state.clock;
+  state.accessInfo = async () => ({ type: 'personal' });
+  state.apiOne = async function (method, params, key) {
+    const out = (k, v) => key ? v : { [k]: v };
+    switch (method) {
+      case 'streams.get':
+        if (params.parentId && !state.streams.find(s => s.id === params.parentId)) throw apiError('unknown-referenced-resource');
+        return out('streams', state.streams.filter(s => s.parentId === (params.parentId ?? null)));
+      case 'streams.create': {
+        if (state.streams.find(s => s.id === params.id)) throw apiError('item-already-exists');
+        state.streams.push({ parentId: null, ...params });
+        return out('stream', params);
+      }
+      case 'events.create': {
+        const now = tick();
+        const e = { id: 'ev-' + (++state.n), time: now, ...structuredClone(params), created: now, modified: now };
+        state.events.set(e.id, e);
+        return out('event', structuredClone(e));
+      }
+      case 'events.getOne': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        if (e.type === 'consent/scope-update-cmc' && e.content.applied == null) {
+          e.content = { ...e.content, applied: true, status: 'completed' };
+          state.grant = e.content.newPermissions;
+        }
+        return out('event', structuredClone(e));
+      }
+      case 'events.update': {
+        const e = state.events.get(params.id);
+        Object.assign(e, structuredClone(params.update), { modified: tick() });
+        return out('event', structuredClone(e));
+      }
+      case 'events.get':
+        return out('events', [...state.events.values()]
+          .filter(e => params.state === 'all' || !e.trashed)
+          .filter(e => e.streamIds.some(id => params.streams.includes(id)))
+          .filter(e => !params.types || params.types.includes(e.type))
+          .filter(e => params.fromTime == null || e.time >= params.fromTime)
+          .filter(e => params.toTime == null || e.time <= params.toTime)
+          .map(e => structuredClone(e)).slice(params.skip ?? 0, (params.skip ?? 0) + (params.limit ?? Infinity)));
+      case 'accesses.get':
+        return out('accesses', []);
+      default:
+        throw new Error('unexpected ' + method);
+    }
+  };
+  return state;
+}
+
+const extraction = { engine: 'hds-reader', engineVersion: '0.3.0', kbVersion: '0.4.0', backend: 'text-layer' };
+const ferritin = (candidateId, content = 48, over = {}) => ({
+  kind: 'proposed-value',
+  about: DOC,
+  candidateId,
+  printed: { label: 'Ferritine', value: String(content), unit: 'µg/l' },
+  anchor: { attachmentId: 'att1', page: 1, bbox: [8.5, 41.2, 83, 2.1] },
+  proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content, time: D, clientData: { hdsTimePrecision: 'day' } },
+  status: 'clear',
+  extraction,
+  ...over
+});
+const streamOf = (itemKey) => (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().itemsDefs.forKey(itemKey).data.streamId;
+
+async function setup (values) {
+  const person = account();
+  const r = { accessId: 'acc-1:2', localCollectorStreamId: COLLECTORS, grantedPermissions: [{ streamId: 'body-weight', level: 'read' }, ...CHANNEL] };
+  await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ensureConversationStreams(person, r);
+  const streams = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationStreamsOf(person.grant);
+  const rel = { ...r, grantedPermissions: person.grant.concat(CHANNEL) };
+  if (values.length > 0) await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, values);
+  const her = (itemKey, type, content, time, clientData = { hdsTimePrecision: 'day' }) =>
+    person.apiOne('events.create', { streamIds: [streamOf(itemKey)], type, content, time, clientData }, 'event');
+  const conv = async () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+  return { person, rel, streams, her, conv };
+}
+
+describe('[CNVX] a value she already has (basis existing-value), the self-contained anchor', function () {
+  before(async function () {
+    this.timeout(20000);
+    await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(`${MODEL_BASE}/pack.json`);
+  });
+
+  it('[CNVX1] the same value on the same day: answered duplicate without a tap, still addable; a different value stays open', async () => {
+    const { person, rel, her, conv } = await setup([ferritin('c1', 48), ferritin('c2', 84)]);
+    await her('body-blood-serum-ferritin', 'concentration/ug-l', 48, D);
+    const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res?.candidateIds, ['c1']);
+    const c = await conv();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(c.proposedValues.map(p => [p.candidateId, p.state, p.answer?.content.basis ?? null]), [['c1', 'duplicate', 'existing-value'], ['c2', 'open', null]]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.proposalRefusal(c.proposedValues[0], ENGINES), null, 'add anyway');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }), null, 'nothing more to match');
+    // she adds it anyway: a later confirm writes it and settles it for good
+    const added = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, rel, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(added.refused, []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await conv()).proposedValues[0].state, 'confirmed');
+  });
+
+  it('[CNVX2] not while is-this-yours is open; never for a proposal she could not confirm', async () => {
+    const { person, rel, her, streams } = await setup([ferritin('c1', 48), ferritin('c2', 48, { extraction: { ...extraction, engine: 'other-engine' } })]);
+    await her('body-blood-serum-ferritin', 'concentration/ug-l', 48, D);
+    await her('body-blood-serum-ferritin', 'concentration/ug-l', 48, D);
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'is-this-yours' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }), null);
+    const other = await setup([ferritin('c2', 48, { extraction: { ...extraction, engine: 'other-engine' } })]);
+    await other.her('body-blood-serum-ferritin', 'concentration/ug-l', 48, D);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(other.person, other.rel, { about: DOC, engines: ENGINES }), null, 'engine not vouched');
+  });
+
+  it('[CNVX3] one for one: two equal draws of one day against one value; a value written from this document never counts', async () => {
+    const { person, rel, her } = await setup([ferritin('c1', 48), ferritin('c3', 48, { printed: { label: 'Ferritine', value: '48', unit: 'µg/l' } })]);
+    await her('body-blood-serum-ferritin', 'concentration/ug-l', 48, D, { hdsTimePrecision: 'day', sourceKey: `hds-reader:document:${DOC}:c9` });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }), null, 'its own document');
+    await her('body-blood-serum-ferritin', 'concentration/ug-l', 48, DAY0 + 8 * H, {});
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }))?.candidateIds, ['c1']);
+    // a later run: c1 keeps its event, c3 has none left
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }), null);
+  });
+
+  it('[CNVX4] the day: day precision on the UTC day; an exact time while day D runs somewhere, or in its own zone; month never', () => {
+    const at = (time, clientData) => ({ time, clientData });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(D, { hdsTimePrecision: 'day' }), '2026-03-12'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(D + 24 * H, { hdsTimePrecision: 'day' }), '2026-03-12'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(DAY0 - 14 * H, {}), '2026-03-12'), 'D 00:00 − 14 h');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(DAY0 - 14 * H - 1, {}), '2026-03-12'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(DAY0 + 36 * H - 1, {}), '2026-03-12'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(DAY0 + 36 * H, {}), '2026-03-12'), 'D+1 00:00 + 12 h excluded');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(DAY0 - 0.5 * H, { hdsTimeZone: 'Europe/Zurich' }), '2026-03-12'), '23:30 UTC on the 11th is the 12th in Zurich');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(DAY0 - 2 * H, { hdsTimeZone: 'Europe/Zurich' }), '2026-03-12'), '22:00 UTC is still the 11th there');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(DAY0 + 23.5 * H, { hdsTimeZone: 'Europe/Zurich' }), '2026-03-12'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.onComparedDay(at(D, { hdsTimePrecision: 'month' }), '2026-03-12'));
+  });
+
+  it('[CNVX5] the value: same type to 12 digits with its comparator; another type converted within the printed digit; coded by system and code', () => {
+    const item = (content) => ({ content });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'concentration/ug-l', content: 48.0000000000001 }, item(ferritin('c', 48))));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'concentration/ug-l', content: 48, clientData: { hdsComparator: '<' } }, item(ferritin('c', 48))));
+    const weight = { ...ferritin('w', 70.5), printed: { label: 'Poids', value: '70,5', unit: 'kg' }, proposal: { itemKey: 'body-weight', type: 'mass/kg', content: 70.5, time: D, clientData: { hdsTimePrecision: 'day' } } };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'mass/lb', content: 155.43 }, item(weight)), '155.43 lb is 70.5 kg');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'mass/lb', content: 156 }, item(weight)));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'mass/lb', content: 155.43 }, item({ ...weight, printed: { ...weight.printed, value: '< 71' } })), 'a limit never across types');
+    const coded = (codes, value) => ({ analyte: { label: { en: 'X' }, codes }, value, unit: 'mmol/L' });
+    const codedPv = { ...ferritin('k'), proposal: { itemKey: 'body-blood-coded', type: 'lab-result/coded-v1', content: coded([{ system: 'http://loinc.org', code: '2947-0' }], 140), time: D, clientData: { hdsTimePrecision: 'day' } } };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'lab-result/coded-v1', content: coded([{ system: 'http://loinc.org', code: '2947-0' }], 140) }, item(codedPv)));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'lab-result/coded-v1', content: coded([{ system: 'http://loinc.org', code: '2951-2' }], 140) }, item(codedPv)));
+  });
+
+  it('[CNVX6] basis rules: existing-value only on a duplicate of proposed values, profile-match only on a confirm of is-this-yours', () => {
+    const answer = { kind: 'answer', inReplyTo: 'ev-1', about: DOC, candidateIds: ['c1'] };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'duplicate', basis: 'existing-value' }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'confirm', basis: 'existing-value', written: [{ candidateId: 'c1', eventId: 'ev-9' }] }).length > 0);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...answer, action: 'duplicate', basis: 'profile-match' }).length > 0);
+    // a basis on the wrong target never counts (R8)
+    const items = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationItems([
+      { id: 'p1', type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ET_CONVERSATION, streamIds: ['r'], time: 1, created: 1, modified: 1, content: ferritin('c1') },
+      { id: 'a1', type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ET_CONVERSATION, streamIds: ['s'], time: 2, created: 2, modified: 2, content: { ...answer, inReplyTo: 'p1', action: 'duplicate', basis: 'profile-match' } }
+    ], { received: 'r', sent: 's' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(items, DOC).proposedValues[0].state, 'open');
+  });
+
+  it('[CNVX7] the profile match ignores commas ("DUPONT, MARIE-CLAIRE")', () => {
+    const profile = { name: 'Marie Claire', surname: 'Dupont', dateOfBirth: '1985-03-14' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch({ name: 'DUPONT, MARIE-CLAIRE', birthDay: '1985-03-14' }, profile));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch({ name: 'DUPONT Marie,Claire', birthDay: '1985-03-14' }, profile));
+  });
+
+  it('[CNVX8] a written value\'s anchor names its document (eventId = about); one naming another document is dropped', () => {
+    const it = (anchor) => ({ id: 'p1', about: DOC, content: { ...ferritin('c1'), anchor } });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.valueEventOf(it({ attachmentId: 'att1', page: 1 })).clientData.hdsSourceAnchor, { attachmentId: 'att1', page: 1, eventId: DOC });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.valueEventOf(it({ eventId: 'other', attachmentId: 'att1', page: 1 })).clientData.hdsSourceAnchor, undefined);
   });
 });
 
@@ -47544,7 +51199,7 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, [{ streamId: 'health', level: 'read' }]);
     });
 
-    it('[CFS11] injects :hds:noop placeholder when permissions empty', () => {
+    it('[CFS11] injects the hds-noop placeholder when permissions empty', () => {
       const spec = basicSpec({ permissions: [] });
       const out = _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.deriveCmcPermissions(spec);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out.length, 1);
@@ -48518,6 +52173,37 @@ describe('[CSCP] cmcScope', function () {
 
 /***/ },
 
+/***/ "./tests/cmcText.test.js"
+/*!*******************************!*\
+  !*** ./tests/cmcText.test.js ***!
+  \*******************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+describe('[CMTX] CMC texts: language keys the core accepts', () => {
+  it('[CMTX1] a regional locale travels under its language, unless the text has that language', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcText)({ en: 'a', 'pt-BR': 'b' }), { en: 'a', pt: 'b' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcText)({ 'pt-BR': 'b', pt: 'p', en: 'a' }), { pt: 'p', en: 'a' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcText)({ en: '', 'fr-CH': undefined }), { en: '' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcText)({ '': 'x', 1: 'y', en: 'a' }), { en: 'a' });
+  });
+
+  it('[CMTX2] a data-export request in a regional locale has accepted keys', () => {
+    const content = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDataExport.buildDataExportRequestContent({ locale: 'pt-BR' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(Object.keys(content.title), ['pt']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(Object.keys(content.body), ['pt']);
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/codedMedicationTemplate.test.js"
 /*!***********************************************!*\
   !*** ./tests/codedMedicationTemplate.test.js ***!
@@ -48936,6 +52622,33 @@ describe('[CONO] connectors: offer streams', function () {
     const calls = (0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToApiCalls)(streams);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[0], { method: 'streams.create', params: { id: 'body', name: 'Body' } });
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls[1].params, { id: 'body-temperature', name: 'Temperature', parentId: 'body' });
+  });
+
+  it('[CO02] puts an app tree under its base: the HDS Reader grant gives hds-reader/ with its three streams', () => {
+    const streams = (0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToCreate)([
+      { streamId: 'hds-reader-inbox', level: 'read', defaultName: 'Reader inbox' },
+      { streamId: 'hds-reader-dialogue', level: 'contribute' },
+      { streamId: 'hds-reader-app', level: 'contribute', defaultName: 'Reader app' }
+    ], model);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(streams, [
+      { id: 'hds-reader', name: 'hds-reader' },
+      { id: 'hds-reader-inbox', name: 'Reader inbox', parentId: 'hds-reader' },
+      { id: 'hds-reader-dialogue', name: 'hds-reader-dialogue', parentId: 'hds-reader' },
+      { id: 'hds-reader-app', name: 'Reader app', parentId: 'hds-reader' }
+    ]);
+  });
+
+  it('[CO03] the app-tree rule needs an unknown {base}-app, never moves model streams, and leaves other roots alone', () => {
+    // no `-app` granted: unknown roots stay at the root (bridge-mira)
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToCreate)([{ streamId: 'bridge-mira' }, { streamId: 'bridge-mira-x' }], model).map(s => s.parentId), [undefined, undefined]);
+    // a base the model knows is never a base: `body-app` does not put `body-x` under the clinical `body`
+    const known = (0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToCreate)([{ streamId: 'body-app' }, { streamId: 'body-x' }], model);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(known.map(s => [s.id, s.parentId]), [['body-app', undefined], ['body-x', undefined]]);
+    // a granted base stays granted at the root; a model stream with the prefix keeps its model parent
+    const granted = (0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToCreate)([{ streamId: 'sync-status-mira' }, { streamId: 'sync-app' }, { streamId: 'sync', defaultName: 'Sync' }], model);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(granted.map(s => [s.id, s.parentId]), [['sync-status', undefined], ['sync-status-mira', 'sync-status'], ['sync', undefined], ['sync-app', 'sync']]);
+    // the base, added ahead of its `-app` stream, keeps its own name once granted
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(granted.find(s => s.id === 'sync').name, 'Sync');
   });
 });
 
@@ -50121,6 +53834,216 @@ describe('[MCVX] HDSModelConverters with loadPack', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.matchDistance > 0, `Expected non-zero distance, got ${result.matchDistance}`);
     const confidence = Math.round((1 - result.matchDistance) * 100);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(confidence > 80 && confidence < 100, `Expected partial confidence, got ${confidence}%`);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/converterEngineFlags.test.js"
+/*!********************************************!*\
+  !*** ./tests/converterEngineFlags.test.js ***!
+  \********************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+/**
+ * Option flags of single-component methods (data-model cervical-fluid Creighton, plan 131): `produce: false`
+ * options convert to a vector but are never returned by fromVector; a `{ <field>: value }` observation (the
+ * shape bridges store) converts like the bare value. Self-contained pack, no network.
+ */
+const pack = {
+  itemKey: 'test-flags',
+  converterVersion: 'v0',
+  engine: 'euclidian-distance',
+  eventType: 'test/vector',
+  dimensionNames: ['a', 'b'],
+  dimensions: {
+    a: { label: { en: 'A' }, shortLabel: { en: 'A' }, description: { en: 'A' }, weight: 0.5, stops: [{ value: 0, label: { en: 'None' } }, { value: 1, label: { en: 'Full' } }] },
+    b: { label: { en: 'B' }, shortLabel: { en: 'B' }, description: { en: 'B' }, weight: 0.5, stops: [{ value: 0, label: { en: 'None' } }, { value: 1, label: { en: 'Full' } }] }
+  },
+  methods: [{
+    methodId: 'notation',
+    name: { en: 'Notation' },
+    description: { en: 'Notation' },
+    caseInsensitive: true,
+    components: [{
+      field: 'code',
+      label: { en: 'Code' },
+      options: [
+        { value: 'low', label: { en: 'Low' }, vector: { a: 0.1 } },
+        { value: 'high', label: { en: 'High' }, vector: { a: 0.9, b: 0.9 } },
+        { value: 'highX', label: { en: 'High, new' }, vector: { a: 0.95, b: 0.95 }, produce: false, parts: { base: 'high', extra: 'X' } },
+        { value: 'old', label: { en: 'Old' }, vector: { a: 0.5 }, offer: false }
+      ]
+    }]
+  }]
+};
+
+describe('[EDFL] EuclidianDistanceEngine option flags', () => {
+  const engine = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.EuclidianDistanceEngine(pack);
+
+  it('[EDFL1] a produce:false option still converts to its vector', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(engine.toVector('notation', 'highX'), { a: 0.95, b: 0.95 });
+  });
+
+  it('[EDFL2] fromVector never returns a produce:false option, even on its own vector', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(engine.fromVector('notation', { a: 0.95, b: 0.95 }).data, 'high');
+  });
+
+  it('[EDFL3] an offer:false option is still produced (offer is for pickers)', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(engine.fromVector('notation', { a: 0.5, b: 0 }).data, 'old');
+  });
+
+  it('[EDFL4] allObservations lists every option, flags included', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(engine.getMethodDef('notation').components[0].options.map(o => o.value), ['low', 'high', 'highX', 'old']);
+  });
+
+  it('[EDFL5] a { <field>: value } observation converts like the bare value', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(engine.toVector('notation', { code: 'HIGH' }), engine.toVector('notation', 'high'));
+  });
+
+  it('[EDFL6] an unknown value inside the object still throws', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => engine.toVector('notation', { code: 'nope' }), /Unknown notation observation/);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/converterPackVersion.test.js"
+/*!********************************************!*\
+  !*** ./tests/converterPackVersion.test.js ***!
+  \********************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel-Converters.ts */ "./ts/HDSModel/HDSModel-Converters.ts");
+
+
+
+
+/**
+ * Which converter pack is fetched (data-model versioned packs, plan 131): `pack-{v}.json`, v the highest of the
+ * index's `versions` this hds-lib supports; `pack-latest.json` when the index has no `versions` or that file is
+ * missing (404). `source.modelVersion` is the method's own model version in the pack. `fetch` is stubbed: no network.
+ */
+const BASE = 'https://model.example.test/';
+const ITEM = 'cervical-fluid';
+const url = (file) => `${BASE}converters/${ITEM}/${file}`;
+
+function packOf (converterVersion, modelVersion) {
+  return {
+    itemKey: ITEM,
+    converterVersion,
+    engine: 'euclidian-distance',
+    eventType: 'test/vector',
+    dimensionNames: ['a'],
+    dimensions: { a: { label: { en: 'A' }, shortLabel: { en: 'A' }, description: { en: 'A' }, weight: 1, stops: [{ value: 0, label: { en: 'None' } }, { value: 1, label: { en: 'Full' } }] } },
+    methods: [
+      { methodId: 'm', name: { en: 'M' }, description: { en: 'M' }, modelVersion, components: [{ field: 'code', label: { en: 'Code' }, options: [{ value: 'x', label: { en: 'X' }, vector: { a: 0.5 } }] }] },
+      { methodId: 'old', name: { en: 'Old' }, description: { en: 'Old' }, components: [{ field: 'code', label: { en: 'Code' }, options: [{ value: 'y', label: { en: 'Y' }, vector: { a: 0.2 } }] }] }
+    ]
+  };
+}
+
+function convertersFor (index) {
+  return new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModelConverters({
+    modelUrl: `${BASE}pack.json`,
+    modelData: {
+      items: { [ITEM]: { key: ITEM, streamId: 'test-stream', eventType: 'test/vector', type: 'convertible', 'converter-engine': { models: ITEM } } },
+      converters: { [ITEM]: index }
+    }
+  });
+}
+
+describe('[CPKV] converter pack version', () => {
+  const realFetch = globalThis.fetch;
+  let served, requested;
+
+  beforeEach(() => {
+    requested = [];
+    globalThis.fetch = async (u) => {
+      requested.push(u);
+      const body = served[u];
+      if (typeof body === 'number') return { ok: false, status: body, json: async () => ({}) };
+      if (body == null) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => body };
+    };
+  });
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it('[CPKV1] fetches the highest published version it supports', async () => {
+    served = { [url('pack-v1.json')]: packOf('v1', 'v1'), [url('pack-latest.json')]: packOf('v0', 'v0') };
+    const engine = await convertersFor({ latestVersion: 'v1', versions: ['v0', 'v1'] }).ensureEngine(ITEM);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(engine.converterVersion, 'v1');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, [url('pack-v1.json')]);
+  });
+
+  it('[CPKV2] a version above what it supports is never fetched', async () => {
+    served = { [url('pack-v1.json')]: packOf('v1', 'v1'), [url('pack-v2.json')]: packOf('v2', 'v2') };
+    const engine = await convertersFor({ latestVersion: 'v2', versions: ['v0', 'v1', 'v2'] }).ensureEngine(ITEM);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(engine.converterVersion, 'v1');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, [url('pack-v1.json')]);
+  });
+
+  it('[CPKV3] an index without versions (data-model before the versioned packs) reads pack-latest.json', async () => {
+    served = { [url('pack-latest.json')]: packOf('v0') };
+    await convertersFor({ latestVersion: 'v0' }).ensureEngine(ITEM);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, [url('pack-latest.json')]);
+  });
+
+  it('[CPKV4] a missing pack file (404) falls back to pack-latest.json (logged)', async () => {
+    served = { [url('pack-latest.json')]: packOf('v0') };
+    const engine = await convertersFor({ versions: ['v0', 'v1'] }).ensureEngine(ITEM);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(engine.converterVersion, 'v0');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, [url('pack-v1.json'), url('pack-latest.json')]);
+  });
+
+  it('[CPKV5] any failure other than 404 throws, without falling back', async () => {
+    served = { [url('pack-v1.json')]: 503, [url('pack-latest.json')]: packOf('v0') };
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => convertersFor({ versions: ['v0', 'v1'] }).ensureEngine(ITEM), /pack-v1\.json \(503\)/);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, [url('pack-v1.json')]);
+  });
+
+  it('[CPKV6] source.modelVersion is the method\'s model version, else the converter version', async () => {
+    const pack = packOf('v1', 'v1');
+    served = { [url('pack-v1.json')]: pack };
+    const converters = convertersFor({ versions: ['v0', 'v1'] });
+    const m = await converters.convertMethodToEvent(ITEM, 'm', 'x');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([m.content.source.engineVersion, m.content.source.modelVersion], ['v1', 'v1']);
+    const old = await converters.convertMethodToEvent(ITEM, 'old', 'y');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([old.content.source.engineVersion, old.content.source.modelVersion], ['v1', 'v1']);
+    const given = await converters.convertMethodToEvent(ITEM, 'm', 'x', 'v7');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(given.content.source.modelVersion, 'v7');
+  });
+
+  it('[CPKV7] a method at an older model version keeps it in source.modelVersion', async () => {
+    const pack = packOf('v1', 'v1');
+    pack.methods[1].modelVersion = 'v0';
+    served = { [url('pack-v1.json')]: pack };
+    const event = await convertersFor({ versions: ['v0', 'v1'] }).convertMethodToEvent(ITEM, 'old', 'y');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([event.content.source.engineVersion, event.content.source.modelVersion], ['v1', 'v0']);
+  });
+
+  it('[CPKV8] packVersionFor: numeric order, bad names ignored, unknown item keys read v0', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.SUPPORTED_CONVERTER_VERSIONS['cervical-fluid'], 'v1');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', ['v1', 'v0']), 'v1');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', ['v0', 'v10', 'v2']), 'v0');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', ['v0', 'v1-draft', 3]), 'v0');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('mood', ['v0', 'v1']), 'v0');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('new-item', ['v0', 'v1']), 'v0');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('new-item', ['v1']), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', undefined), null);
   });
 });
 
@@ -52048,6 +55971,11 @@ describe('[ESTX] eventToShortText', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...base, clientData: { hdsTimePrecision: 'day' } }), '1999-03-01');
   });
 
+  it('[EST16a4] checkbox with an unknown date reads "date unknown", not its recording moment (B-2026-11-21-15)', () => {
+    const base = { content: null, streamIds: ['fertility-cycles-start'], type: 'activity/plain', time: 920289600 };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ ...base, clientData: { hdsTimePrecision: 'unknown' } }), 'date unknown');
+  });
+
   it('[EST16b] medication with plain string label (not i18n object)', () => {
     const event = {
       content: {
@@ -52429,6 +56357,16 @@ describe('[ESTX] eventToShortText', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('(Creighton)'), `Expected method name, got: ${result}`);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(result.includes('10KL'), `Expected observation value, got: ${result}`);
     });
+
+    it('[EST21e] creighton code stored in another case or as { mucus } — same label', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'creighton', '10KL');
+      event.time = Date.now() / 1000;
+      const expected = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      event.content.source.sourceData = '10kl';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), expected);
+      event.content.source.sourceData = { mucus: '10kl' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), expected);
+    });
   });
 
   // ─── Convertible: autoConvert via eventToShortText ──
@@ -52650,6 +56588,93 @@ describe('[ESTX] eventToShortText', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'White, not-a-category');
     });
   });
+
+  describe('[EST30] allergies (data-model 4.21.0, plan 133)', () => {
+    const peanut = { label: 'Peanut', description: 'x', hdsId: 'allergen:762952008', codes: [{ system: 'SNOMED-CT', code: '762952008' }] };
+
+    it('[EST30a] coded: the allergen label, not the status', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'active' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Peanut');
+    });
+
+    it('[EST30b] coded: a high criticality and a status that is not active are said', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'resolved', criticality: 'high' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Peanut — Resolved, high risk');
+    });
+
+    it('[EST30c] coded: a localized allergen label', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { ...peanut, label: { en: 'Peanut', fr: 'Arachide' } }, status: 'active' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Peanut');
+    });
+
+    it('[EST30d] basic: the name as written', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: ' Lactose ', status: 'inactive', type: 'intolerance' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), 'Lactose — Inactive');
+    });
+
+    it('[EST30e] compositeParts: the allergen label and the categories as labels', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: peanut, status: 'active', categories: ['food', 'medication'], reactions: [{ manifestations: [{ text: 'hives' }] }] } };
+      const parts = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(parts.map((p) => p.key), ['allergen', 'status', 'categories']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parts[0].value, 'Peanut');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parts[1].value, 'Active');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parts[2].value, 'Food, Medication');
+    });
+
+    it('[EST30f] compositeParts: no categories part for an empty list, a value with no option as written', () => {
+      const empty = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: 'Kiwi', status: 'active', categories: [] } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(empty).map((p) => p.key), ['name', 'status']);
+      const unknown = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: 'Kiwi', status: 'active', categories: ['food', 'not-an-option'] } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(unknown).find((p) => p.key === 'categories').value, 'Food, not-an-option');
+    });
+
+    it('[EST30g] compositeParts: a localized allergen label; a list or an object in another field is left out', () => {
+      const event = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { ...peanut, label: { en: 'Peanut', fr: 'Arachide' } }, status: ['active'], notes: { text: 'x' } } };
+      const parts = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.compositeParts)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(parts.map((p) => p.key), ['allergen']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(parts[0].value, 'Peanut');
+    });
+
+    it('[EST30h] no allergen and no name, or no content: the generic text, never a dash', () => {
+      const noName = { streamIds: ['allergy'], type: 'allergy/basic-v1', content: { name: '  ', status: 'resolved', criticality: 'high' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!String((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(noName)).includes('—'));
+      const coded = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: { allergen: { hdsId: 'allergen:x' }, status: 'active' } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!String((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(coded)).includes('—'));
+      const noContent = { streamIds: ['allergy'], type: 'allergy/coded-v1', content: null };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!String((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(noContent)).includes('—'));
+    });
+  });
+
+  describe('[EST31] no known allergy (data-model 4.28.0, plan 133)', () => {
+    afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)(); });
+
+    const nka = (content, streamIds = ['allergy']) => ({ streamIds, type: 'allergy/none-known-v1', content });
+
+    it('[EST31a] reads as the scope option label, not the raw value', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'all' })), 'All allergens');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'medication', verificationStatus: 'confirmed', notes: 'checked' })), 'Medications');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'food' })), 'Food');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'environment' })), 'Environment (pollen, animals, dust…)');
+    });
+
+    it('[EST31b] the scope label is localized', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'all' })), 'Tous les allergènes');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'medication' })), 'Médicaments');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'food' })), 'Aliments');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'environment' })), 'Environnement (pollens, animaux, poussière…)');
+    });
+
+    it('[EST31c] no item definition, or a value with no option: the value as written', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'medication' }, ['not-a-stream'])), 'medication');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ scope: 'insects' })), 'insects');
+    });
+
+    it('[EST31d] no scope: the generic path', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka({ notes: 'asked at intake' })), 'asked at intake');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(nka(null)), null);
+    });
+  });
 });
 
 
@@ -52837,6 +56862,29 @@ describe('[FED] formatEventDate', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx' })), 'about 1999');
       (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx', hdsTimeText: 'printemps 1998' })), 'vers printemps 1998');
+    });
+
+    it('[FEDP4b] approx: the "about" word follows opts.locale, not the preferred locale (B-2026-11-21-19)', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx', hdsTimeText: 'printemps 1998' }), { locale: 'fr' }), 'vers printemps 1998');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx' }), { locale: 'fr-CH' }), 'vers 1999');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx', hdsTimeText: 'spring 1998' }), { locale: 'en' }), 'about spring 1998');
+      // a locale with no translation falls back to the preferred locales
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'approx' }), { locale: 'de' }), 'vers 1999');
+    });
+
+    it('[FEDP8] unknown: "date unknown", never the recording moment, whatever the options (B-2026-11-21-15)', async () => {
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(createMockConnection([
+        { id: 'ev1', type: 'settings/date-format', content: 'DD.MM.YYYY' }
+      ]), 'test-stream');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'unknown' })), 'date unknown');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'unknown' }), { weekday: true, year: false }), 'date unknown');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'unknown' }), { locale: 'fr' }), 'date inconnue');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'unknown' }), { locale: 'es' }), 'fecha desconocida');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.formatEventDate)(ev({ hdsTimePrecision: 'unknown' })), 'date inconnue');
     });
 
     it('[FEDP5] day: the date in the resolved format, read in UTC', async () => {
@@ -54414,14 +58462,20 @@ describe('[LABR] lab results', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(ferritin(30)), { valueQuantity: { value: 30, unit: 'ng/mL' } });
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(ferritin(1.5, { hdsComparator: '=' })), null);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, value: 20, comparator: '<', unit: '{copies}/mL' })),
-      { valueQuantity: { value: 20, comparator: '<', unit: 'copies/mL', system: 'http://unitsofmeasure.org', code: '{copies}/mL' } });
+      { valueQuantity: { value: 20, comparator: '<', unit: '{copies}/mL', system: 'http://unitsofmeasure.org', code: '{copies}/mL' } });
+    // the unit as printed when there is one
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, value: 20, unit: '{copies}/mL', unitText: 'copies/ml' })),
+      { valueQuantity: { value: 20, unit: 'copies/ml', system: 'http://unitsofmeasure.org', code: '{copies}/mL' } });
     const negative = { system: 'http://snomed.info/sct', version: 'http://snomed.info/sct/900000000000207008', code: '260385009', display: 'Negative' };
     const labCode = { system: 'urn:oid:1.2.3', code: 'NEG' };
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, valueText: 'négatif', valueCodes: [negative, labCode] })),
       { valueCodeableConcept: { coding: [negative, labCode], text: 'négatif' } });
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, valueText: '1:160' })), { valueString: '1:160' });
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, value: 3.2, unit: '{index}', valueText: 'positive' })),
-      { valueQuantity: { value: 3.2, unit: 'index', system: 'http://unitsofmeasure.org', code: '{index}' }, note: 'positive' });
+      { valueQuantity: { value: 3.2, unit: '{index}', system: 'http://unitsofmeasure.org', code: '{index}' }, printedResult: { text: 'positive' }, note: 'positive' });
+    // a semi-quantitative result keeps its result codes in the printed result
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)(coded({ analyte: hiv, value: 3.2, unit: '{index}', valueText: 'positive', valueCodes: [negative] })),
+      { valueQuantity: { value: 3.2, unit: '{index}', system: 'http://unitsofmeasure.org', code: '{index}' }, printedResult: { coding: [negative], text: 'positive' }, note: 'positive' });
     // an item event reads as it displays: a fraction stored 0..1 exports as a percentage
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.labValueToFhir)({ streamIds: ['body-blood-hba1c'], type: 'ratio/proportion', content: 0.057, clientData: { hdsComparator: '<' } }),
       { valueQuantity: { value: 5.7, comparator: '<', unit: '%' } });
@@ -54890,7 +58944,7 @@ describe('[LOCX] Localization', () => {
   describe('[LOSX] Localization settings', () => {
     it('[LOSG] getSupportedLocales', () => {
       const defaultLocales = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getSupportedLocales)();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(defaultLocales, ['en', 'fr', 'es']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(defaultLocales, ['en', 'fr', 'es', 'it', 'pt', 'pt-BR']);
     });
 
     it('[LOSS] setPreferredLocales, resetPrefferedLocales', () => {
@@ -54904,18 +58958,43 @@ describe('[LOCX] Localization', () => {
       (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['fr', 'es']);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(text), text.fr);
       const prefferedLocales = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)();
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(prefferedLocales, ['fr', 'es', 'en']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(prefferedLocales, ['fr', 'es', 'en', 'it', 'pt', 'pt-BR']);
       (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.resetPreferredLocales)();
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)(), defaultLocales);
     });
 
-    it('[LOSE] setPreferredLocales throws error if language code unsuported', () => {
-      try {
-        (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['ex', 'en', 'fr', 'ut']);
-        throw new Error('Should throw error');
-      } catch (e) {
-        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.message, 'locales "ex, ut" are not supported');
-      }
+    it('[LOSE] setPreferredLocales ignores unsupported codes and keeps the supported ones', () => {
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['ex', 'fr', 'ut', 'es']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)(), ['fr', 'es', 'en', 'it', 'pt', 'pt-BR']);
+      // nothing supported: no change, no listener call
+      let calls = 0;
+      const off = (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.onPreferredLocalesChange)(() => { calls++; });
+      for (const none of [['ex'], [], [null, 3]]) (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(none);
+      off();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls, 0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)(), ['fr', 'es', 'en', 'it', 'pt', 'pt-BR']);
+    });
+
+    it('[LOSM] matchLocale gives the supported locale of a tag', () => {
+      const cases = { fr: 'fr', 'fr-CH': 'fr', FR: 'fr', 'pt-BR': 'pt-BR', 'pt-br': 'pt-BR', pt_BR: 'pt-BR', pt: 'pt', 'pt-PT': 'pt', 'it-CH': 'it', de: null, 'de-CH': null, '': null };
+      for (const [tag, locale] of Object.entries(cases)) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.matchLocale)(tag), locale, tag);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.matchLocale)(null), null);
+    });
+
+    it('[LOSP] the two Portuguese stand in for each other before another language', () => {
+      const br = { en: 'Screen', fr: 'Écran', 'pt-BR': 'Tela' };
+      const pt = { en: 'Screen', fr: 'Écran', pt: 'Ecrã' };
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['pt-BR', 'fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)().slice(0, 3), ['pt-BR', 'pt', 'fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(br), 'Tela');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(pt), 'Ecrã');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ en: 'Screen', fr: 'Écran' }), 'Écran');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['pt-PT']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)({ ...br, ...pt }), 'Ecrã');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(br), 'Tela');
+      // listed by the caller: the caller's order wins
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.setPreferredLocales)(['pt', 'fr', 'pt-BR']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_1__.getPreferredLocales)().slice(0, 3), ['pt', 'fr', 'pt-BR']);
     });
 
     it('[LOSA] setPreferredLocales throws error if not array', () => {
@@ -57863,58 +61942,70 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _cmcDocuments_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./cmcDocuments.test.js */ "./tests/cmcDocuments.test.js");
 /* harmony import */ var _cmcFormSpec_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./cmcFormSpec.test.js */ "./tests/cmcFormSpec.test.js");
 /* harmony import */ var _cmcItemReminders_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./cmcItemReminders.test.js */ "./tests/cmcItemReminders.test.js");
-/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
-/* harmony import */ var _codedMedicationTemplate_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./codedMedicationTemplate.test.js */ "./tests/codedMedicationTemplate.test.js");
-/* harmony import */ var _connectors_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./connectors.test.js */ "./tests/connectors.test.js");
-/* harmony import */ var _contact_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./contact.test.js */ "./tests/contact.test.js");
-/* harmony import */ var _contextResolution_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./contextResolution.test.js */ "./tests/contextResolution.test.js");
-/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
-/* harmony import */ var _converterEngine_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./converterEngine.test.js */ "./tests/converterEngine.test.js");
-/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
-/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
-/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
-/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
-/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
-/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
-/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
-/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
-/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
-/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
-/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
+/* harmony import */ var _cmcConversation_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./cmcConversation.test.js */ "./tests/cmcConversation.test.js");
+/* harmony import */ var _cmcConversationExisting_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./cmcConversationExisting.test.js */ "./tests/cmcConversationExisting.test.js");
+/* harmony import */ var _cmcConversationDocument_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./cmcConversationDocument.test.js */ "./tests/cmcConversationDocument.test.js");
+/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
+/* harmony import */ var _codedMedicationTemplate_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./codedMedicationTemplate.test.js */ "./tests/codedMedicationTemplate.test.js");
+/* harmony import */ var _connectors_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./connectors.test.js */ "./tests/connectors.test.js");
+/* harmony import */ var _contact_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./contact.test.js */ "./tests/contact.test.js");
+/* harmony import */ var _contextResolution_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./contextResolution.test.js */ "./tests/contextResolution.test.js");
+/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
+/* harmony import */ var _converterEngine_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./converterEngine.test.js */ "./tests/converterEngine.test.js");
+/* harmony import */ var _converterEngineFlags_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./converterEngineFlags.test.js */ "./tests/converterEngineFlags.test.js");
+/* harmony import */ var _converterPackVersion_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./converterPackVersion.test.js */ "./tests/converterPackVersion.test.js");
+/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
+/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
+/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
+/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
+/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
+/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
+/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
+/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
+/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
+/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Every `*.test.js` file is listed here, except the node-only ones:
  * - validatorDrift.test.js (reads the file system and runs the validator build)
  * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
+
+
+
+
+
 
 
 
