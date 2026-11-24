@@ -16,6 +16,8 @@
     the sender lists, corrects and removes its own. `receiveDocument` takes `streamId` and `permissions` (its received id
     stays on the document), `freezeDocument` ends it.
   - Group uploaders: `newUploaderOffer`, `offeredShareIssues` (before accepting), `ensureOfferedShareStreams` (after).
+    `offeredShareIssues` reads `:local:<id>` as `<id>`, as the platform does; `namesShareStreams`, `canonicalStreamId`. `checkOfferedShares` runs it on
+    the account, ids without a mark included.
 
 ### Changed
 

@@ -47,9 +47,9 @@ import { provisionHdsNoop } from './formSpec.ts';
 import { changeSharedLevel, personPermissions, replaceSharedStream, shareStreamsAgain, stopSharingStream } from './scope.ts';
 import type { ScopeChangeOptions, ScopeChangeResult, ScopePermission, ScopeRelationship } from './scope.ts';
 
-import { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, isShareStreamId } from './shareIds.ts';
+import { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, canonicalStreamId, isShareStreamId, namesShareStreams } from './shareIds.ts';
 
-export { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, isShareStreamId };
+export { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, canonicalStreamId, isShareStreamId, namesShareStreams };
 export const DOCUMENTS_STREAM_ID = 'documents';
 export const ET_DOCUMENT = 'file/xds-v1';
 
@@ -188,7 +188,8 @@ export interface OfferedShareIssue {
 
 /**
  * Why an offer or a scope request must not be accepted for the share ids it names. Every reader of a document sees the
- * share ids it carries, so a requester could ask for another contact's: `existing` is `listShareStreams` with
+ * share ids it carries, so a requester could ask for another contact's, also spelled `:local:<id>` (`namesShareStreams`
+ * tells whether there is anything to check): `existing` is `listShareStreams` with
  * `includeTrashed`, `rel` the asking relationship when there is one already (its own ids are not `taken`).
  */
 export function offeredShareIssues (
@@ -202,7 +203,7 @@ export function offeredShareIssues (
   const granted = new Map((rel?.grantedPermissions ?? []).map(p => [p.streamId, directionAt(p.level)]));
   const seen: Record<ShareDirection, Set<string>> = { shared: new Set(), received: new Set() };
   for (const p of perms ?? []) {
-    const streamId = p.streamId;
+    const streamId = canonicalStreamId(p.streamId ?? '');
     if (streamId === DOCUMENT_SHARES_ROOT_ID) out.push({ streamId, reason: 'root' });
     if (!isShareStreamId(streamId)) continue;
     const known = existing.find(s => s.id === streamId);
@@ -213,6 +214,28 @@ export function offeredShareIssues (
     else if (seen[direction].add(streamId).size > 1) out.push({ streamId, reason: 'extra' });
   }
   return out;
+}
+
+/**
+ * `offeredShareIssues` against the account, for the app about to accept (and again on the grant once it exists, with its
+ * `rel`). Also `taken`: an id that carries no mark (left by a failed mark) and that another access names. No request
+ * unless a share child or the root is named, under any spelling. Throws when the account cannot be read: do not accept.
+ */
+export async function checkOfferedShares (
+  connection: pryv.Connection,
+  perms: Array<{ streamId?: string; level?: string }>,
+  rel?: Pick<DocumentRelationship, 'accessId' | 'grantedPermissions'>
+): Promise<OfferedShareIssue[]> {
+  if (!namesShareStreams(perms)) return [];
+  const asked = perms.map(p => ({ ...p, streamId: canonicalStreamId(p.streamId ?? '') })) as ScopePermission[];
+  const existing = await listShareStreams(connection, { includeTrashed: true });
+  const issues = offeredShareIssues(asked, existing, rel);
+  const own = rel != null ? relationshipIdOf(rel.accessId) : '';
+  for (const id of new Set(asked.map(p => p.streamId).filter(isShareStreamId))) {
+    if (issues.some(i => i.streamId === id) || existing.some(s => s.id === id)) continue;
+    if (await namedByAnother(connection, own, id)) issues.push({ streamId: id, reason: 'taken' });
+  }
+  return issues;
 }
 
 /** The share children in a stream tree (`streams.get` output, any depth), with valid `hdsDocumentShare`. */
@@ -826,13 +849,16 @@ async function ensureDocumentsStream (connection: pryv.Connection, streamId: str
   }
 }
 
-/** Whether an access of another relationship names this stream (member accesses, which the grant created, aside: `createdBy` is `<access id>[ <caller id>]`). */
+/**
+ * Whether an access of another relationship ('' for none yet) names this stream (member accesses, which the grant
+ * created, aside: `createdBy` is `<access id>[ <caller id>]`).
+ */
 async function namedByAnother (connection: pryv.Connection, relationship: string, streamId: string): Promise<boolean> {
   const info = await connection.accessInfo() as { type?: string };
-  if (info?.type !== 'personal') throw new HDSLibError('ensureOfferedShareStreams: needs a personal token', { reason: 'not-personal' });
+  if (info?.type !== 'personal') throw new HDSLibError('document shares: needs a personal token', { reason: 'not-personal' });
   const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses') as Array<{ id: string; createdBy?: string; permissions?: ScopePermission[] }>;
-  return accesses.some(a => relationshipIdOf(a.id) !== relationship && relationshipIdOf((a.createdBy ?? '').split(' ')[0]) !== relationship &&
-    (a.permissions ?? []).some(p => p.streamId === streamId));
+  const own = (id: string | undefined): boolean => relationship !== '' && id != null && relationshipIdOf(id.split(' ')[0]) === relationship;
+  return accesses.some(a => !own(a.id) && !own(a.createdBy) && (a.permissions ?? []).some(p => p.streamId === streamId));
 }
 
 function findStream (list: any[], id: string): any {
