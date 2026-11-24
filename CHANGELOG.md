@@ -12,6 +12,8 @@
 
 - Label tables typed for every supported locale: `SPECIMEN_CODES` (`en`, `fr`, `es` still required), encounter kinds,
   permission texts.
+- Invites and CMC alerts send a regional locale under its language (`pt-BR` as `pt`): the core refuses any other key, and
+  with it the whole event. `cmcText` is exported for a caller of `cmc.createInvite`.
 - `setPreferredLocales` ignores a locale it does not support (before: it threw, and the supported locales listed with it
   were lost). With no supported entry the order does not change.
 

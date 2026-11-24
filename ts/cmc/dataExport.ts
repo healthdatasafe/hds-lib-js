@@ -23,6 +23,7 @@
  */
 
 import { pryv } from '../patchedPryv.ts';
+import { cmcText } from './cmcText.ts';
 
 export const DATA_EXPORT_KIND = 'data-export-request';
 /** `ackId` prefix that marks an alert as a data-export request (the `hds` block is authoritative). */
@@ -68,8 +69,8 @@ export function buildDataExportRequestContent (params: Omit<DataExportRequestPar
   if (params.note) lines.push(params.note);
   return {
     level: 'info',
-    title: { [locale]: TEXT[locale]?.title ?? TEXT.en.title },
-    body: { [locale]: lines.join('\n') },
+    title: cmcText({ [locale]: TEXT[locale]?.title ?? TEXT.en.title }),
+    body: cmcText({ [locale]: lines.join('\n') }),
     ackRequired: true,
     ackId,
     hds: {

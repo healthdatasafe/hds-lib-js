@@ -32,6 +32,7 @@ import { HDSLibError } from '../errors.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { schemaIssues } from '../utils/schemaCheck.ts';
 import { pryvErrorCode } from './appScope.ts';
+import { cmcText } from './cmcText.ts';
 import { ET_ALERT } from './dataExport.ts';
 import { relationshipIdOf } from './documents.ts';
 import { shareStreamsAgain } from './scope.ts';
@@ -207,7 +208,7 @@ export function buildConversationAlertContent (hds: Record<string, unknown>): Re
   const issues = checkConversationAlertHds(hds);
   if (issues.length > 0) throw new HDSLibError('buildConversationAlertContent: invalid hds block: ' + issues.join('; '), { reason: 'invalid-alert', issues });
   const kind = hds.kind as ConversationAlertKind;
-  return { level: 'info', title: { ...ALERT_TEXT[kind].title }, body: { ...ALERT_TEXT[kind].body }, code: 'hds-' + kind, hds: { ...hds } };
+  return { level: 'info', title: cmcText(ALERT_TEXT[kind].title), body: cmcText(ALERT_TEXT[kind].body), code: 'hds-' + kind, hds: { ...hds } };
 }
 
 /**
