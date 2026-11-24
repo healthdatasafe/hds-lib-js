@@ -34,7 +34,7 @@ import { schemaIssues } from '../utils/schemaCheck.ts';
 import { pryvErrorCode } from './appScope.ts';
 import { cmcText } from './cmcText.ts';
 import { ET_ALERT } from './dataExport.ts';
-import { relationshipIdOf } from './documents.ts';
+import { DOCUMENTS_STREAM_ID, fileDocument, relationshipIdOf } from './documents.ts';
 import { shareStreamsAgain } from './scope.ts';
 import type { ScopeChangeOptions, ScopeChangeResult, ScopePermission, ScopeRelationship } from './scope.ts';
 
@@ -1615,13 +1615,15 @@ export async function markPrintedIn (connection: pryv.Connection, about: string,
  * `shownAt`, or by `documentProposalRefusal`; each field from her `correction`, else the proposal, else her answers to
  * the two document questions; applied only where still pending (one `events.update`); then the answer, `applied`
  * listing the fields, and its alert. When nothing is applied: `nothing-pending`, except on a retry after the update
- * went through (the document already holds every field), which writes the answer.
+ * went through (the document already holds every field), which writes the answer. With `file`, a document whose kind was
+ * applied is then filed under the kind's stream (`documents.ts` `fileDocument`; `filed` is that stream, null when it
+ * was not): the app passes it only once she was told who will newly read it.
  */
 export async function acceptProposedDocument (
   connection: pryv.Connection,
   rel: ConversationRelationship,
-  params: { about: string; candidateId: string; correction?: DocumentFields; shownAt: number; note?: string }
-): Promise<AnswerWritten & { applied: DocumentField[] }> {
+  params: { about: string; candidateId: string; correction?: DocumentFields; shownAt: number; note?: string; file?: boolean }
+): Promise<AnswerWritten & { applied: DocumentField[]; filed: string | null }> {
   const { streams, collectorStreamId } = await personSide(connection, rel, 'acceptProposedDocument');
   if (typeof params?.shownAt !== 'number') throw new HDSLibError('acceptProposedDocument: shownAt is required');
   const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
@@ -1645,10 +1647,21 @@ export async function acceptProposedDocument (
     await connection.apiOne('events.update', { id: params.about, update } as any, 'event');
     applied = written;
   }
+  let filed: string | null = null;
+  if (params.file === true && applied.includes('kind') && typeof fields.documentKind === 'string') {
+    const target = getModel().documentKinds.streamFor(fields.documentKind);
+    // best effort: a document that could not be filed stays where it is, read by no one new
+    if (target !== DOCUMENTS_STREAM_ID) {
+      await bestEffort(async () => { await fileDocument(connection, params.about, target); });
+      // re-read: a `concurrent-update` is thrown after the filing write, which may hold
+      const after = await bestEffort(async () => await readEvent(connection, params.about));
+      if (after?.streamIds?.includes(target)) filed = target;
+    }
+  }
   const action = params.correction != null ? 'correct' : 'confirm';
   const content: Record<string, any> = { kind: 'answer', inReplyTo: pd.item.id, about: params.about, action, candidateIds: [pd.candidateId], applied };
   if (params.note != null) content.note = params.note;
-  return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action, written: [], applied };
+  return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action, written: [], applied, filed };
 }
 
 /**

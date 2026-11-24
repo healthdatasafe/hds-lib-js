@@ -25,6 +25,8 @@ export interface DocumentKindDef {
   type: DocumentKindCoding;
   /** the writer's default for which printed date is the event time: the care reported, or `creation` */
   timeBasis: 'service' | 'creation';
+  /** the stream a document of this kind is filed under; read it with `streamFor` */
+  stream?: string;
   /** a pair a later CH Term release dropped: still read back, never offered */
   deprecated?: true;
 }
@@ -76,6 +78,15 @@ export class HDSModelDocumentKinds {
       return { key, ...k };
     }
     return null;
+  }
+
+  /**
+   * The stream a document of this kind is filed under: the pack's `stream` when the model knows it, else `documents`
+   * (not filed). A pack that states no stream, or an unknown kind, files nothing.
+   */
+  streamFor (key: string): string {
+    const stream = this.#raw()[key]?.stream;
+    return typeof stream === 'string' && this.#model.streams.getDataById(stream, false) != null ? stream : 'documents';
   }
 
   /** Localized label of a kind (en, fr, es), or null when unknown */
