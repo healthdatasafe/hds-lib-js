@@ -1,6 +1,6 @@
 import { pryv } from '../patchedPryv.ts';
 import { getAttachmentUrl } from '../toolkit/getAttachmentUrl.ts';
-import { setPreferredLocales } from '../localizeText.ts';
+import { matchLocale, setPreferredLocales } from '../localizeText.ts';
 import { deleteForGood } from './HDSSettings.ts';
 import type { DateFormat, UnitSystem } from './HDSSettings.ts';
 
@@ -74,7 +74,7 @@ function browserDefaults (): Partial<ProfileValues> {
   if (typeof navigator === 'undefined') return {};
   const result: Partial<ProfileValues> = {};
   try {
-    const lang = navigator.language?.split('-')[0];
+    const lang = matchLocale(navigator.language) ?? navigator.language?.split('-')[0];
     if (lang) result.preferredLocales = [lang];
   } catch { /* ignore */ }
   try {

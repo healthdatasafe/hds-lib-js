@@ -1,5 +1,5 @@
 import { assert } from './test-utils/deps-node.js';
-import { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, setPreferredLocales, onPreferredLocalesChange, validateLocalizableText } from '../ts/localizeText.ts';
+import { resetPreferredLocales, getPreferredLocales, getSupportedLocales, localizeText, matchLocale, setPreferredLocales, onPreferredLocalesChange, validateLocalizableText } from '../ts/localizeText.ts';
 
 describe('[LOCX] Localization', () => {
   afterEach(() => {
@@ -54,7 +54,7 @@ describe('[LOCX] Localization', () => {
   describe('[LOSX] Localization settings', () => {
     it('[LOSG] getSupportedLocales', () => {
       const defaultLocales = getSupportedLocales();
-      assert.deepEqual(defaultLocales, ['en', 'fr', 'es']);
+      assert.deepEqual(defaultLocales, ['en', 'fr', 'es', 'it', 'pt', 'pt-BR']);
     });
 
     it('[LOSS] setPreferredLocales, resetPrefferedLocales', () => {
@@ -68,18 +68,43 @@ describe('[LOCX] Localization', () => {
       setPreferredLocales(['fr', 'es']);
       assert.equal(localizeText(text), text.fr);
       const prefferedLocales = getPreferredLocales();
-      assert.deepEqual(prefferedLocales, ['fr', 'es', 'en']);
+      assert.deepEqual(prefferedLocales, ['fr', 'es', 'en', 'it', 'pt', 'pt-BR']);
       resetPreferredLocales();
       assert.deepEqual(getPreferredLocales(), defaultLocales);
     });
 
-    it('[LOSE] setPreferredLocales throws error if language code unsuported', () => {
-      try {
-        setPreferredLocales(['ex', 'en', 'fr', 'ut']);
-        throw new Error('Should throw error');
-      } catch (e) {
-        assert.equal(e.message, 'locales "ex, ut" are not supported');
-      }
+    it('[LOSE] setPreferredLocales ignores unsupported codes and keeps the supported ones', () => {
+      setPreferredLocales(['ex', 'fr', 'ut', 'es']);
+      assert.deepEqual(getPreferredLocales(), ['fr', 'es', 'en', 'it', 'pt', 'pt-BR']);
+      // nothing supported: no change, no listener call
+      let calls = 0;
+      const off = onPreferredLocalesChange(() => { calls++; });
+      for (const none of [['ex'], [], [null, 3]]) setPreferredLocales(none);
+      off();
+      assert.equal(calls, 0);
+      assert.deepEqual(getPreferredLocales(), ['fr', 'es', 'en', 'it', 'pt', 'pt-BR']);
+    });
+
+    it('[LOSM] matchLocale gives the supported locale of a tag', () => {
+      const cases = { fr: 'fr', 'fr-CH': 'fr', FR: 'fr', 'pt-BR': 'pt-BR', 'pt-br': 'pt-BR', pt_BR: 'pt-BR', pt: 'pt', 'pt-PT': 'pt', 'it-CH': 'it', de: null, 'de-CH': null, '': null };
+      for (const [tag, locale] of Object.entries(cases)) assert.equal(matchLocale(tag), locale, tag);
+      assert.equal(matchLocale(null), null);
+    });
+
+    it('[LOSP] the two Portuguese stand in for each other before another language', () => {
+      const br = { en: 'Screen', fr: 'Écran', 'pt-BR': 'Tela' };
+      const pt = { en: 'Screen', fr: 'Écran', pt: 'Ecrã' };
+      setPreferredLocales(['pt-BR', 'fr']);
+      assert.deepEqual(getPreferredLocales().slice(0, 3), ['pt-BR', 'pt', 'fr']);
+      assert.equal(localizeText(br), 'Tela');
+      assert.equal(localizeText(pt), 'Ecrã');
+      assert.equal(localizeText({ en: 'Screen', fr: 'Écran' }), 'Écran');
+      setPreferredLocales(['pt-PT']);
+      assert.equal(localizeText({ ...br, ...pt }), 'Ecrã');
+      assert.equal(localizeText(br), 'Tela');
+      // listed by the caller: the caller's order wins
+      setPreferredLocales(['pt', 'fr', 'pt-BR']);
+      assert.deepEqual(getPreferredLocales().slice(0, 3), ['pt', 'fr', 'pt-BR']);
     });
 
     it('[LOSA] setPreferredLocales throws error if not array', () => {
