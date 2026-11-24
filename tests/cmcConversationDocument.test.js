@@ -5,7 +5,7 @@
  * (HDS_TEST_MODEL_BASE until it is published).
  */
 import { assert } from './test-utils/deps-node.js';
-import { cmcConversation as cv } from '../ts/index.ts';
+import { cmcConversation as cv, cmcDocuments } from '../ts/index.ts';
 import { getModel } from '../ts/HDSModel/HDSModelInitAndSingleton.ts';
 
 const MODEL_BASE = globalThis.process?.env?.HDS_TEST_MODEL_BASE ?? 'https://model.datasafe.dev';
@@ -154,6 +154,40 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     assert.strictEqual(c.proposedDocuments[0].state, 'confirmed');
     assert.deepStrictEqual(cv.proposedDocumentItemsToDelete(c), [c.proposedDocuments[0].item.id]);
     assert.strictEqual((await cv.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'other' }))).reason, 'nothing-pending');
+  });
+
+  it('[CNVD2b] with `file`, the document goes under the kind\'s stream, shares kept; without it, or for a kind with no stream, it stays', async () => {
+    const pack = await (await fetch(`${MODEL_BASE}/pack.json`)).json();
+    pack.streams.find(s => s.id === 'documents').children = [{ id: 'documents-clinical', name: 'Clinical documents', parentId: 'documents', children: [] }];
+    pack.documentKinds.kinds['laboratory-report'].stream = 'documents-clinical';
+    getModel().loadFromObject(pack);
+    getModel().laziliyLoadedMap = {}; // a reload keeps the maps built from the previous pack
+    const delayMs = cmcDocuments.streamsCheck.delayMs;
+    cmcDocuments.streamsCheck.delayMs = 0;
+    try {
+      const accept = async (documentKind, file, failing) => {
+        const { person, rel, streams, DOC, document, proposed } = await setup(['kind']);
+        await person.apiOne('events.update', { id: DOC, update: { streamIds: ['documents', 'share-ssssssssssss'] } }, 'event');
+        await cv.writeProposedDocument(person, streams, proposed('d1', { documentKind }));
+        if (failing) {
+          const apiOne = person.apiOne;
+          person.apiOne = async (method, params, key) => {
+            if (method === 'streams.create' && params.id === 'documents-clinical') throw apiError('forbidden');
+            return apiOne(method, params, key);
+          };
+        }
+        const res = await cv.acceptProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock, ...(file ? { file } : {}) });
+        return [res.action, res.filed, (await document()).streamIds];
+      };
+      assert.deepStrictEqual(await accept('laboratory-report', true), ['confirm', 'documents-clinical', ['documents-clinical', 'share-ssssssssssss']]);
+      assert.deepStrictEqual(await accept('laboratory-report', false), ['confirm', null, ['documents', 'share-ssssssssssss']]);
+      assert.deepStrictEqual(await accept('consultation-report', true), ['confirm', null, ['documents', 'share-ssssssssssss']]);
+      assert.deepStrictEqual(await accept('laboratory-report', true, true), ['confirm', null, ['documents', 'share-ssssssssssss']], 'not filed: the confirmation still goes through');
+    } finally {
+      cmcDocuments.streamsCheck.delayMs = delayMs;
+      await getModel().load(`${MODEL_BASE}/pack.json`);
+      getModel().laziliyLoadedMap = {};
+    }
   });
 
   it('[CNVD3] her own edit wins; a second contact\'s proposal gets an automatic skip not-pending; a retry after the update writes confirm', async () => {

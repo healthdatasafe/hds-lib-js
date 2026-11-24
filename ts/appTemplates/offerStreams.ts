@@ -1,4 +1,5 @@
 import * as logger from '../logger.ts';
+import { DOCUMENT_SHARES_ROOT_ID, isShareStreamId } from '../cmc/shareIds.ts';
 import type { APICall } from 'pryv';
 
 /**
@@ -61,6 +62,10 @@ function appBasesOf (permissions: Array<{ streamId?: string }>, modelStreams: Mo
  * `documentation/HDS-READER.md`), while the requester holds nothing on `hds-reader` itself. A grant with no
  * `{base}-app` keeps its unknown streams at the root, as before.
  *
+ * A share child (`share-…`, an uploader's offer: `cmcDocuments.newUploaderOffer`) goes under `document-shares`, never at
+ * the root, and is named by its id whatever `defaultName` says (data-model DOCUMENTS.md: the name carries nothing).
+ * Creating it does not check that the id is free: `cmcDocuments.offeredShareIssues` does, before accepting.
+ *
  * A stream the model knows takes the model's name; a granted one it does not know takes the permission's
  * `defaultName` when it carries one, else its id.
  */
@@ -89,6 +94,12 @@ export function offerStreamsToCreate (
       // requester's business, not ours. Hence `granted` is not defaulted true.
       // The one exception is the base of an app tree the grant itself names (see above).
       if (!granted) return;
+      const isShare: boolean = isShareStreamId(id); // annotated: the guard would narrow `id` to never below
+      if (isShare) {
+        add(DOCUMENT_SHARES_ROOT_ID, { granted: true, defaultName: 'Shared documents' });
+        wanted.set(id, { id, name: id, parentId: DOCUMENT_SHARES_ROOT_ID });
+        return;
+      }
       const base = appBases.find((b) => id.startsWith(b + '-'));
       if (base === undefined) {
         wanted.set(id, { id, name });

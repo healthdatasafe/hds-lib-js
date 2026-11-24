@@ -286,6 +286,19 @@ describe('[CONO] connectors: offer streams', function () {
     ]);
   });
 
+  it('[CO04] an offered share child goes under document-shares, named by its id, whatever defaultName says', () => {
+    assert.deepEqual(offerStreamsToCreate([
+      { streamId: 'share-rrrrrrrrrrrr', level: 'contribute', defaultName: 'Clinic X' },
+      { streamId: 'share-ssssssssssss', level: 'read' },
+      { streamId: 'share-notone' }
+    ], model), [
+      { id: 'document-shares', name: model.getDataById('document-shares', false)?.name ?? 'Shared documents' },
+      { id: 'share-rrrrrrrrrrrr', name: 'share-rrrrrrrrrrrr', parentId: 'document-shares' },
+      { id: 'share-ssssssssssss', name: 'share-ssssssssssss', parentId: 'document-shares' },
+      { id: 'share-notone', name: 'share-notone' }
+    ]);
+  });
+
   it('[CO03] the app-tree rule needs an unknown {base}-app, never moves model streams, and leaves other roots alone', () => {
     // no `-app` granted: unknown roots stay at the root (bridge-mira)
     assert.deepEqual(offerStreamsToCreate([{ streamId: 'bridge-mira' }, { streamId: 'bridge-mira-x' }], model).map(s => s.parentId), [undefined, undefined]);

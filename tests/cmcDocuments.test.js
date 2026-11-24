@@ -33,7 +33,11 @@ function account ({ streams = [], events = [], accesses = [], tokenType = 'perso
     switch (method) {
       case 'streams.get':
         if (params.parentId && !state.streams.find(s => s.id === params.parentId)) throw apiError('unknown-referenced-resource');
-        return out('streams', children(params.parentId ?? null).filter(s => params.state === 'all' || !s.trashed));
+        if (params.parentId == null) {
+          const nest = (list) => list.filter(s => params.state === 'all' || !s.trashed).map(s => ({ ...s, children: nest(children(s.id)) }));
+          return out('streams', nest(children(null)));
+        }
+        return out('streams', children(params.parentId).filter(s => params.state === 'all' || !s.trashed));
       case 'streams.create': {
         if (state.streams.find(s => s.id === params.id)) throw apiError('item-already-exists');
         const s = { parentId: null, ...params };
@@ -452,6 +456,296 @@ describe('[CDOC] cmcDocuments', function () {
       const empty = account();
       assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(empty), []);
       assert.ok(!empty.calls.some(c => c.method === 'accessInfo' || c.method === 'accesses.get'), 'no share child: accesses not read');
+    });
+  });
+
+  describe('[CDOC-F] filing and uploaders (plan 140)', () => {
+    const R = 'share-rrrrrrrrrrrr';
+    const S = 'share-ssssssssssss';
+    const O = 'share-oooooooooooo';
+    const CLINICAL = 'documents-clinical';
+    const uploader = () => relWith([{ streamId: R, level: 'contribute' }, { streamId: S, level: 'read' }]);
+
+    // the published pack plus the class streams of plan 140, until a data-model release carries them
+    before(async () => {
+      const pack = await (await fetch(modelURL)).json();
+      const root = pack.streams.find(s => s.id === 'documents');
+      root.children = [
+        { id: CLINICAL, name: 'Clinical documents', parentId: 'documents', children: [] },
+        { id: 'documents-admin', name: 'Administrative documents', parentId: 'documents', children: [{ id: 'documents-admin-insurance', name: 'Insurance documents', parentId: 'documents-admin', children: [] }] }
+      ];
+      pack.documentKinds.kinds['laboratory-report'].stream = CLINICAL;
+      pack.documentKinds.kinds['referral-letter'].stream = 'documents-not-in-the-model';
+      getModel().loadFromObject(pack);
+      getModel().laziliyLoadedMap = {}; // a reload keeps the maps built from the previous pack
+    });
+    after(async () => {
+      await getModel().load(modelURL);
+      getModel().laziliyLoadedMap = {};
+    });
+
+    it('[CDOC50] a contribute child is never the shared one, even alone', () => {
+      assert.deepStrictEqual(cmcDocuments.shareStreamsOf([{ streamId: R, level: 'contribute' }]), { shared: null, received: R });
+      assert.deepStrictEqual(cmcDocuments.shareStreamsOf([{ streamId: R, level: 'contribute' }, { streamId: S, level: 'read' }]), { shared: S, received: R });
+      assert.deepStrictEqual(cmcDocuments.shareStreamsOf([{ streamId: R, level: 'manage' }, { streamId: O, level: 'none' }]), { shared: null, received: null });
+    });
+
+    it('[CDOC51] readsDocument: nearest entry wins, one readable stream is enough, none and create-only hide', () => {
+      const reads = (perms, ...streamIds) => cmcDocuments.readsDocument(perms.map(([streamId, level]) => ({ streamId, level })), { streamIds });
+      assert.strictEqual(reads([['documents', 'read']], CLINICAL), true);
+      assert.strictEqual(reads([['documents', 'read']], 'documents-admin-insurance', S), true);
+      assert.strictEqual(reads([['*', 'read']], CLINICAL), true);
+      assert.strictEqual(reads([[CLINICAL, 'read']], CLINICAL, S), true);
+      assert.strictEqual(reads([[CLINICAL, 'read']], 'documents'), false);
+      assert.strictEqual(reads([[CLINICAL, 'read']], 'documents-admin'), false);
+      assert.strictEqual(reads([['documents-admin', 'read']], 'documents-admin-insurance'), true);
+      assert.strictEqual(reads([['documents', 'read'], [CLINICAL, 'none']], CLINICAL), false);
+      assert.strictEqual(reads([[S, 'read'], [CLINICAL, 'create-only']], CLINICAL, S), false);
+      assert.strictEqual(reads([['documents', 'none'], [CLINICAL, 'read']], CLINICAL), true);
+      assert.strictEqual(reads([['documents', 'create-only']], 'documents'), false);
+      assert.strictEqual(reads([['body', 'read']], CLINICAL), false);
+      assert.strictEqual(cmcDocuments.readsDocument([{ streamId: 'documents', level: 'read' }], { streamIds: [] }), false);
+      assert.strictEqual(reads([['documents', 'no-such-level']], 'documents'), false);
+      assert.strictEqual(reads([['documents', 'read']], 'documents-newer-than-the-pack'), true, 'a pack older than the document');
+      assert.ok(!cmcDocuments.isDocumentsStream('document-shares'));
+      assert.strictEqual(reads([['documents-x', 'read']], 'documents-x-y'), true);
+      assert.strictEqual(reads([['documents', 'read'], ['documents-x', 'none']], 'documents-x-y'), false);
+    });
+
+    it('[CDOC52] a kind files under the pack stream the model knows, else documents; a class document resolves to its item', () => {
+      const kinds = getModel().documentKinds;
+      assert.strictEqual(kinds.streamFor('laboratory-report'), CLINICAL);
+      assert.strictEqual(kinds.streamFor('referral-letter'), 'documents');
+      assert.strictEqual(kinds.streamFor('other'), 'documents');
+      assert.strictEqual(kinds.streamFor('nope'), 'documents');
+      const item = (...streamIds) => getModel().itemsDefs.forEvent({ streamIds, type: 'file/xds-v1' }, false)?.key;
+      assert.strictEqual(item(CLINICAL, S), 'document');
+      assert.strictEqual(item(S, 'documents-admin-insurance'), 'document');
+      assert.strictEqual(item(S), undefined);
+      const first = getModel().itemsDefs.forEvent({ streamIds: [CLINICAL, 'documents-admin'], type: 'file/xds-v1' }, false);
+      assert.strictEqual(first?.key, 'document', 'two class streams resolve once');
+    });
+
+    it('[CDOC53] filedStreamIds: one documents stream, first, every other id kept in order', () => {
+      assert.deepStrictEqual(cmcDocuments.filedStreamIds(['documents', S, O], CLINICAL), [CLINICAL, S, O]);
+      assert.deepStrictEqual(cmcDocuments.filedStreamIds([S, CLINICAL, O], 'documents-admin-insurance'), ['documents-admin-insurance', S, O]);
+      assert.deepStrictEqual(cmcDocuments.filedStreamIds([CLINICAL, S], 'documents'), ['documents', S]);
+    });
+
+    it('[CDOC54] fileDocument keeps every share id and creates the class stream with its parents', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', ['documents', S, O])] });
+      await cmcDocuments.fileDocument(conn, 'd1', 'documents-admin-insurance');
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents-admin-insurance', S, O]);
+      assert.deepStrictEqual(conn.streams.slice(4).map(s => [s.id, s.parentId]), [['documents', null], ['documents-admin', 'documents'], ['documents-admin-insurance', 'documents-admin']]);
+      await cmcDocuments.fileDocument(conn, 'd1', CLINICAL);
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, [CLINICAL, S, O]);
+    });
+
+    it('[CDOC55] fileDocument refuses another stream, another type, and a document still on a received child only', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1'), { ...doc('n1'), type: 'note/txt' }, doc('r1', [R])] });
+      const refused = async (id, stream, reason) => assert.rejects(cmcDocuments.fileDocument(conn, id, stream), (e) => e.innerObject?.reason === reason);
+      await refused('d1', 'body-weight', 'not-a-documents-stream');
+      await refused('d1', S, 'not-a-documents-stream');
+      await refused('d1', 'documents-newer-than-the-pack', 'not-a-documents-stream');
+      await refused('n1', CLINICAL, 'not-a-document');
+      await refused('r1', CLINICAL, 'not-received');
+      assert.ok(!conn.calls.some(c => c.method === 'events.update' || c.method === 'streams.create'));
+    });
+
+    it('[CDOC56] receiveDocument: an uploader keeps its received id; without its grant, or at create-only, it does not', async () => {
+      const conn = account({ streams: tree(), events: [doc('a', [R]), doc('b', [R]), doc('c', [R])] });
+      assert.deepStrictEqual(await cmcDocuments.receiveDocument(conn, 'a', { relationship: 'acc-1', streamId: CLINICAL, permissions: uploader().grantedPermissions }), { ok: true });
+      assert.deepStrictEqual(conn.events.get('a').streamIds, [CLINICAL, R]);
+      await cmcDocuments.receiveDocument(conn, 'b', { permissions: [{ streamId: R, level: 'create-only' }] });
+      assert.deepStrictEqual(conn.events.get('b').streamIds, ['documents']);
+      await cmcDocuments.receiveDocument(conn, 'c', { streamId: CLINICAL });
+      assert.deepStrictEqual(conn.events.get('c').streamIds, [CLINICAL]);
+      assert.deepStrictEqual(await cmcDocuments.receiveDocument(conn, 'a', { permissions: uploader().grantedPermissions }), { ok: false, reason: 'not-received' });
+      await assert.rejects(cmcDocuments.receiveDocument(conn, 'a', { streamId: 'body' }), (e) => e.innerObject?.reason === 'not-a-documents-stream');
+    });
+
+    it('[CDOC57] freezeDocument swaps the received id for the shared one, other shares kept', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', [CLINICAL, R, O])] });
+      const res = await cmcDocuments.freezeDocument(conn, uploader(), 'd1');
+      assert.deepStrictEqual(res, { shareStreamId: S, scopeUpdate: null });
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, [CLINICAL, S, O]);
+      await assert.rejects(cmcDocuments.freezeDocument(conn, uploader(), 'd1'), (e) => e.innerObject?.reason === 'not-open');
+    });
+
+    it('[CDOC58] freezeDocument grants a shared child when there is none, and refuses a document not filed', async () => {
+      const conn = account({ streams: [tree()[0], tree()[2]], events: [doc('d1', [CLINICAL, R]), doc('r1', [R])] });
+      const rel = relWith([{ streamId: R, level: 'contribute' }]);
+      await assert.rejects(cmcDocuments.freezeDocument(conn, rel, 'r1'), (e) => e.innerObject?.reason === 'not-filed');
+      const res = await cmcDocuments.freezeDocument(conn, rel, 'd1');
+      assert.ok(res.scopeUpdate.applied);
+      assert.deepStrictEqual(conn.grant, [{ streamId: R, level: 'contribute' }, { streamId: res.shareStreamId, level: 'read' }]);
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, [CLINICAL, res.shareStreamId]);
+    });
+
+    it('[CDOC59] allowDocumentsFrom at contribute; a child granted at the other level changes level', async () => {
+      const conn = account();
+      const { receiveStreamId } = await cmcDocuments.allowDocumentsFrom(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), { level: 'contribute' });
+      const marks = (id) => conn.streams.find(s => s.id === id)?.clientData?.hdsDocumentShare;
+      const readFirst = (received) => {
+        assert.deepStrictEqual(conn.grant.map(p => p.level), ['read', 'read', 'contribute'], 'the shared child is granted, before the received one');
+        assert.strictEqual(conn.grant[2].streamId, received);
+        assert.strictEqual(marks(conn.grant[1].streamId).direction, 'shared');
+      };
+      readFirst(receiveStreamId);
+      assert.strictEqual(marks(receiveStreamId).direction, 'received');
+      const up = await cmcDocuments.allowDocumentsFrom(conn, relWith([{ streamId: 'body-weight', level: 'read' }, { streamId: R, level: 'create-only' }]), { level: 'contribute' });
+      assert.strictEqual(up.receiveStreamId, R);
+      readFirst(R);
+      await cmcDocuments.allowDocumentsFrom(conn, relWith([{ streamId: R, level: 'create-only' }, { streamId: S, level: 'read' }]), { level: 'contribute' });
+      assert.deepStrictEqual(conn.grant, [{ streamId: S, level: 'read' }, { streamId: R, level: 'contribute' }]);
+      assert.deepStrictEqual(await cmcDocuments.allowDocumentsFrom(conn, uploader()), { receiveStreamId: R, scopeUpdate: null });
+      assert.deepStrictEqual(await cmcDocuments.allowDocumentsFrom(conn, uploader(), { level: 'contribute' }), { receiveStreamId: R, scopeUpdate: null });
+    });
+
+    it('[CDOC59b] back to create-only is refused while the child holds documents', async () => {
+      const held = account({ streams: tree(), events: [doc('d1', [CLINICAL, R])] });
+      await assert.rejects(cmcDocuments.allowDocumentsFrom(held, uploader(), { level: 'create-only' }), (e) => e.innerObject?.reason === 'open-documents');
+      assert.strictEqual(held.grant, null);
+      const empty = account({ streams: tree() });
+      await cmcDocuments.allowDocumentsFrom(empty, uploader(), { level: 'create-only' });
+      assert.deepStrictEqual(empty.grant, [{ streamId: S, level: 'read' }, { streamId: R, level: 'create-only' }]);
+      const { cmcScope } = await import('../ts/index.ts');
+      const refused = (streamId, level, reason) => assert.rejects(cmcScope.changeSharedLevel(empty, uploader(), streamId, level), (e) => e.innerObject?.reason === reason);
+      await refused('body', 'read', 'not-shared');
+      await refused(R, 'contribute', 'same-level');
+    });
+
+    it('[CDOC59c] an ungranted received child is reused only when empty; a granted one always', async () => {
+      const none = relWith([{ streamId: 'body-weight', level: 'read' }]);
+      const held = account({ streams: tree(), events: [doc('d1', [CLINICAL, R])] });
+      assert.notStrictEqual(await cmcDocuments.ensureShareStream(held, none, 'received'), R);
+      const empty = account({ streams: tree() });
+      assert.strictEqual(await cmcDocuments.ensureShareStream(empty, none, 'received'), R);
+      const live = account({ streams: tree(), events: [doc('d1', [CLINICAL, R])], accesses: [{ id: 'acc-1:9', permissions: uploader().grantedPermissions }] });
+      assert.strictEqual(await cmcDocuments.ensureShareStream(live, none, 'received'), R);
+    });
+
+    it('[CDOC60] newUploaderOffer: two new ids each time, contribute and read', () => {
+      const a = cmcDocuments.newUploaderOffer();
+      assert.deepStrictEqual(cmcDocuments.shareStreamsOf(a.permissions), { shared: a.shared, received: a.received });
+      const b = cmcDocuments.newUploaderOffer();
+      assert.strictEqual(new Set([a.shared, a.received, b.shared, b.received]).size, 4);
+      assert.deepStrictEqual(a.permissions.map(p => p.level), ['read', 'contribute'], 'read first: an older hds-lib takes the first one');
+    });
+
+    it('[CDOC61] offeredShareIssues: another relationship\'s id, the root, a level no share child has', () => {
+      const existing = cmcDocuments.shareStreamsIn(tree());
+      const issues = (perms, accessId, grantedPermissions = []) => cmcDocuments.offeredShareIssues(perms, existing, accessId ? { accessId, grantedPermissions } : undefined);
+      assert.deepStrictEqual(issues([{ streamId: S, level: 'read' }, { streamId: 'body', level: 'read' }]), [{ streamId: S, reason: 'taken' }]);
+      assert.deepStrictEqual(issues([{ streamId: S, level: 'read' }], 'acc-1:7'), []);
+      assert.deepStrictEqual(issues([{ streamId: O, level: 'read' }], 'acc-1'), [{ streamId: O, reason: 'taken' }]);
+      assert.deepStrictEqual(issues([{ streamId: 'document-shares', level: 'read' }, { streamId: 'share-nnnnnnnnnnnn', level: 'manage' }]),
+        [{ streamId: 'document-shares', reason: 'root' }, { streamId: 'share-nnnnnnnnnnnn', reason: 'level' }]);
+      assert.deepStrictEqual(issues(cmcDocuments.newUploaderOffer().permissions), []);
+      assert.deepStrictEqual(issues([{ streamId: S, level: 'contribute' }], 'acc-1'), [{ streamId: S, reason: 'direction' }], 'never write access to what she shared');
+      assert.deepStrictEqual(issues([{ streamId: R, level: 'read' }], 'acc-1'), [{ streamId: R, reason: 'direction' }]);
+      assert.deepStrictEqual(issues([{ streamId: S, level: 'read' }, { streamId: R, level: 'contribute' }], 'acc-1'), []);
+      assert.deepStrictEqual(issues([...cmcDocuments.newUploaderOffer().permissions, { streamId: 'share-eeeeeeeeeeee', level: 'create-only' }]), [{ streamId: 'share-eeeeeeeeeeee', reason: 'extra' }]);
+      const offer = cmcDocuments.newUploaderOffer();
+      assert.deepStrictEqual(issues([{ streamId: offer.shared, level: 'contribute' }, { streamId: offer.received, level: 'read' }], 'acc-3', offer.permissions).map(i => i.reason), ['direction', 'direction'], 'swapped before they are marked');
+      assert.deepStrictEqual(issues(offer.permissions, 'acc-3', offer.permissions), []);
+    });
+
+    it('[CDOC62] ensureOfferedShareStreams creates and marks both, repairs an unmarked or misplaced one, is idempotent', async () => {
+      const conn = account({ streams: [{ id: R, parentId: null, name: 'Clinic X' }] });
+      const apiOne = conn.apiOne;
+      conn.apiOne = async (method, params, key) => {
+        if (method === 'streams.get' && params.parentId == null) return conn.streams.map(s => ({ ...s }));
+        if (method === 'streams.update') return Object.assign(conn.streams.find(s => s.id === params.id), params.update);
+        return apiOne(method, params, key);
+      };
+      const mark = (direction) => ({ hdsDocumentShare: { relationship: 'acc-1', direction } });
+      for (let i = 0; i < 2; i++) {
+        assert.deepStrictEqual(await cmcDocuments.ensureOfferedShareStreams(conn, uploader()), { shared: S, received: R });
+        assert.deepStrictEqual(conn.streams.find(s => s.id === R), { id: R, parentId: 'document-shares', name: R, clientData: mark('received') });
+        assert.deepStrictEqual(conn.streams.find(s => s.id === S), { id: S, parentId: 'document-shares', name: S, clientData: mark('shared') });
+      }
+      conn.streams.find(s => s.id === S).parentId = null;
+      await cmcDocuments.ensureOfferedShareStreams(conn, uploader());
+      assert.strictEqual(conn.streams.find(s => s.id === S).parentId, 'document-shares', 'a marked one at the root is moved');
+      await assert.rejects(cmcDocuments.ensureOfferedShareStreams(conn, { ...uploader(), accessId: 'acc-2' }), (e) => e.innerObject?.reason === 'share-id-taken');
+      conn.streams.find(s => s.id === R).clientData = mark('shared');
+      await assert.rejects(cmcDocuments.ensureOfferedShareStreams(conn, uploader()), (e) => e.innerObject?.reason === 'share-id-taken');
+      conn.streams.find(s => s.id === R).clientData = mark('received');
+      conn.streams.find(s => s.id === R).trashed = true;
+      await assert.rejects(cmcDocuments.ensureOfferedShareStreams(conn, uploader()), (e) => e.innerObject?.reason === 'share-id-taken');
+    });
+
+    it('[CDOC62b] an unmarked stream another access names is not adopted; the group\'s own member accesses do not count', async () => {
+      const withAccess = (access) => {
+        const conn = account({ streams: [{ id: 'document-shares', parentId: null }, { id: R, parentId: 'document-shares', name: R, clientData: { other: 1 } }], accesses: [{ id: 'acc-1:2', permissions: uploader().grantedPermissions }, access] });
+        const apiOne = conn.apiOne;
+        conn.apiOne = async (method, params, key) => {
+          if (method === 'streams.get' && params.parentId == null) return conn.streams.map(s => ({ ...s }));
+          if (method === 'streams.update') return Object.assign(conn.streams.find(s => s.id === params.id), params.update);
+          return apiOne(method, params, key);
+        };
+        return conn;
+      };
+      const permissions = [{ streamId: R, level: 'contribute' }];
+      await assert.rejects(cmcDocuments.ensureOfferedShareStreams(withAccess({ id: 'acc-7', createdBy: 'personal', permissions }), uploader()), (e) => e.innerObject?.reason === 'share-id-taken');
+      const member = withAccess({ id: 'acc-8', createdBy: 'acc-1:2 member-7', permissions });
+      await cmcDocuments.ensureOfferedShareStreams(member, uploader());
+      assert.deepStrictEqual(member.streams.find(s => s.id === R).clientData, { other: 1, hdsDocumentShare: { relationship: 'acc-1', direction: 'received' } });
+    });
+
+    it('[CDOC63] unshareDocument takes the id off, and says when the contact still reads it (no alert)', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', [CLINICAL, S]), doc('d2', [CLINICAL, R, S])] });
+      const still = async (rel, id, left) => {
+        assert.deepStrictEqual(await cmcDocuments.unshareDocument(conn, rel, id), { alertEventId: null, stillReads: true });
+        assert.deepStrictEqual(conn.events.get(id).streamIds, left);
+      };
+      await still(relWith([{ streamId: CLINICAL, level: 'read' }, { streamId: S, level: 'read' }]), 'd1', [CLINICAL]);
+      await still(uploader(), 'd2', [CLINICAL, R]);
+      assert.strictEqual(alerts(conn).length, 0);
+      conn.events.set('d3', doc('d3', [CLINICAL, S]));
+      const res = await cmcDocuments.unshareDocument(conn, uploader(), 'd3');
+      assert.deepStrictEqual([res.stillReads, conn.events.get('d3').streamIds, alerts(conn).length], [false, [CLINICAL], 1]);
+    });
+
+    it('[CDOC64] cleanup keeps where a document is filed, other contacts\' shares and a value\'s own stream', async () => {
+      const value = { id: 'v1', type: 'mass/kg', streamIds: ['body-weight', R] };
+      const conn = account({ streams: tree(), events: [doc('filed', [CLINICAL, R, O]), doc('open', [R]), doc('odd', [R, O]), value] });
+      await cmcDocuments.cleanupDocumentShares(conn, 'acc-1');
+      const ids = (id) => conn.events.get(id).streamIds;
+      assert.deepStrictEqual([ids('filed'), ids('open'), ids('odd'), ids('v1')], [[CLINICAL, O], ['documents'], ['documents', O], ['body-weight']]);
+    });
+
+    it('[CDOC66] stopping all sharing with an uploader grants a new empty shared child first, never leaving contribute alone', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', [CLINICAL, S])] });
+      const res = await cmcDocuments.stopSharingDocuments(conn, uploader());
+      assert.strictEqual(res.shareStreamDeleted, true);
+      assert.deepStrictEqual(conn.grant.map(p => p.level), ['read', 'contribute']);
+      assert.ok(![S, R].includes(conn.grant[0].streamId));
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, [CLINICAL]);
+      const update = [...conn.events.values()].find(e => e.type === 'consent/scope-update-cmc');
+      assert.deepStrictEqual(update.content.hds, { removed: [S] });
+    });
+
+    it('[CDOC67] ensureOfferedShareStreams does not adopt a stream it cannot check: personal token only', async () => {
+      const conn = account({ streams: [{ id: 'document-shares', parentId: null }, { id: R, parentId: null, name: R }], tokenType: 'app' });
+      await assert.rejects(cmcDocuments.ensureOfferedShareStreams(conn, uploader()), (e) => e.innerObject?.reason === 'not-personal');
+    });
+
+    it('[CDOC65] offered children never marked: found by the ended grant, or by the orphan sweep once no access names them', async () => {
+      const unmarked = () => [{ id: 'document-shares', parentId: null }, { id: R, parentId: 'document-shares', name: R }, { id: S, parentId: 'document-shares', name: S }];
+      const ended = account({ streams: unmarked(), events: [doc('up', [R])] });
+      assert.deepStrictEqual((await cmcDocuments.cleanupDocumentShares(ended, 'acc-1', { permissions: uploader().grantedPermissions })).sort(), [R, S]);
+      assert.deepStrictEqual(ended.events.get('up').streamIds, ['documents']);
+      const atRoot = account({ streams: [{ id: 'document-shares', parentId: null }, { id: R, parentId: null, name: R }], events: [doc('up', [R])] });
+      assert.deepStrictEqual(await cmcDocuments.cleanupDocumentShares(atRoot, 'acc-1', { permissions: uploader().grantedPermissions }), [R]);
+      assert.deepStrictEqual(atRoot.events.get('up').streamIds, ['documents']);
+      const named = account({ streams: unmarked(), events: [doc('up', [R])], accesses: [{ id: 'acc-1', permissions: uploader().grantedPermissions }] });
+      assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(named), []);
+      const gone = account({ streams: unmarked(), events: [doc('up', [R])] });
+      assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(gone), [R], 'the empty one may be an offer being accepted');
+      assert.deepStrictEqual(gone.events.get('up').streamIds, ['documents']);
+      assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(account({ streams: unmarked(), events: [doc('up', [R])] }), ['acc-1']), [], 'a list of relationships says nothing of unmarked ones');
     });
   });
 });

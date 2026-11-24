@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Documents filed by access class, and uploaders (plan 140).** Filing is inert on data-model 4.31.0, which has no stream
+  under `documents` and no `stream` on a document kind. No app may grant `contribute` on a share child while an older
+  hds-lib still runs on the account: it can take that child for the shared one.
+  - `cmcDocuments.readsDocument(perms, document)`: whether a grant reads a document, as the platform decides.
+    `sharesAllDocuments` only knows `documents` and `*`.
+  - `cmcDocuments.fileDocument`, `filedStreamIds`, `isDocumentsStream`, `model.documentKinds.streamFor(key)`: a document
+    filed under one documents stream, first in `streamIds`, every share id kept. `acceptProposedDocument` takes `file`
+    and returns `filed`.
+  - A `received` share child may be granted at `contribute` (`allowDocumentsFrom` `level`, `cmcScope.changeSharedLevel`):
+    the sender lists, corrects and removes its own. `receiveDocument` takes `streamId` and `permissions` (its received id
+    stays on the document), `freezeDocument` ends it.
+  - Group uploaders: `newUploaderOffer`, `offeredShareIssues` (before accepting), `ensureOfferedShareStreams` (after).
+
+### Changed
+
+- `shareStreamsOf`: a share child at `contribute` is the received one, never the shared one (`manage`: neither).
+- `unshareDocument` returns `stillReads`, with no alert (`alertEventId: null`), when the contact reads the document anyway
+  through its own grant; it announced a take-back that had not happened.
+- `stopSharingDocuments` with an uploader grants a new empty `shared` child in place of the stopped one.
+- `ensureShareStream`: an ungranted `received` child is reused only when empty.
+- `cleanupDocumentShares` keeps where a document is filed and the other contacts' share ids; it wrote `['documents']`. With
+  `permissions` it also finds offered children never marked; `cleanupOrphanDocumentShares` removes those no access names.
+- `offerStreamsToCreate` puts a granted `share-…` id under `document-shares`, named by its id.
+- `itemsDefs.forEvent` walks up from every stream of the event in order, not only the first: an event whose first stream
+  is unknown and whose next is a child of an item's stream now resolves.
+
 ## [2.64.0] - 2026-11-24
 
 ### Added

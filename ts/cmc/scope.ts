@@ -243,6 +243,48 @@ export async function shareStreamsAgain (
   return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
 }
 
+/**
+ * Change the level of one stream already shared (e.g. a `received` share child from `create-only` to `contribute`), with
+ * `opts.add` the streams granted in the same update. The changed stream is listed last.
+ * Throws `HDSLibError` (`not-shared`, `same-level`) before writing, else as `shareStreamsAgain`.
+ */
+export async function changeSharedLevel (
+  connection: pryv.Connection,
+  rel: ScopeRelationship,
+  streamId: string,
+  level: string,
+  opts: ScopeChangeOptions & { add?: Array<{ streamId: string; level: string }> } = {}
+): Promise<ScopeChangeResult> {
+  const collectorStreamId = requireCollectorStream(rel, 'changeSharedLevel');
+  const now = personPermissions(rel.grantedPermissions);
+  const entry = now.find(p => p.streamId === streamId);
+  if (entry == null) throw new HDSLibError(`changeSharedLevel: "${streamId}" is not shared`, { reason: 'not-shared', streamId });
+  if (entry.level === level) throw new HDSLibError(`changeSharedLevel: "${streamId}" is already shared at ${level}`, { reason: 'same-level', streamId });
+  const add = opts.add ?? [];
+  const newPermissions = [...now.filter(p => p.streamId !== streamId), ...add, { streamId, level }];
+  const hds: ScopeUpdateHds = { ...(add.length > 0 ? { added: add.map(p => p.streamId) } : {}), ...(opts.message ? { message: opts.message } : {}) };
+  return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
+}
+
+/**
+ * Stop sharing `streamId` and share `to` in its place, in one update, `to` listed first. Throws `HDSLibError`
+ * (`not-shared`) before writing, else as `stopSharingStream`.
+ */
+export async function replaceSharedStream (
+  connection: pryv.Connection,
+  rel: ScopeRelationship,
+  streamId: string,
+  to: { streamId: string; level: string },
+  opts: ScopeChangeOptions = {}
+): Promise<ScopeChangeResult> {
+  const collectorStreamId = requireCollectorStream(rel, 'replaceSharedStream');
+  const now = personPermissions(rel.grantedPermissions);
+  if (!now.some(p => p.streamId === streamId)) throw new HDSLibError(`replaceSharedStream: "${streamId}" is not shared`, { reason: 'not-shared', streamId });
+  const newPermissions = [to, ...now.filter(p => p.streamId !== streamId)];
+  const hds: ScopeUpdateHds = { removed: [streamId], ...(opts.message ? { message: opts.message } : {}) };
+  return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
+}
+
 /** A change of what a relationship shares, as a conversation shows it. */
 export type SharingNote =
   | {
