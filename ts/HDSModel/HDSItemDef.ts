@@ -83,7 +83,8 @@ export class HDSItemDef {
 
   /**
    * Whether this is an imported item (`type: imported`, data-model 3.27.0): an object written by an importer from a
-   * coded source (`lab-result/coded-v1`), never entered in a form. Read, shown and requested like any item (unlike
+   * coded source (`lab-result/coded-v1`) or by a control made for that item alone (4.32.0, `fertility/chart-stamp-v1`),
+   * never entered in a generic form. Read, shown and requested like any item (unlike
    * `system`), but not offered in pickers or rendered as an editable form field.
    */
   get isImported (): boolean {

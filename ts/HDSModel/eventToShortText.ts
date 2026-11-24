@@ -8,6 +8,7 @@ import type { DateFormat } from '../settings/HDSSettings.ts';
 import { LAB_RESULT_CODED, labComparatorOf, labResultCodedText } from './labResults.ts';
 import { ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, encounterShortText } from './encounters.ts';
 import { GENETIC_VARIANT_CODED, geneticVariantText } from './genetics.ts';
+import { CHART_STAMP, chartStampText } from './chartStamp.ts';
 import { medicationStatusText } from './medication.ts';
 
 /** A calendar day: year, month (1-12), day of month. */
@@ -375,6 +376,12 @@ function shortTextWithOrigin (event: any): ShortTextResult {
   // item would otherwise fall to the generic object path.
   if (event.type === GENETIC_VARIANT_CODED) {
     const text = geneticVariantText(content);
+    if (text) return { text, origin: null };
+  }
+
+  // A charted stamp (site-agents#67): "Yellow with a baby"; the generic object path would read the method.
+  if (event.type === CHART_STAMP) {
+    const text = chartStampText(content);
     if (text) return { text, origin: null };
   }
 
