@@ -576,6 +576,11 @@ await cmcDocuments.sendDocument(personConnection, ownConnection, { receiveStream
 const alerts = await cmcDocuments.listDocumentAlerts(connection, collectorStreamId);
 ```
 
+An uploader (`allowDocumentsFrom(…, { level: 'contribute' })`, or a group's `newUploaderOffer()`) keeps correcting what it
+sent: pass its `permissions` to `receiveDocument`, then `freezeDocument` when it must stop changing. Check an offer's share
+ids with `offeredShareIssues` before accepting, and create them with `ensureOfferedShareStreams` after. `fileDocument` moves
+a document between the documents streams, share ids kept.
+
 `shareDocument` posts only the alert when the contact already reads `documents` or `*` (`mode: 'all'`). Stream changes
 are written, re-read and checked (`concurrent-update` when another device changed them meanwhile). Readers label a
 share child from its `direction`, never from its name.

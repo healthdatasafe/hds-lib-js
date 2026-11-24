@@ -18379,6 +18379,14 @@ class HDSModelDocumentKinds {
         }
         return null;
     }
+    /**
+     * The stream a document of this kind is filed under: the pack's `stream` when the model knows it, else `documents`
+     * (not filed). A pack that states no stream, or an unknown kind, files nothing.
+     */
+    streamFor(key) {
+        const stream = this.#raw()[key]?.stream;
+        return typeof stream === 'string' && this.#model.streams.getDataById(stream, false) != null ? stream : 'documents';
+    }
     /** Localized label of a kind (en, fr, es), or null when unknown */
     label(key) {
         const label = this.#raw()[key]?.label;
@@ -18539,8 +18547,9 @@ class HDSModelItemsDefs {
      * Resolution rule (Plan 46 §2.1 — context-via-substream / D3):
      *   1. Try direct match on every entry in event.streamIds (legacy: events
      *      may carry multiple streamIds, e.g. bridge-athenahealth credentials).
-     *   2. If no direct match, walk parents of streamIds[0] looking for a
-     *      matching itemDef. Closest ancestor wins.
+     *   2. If no direct match, walk parents of each streamId in order looking
+     *      for a matching itemDef. The first streamId with one wins, its
+     *      closest ancestor first.
      *
      * The walk-up reuses `HDSModelStreams.getParentsIds`, the same helper
      * Authorizations consumes (HDSModel-Authorizations.ts:86) and the same
@@ -18554,13 +18563,14 @@ class HDSModelItemsDefs {
             if (candidate)
                 candidates.push(candidate);
         }
-        if (candidates.length === 0 && event.streamIds && event.streamIds.length > 0) {
-            const primary = event.streamIds[0];
-            // getParentsIds returns root-first ancestors of `primary` (excludes self).
+        // In the order of `streamIds`, the first stream with a matching ancestor wins: an event whose first stream is not a
+        // model stream (a `share-…` child) still resolves through the next one.
+        for (const streamId of candidates.length === 0 ? event.streamIds : []) {
+            // getParentsIds returns root-first ancestors of `streamId` (excludes self).
             // We need closest-ancestor-wins, so iterate leaf-to-root: walk parents
-            // in reverse, then check `primary` is already covered by the direct-match
+            // in reverse; `streamId` itself is already covered by the direct-match
             // pass above — so we only need ancestors here.
-            const ancestorsRootFirst = this.#model.streams.getParentsIds(primary, false);
+            const ancestorsRootFirst = this.#model.streams.getParentsIds(streamId, false);
             for (let i = ancestorsRootFirst.length - 1; i >= 0; i--) {
                 const ancestorId = ancestorsRootFirst[i];
                 const keyStreamIdEventType = ancestorId + ':' + event.type;
@@ -18570,6 +18580,8 @@ class HDSModelItemsDefs {
                     break;
                 }
             }
+            if (candidates.length > 0)
+                break;
         }
         if (candidates.length === 0) {
             if (throwErrorIfNotFound)
@@ -26180,6 +26192,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.offerStreamsToCreate = offerStreamsToCreate;
 exports.offerStreamsToApiCalls = offerStreamsToApiCalls;
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+const shareIds_ts_1 = __webpack_require__(/*! ../cmc/shareIds.js */ "./ts/cmc/shareIds.ts");
 const APP_SUFFIX = '-app';
 /**
  * The app bases a grant names (the app-streams convention: a base `{base}` with its `{base}-app` under it): one per
@@ -26212,6 +26225,10 @@ function appBasesOf(permissions, modelStreams) {
  * `documentation/HDS-READER.md`), while the requester holds nothing on `hds-reader` itself. A grant with no
  * `{base}-app` keeps its unknown streams at the root, as before.
  *
+ * A share child (`share-…`, an uploader's offer: `cmcDocuments.newUploaderOffer`) goes under `document-shares`, never at
+ * the root, and is named by its id whatever `defaultName` says (data-model DOCUMENTS.md: the name carries nothing).
+ * Creating it does not check that the id is free: `cmcDocuments.offeredShareIssues` does, before accepting.
+ *
  * A stream the model knows takes the model's name; a granted one it does not know takes the permission's
  * `defaultName` when it carries one, else its id.
  */
@@ -26238,6 +26255,12 @@ function offerStreamsToCreate(permissions, modelStreams) {
             // The one exception is the base of an app tree the grant itself names (see above).
             if (!granted)
                 return;
+            const isShare = (0, shareIds_ts_1.isShareStreamId)(id); // annotated: the guard would narrow `id` to never below
+            if (isShare) {
+                add(shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID, { granted: true, defaultName: 'Shared documents' });
+                wanted.set(id, { id, name: id, parentId: shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID });
+                return;
+            }
             const base = appBases.find((b) => id.startsWith(b + '-'));
             if (base === undefined) {
                 wanted.set(id, { id, name });
@@ -28571,7 +28594,9 @@ async function markPrintedIn(connection, about, eventIds) {
  * `shownAt`, or by `documentProposalRefusal`; each field from her `correction`, else the proposal, else her answers to
  * the two document questions; applied only where still pending (one `events.update`); then the answer, `applied`
  * listing the fields, and its alert. When nothing is applied: `nothing-pending`, except on a retry after the update
- * went through (the document already holds every field), which writes the answer.
+ * went through (the document already holds every field), which writes the answer. With `file`, a document whose kind was
+ * applied is then filed under the kind's stream (`documents.ts` `fileDocument`; `filed` is that stream, null when it
+ * was not): the app passes it only once she was told who will newly read it.
  */
 async function acceptProposedDocument(connection, rel, params) {
     const { streams, collectorStreamId } = await personSide(connection, rel, 'acceptProposedDocument');
@@ -28602,11 +28627,23 @@ async function acceptProposedDocument(connection, rel, params) {
         await connection.apiOne('events.update', { id: params.about, update }, 'event');
         applied = written;
     }
+    let filed = null;
+    if (params.file === true && applied.includes('kind') && typeof fields.documentKind === 'string') {
+        const target = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.streamFor(fields.documentKind);
+        // best effort: a document that could not be filed stays where it is, read by no one new
+        if (target !== documents_ts_1.DOCUMENTS_STREAM_ID) {
+            await bestEffort(async () => { await (0, documents_ts_1.fileDocument)(connection, params.about, target); });
+            // re-read: a `concurrent-update` is thrown after the filing write, which may hold
+            const after = await bestEffort(async () => await readEvent(connection, params.about));
+            if (after?.streamIds?.includes(target))
+                filed = target;
+        }
+    }
     const action = params.correction != null ? 'correct' : 'confirm';
     const content = { kind: 'answer', inReplyTo: pd.item.id, about: params.about, action, candidateIds: [pd.candidateId], applied };
     if (params.note != null)
         content.note = params.note;
-    return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action, written: [], applied };
+    return { ...await writeAnswer(connection, streams.sent, collectorStreamId, content, pd.item, conv), action, written: [], applied, filed };
 }
 /**
  * Her tapped `skip` on a proposed document ("Later"), or her comment alone on it (`note`: a `skip` with a note, with
@@ -29186,6 +29223,17 @@ function randomId() {
  * - `shared`, granted `read`: the documents the person shares with the contact;
  * - `received`, granted `create-only`: the documents the contact may send (Route B). On receipt
  *   the person's app sets the event's `streamIds` to `['documents']` (`receiveDocument`).
+ * - `received`, granted `contribute`: an uploader, which lists, corrects and removes what it sent, and reads nothing
+ *   else. On receipt the received id stays beside the documents stream (`receiveDocument` with `permissions`), until
+ *   the person freezes the document (`freezeDocument`: the received id becomes the relationship's `shared` one).
+ *
+ * A CMC group needs both ids in its original offer, since a member access is bounded by that offer
+ * (`newUploaderOffer`); the person's app checks them before accepting (`offeredShareIssues`) and marks the streams after
+ * (`ensureOfferedShareStreams`).
+ *
+ * Filing moves a document between the documents streams (`fileDocument`): one documents stream per document, first in
+ * `streamIds`, every share id kept. A contact reads a document through its own share child only, so an id dropped here
+ * takes the document away from that contact.
  *
  * `relationship` is the base id of the person's counterparty access (`CmcRelationship.accessId`
  * without its serial), so it survives scope updates. The other side is told by a
@@ -29231,12 +29279,17 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.streamsCheck = exports.DOCUMENT_ALERT_KINDS = exports.ET_DOCUMENT = exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = exports.DOCUMENTS_STREAM_ID = void 0;
+exports.streamsCheck = exports.DOCUMENT_ALERT_KINDS = exports.ET_DOCUMENT = exports.DOCUMENTS_STREAM_ID = exports.namesShareStreams = exports.isShareStreamId = exports.canonicalStreamId = exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = void 0;
 exports.newShareStreamId = newShareStreamId;
-exports.isShareStreamId = isShareStreamId;
 exports.relationshipIdOf = relationshipIdOf;
 exports.shareStreamsOf = shareStreamsOf;
 exports.sharesAllDocuments = sharesAllDocuments;
+exports.readsDocument = readsDocument;
+exports.isDocumentsStream = isDocumentsStream;
+exports.filedStreamIds = filedStreamIds;
+exports.newUploaderOffer = newUploaderOffer;
+exports.offeredShareIssues = offeredShareIssues;
+exports.checkOfferedShares = checkOfferedShares;
 exports.shareStreamsIn = shareStreamsIn;
 exports.buildDocumentAlertContent = buildDocumentAlertContent;
 exports.parseDocumentAlerts = parseDocumentAlerts;
@@ -29245,11 +29298,14 @@ exports.listDocumentAlerts = listDocumentAlerts;
 exports.listShareStreams = listShareStreams;
 exports.ensureDocumentSharesRoot = ensureDocumentSharesRoot;
 exports.ensureShareStream = ensureShareStream;
+exports.ensureOfferedShareStreams = ensureOfferedShareStreams;
 exports.shareDocument = shareDocument;
 exports.unshareDocument = unshareDocument;
 exports.stopSharingDocuments = stopSharingDocuments;
 exports.allowDocumentsFrom = allowDocumentsFrom;
 exports.receiveDocument = receiveDocument;
+exports.fileDocument = fileDocument;
+exports.freezeDocument = freezeDocument;
 exports.cleanupDocumentShares = cleanupDocumentShares;
 exports.cleanupOrphanDocumentShares = cleanupOrphanDocumentShares;
 exports.sendDocument = sendDocument;
@@ -29262,9 +29318,13 @@ const cmcText_ts_1 = __webpack_require__(/*! ./cmcText.js */ "./ts/cmc/cmcText.t
 const dataExport_ts_1 = __webpack_require__(/*! ./dataExport.js */ "./ts/cmc/dataExport.ts");
 const formSpec_ts_1 = __webpack_require__(/*! ./formSpec.js */ "./ts/cmc/formSpec.ts");
 const scope_ts_1 = __webpack_require__(/*! ./scope.js */ "./ts/cmc/scope.ts");
+const shareIds_ts_1 = __webpack_require__(/*! ./shareIds.js */ "./ts/cmc/shareIds.ts");
+Object.defineProperty(exports, "DOCUMENT_SHARES_ROOT_ID", ({ enumerable: true, get: function () { return shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID; } }));
+Object.defineProperty(exports, "SHARE_STREAM_PREFIX", ({ enumerable: true, get: function () { return shareIds_ts_1.SHARE_STREAM_PREFIX; } }));
+Object.defineProperty(exports, "canonicalStreamId", ({ enumerable: true, get: function () { return shareIds_ts_1.canonicalStreamId; } }));
+Object.defineProperty(exports, "isShareStreamId", ({ enumerable: true, get: function () { return shareIds_ts_1.isShareStreamId; } }));
+Object.defineProperty(exports, "namesShareStreams", ({ enumerable: true, get: function () { return shareIds_ts_1.namesShareStreams; } }));
 exports.DOCUMENTS_STREAM_ID = 'documents';
-exports.DOCUMENT_SHARES_ROOT_ID = 'document-shares';
-exports.SHARE_STREAM_PREFIX = 'share-';
 exports.ET_DOCUMENT = 'file/xds-v1';
 exports.DOCUMENT_ALERT_KINDS = {
     SHARED: 'document-shared',
@@ -29272,15 +29332,13 @@ exports.DOCUMENT_ALERT_KINDS = {
     SENT: 'document-sent'
 };
 const READ_LEVELS = new Set(['read', 'contribute', 'manage']);
+const RECEIVE_LEVELS = new Set(['create-only', 'contribute']);
 // ---- pure helpers ---- //
 /** A new share child id: `share-` + 12 lowercase base36 characters, random. */
 function newShareStreamId() {
     const bytes = new Uint8Array(12);
     globalThis.crypto.getRandomValues(bytes);
-    return exports.SHARE_STREAM_PREFIX + Array.from(bytes, b => (b % 36).toString(36)).join('');
-}
-function isShareStreamId(streamId) {
-    return typeof streamId === 'string' && /^share-[a-z0-9]{12}$/.test(streamId);
+    return shareIds_ts_1.SHARE_STREAM_PREFIX + Array.from(bytes, b => (b % 36).toString(36)).join('');
 }
 /** The relationship key stored on a share child: the base of the counterparty access id. */
 function relationshipIdOf(accessId) {
@@ -29291,23 +29349,123 @@ function relationshipIdOf(accessId) {
         return accessId;
     }
 }
-/** The share children of a grant: `read` on a share id is the shared one, `create-only` the received one. */
+/**
+ * The share children of a grant: `read` on a share id is the shared one, `create-only` or `contribute` the received one.
+ * A `contribute` child is never the shared one, even alone: what is added to it, the contact can change and delete.
+ */
 function shareStreamsOf(perms) {
     let shared = null;
     let received = null;
     for (const p of perms ?? []) {
-        if (!isShareStreamId(p.streamId))
+        if (!(0, shareIds_ts_1.isShareStreamId)(p.streamId))
             continue;
-        if (p.level === 'create-only')
+        const direction = directionAt(p.level);
+        if (direction === 'received')
             received ??= p.streamId;
-        else if (READ_LEVELS.has(p.level ?? 'read'))
+        else if (direction === 'shared')
             shared ??= p.streamId;
     }
     return { shared, received };
 }
+/** The direction a share child is granted at this level for; null for a level no share child has (`manage`, `none`). */
+function directionAt(level) {
+    if (RECEIVE_LEVELS.has(level))
+        return 'received';
+    return (level ?? 'read') === 'read' ? 'shared' : null;
+}
 /** The grant already reads every document (`documents` or `*`): sharing one only posts the alert. */
 function sharesAllDocuments(perms) {
     return (perms ?? []).some(p => (p.streamId === exports.DOCUMENTS_STREAM_ID || p.streamId === '*') && READ_LEVELS.has(p.level ?? 'read'));
+}
+/**
+ * Whether a grant reads this document, as the platform decides: the level of each of its streams is the nearest entry
+ * walking up (else `*`), one readable stream is enough, and a stream held at `none` or `create-only` hides it.
+ */
+function readsDocument(perms, document) {
+    const levels = new Map();
+    for (const p of perms ?? [])
+        if (p.streamId != null)
+            levels.set(p.streamId, p.level ?? 'read');
+    let reads = false;
+    for (const id of document?.streamIds ?? []) {
+        const at = [id, ...ancestorsOf(id), '*'].find(s => levels.has(s));
+        const level = at != null ? levels.get(at) : null;
+        if (level === 'none' || level === 'create-only')
+            return false;
+        if (level != null && READ_LEVELS.has(level))
+            reads = true;
+    }
+    return reads;
+}
+/** `documents` or a stream under it in the data model: where a document is filed. */
+function isDocumentsStream(streamId) {
+    return streamId === exports.DOCUMENTS_STREAM_ID || ancestorsOf(streamId).includes(exports.DOCUMENTS_STREAM_ID);
+}
+/** A document's `streamIds` once filed under `target`: `target` first, the other documents streams gone, all else kept. */
+function filedStreamIds(streamIds, target) {
+    return [target, ...(streamIds ?? []).filter(id => id !== target && !isDocumentsStream(id))];
+}
+/**
+ * What an uploader puts in its invite: a `received` child it contributes to, and a `shared` one it reads, the latter
+ * used when a document is frozen. Ids are new for each invite: use it on a `single-use` invite (an open link would give
+ * every person the same ids, which any reader of their documents could match), with `accessType: 'app'` for a group.
+ * `read` comes first: hds-lib before this version takes the first share id it can read as the `shared` child.
+ */
+function newUploaderOffer() {
+    const received = newShareStreamId();
+    const shared = newShareStreamId();
+    return { received, shared, permissions: [{ streamId: shared, level: 'read' }, { streamId: received, level: 'contribute' }] };
+}
+/**
+ * Why an offer or a scope request must not be accepted for the share ids it names. Every reader of a document sees the
+ * share ids it carries, so a requester could ask for another contact's, also spelled `:local:<id>` (`namesShareStreams`
+ * tells whether there is anything to check): `existing` is `listShareStreams` with
+ * `includeTrashed`, `rel` the asking relationship when there is one already (its own ids are not `taken`).
+ */
+function offeredShareIssues(perms, existing, rel) {
+    const own = rel != null ? relationshipIdOf(rel.accessId) : null;
+    const out = [];
+    // what it is granted now tells the direction of a child not marked yet
+    const granted = new Map((rel?.grantedPermissions ?? []).map(p => [p.streamId, directionAt(p.level)]));
+    const seen = { shared: new Set(), received: new Set() };
+    for (const p of perms ?? []) {
+        const streamId = (0, shareIds_ts_1.canonicalStreamId)(p.streamId ?? '');
+        if (streamId === shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID)
+            out.push({ streamId, reason: 'root' });
+        if (!(0, shareIds_ts_1.isShareStreamId)(streamId))
+            continue;
+        const known = existing.find(s => s.id === streamId);
+        const direction = directionAt(p.level);
+        if (known != null && known.relationship !== own)
+            out.push({ streamId, reason: 'taken' });
+        else if (direction == null)
+            out.push({ streamId, reason: 'level' });
+        else if ((known?.direction ?? granted.get(streamId) ?? direction) !== direction)
+            out.push({ streamId, reason: 'direction' });
+        else if (seen[direction].add(streamId).size > 1)
+            out.push({ streamId, reason: 'extra' });
+    }
+    return out;
+}
+/**
+ * `offeredShareIssues` against the account, for the app about to accept (and again on the grant once it exists, with its
+ * `rel`). Also `taken`: an id that carries no mark (left by a failed mark) and that another access names. No request
+ * unless a share child or the root is named, under any spelling. Throws when the account cannot be read: do not accept.
+ */
+async function checkOfferedShares(connection, perms, rel) {
+    if (!(0, shareIds_ts_1.namesShareStreams)(perms))
+        return [];
+    const asked = perms.map(p => ({ ...p, streamId: (0, shareIds_ts_1.canonicalStreamId)(p.streamId ?? '') }));
+    const existing = await listShareStreams(connection, { includeTrashed: true });
+    const issues = offeredShareIssues(asked, existing, rel);
+    const own = rel != null ? relationshipIdOf(rel.accessId) : '';
+    for (const id of new Set(asked.map(p => p.streamId).filter(shareIds_ts_1.isShareStreamId))) {
+        if (issues.some(i => i.streamId === id) || existing.some(s => s.id === id))
+            continue;
+        if (await namedByAnother(connection, own, id))
+            issues.push({ streamId: id, reason: 'taken' });
+    }
+    return issues;
 }
 /** The share children in a stream tree (`streams.get` output, any depth), with valid `hdsDocumentShare`. */
 function shareStreamsIn(streams) {
@@ -29315,7 +29473,7 @@ function shareStreamsIn(streams) {
     const walk = (list) => {
         for (const s of list ?? []) {
             const info = s.clientData?.hdsDocumentShare;
-            if (s.parentId === exports.DOCUMENT_SHARES_ROOT_ID && isShareStreamId(s.id) && typeof info?.relationship === 'string' &&
+            if (s.parentId === shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID && (0, shareIds_ts_1.isShareStreamId)(s.id) && typeof info?.relationship === 'string' &&
                 (info.direction === 'shared' || info.direction === 'received')) {
                 out.push({ id: s.id, relationship: info.relationship, direction: info.direction });
             }
@@ -29408,16 +29566,22 @@ async function listDocumentAlerts(connection, collectorStreamId, opts = {}) {
  * trashed ones (a cleanup interrupted between its two deletes).
  */
 async function listShareStreams(connection, opts = {}) {
+    return (await shareChildren(connection, opts.includeTrashed === true)).marked;
+}
+/** The `share-…` children of the root: the marked ones, and the ids of those with no valid mark. */
+async function shareChildren(connection, includeTrashed) {
     try {
-        const params = { parentId: exports.DOCUMENT_SHARES_ROOT_ID };
-        if (opts.includeTrashed === true)
+        const params = { parentId: shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID };
+        if (includeTrashed)
             params.state = 'all';
         const streams = await connection.apiOne('streams.get', params, 'streams');
-        return shareStreamsIn(streams);
+        const marked = shareStreamsIn(streams);
+        const ids = new Set(marked.map(s => s.id));
+        return { marked, unmarked: streams.map(s => s.id).filter(id => (0, shareIds_ts_1.isShareStreamId)(id) && !ids.has(id)) };
     }
     catch (e) {
         if ((0, appScope_ts_1.pryvErrorCode)(e) === 'unknown-referenced-resource')
-            return [];
+            return { marked: [], unmarked: [] };
         throw e;
     }
 }
@@ -29425,11 +29589,11 @@ async function listShareStreams(connection, opts = {}) {
 async function ensureDocumentSharesRoot(connection) {
     let name = 'Shared documents';
     try {
-        name = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(exports.DOCUMENT_SHARES_ROOT_ID).name ?? name;
+        name = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID).name ?? name;
     }
     catch { /* model not loaded */ }
     try {
-        await connection.apiOne('streams.create', { id: exports.DOCUMENT_SHARES_ROOT_ID, name });
+        await connection.apiOne('streams.create', { id: shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID, name });
     }
     catch (e) {
         if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'item-already-exists')
@@ -29439,30 +29603,77 @@ async function ensureDocumentSharesRoot(connection) {
 /**
  * The relationship's share child for `direction`, created (with the root) when missing. A `shared` child is reused
  * only while the contact is granted it: an ungranted one (left by a stop whose delete failed) still carries the
- * documents shared before, and granting it again would hand them all back.
+ * documents shared before, and granting it again would hand them all back. An ungranted `received` one is reused only
+ * when empty, for the same reason.
  */
 async function ensureShareStream(connection, rel, direction) {
     const relationship = relationshipIdOf(requireAccessId(rel, 'ensureShareStream'));
     if (direction === 'shared') {
-        const granted = await liveSharedChild(connection, rel);
+        const granted = await liveShareChild(connection, rel, 'shared');
         if (granted != null)
             return granted;
     }
     else {
-        const existing = (await listShareStreams(connection)).find(s => s.relationship === relationship && s.direction === direction);
-        if (existing)
-            return existing.id;
+        const granted = await liveShareChild(connection, rel, 'received');
+        if (granted != null)
+            return granted;
+        for (const s of await listShareStreams(connection)) {
+            if (s.relationship === relationship && s.direction === direction && !await holdsEvents(connection, s.id))
+                return s.id;
+        }
     }
+    return await createShareChild(connection, relationship, direction);
+}
+async function createShareChild(connection, relationship, direction) {
     await ensureDocumentSharesRoot(connection);
     const id = newShareStreamId();
     // pryv's typings take flat clientData values only
     await connection.apiOne('streams.create', {
         id,
         name: id,
-        parentId: exports.DOCUMENT_SHARES_ROOT_ID,
+        parentId: shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID,
         clientData: { hdsDocumentShare: { relationship, direction } }
     }, 'stream');
     return id;
+}
+/**
+ * The share children a grant names and the requester chose (`newUploaderOffer`), created under `document-shares` and
+ * marked with their relationship and direction. Idempotent; a child the consent screen created without its mark, or at
+ * the root, is repaired. Throws `share-id-taken` when an id is another relationship's child, or trashed: the grant then
+ * reaches what it must not, and the caller revokes it.
+ */
+async function ensureOfferedShareStreams(connection, rel) {
+    const relationship = relationshipIdOf(requireAccessId(rel, 'ensureOfferedShareStreams'));
+    const ids = shareStreamsOf(rel.grantedPermissions);
+    const missing = ['received', 'shared'].filter(direction => ids[direction] != null);
+    if (missing.length === 0)
+        return ids;
+    await ensureDocumentSharesRoot(connection);
+    for (const direction of missing) {
+        const id = ids[direction];
+        const clientData = { hdsDocumentShare: { relationship, direction } };
+        try {
+            await connection.apiOne('streams.create', { id, name: id, parentId: shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID, clientData }, 'stream');
+            continue;
+        }
+        catch (e) {
+            if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'item-already-exists')
+                throw e;
+        }
+        const stream = findStream(await connection.apiOne('streams.get', { state: 'all' }, 'streams'), id);
+        const mark = stream?.clientData?.hdsDocumentShare;
+        if (stream == null || stream.trashed === true || (mark != null && (mark.relationship !== relationship || mark.direction !== direction)) ||
+            (mark == null && await namedByAnother(connection, relationship, id))) {
+            throw new errors_ts_1.HDSLibError(`ensureOfferedShareStreams: "${id}" is not free`, { reason: 'share-id-taken', streamId: id });
+        }
+        if (mark != null && stream.parentId === shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID)
+            continue;
+        const update = { name: id, clientData: { ...stream.clientData, ...clientData } };
+        if (stream.parentId !== shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID)
+            update.parentId = shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID;
+        await connection.apiOne('streams.update', { id, update }, 'stream');
+    }
+    return ids;
 }
 /**
  * Share one document with a contact. In order: the share child (created if needed), the
@@ -29485,7 +29696,11 @@ async function shareDocument(connection, rel, eventId, opts = {}) {
     const { alertEventId } = await postDocumentAlert(connection, collectorStreamId, exports.DOCUMENT_ALERT_KINDS.SHARED, eventId, opts.locale);
     return { mode: 'shared', shareStreamId, scopeUpdate, alertEventId };
 }
-/** Take one document back: the relationship's share id removed from it, then the `document-unshared` alert. */
+/**
+ * Take one document back: the relationship's share id removed from it, then the `document-unshared` alert. `stillReads`,
+ * with no alert, when the contact reads it anyway: through `documents`, the stream it is filed under, or the contact's
+ * own `received` child.
+ */
 async function unshareDocument(connection, rel, eventId, opts = {}) {
     const collectorStreamId = requireCollectorStream(rel, 'unshareDocument');
     const relationship = relationshipIdOf(requireAccessId(rel, 'unshareDocument'));
@@ -29495,15 +29710,20 @@ async function unshareDocument(connection, rel, eventId, opts = {}) {
         ids.add(granted);
     if (ids.size === 0)
         throw new errors_ts_1.HDSLibError('unshareDocument: nothing is shared with this relationship', { reason: 'not-shared', eventId });
-    await changeEventStreams(connection, eventId, list => list.filter(id => !ids.has(id)), 'unshareDocument');
-    return postDocumentAlert(connection, collectorStreamId, exports.DOCUMENT_ALERT_KINDS.UNSHARED, eventId, opts.locale);
+    let kept = [];
+    await changeEventStreams(connection, eventId, list => { kept = list.filter(id => !ids.has(id)); return kept; }, 'unshareDocument');
+    if (readsDocument(rel.grantedPermissions, { streamIds: kept }))
+        return { alertEventId: null, stillReads: true };
+    const { alertEventId } = await postDocumentAlert(connection, collectorStreamId, exports.DOCUMENT_ALERT_KINDS.UNSHARED, eventId, opts.locale);
+    return { alertEventId, stillReads: false };
 }
 /**
  * Stop sharing all documents with a contact: its `read` on the share child removed (scope
  * update with `hds.removed`). The conversation goes on: a chat-only remainder is accepted, and
  * when nothing else is shared the `hds-noop` placeholder is granted (and provisioned). Once the
  * change is applied the share child is deleted (best effort; the documents keep `documents`), so a
- * later share starts a new child and never hands the contact back what was shared before. With
+ * later share starts a new child and never hands the contact back what was shared before. An uploader is granted a new,
+ * empty one in its place (a group's members cannot be minted on it: it is not in the original offer). With
  * `waitForCompletion: false` the child is kept (the change may not apply); `ensureShareStream`
  * never reuses an ungranted one.
  */
@@ -29514,7 +29734,12 @@ async function stopSharingDocuments(connection, rel, opts = {}) {
     const others = (0, scope_ts_1.personPermissions)(rel.grantedPermissions).filter(p => p.streamId !== shared);
     if (!others.some(p => p.streamId != null && !p.streamId.startsWith(':_')))
         await (0, formSpec_ts_1.provisionHdsNoop)(connection);
-    const result = await (0, scope_ts_1.stopSharingStream)(connection, rel, shared, { ...opts, parentIds: [exports.DOCUMENT_SHARES_ROOT_ID], allowChatOnly: true });
+    // an uploader keeps an empty `shared` child, listed first: hds-lib before this version would take its `contribute` child
+    // for the shared one and add her documents to it
+    const uploader = rel.grantedPermissions.some(p => (0, shareIds_ts_1.isShareStreamId)(p.streamId) && p.level === 'contribute');
+    const result = uploader
+        ? await (0, scope_ts_1.replaceSharedStream)(connection, rel, shared, { streamId: await createShareChild(connection, relationshipIdOf(rel.accessId), 'shared'), level: 'read' }, opts)
+        : await (0, scope_ts_1.stopSharingStream)(connection, rel, shared, { ...opts, parentIds: [shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID], allowChatOnly: true });
     let shareStreamDeleted = false;
     if (result.applied) {
         try {
@@ -29527,24 +29752,46 @@ async function stopSharingDocuments(connection, rel, opts = {}) {
     }
     return { ...result, shareStreamDeleted };
 }
-/** Let a contact send documents (Route B): `create-only` on the relationship's receive child. */
+/**
+ * Let a contact send documents (Route B): `create-only` (default) or `contribute` on the relationship's receive child.
+ * A child already granted at the other level changes level; going down is refused while it holds documents
+ * (`open-documents`). With `contribute` the `shared` child is granted too, listed before it: hds-lib before this version
+ * takes the first share id it can read as the `shared` child, and would add her documents to one the contact changes.
+ */
 async function allowDocumentsFrom(connection, rel, opts = {}) {
     requireCollectorStream(rel, 'allowDocumentsFrom');
+    const level = opts.level ?? 'create-only';
     const granted = shareStreamsOf(rel.grantedPermissions).received;
-    if (granted)
-        return { receiveStreamId: granted, scopeUpdate: null };
+    if (granted) {
+        const held = rel.grantedPermissions.find(p => p.streamId === granted)?.level;
+        if (opts.level == null || held === level)
+            return { receiveStreamId: granted, scopeUpdate: null };
+        // a document on a `create-only` child is hidden from the contact, whatever else it is shared through
+        if (level === 'create-only' && await holdsEvents(connection, granted)) {
+            throw new errors_ts_1.HDSLibError('allowDocumentsFrom: freeze or receive the open documents first', { reason: 'open-documents', streamId: granted });
+        }
+        const add = level === 'contribute' ? await sharedFirst(connection, rel) : [];
+        const scopeUpdate = await (0, scope_ts_1.changeSharedLevel)(connection, rel, granted, level, { ...opts, add, waitForCompletion: true });
+        return { receiveStreamId: granted, scopeUpdate };
+    }
     const receiveStreamId = await ensureShareStream(connection, rel, 'received');
-    const scopeUpdate = await (0, scope_ts_1.shareStreamsAgain)(connection, rel, [receiveStreamId], { ...opts, level: 'create-only', waitForCompletion: true });
+    const add = level === 'contribute' ? await sharedFirst(connection, rel) : [];
+    const levels = Object.fromEntries([...add, { streamId: receiveStreamId, level }].map(p => [p.streamId, p.level]));
+    const scopeUpdate = await (0, scope_ts_1.shareStreamsAgain)(connection, rel, Object.keys(levels), { ...opts, levels, waitForCompletion: true });
     return { receiveStreamId, scopeUpdate };
 }
 /**
  * Process a document a contact sent: checked (only on `received` share children, of
  * `opts.relationship` when given; `file/xds-v1`, with an attachment, at most `maxBytes` in all when
- * given), then moved to `streamIds = ['documents']` in one update so it can later be shared back.
+ * given), then moved to `streamIds = [opts.streamId]` (default `documents`) in one update so it can later be shared
+ * back. With `opts.permissions` (the relationship's grant), a received child it holds at `contribute` stays on the
+ * document, so the sender keeps correcting it until `freezeDocument`.
  * An event already on `documents` (received before, or the person's own) is refused, so a repeated
  * or forged `document-sent` never strips its shares. A refused event is left as it is.
  */
 async function receiveDocument(connection, eventId, opts = {}) {
+    const target = opts.streamId ?? exports.DOCUMENTS_STREAM_ID;
+    requireDocumentsStream(target, 'receiveDocument');
     const event = await getEvent(connection, eventId);
     const streamIds = event.streamIds ?? [];
     const relationship = opts.relationship != null ? relationshipIdOf(opts.relationship) : null;
@@ -29560,55 +29807,131 @@ async function receiveDocument(connection, eventId, opts = {}) {
         return { ok: false, reason: 'no-attachment' };
     if (opts.maxBytes != null && attachments.reduce((n, a) => n + (a.size ?? 0), 0) > opts.maxBytes)
         return { ok: false, reason: 'too-large' };
-    await connection.apiOne('events.update', { id: eventId, update: { streamIds: [exports.DOCUMENTS_STREAM_ID] } }, 'event');
+    if (target !== exports.DOCUMENTS_STREAM_ID)
+        await ensureDocumentsStream(connection, target);
+    const open = streamIds.filter(id => (opts.permissions ?? []).some(p => p.streamId === id && p.level === 'contribute'));
+    await connection.apiOne('events.update', { id: eventId, update: { streamIds: [target, ...open] } }, 'event');
     return { ok: true };
 }
 /**
- * When a relationship ends: every event on its receive child moved to `['documents']`, then both
- * children deleted with `mergeEventsWithParent: false` (shared documents keep `documents`).
+ * File a document of hers under another documents stream (`streamId`: `documents` or a model stream under it, created
+ * with its ancestors when missing). Every share id stays. It changes who reads the document, so the app says so first
+ * (`readsDocument` on each grant, before and after). A document still on a received child only is filed by
+ * `receiveDocument`.
+ */
+async function fileDocument(connection, eventId, streamId) {
+    requireDocumentsStream(streamId, 'fileDocument');
+    const event = await getEvent(connection, eventId);
+    if (event.type !== exports.ET_DOCUMENT)
+        throw new errors_ts_1.HDSLibError('fileDocument: not a document', { reason: 'not-a-document', eventId });
+    if (!(event.streamIds ?? []).some(isDocumentsStream)) {
+        throw new errors_ts_1.HDSLibError('fileDocument: not received yet (receiveDocument)', { reason: 'not-received', eventId });
+    }
+    if (streamId !== exports.DOCUMENTS_STREAM_ID)
+        await ensureDocumentsStream(connection, streamId);
+    await changeEventStreams(connection, eventId, ids => filedStreamIds(ids, streamId), 'fileDocument');
+}
+/**
+ * Freeze a document an uploader sent: its received id becomes the relationship's `shared` one (`read`, granted by a
+ * scope update when missing), so the sender still reads it and can no longer change or remove it. A later correction is
+ * a new document listing it in `supersedes`. Refused when it is not open to the sender (`not-open`) or not filed
+ * (`not-filed`). What `receiveDocument` checked (type, size) held then: the sender could change both until now.
+ */
+async function freezeDocument(connection, rel, eventId, opts = {}) {
+    requireAccessId(rel, 'freezeDocument');
+    const granted = shareStreamsOf(rel.grantedPermissions);
+    const streamIds = (await getEvent(connection, eventId)).streamIds ?? [];
+    const received = granted.received;
+    if (received == null || !streamIds.includes(received))
+        throw new errors_ts_1.HDSLibError('freezeDocument: the sender cannot change it', { reason: 'not-open', eventId });
+    if (!streamIds.some(isDocumentsStream))
+        throw new errors_ts_1.HDSLibError('freezeDocument: file it first', { reason: 'not-filed', eventId });
+    let shareStreamId = granted.shared;
+    let scopeUpdate = null;
+    if (shareStreamId == null) {
+        requireCollectorStream(rel, 'freezeDocument');
+        shareStreamId = await ensureShareStream(connection, rel, 'shared');
+        scopeUpdate = await (0, scope_ts_1.shareStreamsAgain)(connection, rel, [shareStreamId], { ...opts, level: 'read', waitForCompletion: true });
+    }
+    const shared = shareStreamId;
+    await changeEventStreams(connection, eventId, ids => [...new Set(ids.map(id => id === received ? shared : id))], 'freezeDocument');
+    return { shareStreamId: shared, scopeUpdate };
+}
+/**
+ * When a relationship ends: its share ids taken off every event on its receive child (one left with no other stream,
+ * or share ids of other contacts only, goes to `documents`), then both
+ * children deleted with `mergeEventsWithParent: false` (shared documents keep their documents stream). `permissions`
+ * (the grant that ended) also finds offered children that were never marked (`ensureOfferedShareStreams` not run).
  * Returns the deleted child ids.
  */
-async function cleanupDocumentShares(connection, relationship) {
+async function cleanupDocumentShares(connection, relationship, opts = {}) {
     const base = relationshipIdOf(relationship);
-    const mine = (await listShareStreams(connection, { includeTrashed: true })).filter(s => s.relationship === base);
-    for (const s of mine.filter(s => s.direction === 'received')) {
+    const { marked } = await shareChildren(connection, true);
+    const mine = marked.filter(s => s.relationship === base);
+    const unmarked = [];
+    const offered = (opts.permissions ?? []).map(p => p.streamId).filter(shareIds_ts_1.isShareStreamId).filter(id => !marked.some(s => s.id === id));
+    if (offered.length > 0) {
+        // anywhere: an older consent screen creates them at the root
+        const streams = await connection.apiOne('streams.get', { state: 'all' }, 'streams');
+        unmarked.push(...offered.filter(id => findStream(streams, id) != null));
+    }
+    return await removeShareChildren(connection, mine, unmarked);
+}
+/** Drain the `received` and the unmarked children, then delete all of them. */
+async function removeShareChildren(connection, marked, unmarked) {
+    const mine = [...marked.map(s => s.id), ...unmarked];
+    const own = new Set(mine);
+    for (const id of [...marked.filter(s => s.direction === 'received').map(s => s.id), ...unmarked]) {
         // each moved event leaves the child, so reading the first page again until it is empty walks them all;
         // `state: 'all'` for trashed events, and because a trashed child is not expanded otherwise
         for (;;) {
-            const events = await connection.apiOne('events.get', { streams: [s.id], state: 'all', limit: 500 }, 'events');
+            const events = await connection.apiOne('events.get', { streams: [id], state: 'all', limit: 500 }, 'events');
             if (events.length === 0)
                 break;
             for (const e of events) {
-                await connection.apiOne('events.update', { id: e.id, update: { streamIds: [exports.DOCUMENTS_STREAM_ID] } }, 'event');
+                const kept = (e.streamIds ?? []).filter(id => !own.has(id));
+                const streamIds = kept.some(id => !(0, shareIds_ts_1.isShareStreamId)(id)) ? kept : [exports.DOCUMENTS_STREAM_ID, ...kept];
+                await connection.apiOne('events.update', { id: e.id, update: { streamIds } }, 'event');
             }
         }
     }
-    for (const s of mine)
-        await deleteShareStream(connection, s.id);
-    return mine.map(s => s.id);
+    for (const id of mine)
+        await deleteShareStream(connection, id);
+    return mine;
 }
 /**
  * Clean up every share child whose relationship no longer exists: after a restore (accesses are not restored), or a
  * revoke whose `cleanupDocumentShares` failed. Without `liveRelationships` the live ones are read from the account's
  * accesses (expired ones count as live), which needs a personal token: an app token lists only the accesses it
- * created, and would make every relationship look gone. So it can run at any time, contacts loaded or not.
+ * created, and would make every relationship look gone. So it can run at any time, contacts loaded or not. Then it also
+ * empties and removes the unmarked children that hold events and that no access names any more.
  */
 async function cleanupOrphanDocumentShares(connection, liveRelationships) {
-    const children = await listShareStreams(connection, { includeTrashed: true });
-    if (children.length === 0)
+    const { marked: children, unmarked } = await shareChildren(connection, true);
+    if (children.length === 0 && (unmarked.length === 0 || liveRelationships != null))
         return [];
+    const abandoned = [];
     if (liveRelationships == null) {
         const info = await connection.accessInfo();
         if (info?.type !== 'personal')
             throw new errors_ts_1.HDSLibError('cleanupOrphanDocumentShares: reading the live relationships needs a personal token', { reason: 'not-personal' });
+        // an empty one may be an offer she is accepting now; read before the accesses, since what it holds was written by one
+        const held = [];
+        for (const id of unmarked)
+            if (await holdsEvents(connection, id))
+                held.push(id);
         const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses');
         liveRelationships = accesses.map(a => a.id);
+        const named = new Set(accesses.flatMap(a => (a.permissions ?? []).map(p => p.streamId)));
+        abandoned.push(...held.filter(id => !named.has(id)));
     }
     const live = new Set(liveRelationships.map(relationshipIdOf));
     const orphans = [...new Set(children.map(s => s.relationship))].filter(r => !live.has(r));
     const deleted = [];
     for (const r of orphans)
         deleted.push(...await cleanupDocumentShares(connection, r));
+    if (abandoned.length > 0)
+        deleted.push(...await removeShareChildren(connection, [], abandoned));
     return deleted;
 }
 // ---- the contact's side ---- //
@@ -29618,7 +29941,7 @@ async function cleanupOrphanDocumentShares(connection, liveRelationships) {
  * collectors stream. The contact keeps its own copy separately.
  */
 async function sendDocument(personConnection, ownConnection, params) {
-    if (!isShareStreamId(params?.receiveStreamId))
+    if (!(0, shareIds_ts_1.isShareStreamId)(params?.receiveStreamId))
         throw new errors_ts_1.HDSLibError('sendDocument: receiveStreamId must be a share child', { reason: 'not-a-share-stream' });
     if (!params.collectorStreamId)
         throw new errors_ts_1.HDSLibError('sendDocument: collectorStreamId is required', { reason: 'no-collector-stream' });
@@ -29652,21 +29975,31 @@ function requireCollectorStream(rel, fn) {
     return rel.localCollectorStreamId;
 }
 /**
- * The `shared` child the contact is granted now: from the live access (a personal token lists it), so a relationship
+ * The share child the contact is granted now for a direction: from the live access (a personal token lists it), so a relationship
  * read before another device's first share reuses that device's child instead of ungranting it; else from `rel`.
  */
-async function liveSharedChild(connection, rel) {
+async function liveShareChild(connection, rel, direction) {
     const base = relationshipIdOf(rel.accessId);
     try {
         const accesses = await connection.apiOne('accesses.get', {}, 'accesses');
         const live = accesses.find(a => relationshipIdOf(a.id) === base);
         if (live != null)
-            return shareStreamsOf(live.permissions ?? []).shared;
+            return shareStreamsOf(live.permissions ?? [])[direction];
     }
     catch (e) {
         logger.warn('ensureShareStream: the live grant was not read, the relationship as given is used:', e);
     }
-    return shareStreamsOf(rel.grantedPermissions).shared;
+    return shareStreamsOf(rel.grantedPermissions)[direction];
+}
+/** The `shared` child to grant beside a `contribute` one: none when the contact has one already. */
+async function sharedFirst(connection, rel) {
+    if (shareStreamsOf(rel.grantedPermissions).shared != null)
+        return [];
+    return [{ streamId: await ensureShareStream(connection, rel, 'shared'), level: 'read' }];
+}
+/** Whether any event, trashed or not, is on this stream. */
+async function holdsEvents(connection, streamId) {
+    return (await connection.apiOne('events.get', { streams: [streamId], state: 'all', limit: 1 }, 'events')).length > 0;
 }
 /**
  * Delete a share child with `mergeEventsWithParent: false`: its documents lose its id and keep `documents`. The first
@@ -29683,6 +30016,61 @@ async function deleteShareStream(connection, streamId) {
                 throw e;
         }
     }
+}
+/** The streams above `streamId`, the closest first: `document-shares` for a share child, else the model's (not the account's). */
+function ancestorsOf(streamId) {
+    const isShare = (0, shareIds_ts_1.isShareStreamId)(streamId); // annotated: the guard would narrow `streamId` to never below
+    if (isShare)
+        return [shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID];
+    try {
+        if ((0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(streamId, false) != null)
+            return [...(0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getParentsIds(streamId, false)].reverse();
+    }
+    catch { /* model not loaded */ }
+    // a pack older than the document: the streams under `documents` are all named `documents-…`
+    if (!streamId.startsWith(exports.DOCUMENTS_STREAM_ID + '-'))
+        return [];
+    const parts = streamId.split('-');
+    return parts.slice(1).map((_, i) => parts.slice(0, parts.length - 1 - i).join('-'));
+}
+function requireDocumentsStream(streamId, fn) {
+    const known = streamId === exports.DOCUMENTS_STREAM_ID || (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(streamId, false) != null;
+    if (!known || !isDocumentsStream(streamId))
+        throw new errors_ts_1.HDSLibError(`${fn}: "${streamId}" is not a documents stream`, { reason: 'not-a-documents-stream', streamId });
+}
+/** Create a documents stream and the ones above it, with their model names, where missing. */
+async function ensureDocumentsStream(connection, streamId) {
+    const streams = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams;
+    for (const id of [...streams.getParentsIds(streamId, false), streamId]) {
+        const { name, parentId } = streams.getDataById(id);
+        try {
+            await connection.apiOne('streams.create', parentId != null ? { id, name, parentId } : { id, name });
+        }
+        catch (e) {
+            if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'item-already-exists')
+                throw e;
+        }
+    }
+}
+/**
+ * Whether an access of another relationship ('' for none yet) names this stream (member accesses, which the grant
+ * created, aside: `createdBy` is `<access id>[ <caller id>]`).
+ */
+async function namedByAnother(connection, relationship, streamId) {
+    const info = await connection.accessInfo();
+    if (info?.type !== 'personal')
+        throw new errors_ts_1.HDSLibError('document shares: needs a personal token', { reason: 'not-personal' });
+    const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses');
+    const own = (id) => relationship !== '' && id != null && relationshipIdOf(id.split(' ')[0]) === relationship;
+    return accesses.some(a => !own(a.id) && !own(a.createdBy) && (a.permissions ?? []).some(p => p.streamId === streamId));
+}
+function findStream(list, id) {
+    for (const s of list ?? []) {
+        const found = s.id === id ? s : findStream(s.children, id);
+        if (found != null)
+            return found;
+    }
+    return null;
 }
 async function getEvent(connection, eventId) {
     return await connection.apiOne('events.getOne', { id: eventId }, 'event');
@@ -30443,6 +30831,8 @@ exports.planStopSharing = planStopSharing;
 exports.scopeDiff = scopeDiff;
 exports.stopSharingStream = stopSharingStream;
 exports.shareStreamsAgain = shareStreamsAgain;
+exports.changeSharedLevel = changeSharedLevel;
+exports.replaceSharedStream = replaceSharedStream;
 exports.listSharingNotes = listSharingNotes;
 exports.parseSharingNotes = parseSharingNotes;
 exports.proposeDataSetUpdate = proposeDataSetUpdate;
@@ -30558,6 +30948,37 @@ async function shareStreamsAgain(connection, rel, streamIds, opts = {}) {
     }
     const newPermissions = [...now, ...back.map(streamId => ({ streamId, level: opts.levels?.[streamId] ?? opts.level ?? 'read' }))];
     const hds = { added: back, ...(opts.message ? { message: opts.message } : {}) };
+    return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
+}
+/**
+ * Change the level of one stream already shared (e.g. a `received` share child from `create-only` to `contribute`), with
+ * `opts.add` the streams granted in the same update. The changed stream is listed last.
+ * Throws `HDSLibError` (`not-shared`, `same-level`) before writing, else as `shareStreamsAgain`.
+ */
+async function changeSharedLevel(connection, rel, streamId, level, opts = {}) {
+    const collectorStreamId = requireCollectorStream(rel, 'changeSharedLevel');
+    const now = personPermissions(rel.grantedPermissions);
+    const entry = now.find(p => p.streamId === streamId);
+    if (entry == null)
+        throw new errors_ts_1.HDSLibError(`changeSharedLevel: "${streamId}" is not shared`, { reason: 'not-shared', streamId });
+    if (entry.level === level)
+        throw new errors_ts_1.HDSLibError(`changeSharedLevel: "${streamId}" is already shared at ${level}`, { reason: 'same-level', streamId });
+    const add = opts.add ?? [];
+    const newPermissions = [...now.filter(p => p.streamId !== streamId), ...add, { streamId, level }];
+    const hds = { ...(add.length > 0 ? { added: add.map(p => p.streamId) } : {}), ...(opts.message ? { message: opts.message } : {}) };
+    return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
+}
+/**
+ * Stop sharing `streamId` and share `to` in its place, in one update, `to` listed first. Throws `HDSLibError`
+ * (`not-shared`) before writing, else as `stopSharingStream`.
+ */
+async function replaceSharedStream(connection, rel, streamId, to, opts = {}) {
+    const collectorStreamId = requireCollectorStream(rel, 'replaceSharedStream');
+    const now = personPermissions(rel.grantedPermissions);
+    if (!now.some(p => p.streamId === streamId))
+        throw new errors_ts_1.HDSLibError(`replaceSharedStream: "${streamId}" is not shared`, { reason: 'not-shared', streamId });
+    const newPermissions = [to, ...now.filter(p => p.streamId !== streamId)];
+    const hds = { removed: [streamId], ...(opts.message ? { message: opts.message } : {}) };
     return writeScopeUpdate(connection, collectorStreamId, { accessId: rel.accessId, newPermissions, hds }, opts);
 }
 /**
@@ -30889,6 +31310,43 @@ async function waitForOutcome(connection, eventId, opts) {
     if (typeof content.applied === 'boolean')
         return content;
     throw new errors_ts_1.HDSLibError('scope update outcome not known yet', { reason: 'outcome-unknown', updateEventId: eventId, lastStatus: content.status });
+}
+
+
+/***/ },
+
+/***/ "./ts/cmc/shareIds.ts"
+/*!****************************!*\
+  !*** ./ts/cmc/shareIds.ts ***!
+  \****************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+/**
+ * The ids of the `document-shares` children (data-model `documentation/DOCUMENTS.md`), apart from `documents.ts` so
+ * that `appTemplates/offerStreams.ts` can read them without the CMC helpers.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = void 0;
+exports.canonicalStreamId = canonicalStreamId;
+exports.namesShareStreams = namesShareStreams;
+exports.isShareStreamId = isShareStreamId;
+exports.DOCUMENT_SHARES_ROOT_ID = 'document-shares';
+exports.SHARE_STREAM_PREFIX = 'share-';
+/** The platform reads `:local:<id>` as `<id>` (and stores it so): compare what a requester sends by this id. */
+function canonicalStreamId(streamId) {
+    return streamId.replace(/^(?::local:)+/, '');
+}
+/** Whether permissions name a share child or their root, under any spelling. */
+function namesShareStreams(perms) {
+    return (perms ?? []).some(p => {
+        const id = canonicalStreamId(p.streamId ?? '');
+        return id === exports.DOCUMENT_SHARES_ROOT_ID || isShareStreamId(id);
+    });
+}
+function isShareStreamId(streamId) {
+    return typeof streamId === 'string' && /^share-[a-z0-9]{12}$/.test(streamId);
 }
 
 
@@ -50197,6 +50655,40 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'other' }))).reason, 'nothing-pending');
   });
 
+  it('[CNVD2b] with `file`, the document goes under the kind\'s stream, shares kept; without it, or for a kind with no stream, it stays', async () => {
+    const pack = await (await fetch(`${MODEL_BASE}/pack.json`)).json();
+    pack.streams.find(s => s.id === 'documents').children = [{ id: 'documents-clinical', name: 'Clinical documents', parentId: 'documents', children: [] }];
+    pack.documentKinds.kinds['laboratory-report'].stream = 'documents-clinical';
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().loadFromObject(pack);
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().laziliyLoadedMap = {}; // a reload keeps the maps built from the previous pack
+    const delayMs = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.streamsCheck.delayMs;
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.streamsCheck.delayMs = 0;
+    try {
+      const accept = async (documentKind, file, failing) => {
+        const { person, rel, streams, DOC, document, proposed } = await setup(['kind']);
+        await person.apiOne('events.update', { id: DOC, update: { streamIds: ['documents', 'share-ssssssssssss'] } }, 'event');
+        await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { documentKind }));
+        if (failing) {
+          const apiOne = person.apiOne;
+          person.apiOne = async (method, params, key) => {
+            if (method === 'streams.create' && params.id === 'documents-clinical') throw apiError('forbidden');
+            return apiOne(method, params, key);
+          };
+        }
+        const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedDocument(person, rel, { about: DOC, candidateId: 'd1', shownAt: person.clock, ...(file ? { file } : {}) });
+        return [res.action, res.filed, (await document()).streamIds];
+      };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await accept('laboratory-report', true), ['confirm', 'documents-clinical', ['documents-clinical', 'share-ssssssssssss']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await accept('laboratory-report', false), ['confirm', null, ['documents', 'share-ssssssssssss']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await accept('consultation-report', true), ['confirm', null, ['documents', 'share-ssssssssssss']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await accept('laboratory-report', true, true), ['confirm', null, ['documents', 'share-ssssssssssss']], 'not filed: the confirmation still goes through');
+    } finally {
+      _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.streamsCheck.delayMs = delayMs;
+      await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(`${MODEL_BASE}/pack.json`);
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().laziliyLoadedMap = {};
+    }
+  });
+
   it('[CNVD3] her own edit wins; a second contact\'s proposal gets an automatic skip not-pending; a retry after the update writes confirm', async () => {
     const { person, rel, streams, DOC, conv, document, proposed } = await setup(['time']);
     await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedDocument(person, streams, proposed('d1', { time: D, timePrecision: 'day' }));
@@ -50717,7 +51209,11 @@ function account ({ streams = [], events = [], accesses = [], tokenType = 'perso
     switch (method) {
       case 'streams.get':
         if (params.parentId && !state.streams.find(s => s.id === params.parentId)) throw apiError('unknown-referenced-resource');
-        return out('streams', children(params.parentId ?? null).filter(s => params.state === 'all' || !s.trashed));
+        if (params.parentId == null) {
+          const nest = (list) => list.filter(s => params.state === 'all' || !s.trashed).map(s => ({ ...s, children: nest(children(s.id)) }));
+          return out('streams', nest(children(null)));
+        }
+        return out('streams', children(params.parentId).filter(s => params.state === 'all' || !s.trashed));
       case 'streams.create': {
         if (state.streams.find(s => s.id === params.id)) throw apiError('item-already-exists');
         const s = { parentId: null, ...params };
@@ -51136,6 +51632,325 @@ describe('[CDOC] cmcDocuments', function () {
       const empty = account();
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(empty), []);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!empty.calls.some(c => c.method === 'accessInfo' || c.method === 'accesses.get'), 'no share child: accesses not read');
+    });
+  });
+
+  describe('[CDOC-F] filing and uploaders (plan 140)', () => {
+    const R = 'share-rrrrrrrrrrrr';
+    const S = 'share-ssssssssssss';
+    const O = 'share-oooooooooooo';
+    const CLINICAL = 'documents-clinical';
+    const uploader = () => relWith([{ streamId: R, level: 'contribute' }, { streamId: S, level: 'read' }]);
+
+    // the published pack plus the class streams of plan 140, until a data-model release carries them
+    before(async () => {
+      const pack = await (await fetch(modelURL)).json();
+      const root = pack.streams.find(s => s.id === 'documents');
+      root.children = [
+        { id: CLINICAL, name: 'Clinical documents', parentId: 'documents', children: [] },
+        { id: 'documents-admin', name: 'Administrative documents', parentId: 'documents', children: [{ id: 'documents-admin-insurance', name: 'Insurance documents', parentId: 'documents-admin', children: [] }] }
+      ];
+      pack.documentKinds.kinds['laboratory-report'].stream = CLINICAL;
+      pack.documentKinds.kinds['referral-letter'].stream = 'documents-not-in-the-model';
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().loadFromObject(pack);
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().laziliyLoadedMap = {}; // a reload keeps the maps built from the previous pack
+    });
+    after(async () => {
+      await (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().load(modelURL);
+      (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().laziliyLoadedMap = {};
+    });
+
+    it('[CDOC50] a contribute child is never the shared one, even alone', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsOf([{ streamId: R, level: 'contribute' }]), { shared: null, received: R });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsOf([{ streamId: R, level: 'contribute' }, { streamId: S, level: 'read' }]), { shared: S, received: R });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsOf([{ streamId: R, level: 'manage' }, { streamId: O, level: 'none' }]), { shared: null, received: null });
+    });
+
+    it('[CDOC51] readsDocument: nearest entry wins, one readable stream is enough, none and create-only hide', () => {
+      const reads = (perms, ...streamIds) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.readsDocument(perms.map(([streamId, level]) => ({ streamId, level })), { streamIds });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'read']], CLINICAL), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'read']], 'documents-admin-insurance', S), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['*', 'read']], CLINICAL), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([[CLINICAL, 'read']], CLINICAL, S), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([[CLINICAL, 'read']], 'documents'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([[CLINICAL, 'read']], 'documents-admin'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents-admin', 'read']], 'documents-admin-insurance'), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'read'], [CLINICAL, 'none']], CLINICAL), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([[S, 'read'], [CLINICAL, 'create-only']], CLINICAL, S), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'none'], [CLINICAL, 'read']], CLINICAL), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'create-only']], 'documents'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['body', 'read']], CLINICAL), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.readsDocument([{ streamId: 'documents', level: 'read' }], { streamIds: [] }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'no-such-level']], 'documents'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'read']], 'documents-newer-than-the-pack'), true, 'a pack older than the document');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.isDocumentsStream('document-shares'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents-x', 'read']], 'documents-x-y'), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'read'], ['documents-x', 'none']], 'documents-x-y'), false);
+    });
+
+    it('[CDOC52] a kind files under the pack stream the model knows, else documents; a class document resolves to its item', () => {
+      const kinds = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().documentKinds;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(kinds.streamFor('laboratory-report'), CLINICAL);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(kinds.streamFor('referral-letter'), 'documents');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(kinds.streamFor('other'), 'documents');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(kinds.streamFor('nope'), 'documents');
+      const item = (...streamIds) => (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().itemsDefs.forEvent({ streamIds, type: 'file/xds-v1' }, false)?.key;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(item(CLINICAL, S), 'document');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(item(S, 'documents-admin-insurance'), 'document');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(item(S), undefined);
+      const first = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().itemsDefs.forEvent({ streamIds: [CLINICAL, 'documents-admin'], type: 'file/xds-v1' }, false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(first?.key, 'document', 'two class streams resolve once');
+    });
+
+    it('[CDOC53] filedStreamIds: one documents stream, first, every other id kept in order', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.filedStreamIds(['documents', S, O], CLINICAL), [CLINICAL, S, O]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.filedStreamIds([S, CLINICAL, O], 'documents-admin-insurance'), ['documents-admin-insurance', S, O]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.filedStreamIds([CLINICAL, S], 'documents'), ['documents', S]);
+    });
+
+    it('[CDOC54] fileDocument keeps every share id and creates the class stream with its parents', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', ['documents', S, O])] });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.fileDocument(conn, 'd1', 'documents-admin-insurance');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents-admin-insurance', S, O]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.streams.slice(4).map(s => [s.id, s.parentId]), [['documents', null], ['documents-admin', 'documents'], ['documents-admin-insurance', 'documents-admin']]);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.fileDocument(conn, 'd1', CLINICAL);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, [CLINICAL, S, O]);
+    });
+
+    it('[CDOC55] fileDocument refuses another stream, another type, and a document still on a received child only', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1'), { ...doc('n1'), type: 'note/txt' }, doc('r1', [R])] });
+      const refused = async (id, stream, reason) => _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.fileDocument(conn, id, stream), (e) => e.innerObject?.reason === reason);
+      await refused('d1', 'body-weight', 'not-a-documents-stream');
+      await refused('d1', S, 'not-a-documents-stream');
+      await refused('d1', 'documents-newer-than-the-pack', 'not-a-documents-stream');
+      await refused('n1', CLINICAL, 'not-a-document');
+      await refused('r1', CLINICAL, 'not-received');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.calls.some(c => c.method === 'events.update' || c.method === 'streams.create'));
+    });
+
+    it('[CDOC56] receiveDocument: an uploader keeps its received id; without its grant, or at create-only, it does not', async () => {
+      const conn = account({ streams: tree(), events: [doc('a', [R]), doc('b', [R]), doc('c', [R])] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'a', { relationship: 'acc-1', streamId: CLINICAL, permissions: uploader().grantedPermissions }), { ok: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('a').streamIds, [CLINICAL, R]);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'b', { permissions: [{ streamId: R, level: 'create-only' }] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('b').streamIds, ['documents']);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'c', { streamId: CLINICAL });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('c').streamIds, [CLINICAL]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'a', { permissions: uploader().grantedPermissions }), { ok: false, reason: 'not-received' });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.receiveDocument(conn, 'a', { streamId: 'body' }), (e) => e.innerObject?.reason === 'not-a-documents-stream');
+    });
+
+    it('[CDOC57] freezeDocument swaps the received id for the shared one, other shares kept', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', [CLINICAL, R, O])] });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.freezeDocument(conn, uploader(), 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res, { shareStreamId: S, scopeUpdate: null });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, [CLINICAL, S, O]);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.freezeDocument(conn, uploader(), 'd1'), (e) => e.innerObject?.reason === 'not-open');
+    });
+
+    it('[CDOC58] freezeDocument grants a shared child when there is none, and refuses a document not filed', async () => {
+      const conn = account({ streams: [tree()[0], tree()[2]], events: [doc('d1', [CLINICAL, R]), doc('r1', [R])] });
+      const rel = relWith([{ streamId: R, level: 'contribute' }]);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.freezeDocument(conn, rel, 'r1'), (e) => e.innerObject?.reason === 'not-filed');
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.freezeDocument(conn, rel, 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(res.scopeUpdate.applied);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant, [{ streamId: R, level: 'contribute' }, { streamId: res.shareStreamId, level: 'read' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, [CLINICAL, res.shareStreamId]);
+    });
+
+    it('[CDOC59] allowDocumentsFrom at contribute; a child granted at the other level changes level', async () => {
+      const conn = account();
+      const { receiveStreamId } = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), { level: 'contribute' });
+      const marks = (id) => conn.streams.find(s => s.id === id)?.clientData?.hdsDocumentShare;
+      const readFirst = (received) => {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant.map(p => p.level), ['read', 'read', 'contribute'], 'the shared child is granted, before the received one');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.grant[2].streamId, received);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(marks(conn.grant[1].streamId).direction, 'shared');
+      };
+      readFirst(receiveStreamId);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(marks(receiveStreamId).direction, 'received');
+      const up = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(conn, relWith([{ streamId: 'body-weight', level: 'read' }, { streamId: R, level: 'create-only' }]), { level: 'contribute' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(up.receiveStreamId, R);
+      readFirst(R);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(conn, relWith([{ streamId: R, level: 'create-only' }, { streamId: S, level: 'read' }]), { level: 'contribute' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant, [{ streamId: S, level: 'read' }, { streamId: R, level: 'contribute' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(conn, uploader()), { receiveStreamId: R, scopeUpdate: null });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(conn, uploader(), { level: 'contribute' }), { receiveStreamId: R, scopeUpdate: null });
+    });
+
+    it('[CDOC59b] back to create-only is refused while the child holds documents', async () => {
+      const held = account({ streams: tree(), events: [doc('d1', [CLINICAL, R])] });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(held, uploader(), { level: 'create-only' }), (e) => e.innerObject?.reason === 'open-documents');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(held.grant, null);
+      const empty = account({ streams: tree() });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.allowDocumentsFrom(empty, uploader(), { level: 'create-only' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(empty.grant, [{ streamId: S, level: 'read' }, { streamId: R, level: 'create-only' }]);
+      const { cmcScope } = await Promise.resolve(/*! import() */).then(__webpack_require__.t.bind(__webpack_require__, /*! ../ts/index.ts */ "./ts/index.ts", 19));
+      const refused = (streamId, level, reason) => _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(cmcScope.changeSharedLevel(empty, uploader(), streamId, level), (e) => e.innerObject?.reason === reason);
+      await refused('body', 'read', 'not-shared');
+      await refused(R, 'contribute', 'same-level');
+    });
+
+    it('[CDOC59c] an ungranted received child is reused only when empty; a granted one always', async () => {
+      const none = relWith([{ streamId: 'body-weight', level: 'read' }]);
+      const held = account({ streams: tree(), events: [doc('d1', [CLINICAL, R])] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureShareStream(held, none, 'received'), R);
+      const empty = account({ streams: tree() });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureShareStream(empty, none, 'received'), R);
+      const live = account({ streams: tree(), events: [doc('d1', [CLINICAL, R])], accesses: [{ id: 'acc-1:9', permissions: uploader().grantedPermissions }] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureShareStream(live, none, 'received'), R);
+    });
+
+    it('[CDOC60] newUploaderOffer: two new ids each time, contribute and read', () => {
+      const a = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.newUploaderOffer();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsOf(a.permissions), { shared: a.shared, received: a.received });
+      const b = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.newUploaderOffer();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(new Set([a.shared, a.received, b.shared, b.received]).size, 4);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(a.permissions.map(p => p.level), ['read', 'contribute'], 'read first: an older hds-lib takes the first one');
+    });
+
+    it('[CDOC68] checkOfferedShares: nothing read without a share child; another access names an unmarked one', async () => {
+      const calls = [];
+      const account = (accesses) => ({
+        accessInfo: async () => ({ type: 'personal' }),
+        apiOne: async (method) => { calls.push(method); return method === 'accesses.get' ? accesses : tree(); }
+      });
+      const N = 'share-nnnnnnnnnnnn';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.checkOfferedShares(account([]), [{ streamId: 'body', level: 'read' }]), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(calls, []);
+      const named = [{ id: 'acc-9', permissions: [{ streamId: N, level: 'read' }] }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.checkOfferedShares(account(named), [{ streamId: ':local:' + N, level: 'read' }]), [{ streamId: N, reason: 'taken' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.checkOfferedShares(account([]), [{ streamId: N, level: 'read' }]), []);
+      // a marked one is judged by its mark; a permission without a stream (a feature) is left out
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.checkOfferedShares(account([]), [{ streamId: S, level: 'read' }, { feature: 'selfRevoke' }, { streamId: N, level: 'read' }]),
+        [{ streamId: S, reason: 'taken' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.checkOfferedShares(account(named), [{ streamId: S, level: 'read' }], { accessId: 'acc-1:3', grantedPermissions: [] }), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.checkOfferedShares(account([{ id: 'acc-9', createdBy: 'acc-1 x', permissions: [{ streamId: N }] }, { id: 'acc-8' }]),
+        [{ streamId: N, level: 'read' }], { accessId: 'acc-1', grantedPermissions: [] }), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.namesShareStreams(undefined), false);
+      // the asking relationship's own grant naming it is not another access
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.checkOfferedShares(account(named), [{ streamId: N, level: 'read' }], { accessId: 'acc-9:2', grantedPermissions: [] }), []);
+    });
+
+    it('[CDOC61] offeredShareIssues: another relationship\'s id, the root, a level no share child has', () => {
+      const existing = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsIn(tree());
+      const issues = (perms, accessId, grantedPermissions = []) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.offeredShareIssues(perms, existing, accessId ? { accessId, grantedPermissions } : undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: S, level: 'read' }, { streamId: 'body', level: 'read' }]), [{ streamId: S, reason: 'taken' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: S, level: 'read' }], 'acc-1:7'), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: O, level: 'read' }], 'acc-1'), [{ streamId: O, reason: 'taken' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: 'document-shares', level: 'read' }, { streamId: 'share-nnnnnnnnnnnn', level: 'manage' }]),
+        [{ streamId: 'document-shares', reason: 'root' }, { streamId: 'share-nnnnnnnnnnnn', reason: 'level' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.newUploaderOffer().permissions), []);
+      // the platform reads `:local:<id>` as `<id>`
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: ':local:' + S, level: 'read' }, { streamId: ':local::local:document-shares', level: 'read' }]),
+        [{ streamId: S, reason: 'taken' }, { streamId: 'document-shares', reason: 'root' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: ':local:' + S, level: 'read' }], 'acc-1:7'), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.namesShareStreams([{ streamId: ':local:' + S }]), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.namesShareStreams([{ streamId: 'body' }, { streamId: '*' }, {}]), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: S, level: 'contribute' }], 'acc-1'), [{ streamId: S, reason: 'direction' }], 'never write access to what she shared');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: R, level: 'read' }], 'acc-1'), [{ streamId: R, reason: 'direction' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: S, level: 'read' }, { streamId: R, level: 'contribute' }], 'acc-1'), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([..._ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.newUploaderOffer().permissions, { streamId: 'share-eeeeeeeeeeee', level: 'create-only' }]), [{ streamId: 'share-eeeeeeeeeeee', reason: 'extra' }]);
+      const offer = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.newUploaderOffer();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues([{ streamId: offer.shared, level: 'contribute' }, { streamId: offer.received, level: 'read' }], 'acc-3', offer.permissions).map(i => i.reason), ['direction', 'direction'], 'swapped before they are marked');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(issues(offer.permissions, 'acc-3', offer.permissions), []);
+    });
+
+    it('[CDOC62] ensureOfferedShareStreams creates and marks both, repairs an unmarked or misplaced one, is idempotent', async () => {
+      const conn = account({ streams: [{ id: R, parentId: null, name: 'Clinic X' }] });
+      const apiOne = conn.apiOne;
+      conn.apiOne = async (method, params, key) => {
+        if (method === 'streams.get' && params.parentId == null) return conn.streams.map(s => ({ ...s }));
+        if (method === 'streams.update') return Object.assign(conn.streams.find(s => s.id === params.id), params.update);
+        return apiOne(method, params, key);
+      };
+      const mark = (direction) => ({ hdsDocumentShare: { relationship: 'acc-1', direction } });
+      for (let i = 0; i < 2; i++) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureOfferedShareStreams(conn, uploader()), { shared: S, received: R });
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.streams.find(s => s.id === R), { id: R, parentId: 'document-shares', name: R, clientData: mark('received') });
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.streams.find(s => s.id === S), { id: S, parentId: 'document-shares', name: S, clientData: mark('shared') });
+      }
+      conn.streams.find(s => s.id === S).parentId = null;
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureOfferedShareStreams(conn, uploader());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.streams.find(s => s.id === S).parentId, 'document-shares', 'a marked one at the root is moved');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureOfferedShareStreams(conn, { ...uploader(), accessId: 'acc-2' }), (e) => e.innerObject?.reason === 'share-id-taken');
+      conn.streams.find(s => s.id === R).clientData = mark('shared');
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureOfferedShareStreams(conn, uploader()), (e) => e.innerObject?.reason === 'share-id-taken');
+      conn.streams.find(s => s.id === R).clientData = mark('received');
+      conn.streams.find(s => s.id === R).trashed = true;
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureOfferedShareStreams(conn, uploader()), (e) => e.innerObject?.reason === 'share-id-taken');
+    });
+
+    it('[CDOC62b] an unmarked stream another access names is not adopted; the group\'s own member accesses do not count', async () => {
+      const withAccess = (access) => {
+        const conn = account({ streams: [{ id: 'document-shares', parentId: null }, { id: R, parentId: 'document-shares', name: R, clientData: { other: 1 } }], accesses: [{ id: 'acc-1:2', permissions: uploader().grantedPermissions }, access] });
+        const apiOne = conn.apiOne;
+        conn.apiOne = async (method, params, key) => {
+          if (method === 'streams.get' && params.parentId == null) return conn.streams.map(s => ({ ...s }));
+          if (method === 'streams.update') return Object.assign(conn.streams.find(s => s.id === params.id), params.update);
+          return apiOne(method, params, key);
+        };
+        return conn;
+      };
+      const permissions = [{ streamId: R, level: 'contribute' }];
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureOfferedShareStreams(withAccess({ id: 'acc-7', createdBy: 'personal', permissions }), uploader()), (e) => e.innerObject?.reason === 'share-id-taken');
+      const member = withAccess({ id: 'acc-8', createdBy: 'acc-1:2 member-7', permissions });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureOfferedShareStreams(member, uploader());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(member.streams.find(s => s.id === R).clientData, { other: 1, hdsDocumentShare: { relationship: 'acc-1', direction: 'received' } });
+    });
+
+    it('[CDOC63] unshareDocument takes the id off, and says when the contact still reads it (no alert)', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', [CLINICAL, S]), doc('d2', [CLINICAL, R, S])] });
+      const still = async (rel, id, left) => {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.unshareDocument(conn, rel, id), { alertEventId: null, stillReads: true });
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get(id).streamIds, left);
+      };
+      await still(relWith([{ streamId: CLINICAL, level: 'read' }, { streamId: S, level: 'read' }]), 'd1', [CLINICAL]);
+      await still(uploader(), 'd2', [CLINICAL, R]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(alerts(conn).length, 0);
+      conn.events.set('d3', doc('d3', [CLINICAL, S]));
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.unshareDocument(conn, uploader(), 'd3');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([res.stillReads, conn.events.get('d3').streamIds, alerts(conn).length], [false, [CLINICAL], 1]);
+    });
+
+    it('[CDOC64] cleanup keeps where a document is filed, other contacts\' shares and a value\'s own stream', async () => {
+      const value = { id: 'v1', type: 'mass/kg', streamIds: ['body-weight', R] };
+      const conn = account({ streams: tree(), events: [doc('filed', [CLINICAL, R, O]), doc('open', [R]), doc('odd', [R, O]), value] });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupDocumentShares(conn, 'acc-1');
+      const ids = (id) => conn.events.get(id).streamIds;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([ids('filed'), ids('open'), ids('odd'), ids('v1')], [[CLINICAL, O], ['documents'], ['documents', O], ['body-weight']]);
+    });
+
+    it('[CDOC66] stopping all sharing with an uploader grants a new empty shared child first, never leaving contribute alone', async () => {
+      const conn = account({ streams: tree(), events: [doc('d1', [CLINICAL, S])] });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.stopSharingDocuments(conn, uploader());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.shareStreamDeleted, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.grant.map(p => p.level), ['read', 'contribute']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(![S, R].includes(conn.grant[0].streamId));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, [CLINICAL]);
+      const update = [...conn.events.values()].find(e => e.type === 'consent/scope-update-cmc');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(update.content.hds, { removed: [S] });
+    });
+
+    it('[CDOC67] ensureOfferedShareStreams does not adopt a stream it cannot check: personal token only', async () => {
+      const conn = account({ streams: [{ id: 'document-shares', parentId: null }, { id: R, parentId: null, name: R }], tokenType: 'app' });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.ensureOfferedShareStreams(conn, uploader()), (e) => e.innerObject?.reason === 'not-personal');
+    });
+
+    it('[CDOC65] offered children never marked: found by the ended grant, or by the orphan sweep once no access names them', async () => {
+      const unmarked = () => [{ id: 'document-shares', parentId: null }, { id: R, parentId: 'document-shares', name: R }, { id: S, parentId: 'document-shares', name: S }];
+      const ended = account({ streams: unmarked(), events: [doc('up', [R])] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupDocumentShares(ended, 'acc-1', { permissions: uploader().grantedPermissions })).sort(), [R, S]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(ended.events.get('up').streamIds, ['documents']);
+      const atRoot = account({ streams: [{ id: 'document-shares', parentId: null }, { id: R, parentId: null, name: R }], events: [doc('up', [R])] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupDocumentShares(atRoot, 'acc-1', { permissions: uploader().grantedPermissions }), [R]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(atRoot.events.get('up').streamIds, ['documents']);
+      const named = account({ streams: unmarked(), events: [doc('up', [R])], accesses: [{ id: 'acc-1', permissions: uploader().grantedPermissions }] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(named), []);
+      const gone = account({ streams: unmarked(), events: [doc('up', [R])] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(gone), [R], 'the empty one may be an offer being accepted');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(gone.events.get('up').streamIds, ['documents']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(account({ streams: unmarked(), events: [doc('up', [R])] }), ['acc-1']), [], 'a list of relationships says nothing of unmarked ones');
     });
   });
 });
@@ -52635,6 +53450,19 @@ describe('[CONO] connectors: offer streams', function () {
       { id: 'hds-reader-inbox', name: 'Reader inbox', parentId: 'hds-reader' },
       { id: 'hds-reader-dialogue', name: 'hds-reader-dialogue', parentId: 'hds-reader' },
       { id: 'hds-reader-app', name: 'Reader app', parentId: 'hds-reader' }
+    ]);
+  });
+
+  it('[CO04] an offered share child goes under document-shares, named by its id, whatever defaultName says', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToCreate)([
+      { streamId: 'share-rrrrrrrrrrrr', level: 'contribute', defaultName: 'Clinic X' },
+      { streamId: 'share-ssssssssssss', level: 'read' },
+      { streamId: 'share-notone' }
+    ], model), [
+      { id: 'document-shares', name: model.getDataById('document-shares', false)?.name ?? 'Shared documents' },
+      { id: 'share-rrrrrrrrrrrr', name: 'share-rrrrrrrrrrrr', parentId: 'document-shares' },
+      { id: 'share-ssssssssssss', name: 'share-ssssssssssss', parentId: 'document-shares' },
+      { id: 'share-notone', name: 'share-notone' }
     ]);
   });
 
