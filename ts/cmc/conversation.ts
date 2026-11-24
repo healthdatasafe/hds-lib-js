@@ -26,6 +26,7 @@
  * dispatch on `kind` and skip what they do not know.
  */
 
+import type { localizableText } from '../localizeText.ts';
 import { pryv } from '../patchedPryv.ts';
 import { HDSLibError } from '../errors.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
@@ -66,7 +67,7 @@ export const QUESTION_CODES = {
 } as const;
 
 /** The options of `which-specimen`, registered in CONVERSATION.md § Specimen codes (4.26.0), with their labels. */
-export const SPECIMEN_CODES: Readonly<Record<string, Record<'en' | 'fr' | 'es', string>>> = {
+export const SPECIMEN_CODES: Readonly<Record<string, Record<'en' | 'fr' | 'es', string> & localizableText>> = {
   'serum-plasma': { en: 'Serum or plasma', fr: 'Sérum ou plasma', es: 'Suero o plasma' },
   'whole-blood': { en: 'Whole blood', fr: 'Sang total', es: 'Sangre total' },
   'citrated-plasma': { en: 'Citrated plasma (coagulation)', fr: 'Plasma citraté (coagulation)', es: 'Plasma citratado (coagulación)' },

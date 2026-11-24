@@ -10,6 +10,8 @@
 
 ### Changed
 
+- Label tables typed for every supported locale: `SPECIMEN_CODES` (`en`, `fr`, `es` still required), encounter kinds,
+  permission texts.
 - `setPreferredLocales` ignores a locale it does not support (before: it threw, and the supported locales listed with it
   were lost). With no supported entry the order does not change.
 
