@@ -1,8 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [2.64.0] - 2026-11-24
+
+### Added
+
+- Locales `it`, `pt` (European Portuguese) and `pt-BR` (plan 138). `settings.matchLocale(tag)` gives the supported locale
+  of a language tag (`fr-CH` is `fr`, `pt-PT` is `pt`, `pt-BR` stays `pt-BR`). A text missing in one Portuguese is read
+  in the other before another language. The browser default keeps the region when it is a supported locale.
 
 ### Changed
+
+- Label tables typed for every supported locale: `SPECIMEN_CODES` (`en`, `fr`, `es` still required), encounter kinds,
+  permission texts.
+- Invites and CMC alerts send a regional locale under its language (`pt-BR` as `pt`): the core refuses any other key, and
+  with it the whole event. `cmcText` is exported for a caller of `cmc.createInvite`.
+- `setPreferredLocales` ignores a locale it does not support (before: it threw, and the supported locales listed with it
+  were lost). With no supported entry the order does not change.
 
 - `labValueToFhir` on a `lab-result/coded-v1` result follows the FHIR blocks of data-model 4.31.0 (plan 133;
   BLOOD-CHEMISTRY.md § Cross-system): `valueQuantity.unit` is the unit as printed (`unitText`), else the UCUM code

@@ -8,7 +8,7 @@
  */
 
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
-import { localizeText, type Localizable } from '../localizeText.ts';
+import { localizeText, type Localizable, type localizableText } from '../localizeText.ts';
 
 export interface PermissionLabelOptions {
   /** Language of the names; defaults to the preferred locales (`localizeText`). */
@@ -36,7 +36,7 @@ export interface PermissionView {
   requesterLabel: string | null;
 }
 
-const TEXTS: Record<'allData' | 'email' | 'under', { en: string; fr: string; es: string }> = {
+const TEXTS: Record<'allData' | 'email' | 'under', localizableText> = {
   allData: { en: 'All your data', fr: 'Toutes vos données', es: 'Todos sus datos' },
   email: { en: 'Your e-mail address', fr: 'Votre adresse e-mail', es: 'Su dirección de correo electrónico' },
   under: { en: '{name} and everything under it', fr: '{name} et tout ce qui en dépend', es: '{name} y todo lo que contiene' }

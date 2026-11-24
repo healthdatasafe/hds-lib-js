@@ -1,5 +1,5 @@
 import { pryv } from '../patchedPryv.ts';
-import { setPreferredLocales } from '../localizeText.ts';
+import { matchLocale, setPreferredLocales } from '../localizeText.ts';
 import type { Application } from '../appTemplates/Application.ts';
 
 /**
@@ -54,7 +54,7 @@ function browserDefaults (): Partial<SettingsValues> {
   if (typeof navigator === 'undefined') return {};
   const result: Partial<SettingsValues> = {};
   try {
-    const lang = navigator.language?.split('-')[0];
+    const lang = matchLocale(navigator.language) ?? navigator.language?.split('-')[0];
     if (lang) result.preferredLocales = [lang];
   } catch { /* ignore */ }
   try {

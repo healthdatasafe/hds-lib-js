@@ -8,6 +8,9 @@ export type localizableText = {
   en: string;
   fr?: string;
   es?: string;
+  it?: string;
+  pt?: string;
+  'pt-BR'?: string;
 };
 
 /**
@@ -17,8 +20,22 @@ export type localizableText = {
  */
 export type Localizable = localizableText | Readonly<Record<string, string | undefined>>;
 
-const supportedLocales = ['en', 'fr', 'es'] as const;
+const supportedLocales = ['en', 'fr', 'es', 'it', 'pt', 'pt-BR'] as const;
 Object.freeze(supportedLocales);
+
+/** Read next when a text is missing in the key's locale: the two Portuguese stand in for each other before another language does. */
+const closeLocales: Readonly<Record<string, readonly string[]>> = { pt: ['pt-BR'], 'pt-BR': ['pt'] };
+
+/**
+ * The supported locale a language tag stands for, or null: the tag itself whatever its case (`pt-br` is `pt-BR`),
+ * else its language (`fr-CH` is `fr`, `pt-PT` is `pt`).
+ */
+export function matchLocale (tag: unknown): string | null {
+  if (typeof tag !== 'string') return null;
+  const wanted = tag.trim().replace(/_/g, '-').toLowerCase();
+  const exact = supportedLocales.find((l) => l.toLowerCase() === wanted);
+  return exact ?? supportedLocales.find((l) => l === wanted.split('-')[0]) ?? null;
+}
 let preferredLocales: string[] = [...supportedLocales];
 
 export type PreferredLocalesListener = (locales: string[]) => void;
@@ -89,18 +106,19 @@ export function localizeText (textItem: Localizable | null | undefined): string 
 }
 
 /**
- * Change prefferedLocal order
+ * Change the preferred locales order. Each entry is matched with `matchLocale()`; an entry hds-lib does not support is
+ * ignored, so a language stored by a newer app never hides the supported ones listed with it. With no supported entry
+ * the order does not change.
  */
 export function setPreferredLocales (arrayOfLocals: string[]): void {
   if (!Array.isArray(arrayOfLocals)) {
     throw new HDSLibError('setPreferredLocales takes an array of language codes');
   }
-  const unsupportedLocales = arrayOfLocals.filter(l => (supportedLocales.indexOf(l as any) < 0));
-  if (unsupportedLocales.length > 0) {
-    throw new HDSLibError(`locales "${unsupportedLocales.join(', ')}" are not supported`, arrayOfLocals);
-  }
+  const matched = arrayOfLocals.map(matchLocale).filter((l): l is string => l != null);
+  // a close locale comes right after its own, unless the caller listed it
+  const wanted = matched.flatMap((l) => [l, ...(closeLocales[l] ?? []).filter((c) => !matched.includes(c))]);
 
-  const next = [...new Set([...arrayOfLocals, ...preferredLocales])];
+  const next = [...new Set([...wanted, ...preferredLocales])];
   // Compare BEFORE assigning so listeners fire only on a real change.
   const changed = next.length !== preferredLocales.length || next.some((l, i) => l !== preferredLocales[i]);
   preferredLocales = next;

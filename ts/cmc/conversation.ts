@@ -26,11 +26,13 @@
  * dispatch on `kind` and skip what they do not know.
  */
 
+import type { localizableText } from '../localizeText.ts';
 import { pryv } from '../patchedPryv.ts';
 import { HDSLibError } from '../errors.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { schemaIssues } from '../utils/schemaCheck.ts';
 import { pryvErrorCode } from './appScope.ts';
+import { cmcText } from './cmcText.ts';
 import { ET_ALERT } from './dataExport.ts';
 import { relationshipIdOf } from './documents.ts';
 import { shareStreamsAgain } from './scope.ts';
@@ -66,7 +68,7 @@ export const QUESTION_CODES = {
 } as const;
 
 /** The options of `which-specimen`, registered in CONVERSATION.md § Specimen codes (4.26.0), with their labels. */
-export const SPECIMEN_CODES: Readonly<Record<string, Record<'en' | 'fr' | 'es', string>>> = {
+export const SPECIMEN_CODES: Readonly<Record<string, Record<'en' | 'fr' | 'es', string> & localizableText>> = {
   'serum-plasma': { en: 'Serum or plasma', fr: 'Sérum ou plasma', es: 'Suero o plasma' },
   'whole-blood': { en: 'Whole blood', fr: 'Sang total', es: 'Sangre total' },
   'citrated-plasma': { en: 'Citrated plasma (coagulation)', fr: 'Plasma citraté (coagulation)', es: 'Plasma citratado (coagulación)' },
@@ -206,7 +208,7 @@ export function buildConversationAlertContent (hds: Record<string, unknown>): Re
   const issues = checkConversationAlertHds(hds);
   if (issues.length > 0) throw new HDSLibError('buildConversationAlertContent: invalid hds block: ' + issues.join('; '), { reason: 'invalid-alert', issues });
   const kind = hds.kind as ConversationAlertKind;
-  return { level: 'info', title: { ...ALERT_TEXT[kind].title }, body: { ...ALERT_TEXT[kind].body }, code: 'hds-' + kind, hds: { ...hds } };
+  return { level: 'info', title: cmcText(ALERT_TEXT[kind].title), body: cmcText(ALERT_TEXT[kind].body), code: 'hds-' + kind, hds: { ...hds } };
 }
 
 /**

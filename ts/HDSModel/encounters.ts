@@ -1,3 +1,4 @@
+import type { localizableText } from '../localizeText.ts';
 import { localizeText } from '../localizeText.ts';
 import { getModel } from './HDSModelInitAndSingleton.ts';
 
@@ -273,7 +274,7 @@ export function checkRelatedMirror (event: EncounterEventLike, targets?: Targets
 }
 
 /** Visit kinds, for a model without the `encounter-visit` item (labels as the item's, data-model ENCOUNTER.md). */
-const KIND_LABELS: Record<string, { en: string; fr: string }> = {
+const KIND_LABELS: Record<string, localizableText> = {
   consultation: { en: 'Consultation', fr: 'Consultation' },
   'hospital-stay': { en: 'Hospital stay', fr: 'Séjour hospitalier' },
   emergency: { en: 'Emergency', fr: 'Urgence' },

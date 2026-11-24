@@ -31,6 +31,7 @@ import { getModel as getHDSModel } from '../HDSModel/HDSModelInitAndSingleton.ts
 import { CMC_APP_CODES, CMC_EVENT_TYPES, appSubScope, extractAppSubScopeSuffix } from './constants.ts';
 import type { Permission } from '../appTemplates/interfaces.ts';
 import type { localizableText } from '../localizeText.ts';
+import { cmcText } from './cmcText.ts';
 import type {
   AppTemplateSection,
   CustomFieldDeclaration,
@@ -437,9 +438,9 @@ export async function createInviteWithFormSpec (
     params.requesterMeta ?? {}
   );
   const request: any = {
-    title: params.title ?? params.formSpec.title ?? { en: params.displayName },
-    description: params.description ?? params.formSpec.description ?? { en: '' },
-    consent: params.consent ?? params.formSpec.consent ?? { en: '' },
+    title: cmcText(params.title ?? params.formSpec.title ?? { en: params.displayName }),
+    description: cmcText(params.description ?? params.formSpec.description ?? { en: '' }),
+    consent: cmcText(params.consent ?? params.formSpec.consent ?? { en: '' }),
     permissions: params.requestedPermissions
   };
   if (params.features) request.features = params.features;

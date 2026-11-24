@@ -30,6 +30,7 @@ import { HDSLibError } from '../errors.ts';
 import * as logger from '../logger.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { pryvErrorCode } from './appScope.ts';
+import { cmcText } from './cmcText.ts';
 import { ET_ALERT } from './dataExport.ts';
 import { provisionHdsNoop } from './formSpec.ts';
 import { personPermissions, shareStreamsAgain, stopSharingStream } from './scope.ts';
@@ -139,8 +140,8 @@ export function buildDocumentAlertContent (kind: DocumentAlertKind, eventId: str
   const lang = TEXT[kind][locale] ? locale : 'en';
   return {
     level: 'info',
-    title: { [lang]: text.title },
-    body: { [lang]: text.body },
+    title: cmcText({ [lang]: text.title }),
+    body: cmcText({ [lang]: text.body }),
     code: 'hds-' + kind,
     hds: { kind, eventId }
   };

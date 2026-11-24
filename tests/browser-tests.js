@@ -52,6 +52,7 @@ import './labResults.test.js';
 import './legacyChat.test.js';
 import './libSettings.test.js';
 import './loader.test.js';
+import './cmcText.test.js';
 import './localizeText.test.js';
 import './logger.test.js';
 import './medication.test.js';

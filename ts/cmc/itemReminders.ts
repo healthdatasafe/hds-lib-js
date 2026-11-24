@@ -14,6 +14,7 @@
 import { pryv } from '../patchedPryv.ts';
 import { HDSLibError } from '../errors.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
+import { cmcText } from './cmcText.ts';
 import { ET_ALERT } from './dataExport.ts';
 import type { ScopePermission } from './scope.ts';
 
@@ -48,8 +49,8 @@ export function buildItemReminderContent (itemKey: string, locale: string = 'en'
   const lang = Object.hasOwn(TEXT, locale) ? locale : 'en';
   return {
     level: 'info',
-    title: { [lang]: TEXT[lang].title },
-    body: { [lang]: TEXT[lang].body },
+    title: cmcText({ [lang]: TEXT[lang].title }),
+    body: cmcText({ [lang]: TEXT[lang].body }),
     code: 'hds-' + ITEM_REMINDER_KIND,
     hds: { kind: ITEM_REMINDER_KIND, itemKey }
   };

@@ -1,4 +1,4 @@
-import { setPreferredLocales, onPreferredLocalesChange } from './localizeText.ts';
+import { matchLocale, setPreferredLocales, onPreferredLocalesChange } from './localizeText.ts';
 
 // Production HDS registry. Apps targeting another platform (demo, local
 // backloop) must call setServiceInfoURL() before any HDSService/HDSModel use.
@@ -18,4 +18,4 @@ export function getServiceInfoURL (): string {
   return serviceInfoUrl;
 }
 
-export { setPreferredLocales, onPreferredLocalesChange };
+export { matchLocale, setPreferredLocales, onPreferredLocalesChange };
