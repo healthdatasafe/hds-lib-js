@@ -17529,7 +17529,8 @@ class HDSItemDef {
     }
     /**
      * Whether this is an imported item (`type: imported`, data-model 3.27.0): an object written by an importer from a
-     * coded source (`lab-result/coded-v1`), never entered in a form. Read, shown and requested like any item (unlike
+     * coded source (`lab-result/coded-v1`) or by a control made for that item alone (4.32.0, `fertility/chart-stamp-v1`),
+     * never entered in a generic form. Read, shown and requested like any item (unlike
      * `system`), but not offered in pickers or rendered as an editable form field.
      */
     get isImported() {
@@ -18339,18 +18340,28 @@ const RECORD_ARTIFACT = '419891008';
  * Document kinds - Extension of HDSModel
  *
  * The class and first type of a `file/xds-v1` document by kind (data-model 4.17.0, pack section `documentKinds`,
- * DOCUMENTS.md § Document kinds), one kind per pair of the CH Term ConceptMap. A pack without the section has no
- * kind.
+ * DOCUMENTS.md § Document kinds), one kind per pair of the CH Term ConceptMap, then the kinds with a `detail` code
+ * (4.32.0, `detailKinds`, which an earlier version does not see). A pack without the section has no kind.
  */
 class HDSModelDocumentKinds {
     #model;
     constructor(model) {
         this.#model = model;
     }
+    /** Every kind, a detail kind after the one it shares its codes with */
     #raw() {
-        return this.#model.modelData.documentKinds?.kinds || {};
+        const { kinds = {}, detailKinds = {} } = this.#model.modelData.documentKinds ?? {};
+        const all = {};
+        for (const [key, k] of Object.entries(kinds)) {
+            all[key] = k;
+            for (const [detailKey, d] of Object.entries(detailKinds)) {
+                if (d.class.code === k.class.code && d.type.code === k.type.code)
+                    all[detailKey] = d;
+            }
+        }
+        return all;
     }
-    /** The kinds a person or an importer picks from, in the pack's order (deprecated ones left out) */
+    /** The kinds a person or an importer picks from, in the pack's order, a detail kind after the one it shares its codes with (deprecated ones left out) */
     getAll() {
         return Object.entries(this.#raw()).filter(([, k]) => !k.deprecated).map(([key, k]) => ({ key, ...k }));
     }
@@ -18362,7 +18373,8 @@ class HDSModelDocumentKinds {
     /**
      * The kind of a document's content, or null when its codes are in no kind. Reads the first SNOMED CT coding of
      * `type` (another writer may lead with a LOINC one): it identifies the kind, except Record artifact, where `class`
-     * does. Deprecated kinds are found too, so a stored document still reads back.
+     * does. Among the kinds these codes fit, one whose `detail` is also in `type` wins; without it, the one that has no
+     * `detail`. Deprecated kinds are found too, so a stored document still reads back.
      */
     forContent(content) {
         const type = Array.isArray(content?.type) ? content.type.find((c) => c?.system === SNOMED) : undefined;
@@ -18370,14 +18382,28 @@ class HDSModelDocumentKinds {
             return null;
         const cls = content?.class;
         const classCode = cls?.system === SNOMED && typeof cls.code === 'string' ? cls.code : null;
+        let found = null;
         for (const [key, k] of Object.entries(this.#raw())) {
             if (k.type.code !== type.code)
                 continue;
             if (type.code === RECORD_ARTIFACT && k.class.code !== classCode)
                 continue;
-            return { key, ...k };
+            if (k.detail == null)
+                found ??= { key, ...k };
+            else if (content.type.some((c) => c?.system === k.detail.system && c?.code === k.detail.code))
+                return { key, ...k };
         }
-        return null;
+        return found;
+    }
+    /**
+     * The `class` and the whole `type` a writer puts in a document's content for a kind: `type`, then `detail` when the
+     * kind has one. Copies; null for an unknown kind.
+     */
+    codingsFor(key) {
+        const k = this.#raw()[key];
+        if (!k)
+            return null;
+        return { class: { ...k.class }, type: [{ ...k.type }, ...(k.detail == null ? [] : [{ ...k.detail }])] };
     }
     /**
      * The stream a document of this kind is filed under: the pack's `stream` when the model knows it, else `documents`
@@ -19646,6 +19672,42 @@ async function initHDSModel(opts = {}) {
 
 /***/ },
 
+/***/ "./ts/HDSModel/chartStamp.ts"
+/*!***********************************!*\
+  !*** ./ts/HDSModel/chartStamp.ts ***!
+  \***********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CHART_STAMP = void 0;
+exports.chartStampText = chartStampText;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+/**
+ * The stamp charted on one day of a stamp-based chart (data-model 4.32.0, site-agents#67): `{ method, stamp }`. Chart
+ * notation, never a statement about fertility. See data-model documentation/MENSTRUAL-CYCLE.md § Charted stamp.
+ */
+exports.CHART_STAMP = 'fertility/chart-stamp-v1';
+const STAMP_LABELS = {
+    red: { en: 'Red', fr: 'Rouge', es: 'Rojo' },
+    green: { en: 'Green', fr: 'Vert', es: 'Verde' },
+    'green-baby': { en: 'Green with a baby', fr: 'Vert avec un bébé', es: 'Verde con un bebé' },
+    'white-baby': { en: 'White with a baby', fr: 'Blanc avec un bébé', es: 'Blanco con un bebé' },
+    yellow: { en: 'Yellow', fr: 'Jaune', es: 'Amarillo' },
+    'yellow-baby': { en: 'Yellow with a baby', fr: 'Jaune avec un bébé', es: 'Amarillo con un bebé' }
+};
+/** Short text of a charted stamp: its name, "Yellow with a baby" (an unknown one as stored). Null without a stamp. */
+function chartStampText(content) {
+    const stamp = content?.stamp;
+    if (typeof stamp !== 'string' || stamp === '')
+        return null;
+    return (Object.hasOwn(STAMP_LABELS, stamp) ? (0, localizeText_ts_1.localizeText)(STAMP_LABELS[stamp]) : null) || stamp;
+}
+
+
+/***/ },
+
 /***/ "./ts/HDSModel/encounters.ts"
 /*!***********************************!*\
   !*** ./ts/HDSModel/encounters.ts ***!
@@ -20008,6 +20070,7 @@ const accountPreferences_ts_1 = __webpack_require__(/*! ../settings/accountPrefe
 const labResults_ts_1 = __webpack_require__(/*! ./labResults.js */ "./ts/HDSModel/labResults.ts");
 const encounters_ts_1 = __webpack_require__(/*! ./encounters.js */ "./ts/HDSModel/encounters.ts");
 const genetics_ts_1 = __webpack_require__(/*! ./genetics.js */ "./ts/HDSModel/genetics.ts");
+const chartStamp_ts_1 = __webpack_require__(/*! ./chartStamp.js */ "./ts/HDSModel/chartStamp.ts");
 const medication_ts_1 = __webpack_require__(/*! ./medication.js */ "./ts/HDSModel/medication.ts");
 const DATE_SEPARATORS = {
     'DD.MM.YYYY': (p, year) => pad(p.d) + '.' + pad(p.m) + '.' + (year ? p.y : ''),
@@ -20318,6 +20381,12 @@ function shortTextWithOrigin(event) {
     // item would otherwise fall to the generic object path.
     if (event.type === genetics_ts_1.GENETIC_VARIANT_CODED) {
         const text = (0, genetics_ts_1.geneticVariantText)(content);
+        if (text)
+            return { text, origin: null };
+    }
+    // A charted stamp (site-agents#67): "Yellow with a baby"; the generic object path would read the method.
+    if (event.type === chartStamp_ts_1.CHART_STAMP) {
+        const text = (0, chartStamp_ts_1.chartStampText)(content);
         if (text)
             return { text, origin: null };
     }
@@ -28037,7 +28106,7 @@ function documentProposalRefusal(pd, document, conv) {
 }
 /**
  * The `events.update` of the document (CONVERSATION.md § Writing a document's date and kind) for `fields`, applied
- * only where pending: the whole `content` with `class` and `type` from the pack's kind (`type` = `[kind.type]`), `time`
+ * only where pending: the whole `content` with `class` and `type` from the pack's kind (`codingsFor`), `time`
  * and `clientData.hdsTimePrecision` (with `unknown`, the time stays), and `hdsDocumentPending` reduced (`null` when
  * empty; `events.update` merges `clientData`). Null `update` when nothing is applied.
  */
@@ -28047,8 +28116,7 @@ function documentUpdateOf(document, fields) {
     const update = {};
     const clientData = {};
     if (pending.includes('kind') && typeof fields.documentKind === 'string' && documentKindRefusal(fields.documentKind) == null) {
-        const kind = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forKey(fields.documentKind);
-        update.content = { ...document.content, class: { ...kind.class }, type: [{ ...kind.type }] };
+        update.content = { ...document.content, ...(0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.codingsFor(fields.documentKind) };
         applied.push('kind');
     }
     if (pending.includes('time') && TIME_PRECISIONS.has(fields.timePrecision) && (fields.timePrecision === 'unknown' || typeof fields.time === 'number')) {
@@ -28073,8 +28141,8 @@ function documentUpdateOf(document, fields) {
 function pendingDocumentEvent(params) {
     const kind = params.documentKind != null && documentKindRefusal(params.documentKind) == null ? params.documentKind : null;
     const dated = params.timePrecision != null && TIME_PRECISIONS.has(params.timePrecision) && (params.timePrecision === 'unknown' || typeof params.time === 'number');
-    const def = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forKey(kind ?? 'other');
-    if (def == null)
+    const codings = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.codingsFor(kind ?? 'other');
+    if (codings == null)
         throw new errors_ts_1.HDSLibError('pendingDocumentEvent: the loaded data model has no document kinds (data-model 4.17.0 or later)');
     const now = params.now ?? Math.floor(Date.now() / 1000);
     const pending = [...(dated ? [] : ['time']), ...(kind != null ? [] : ['kind'])];
@@ -28087,7 +28155,7 @@ function pendingDocumentEvent(params) {
         streamIds: params.streamIds ?? ['documents'],
         type: 'file/xds-v1',
         time: dated && params.timePrecision !== 'unknown' ? params.time : now,
-        content: { class: { ...def.class }, type: [{ ...def.type }], title: params.title, language: params.language ?? 'und' },
+        content: { ...codings, title: params.title, language: params.language ?? 'und' },
         clientData
     };
 }
@@ -28105,8 +28173,7 @@ function documentEditOf(document, fields) {
         const refusal = documentKindRefusal(fields.documentKind);
         if (refusal != null)
             throw new errors_ts_1.HDSLibError(`documentEditOf: ${fields.documentKind} is ${refusal}`, { reason: refusal });
-        const kind = (0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.forKey(fields.documentKind);
-        update.content = { ...document.content, class: { ...kind.class }, type: [{ ...kind.type }] };
+        update.content = { ...document.content, ...(0, HDSModelInitAndSingleton_ts_1.getModel)().documentKinds.codingsFor(fields.documentKind) };
         written.push('kind');
     }
     if (fields.timePrecision != null) {
@@ -49815,6 +49882,74 @@ describe('[BAU] Bridge access update — missing permission streams', function (
 
 /***/ },
 
+/***/ "./tests/chartStamp.test.js"
+/*!**********************************!*\
+  !*** ./tests/chartStamp.test.js ***!
+  \**********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_HDSModel_chartStamp_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/chartStamp.ts */ "./ts/HDSModel/chartStamp.ts");
+/* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+
+
+/** A charted stamp, data-model 4.32.0 (plan 141, site-agents#67): its short text is the stamp, not the method. */
+describe('[CSTX] charted stamp', () => {
+  const KEY = 'fertility-cycles-chart-stamp';
+  let published;
+  before(async () => {
+    const model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_3__.getModel)();
+    if (!model.isLoaded) await model.load('https://model.datasafe.dev/pack.json');
+    published = structuredClone(model.modelData);
+    const pack = structuredClone(published);
+    pack.items[KEY] = {
+      version: 'v1', label: { en: 'Cycle chart stamp' }, description: { en: 'd' }, streamId: KEY, eventType: 'fertility/chart-stamp-v1', type: 'imported', repeatable: 'P1D'
+    };
+    model.loadFromObject(pack);
+  });
+  after(() => { (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_3__.getModel)().loadFromObject(published); });
+  afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_4__.resetPreferredLocales)(); });
+
+  const text = (content) => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)({ streamIds: [KEY], type: 'fertility/chart-stamp-v1', time: 1, content });
+
+  it('[CSTX1] reads as the stamp, localized', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text({ method: 'creighton', stamp: 'yellow' }), 'Yellow');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text({ method: 'billings', stamp: 'white-baby' }), 'White with a baby');
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_4__.setPreferredLocales)(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text({ method: 'creighton', stamp: 'yellow-baby' }), 'Jaune avec un bébé');
+  });
+
+  it('[CSTX2] an unknown stamp reads as stored; inherited names are not labels', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text({ method: 'creighton', stamp: 'brown' }), 'brown');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text({ method: 'creighton', stamp: 'constructor' }), 'constructor');
+  });
+
+  it('[CSTX3] without the item in the model, the same text', () => {
+    const without = structuredClone(published);
+    delete without.items[KEY];
+    (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_3__.getModel)().loadFromObject(without);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_3__.getModel)().modelData.items[KEY], undefined);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(text({ method: 'creighton', stamp: 'red' }), 'Red');
+  });
+
+  it('[CSTX4] no stamp, no text of its own', () => {
+    for (const content of [null, 'yellow', {}, { method: 'creighton' }, { stamp: '' }, { stamp: 3 }]) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_HDSModel_chartStamp_ts__WEBPACK_IMPORTED_MODULE_2__.chartStampText)(content), null, JSON.stringify(content));
+    }
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/cmcConstants.test.js"
 /*!************************************!*\
   !*** ./tests/cmcConstants.test.js ***!
@@ -55811,7 +55946,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/HDSModel/HDSModelInitAndSingleton.ts */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 /* harmony import */ var _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/HDSModel/HDSModel.ts */ "./ts/HDSModel/HDSModel.ts");
-/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
 
 
 
@@ -55827,7 +55964,7 @@ describe('[DKND] model.documentKinds (data-model 4.17.0)', () => {
     model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_1__.getModel)();
     await model.load(modelURL);
   });
-  afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)(); });
+  afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_4__.resetPreferredLocales)(); });
 
   it('[DKND1] lists the kinds, and finds one by key', () => {
     const all = model.documentKinds.getAll();
@@ -55858,7 +55995,7 @@ describe('[DKND] model.documentKinds (data-model 4.17.0)', () => {
 
   it('[DKND4] labels a kind, localized', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.label('discharge-summary'), 'Discharge summary');
-    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_4__.setPreferredLocales)(['fr']);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.label('discharge-summary'), 'Rapport de sortie');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.label('nope'), null);
   });
@@ -55869,6 +56006,91 @@ describe('[DKND] model.documentKinds (data-model 4.17.0)', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(older.documentKinds.getAll(), []);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(older.documentKinds.forContent({ class: sct('371525003'), type: [sct('4241000179101')] }), null);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(older.documentKinds.label('laboratory-report'), null);
+  });
+});
+
+/** A kind with `detail`, data-model 4.32.0 (plan 141): the codes of another kind plus a code of an HDS code system. */
+describe('[DKDT] document kinds with a detail code', () => {
+  const SYSTEM = 'https://hds.ngo/fhir/CodeSystem/document-kind';
+  const CLASS = { ...sct('184216000'), display: 'Patient record type' };
+  const ARTIFACT = { ...sct('419891008'), display: 'Record artifact' };
+  const DETAIL = { system: SYSTEM, code: 'menstrual-cycle-chart', display: 'Menstrual cycle chart' };
+  const label = (en) => ({ en, fr: en });
+  const plain = { label: label('Other patient record'), description: label('d'), class: CLASS, type: ARTIFACT, timeBasis: 'creation' };
+  const chart = { label: label('Menstrual cycle chart'), description: label('d'), class: CLASS, type: ARTIFACT, detail: DETAIL, timeBasis: 'creation' };
+  const other = { label: label('Other'), description: label('d'), class: ARTIFACT, type: ARTIFACT, timeBasis: 'creation' };
+  const kindsOf = (documentKinds) => {
+    const model = new _ts_HDSModel_HDSModel_ts__WEBPACK_IMPORTED_MODULE_2__.HDSModel('https://example.invalid/pack.json');
+    model.loadFromObject({ items: {}, documentKinds });
+    return model.documentKinds;
+  };
+  const packed = { kinds: { 'other-patient-record': plain, other }, detailKinds: { 'menstrual-cycle-chart': chart } };
+  const layouts = {
+    'in detailKinds, as published': packed,
+    'before the kind it shares codes with': { kinds: { 'menstrual-cycle-chart': chart, 'other-patient-record': plain, other } }
+  };
+
+  for (const [name, documentKinds] of Object.entries(layouts)) {
+    it(`[DKDT1] told apart by the detail code, listed ${name}`, () => {
+      const dk = kindsOf(documentKinds);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(dk.getAll().some((k) => k.key === 'menstrual-cycle-chart'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forKey('menstrual-cycle-chart').detail.code, 'menstrual-cycle-chart');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.label('menstrual-cycle-chart'), 'Menstrual cycle chart');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent({ class: CLASS, type: [ARTIFACT, DETAIL] }).key, 'menstrual-cycle-chart');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent({ class: CLASS, type: [DETAIL, ARTIFACT] }).key, 'menstrual-cycle-chart');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent({ class: CLASS, type: [ARTIFACT] }).key, 'other-patient-record');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent({ class: CLASS, type: [ARTIFACT, { ...DETAIL, code: 'unknown' }] }).key, 'other-patient-record');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent({ class: CLASS, type: [ARTIFACT, { ...DETAIL, system: 'https://example.org' }] }).key, 'other-patient-record');
+    });
+  }
+
+  it('[DKDT5] a picker lists it after the kind it shares its codes with', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(kindsOf(packed).getAll().map((k) => k.key), ['other-patient-record', 'menstrual-cycle-chart', 'other']);
+  });
+
+  it('[DKDT2] a detail code beside another class or type does not make the kind', () => {
+    const dk = kindsOf(packed);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent({ class: ARTIFACT, type: [ARTIFACT, DETAIL] }).key, 'other');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent({ class: CLASS, type: [sct('1'), DETAIL] }), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent({ class: CLASS, type: [DETAIL] }), null);
+  });
+
+  it('[DKDT3] codingsFor gives what a writer puts, read back as the kind, as copies', () => {
+    const dk = kindsOf(packed);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(dk.codingsFor('menstrual-cycle-chart'), { class: CLASS, type: [ARTIFACT, DETAIL] });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(dk.codingsFor('other-patient-record'), { class: CLASS, type: [ARTIFACT] });
+    for (const key of ['menstrual-cycle-chart', 'other-patient-record', 'other']) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.forContent(dk.codingsFor(key)).key, key);
+    }
+    dk.codingsFor('menstrual-cycle-chart').type[1].code = 'changed';
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.codingsFor('menstrual-cycle-chart').type[1].code, 'menstrual-cycle-chart');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(dk.codingsFor('nope'), null);
+  });
+
+  it('[DKDT4] the conversation writers write the detail code, and removing it is a change of kind', async () => {
+    const model = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_1__.getModel)();
+    if (!model.isLoaded) await model.load(modelURL);
+    const published = structuredClone(model.modelData);
+    const pack = structuredClone(published);
+    pack.documentKinds.detailKinds = { 'menstrual-cycle-chart': chart };
+    model.loadFromObject(pack);
+    try {
+      const pending = _ts_index_ts__WEBPACK_IMPORTED_MODULE_3__.cmcConversation.pendingDocumentEvent({ title: 'chart', documentKind: 'menstrual-cycle-chart' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(pending.content.type, [ARTIFACT, DETAIL]);
+      const asOther = _ts_index_ts__WEBPACK_IMPORTED_MODULE_3__.cmcConversation.pendingDocumentEvent({ title: 'chart' });
+      const { update, applied } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_3__.cmcConversation.documentUpdateOf(asOther, { documentKind: 'menstrual-cycle-chart' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(applied, ['kind']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(update.content.type, [ARTIFACT, DETAIL]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(update.content.class.code, CLASS.code);
+      const back = _ts_index_ts__WEBPACK_IMPORTED_MODULE_3__.cmcConversation.documentEditOf(pending, { documentKind: 'other-patient-record' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(back.content.type.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent(back.content).key, 'other-patient-record');
+      const again = _ts_index_ts__WEBPACK_IMPORTED_MODULE_3__.cmcConversation.documentEditOf(asOther, { documentKind: 'menstrual-cycle-chart' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.documentKinds.forContent(again.content).key, 'menstrual-cycle-chart');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_3__.cmcConversation.pendingFieldsOf({ ...asOther, content: update.content }), ['time'], 'the kind is no longer waiting');
+    } finally {
+      model.loadFromObject(published);
+    }
   });
 });
 
@@ -62765,69 +62987,71 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _apptemplatesRequest_test_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./apptemplatesRequest.test.js */ "./tests/apptemplatesRequest.test.js");
 /* harmony import */ var _attachmentsItems_test_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./attachmentsItems.test.js */ "./tests/attachmentsItems.test.js");
 /* harmony import */ var _bridgeAccess_test_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./bridgeAccess.test.js */ "./tests/bridgeAccess.test.js");
-/* harmony import */ var _cmcConstants_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./cmcConstants.test.js */ "./tests/cmcConstants.test.js");
-/* harmony import */ var _cmcDataExport_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./cmcDataExport.test.js */ "./tests/cmcDataExport.test.js");
-/* harmony import */ var _cmcDocuments_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./cmcDocuments.test.js */ "./tests/cmcDocuments.test.js");
-/* harmony import */ var _cmcFormSpec_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./cmcFormSpec.test.js */ "./tests/cmcFormSpec.test.js");
-/* harmony import */ var _cmcItemReminders_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./cmcItemReminders.test.js */ "./tests/cmcItemReminders.test.js");
-/* harmony import */ var _cmcConversation_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./cmcConversation.test.js */ "./tests/cmcConversation.test.js");
-/* harmony import */ var _cmcConversationExisting_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./cmcConversationExisting.test.js */ "./tests/cmcConversationExisting.test.js");
-/* harmony import */ var _cmcConversationDocument_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./cmcConversationDocument.test.js */ "./tests/cmcConversationDocument.test.js");
-/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
-/* harmony import */ var _codedMedicationTemplate_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./codedMedicationTemplate.test.js */ "./tests/codedMedicationTemplate.test.js");
-/* harmony import */ var _connectors_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./connectors.test.js */ "./tests/connectors.test.js");
-/* harmony import */ var _contact_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./contact.test.js */ "./tests/contact.test.js");
-/* harmony import */ var _contextResolution_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./contextResolution.test.js */ "./tests/contextResolution.test.js");
-/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
-/* harmony import */ var _converterEngine_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./converterEngine.test.js */ "./tests/converterEngine.test.js");
-/* harmony import */ var _converterEngineFlags_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./converterEngineFlags.test.js */ "./tests/converterEngineFlags.test.js");
-/* harmony import */ var _converterPackVersion_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./converterPackVersion.test.js */ "./tests/converterPackVersion.test.js");
-/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
-/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
-/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
-/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
-/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
-/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
-/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
-/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
-/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
-/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
-/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
-/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
+/* harmony import */ var _chartStamp_test_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./chartStamp.test.js */ "./tests/chartStamp.test.js");
+/* harmony import */ var _cmcConstants_test_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./cmcConstants.test.js */ "./tests/cmcConstants.test.js");
+/* harmony import */ var _cmcDataExport_test_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./cmcDataExport.test.js */ "./tests/cmcDataExport.test.js");
+/* harmony import */ var _cmcDocuments_test_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./cmcDocuments.test.js */ "./tests/cmcDocuments.test.js");
+/* harmony import */ var _cmcFormSpec_test_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./cmcFormSpec.test.js */ "./tests/cmcFormSpec.test.js");
+/* harmony import */ var _cmcItemReminders_test_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./cmcItemReminders.test.js */ "./tests/cmcItemReminders.test.js");
+/* harmony import */ var _cmcConversation_test_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./cmcConversation.test.js */ "./tests/cmcConversation.test.js");
+/* harmony import */ var _cmcConversationExisting_test_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./cmcConversationExisting.test.js */ "./tests/cmcConversationExisting.test.js");
+/* harmony import */ var _cmcConversationDocument_test_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./cmcConversationDocument.test.js */ "./tests/cmcConversationDocument.test.js");
+/* harmony import */ var _cmcScope_test_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./cmcScope.test.js */ "./tests/cmcScope.test.js");
+/* harmony import */ var _codedMedicationTemplate_test_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./codedMedicationTemplate.test.js */ "./tests/codedMedicationTemplate.test.js");
+/* harmony import */ var _connectors_test_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./connectors.test.js */ "./tests/connectors.test.js");
+/* harmony import */ var _contact_test_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./contact.test.js */ "./tests/contact.test.js");
+/* harmony import */ var _contextResolution_test_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./contextResolution.test.js */ "./tests/contextResolution.test.js");
+/* harmony import */ var _conversions_test_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./conversions.test.js */ "./tests/conversions.test.js");
+/* harmony import */ var _converterEngine_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./converterEngine.test.js */ "./tests/converterEngine.test.js");
+/* harmony import */ var _converterEngineFlags_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./converterEngineFlags.test.js */ "./tests/converterEngineFlags.test.js");
+/* harmony import */ var _converterPackVersion_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./converterPackVersion.test.js */ "./tests/converterPackVersion.test.js");
+/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
+/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
+/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
+/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
+/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
+/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
+/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
+/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
+/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
+/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_64__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Every `*.test.js` file is listed here, except the node-only ones:
  * - validatorDrift.test.js (reads the file system and runs the validator build)
  * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
 
 
 
