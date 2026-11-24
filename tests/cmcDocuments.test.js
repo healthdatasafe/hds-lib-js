@@ -645,6 +645,13 @@ describe('[CDOC] cmcDocuments', function () {
       const named = [{ id: 'acc-9', permissions: [{ streamId: N, level: 'read' }] }];
       assert.deepStrictEqual(await cmcDocuments.checkOfferedShares(account(named), [{ streamId: ':local:' + N, level: 'read' }]), [{ streamId: N, reason: 'taken' }]);
       assert.deepStrictEqual(await cmcDocuments.checkOfferedShares(account([]), [{ streamId: N, level: 'read' }]), []);
+      // a marked one is judged by its mark; a permission without a stream (a feature) is left out
+      assert.deepStrictEqual(await cmcDocuments.checkOfferedShares(account([]), [{ streamId: S, level: 'read' }, { feature: 'selfRevoke' }, { streamId: N, level: 'read' }]),
+        [{ streamId: S, reason: 'taken' }]);
+      assert.deepStrictEqual(await cmcDocuments.checkOfferedShares(account(named), [{ streamId: S, level: 'read' }], { accessId: 'acc-1:3', grantedPermissions: [] }), []);
+      assert.deepStrictEqual(await cmcDocuments.checkOfferedShares(account([{ id: 'acc-9', createdBy: 'acc-1 x', permissions: [{ streamId: N }] }, { id: 'acc-8' }]),
+        [{ streamId: N, level: 'read' }], { accessId: 'acc-1', grantedPermissions: [] }), []);
+      assert.strictEqual(cmcDocuments.namesShareStreams(undefined), false);
       // the asking relationship's own grant naming it is not another access
       assert.deepStrictEqual(await cmcDocuments.checkOfferedShares(account(named), [{ streamId: N, level: 'read' }], { accessId: 'acc-9:2', grantedPermissions: [] }), []);
     });
