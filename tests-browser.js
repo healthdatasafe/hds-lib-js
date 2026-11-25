@@ -18061,6 +18061,8 @@ exports.HDSModelConverters = exports.SUPPORTED_CONVERTER_VERSIONS = void 0;
 exports.packVersionFor = packVersionFor;
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 const EuclidianDistanceEngine_ts_1 = __webpack_require__(/*! ../converters/EuclidianDistanceEngine.js */ "./ts/converters/EuclidianDistanceEngine.ts");
+const packTexts_ts_1 = __webpack_require__(/*! ../converters/packTexts.js */ "./ts/converters/packTexts.ts");
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 /**
  * The newest converter version this hds-lib reads, per item key. A version above it may carry what this engine
  * does not know (cervical-fluid v1: options with `produce: false`), so it is never fetched. An item key not listed
@@ -18093,6 +18095,14 @@ async function fetchPack(url, missingOk) {
     return await response.json();
 }
 /**
+ * The locales whose converter texts may be shown: those preferred to `en`. A pack carries `en` and `fr` itself, so
+ * nothing after `en` is ever read, and `fr` needs no file.
+ */
+function textLocales() {
+    const preferred = (0, localizeText_ts_1.getPreferredLocales)();
+    return preferred.slice(0, preferred.indexOf('en')).filter((l) => l !== 'fr');
+}
+/**
  * Converters — Extension of HDSModel
  *
  * Lazy-loads converter packs from the model's base URL:
@@ -18105,12 +18115,19 @@ async function fetchPack(url, missingOk) {
  * Full converter data (dimensions + methods) is fetched on first use and cached.
  *
  * All conversion methods are async (first call fetches, subsequent calls are instant).
+ *
+ * The texts of the other languages are in `{modelBaseUrl}/converters/{itemKey}/l10n-{locale}.json` (data-model
+ * `documentation/L10N.md`): fetched with the pack for the preferred languages, and again when they change (`loadTexts`).
+ * A missing or unreadable file leaves the texts of the pack.
  */
 class HDSModelConverters {
     #model;
     #engines = {};
     #pendingLoads = {};
     #itemKeyByEventType = {};
+    /** The fetched packs: their url, and per locale the load of its texts (once, failed or not). */
+    #packs = {};
+    #followsLocales = false;
     constructor(model) {
         this.#model = model;
     }
@@ -18155,6 +18172,13 @@ class HDSModelConverters {
         finally {
             delete this.#pendingLoads[itemKey];
         }
+    }
+    /**
+     * Load the texts of the preferred languages for the engines already loaded. Called on each change of the preferred
+     * languages; an app that switches language awaits it to render the converter texts in the new one. Never throws.
+     */
+    async loadTexts() {
+        await Promise.all(Object.keys(this.#packs).map((itemKey) => this.#loadTextsOf(itemKey)));
     }
     /**
      * Convert a source method observation into a Pryv event structure.
@@ -18223,19 +18247,59 @@ class HDSModelConverters {
         }
         // Derive URL from model base URL
         const modelUrl = this.#model.modelUrl;
-        const baseUrl = modelUrl.substring(0, modelUrl.lastIndexOf('/') + 1);
+        const converterUrl = `${modelUrl.substring(0, modelUrl.lastIndexOf('/') + 1)}converters/${itemKey}/`;
         const version = packVersionFor(itemKey, converters[itemKey].versions);
-        let pack = version ? await fetchPack(`${baseUrl}converters/${itemKey}/pack-${version}.json`, true) : null;
+        let url = `${converterUrl}pack-${version}.json`;
+        let pack = version ? await fetchPack(url, true) : null;
         if (version && !pack)
             logger.warn(`Converter pack ${itemKey} ${version} not found; reading pack-latest.json`);
-        pack ??= (await fetchPack(`${baseUrl}converters/${itemKey}/pack-latest.json`, false));
+        if (!pack) {
+            url = `${converterUrl}pack-latest.json`;
+            pack = (await fetchPack(url, false));
+        }
         if (pack.engine !== 'euclidian-distance') {
             throw new Error(`Unknown converter engine: "${pack.engine}" in pack for "${itemKey}"`);
         }
+        this.#packs[itemKey] = { pack, url, texts: {} };
+        if (!this.#followsLocales) {
+            this.#followsLocales = true;
+            // weak: the listener must not keep a replaced model in memory
+            const self = new WeakRef(this);
+            const stop = (0, localizeText_ts_1.onPreferredLocalesChange)(() => {
+                const converters = self.deref();
+                if (converters)
+                    converters.loadTexts();
+                else
+                    stop();
+            });
+        }
+        await this.#loadTextsOf(itemKey);
         const engine = new EuclidianDistanceEngine_ts_1.EuclidianDistanceEngine(pack);
         this.#engines[itemKey] = engine;
         this.#itemKeyByEventType[engine.eventType] = itemKey;
         return engine;
+    }
+    async #loadTextsOf(itemKey) {
+        const { pack, url, texts } = this.#packs[itemKey];
+        await Promise.all(textLocales().map((locale) => (texts[locale] ??= this.#fetchTexts(pack, url, locale))));
+    }
+    /** A language without its file (404), or whose file cannot be read, keeps the pack's own texts. */
+    async #fetchTexts(pack, packUrl, locale) {
+        const at = packUrl.lastIndexOf('/') + 1;
+        const url = `${packUrl.substring(0, at)}l10n-${locale}.json`;
+        try {
+            const response = await fetch(url);
+            if (response.status === 404)
+                return;
+            if (!response.ok)
+                throw new Error(`status ${response.status}`);
+            const texts = (await response.json())?.packs?.[packUrl.substring(at)];
+            if (texts != null && typeof texts === 'object')
+                (0, packTexts_ts_1.addPackTexts)(pack, locale, texts);
+        }
+        catch (e) {
+            logger.warn(`Converter texts not loaded: ${url} (${e?.message ?? e})`);
+        }
     }
     #getItemDef(itemKey) {
         const items = this.#model.modelData.items;
@@ -19690,12 +19754,12 @@ const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/lo
  */
 exports.CHART_STAMP = 'fertility/chart-stamp-v1';
 const STAMP_LABELS = {
-    red: { en: 'Red', fr: 'Rouge', es: 'Rojo' },
-    green: { en: 'Green', fr: 'Vert', es: 'Verde' },
-    'green-baby': { en: 'Green with a baby', fr: 'Vert avec un bébé', es: 'Verde con un bebé' },
-    'white-baby': { en: 'White with a baby', fr: 'Blanc avec un bébé', es: 'Blanco con un bebé' },
-    yellow: { en: 'Yellow', fr: 'Jaune', es: 'Amarillo' },
-    'yellow-baby': { en: 'Yellow with a baby', fr: 'Jaune avec un bébé', es: 'Amarillo con un bebé' }
+    red: { en: 'Red', fr: 'Rouge', es: 'Rojo', it: 'Rosso', 'pt-BR': 'Vermelho' },
+    green: { en: 'Green', fr: 'Vert', es: 'Verde', it: 'Verde', 'pt-BR': 'Verde' },
+    'green-baby': { en: 'Green with a baby', fr: 'Vert avec un bébé', es: 'Verde con un bebé', it: 'Verde con un bambino', 'pt-BR': 'Verde com um bebê' },
+    'white-baby': { en: 'White with a baby', fr: 'Blanc avec un bébé', es: 'Blanco con un bebé', it: 'Bianco con un bambino', 'pt-BR': 'Branco com um bebê' },
+    yellow: { en: 'Yellow', fr: 'Jaune', es: 'Amarillo', it: 'Giallo', 'pt-BR': 'Amarelo' },
+    'yellow-baby': { en: 'Yellow with a baby', fr: 'Jaune avec un bébé', es: 'Amarillo con un bebé', it: 'Giallo con un bambino', 'pt-BR': 'Amarelo com um bebê' }
 };
 /** Short text of a charted stamp: its name, "Yellow with a baby" (an unknown one as stored). Null without a stamp. */
 function chartStampText(content) {
@@ -19980,13 +20044,13 @@ function checkRelatedMirror(event, targets) {
 }
 /** Visit kinds, for a model without the `encounter-visit` item (labels as the item's, data-model ENCOUNTER.md). */
 const KIND_LABELS = {
-    consultation: { en: 'Consultation', fr: 'Consultation' },
-    'hospital-stay': { en: 'Hospital stay', fr: 'Séjour hospitalier' },
-    emergency: { en: 'Emergency', fr: 'Urgence' },
-    'day-case': { en: 'Day hospital', fr: 'Hôpital de jour' },
-    teleconsultation: { en: 'Teleconsultation', fr: 'Téléconsultation' },
-    'home-visit': { en: 'Home visit', fr: 'Visite à domicile' },
-    other: { en: 'Other', fr: 'Autre' }
+    consultation: { en: 'Consultation', fr: 'Consultation', es: 'Consulta', it: 'Visita', 'pt-BR': 'Consulta' },
+    'hospital-stay': { en: 'Hospital stay', fr: 'Séjour hospitalier', es: 'Hospitalización', it: 'Ricovero ospedaliero', 'pt-BR': 'Internação' },
+    emergency: { en: 'Emergency', fr: 'Urgence', es: 'Urgencias', it: 'Pronto soccorso', 'pt-BR': 'Emergência' },
+    'day-case': { en: 'Day hospital', fr: 'Hôpital de jour', es: 'Hospital de día', it: 'Day hospital', 'pt-BR': 'Hospital-dia' },
+    teleconsultation: { en: 'Teleconsultation', fr: 'Téléconsultation', es: 'Teleconsulta', it: 'Teleconsulto', 'pt-BR': 'Teleconsulta' },
+    'home-visit': { en: 'Home visit', fr: 'Visite à domicile', es: 'Visita a domicilio', it: 'Visita a domicilio', 'pt-BR': 'Visita domiciliar' },
+    other: { en: 'Other', fr: 'Autre', es: 'Otro', it: 'Altro', 'pt-BR': 'Outro' }
 };
 function labelText(label) {
     if (typeof label === 'string')
@@ -20104,8 +20168,8 @@ function formatDayParts(p, fmt, opts) {
     catch { /* unknown locale: no weekday rather than a throw */ }
     return name ? name + ' ' + text : text;
 }
-const ABOUT = { en: 'about', fr: 'vers', es: 'hacia' };
-const DATE_UNKNOWN = { en: 'date unknown', fr: 'date inconnue', es: 'fecha desconocida' };
+const ABOUT = { en: 'about', fr: 'vers', es: 'hacia', it: 'circa', 'pt-BR': 'cerca de' };
+const DATE_UNKNOWN = { en: 'date unknown', fr: 'date inconnue', es: 'fecha desconocida', it: 'data sconosciuta', 'pt-BR': 'data desconhecida' };
 /** `texts` in `locale` (or its language, `fr` for `fr-CH`) when given and translated, else in the preferred locales. */
 function wordIn(texts, locale) {
     if (locale) {
@@ -20314,7 +20378,7 @@ function compositePartText(value, def) {
 }
 const ALLERGY_CODED = 'allergy/coded-v1';
 const ALLERGY_BASIC = 'allergy/basic-v1';
-const HIGH_RISK = { en: 'high risk', fr: 'risque élevé', es: 'riesgo alto' };
+const HIGH_RISK = { en: 'high risk', fr: 'risque élevé', es: 'riesgo alto', it: 'rischio elevato', 'pt-BR': 'alto risco' };
 /**
  * An allergy as its allergen (the coded entry's label, or the name as written), then what changes how it reads: a
  * status that is not `active` (its option label, "Resolved") and a `high` criticality. `null` when there is no
@@ -20511,9 +20575,9 @@ function formatFallback(event, content, model) {
     return String(content);
 }
 const TEST_RESULT_LABELS = {
-    positive: { en: 'Positive', fr: 'Positif', es: 'Positivo' },
-    negative: { en: 'Negative', fr: 'Négatif', es: 'Negativo' },
-    indeterminate: { en: 'Indeterminate', fr: 'Indéterminé', es: 'Indeterminado' },
+    positive: { en: 'Positive', fr: 'Positif', es: 'Positivo', it: 'Positivo', 'pt-BR': 'Positivo' },
+    negative: { en: 'Negative', fr: 'Négatif', es: 'Negativo', it: 'Negativo', 'pt-BR': 'Negativo' },
+    indeterminate: { en: 'Indeterminate', fr: 'Indéterminé', es: 'Indeterminado', it: 'Indeterminato', 'pt-BR': 'Indeterminado' },
 };
 function formatTestResult(content) {
     if (content === 0)
@@ -20825,9 +20889,9 @@ function formatDatasource(content) {
 function doseUnitLabel(doseUnit) {
     return typeof doseUnit === 'string' ? doseUnit.replace(/^(dose|mass|volume)\//, '') : '';
 }
-const AS_NEEDED = { en: 'as needed', fr: 'si besoin', es: 'si es necesario' };
-const FOR = { en: 'for', fr: 'pendant', es: 'durante' };
-const UNTIL = { en: 'until', fr: 'jusqu’au', es: 'hasta el' };
+const AS_NEEDED = { en: 'as needed', fr: 'si besoin', es: 'si es necesario', it: 'al bisogno', 'pt-BR': 'se necessário' };
+const FOR = { en: 'for', fr: 'pendant', es: 'durante', it: 'per', 'pt-BR': 'por' };
+const UNTIL = { en: 'until', fr: 'jusqu’au', es: 'hasta el', it: 'fino al', 'pt-BR': 'até' };
 /**
  * The regimen of a medication intake (data-model 3.23.0, the `posology` spelling):
  * `frequency` as "2×/d" or "1×/48 h", the times "08:00, 20:00" or the `when` slots "before breakfast"
@@ -21533,7 +21597,7 @@ function isSkipped(event) {
 function isCodedDrug(drug) {
     return Array.isArray(drug?.codes) && drug.codes.some((c) => typeof c?.code === 'string' && c.code !== '');
 }
-const STOPPED = { en: 'stopped', fr: 'arrêté', es: 'suspendido' };
+const STOPPED = { en: 'stopped', fr: 'arrêté', es: 'suspendido', it: 'interrotto', 'pt-BR': 'interrompido' };
 function lowerFirst(s) {
     return s.charAt(0).toLowerCase() + s.slice(1);
 }
@@ -26396,9 +26460,9 @@ const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSMod
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 const shareIds_ts_1 = __webpack_require__(/*! ../cmc/shareIds.js */ "./ts/cmc/shareIds.ts");
 const TEXTS = {
-    allData: { en: 'All your data', fr: 'Toutes vos données', es: 'Todos sus datos' },
-    email: { en: 'Your e-mail address', fr: 'Votre adresse e-mail', es: 'Su dirección de correo electrónico' },
-    under: { en: '{name} and everything under it', fr: '{name} et tout ce qui en dépend', es: '{name} y todo lo que contiene' }
+    allData: { en: 'All your data', fr: 'Toutes vos données', es: 'Todos sus datos', it: 'Tutti i suoi dati', 'pt-BR': 'Todos os seus dados' },
+    email: { en: 'Your e-mail address', fr: 'Votre adresse e-mail', es: 'Su dirección de correo electrónico', it: 'Il suo indirizzo e-mail', 'pt-BR': 'Seu endereço de e-mail' },
+    under: { en: '{name} and everything under it', fr: '{name} et tout ce qui en dépend', es: '{name} y todo lo que contiene', it: '{name} e tutto ciò che contiene', 'pt-BR': '{name} e tudo o que contém' }
 };
 function pick(text, locale) {
     if (text == null)
@@ -27060,12 +27124,13 @@ function extractAppSubScopeSuffix(streamId, appCode) {
  * dispatch on `kind` and skip what they do not know.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.BASES = exports.CONVERSATION_ALERT_HDS_SCHEMA = exports.VOUCHED_ENGINES = exports.CONFIRMABLE_STATUSES = exports.ERROR_CODES = exports.NOTICE_CODES = exports.ANSWER_ACTIONS = exports.TASK_STATUSES = exports.NOTE_MAX_LENGTH = exports.PRINTED_IN_KEY = exports.DOCUMENT_VALUES_KEY = exports.DOCUMENT_PENDING_KEY = exports.SPECIMEN_CODES = exports.QUESTION_CODES = exports.ITEM_KINDS = exports.CONVERSATION_ALERT_KINDS = exports.ET_CONVERSATION = exports.CONVERSATION_STREAM_PREFIX = exports.CONVERSATION_ROOT_ID = void 0;
+exports.BASES = exports.CONVERSATION_ALERT_HDS_SCHEMA = exports.VOUCHED_ENGINES = exports.CONFIRMABLE_STATUSES = exports.ERROR_CODES = exports.NOTICE_CODES = exports.ANSWER_ACTIONS = exports.TASK_STATUSES = exports.NOTE_MAX_LENGTH = exports.PRINTED_IN_KEY = exports.DOCUMENT_VALUES_KEY = exports.DOCUMENT_PENDING_KEY = exports.SPECIMEN_CODES = exports.REASON_NOT_READ = exports.QUESTION_CODES = exports.ITEM_KINDS = exports.CONVERSATION_ALERT_KINDS = exports.ET_CONVERSATION = exports.CONVERSATION_STREAM_PREFIX = exports.CONVERSATION_ROOT_ID = void 0;
 exports.vouchedEnginesFor = vouchedEnginesFor;
 exports.checkConversationAlertHds = checkConversationAlertHds;
 exports.buildConversationAlertContent = buildConversationAlertContent;
 exports.parseConversationAlerts = parseConversationAlerts;
 exports.taskStatusOf = taskStatusOf;
+exports.latestDoneOf = latestDoneOf;
 exports.newConversationStreamId = newConversationStreamId;
 exports.isConversationStreamId = isConversationStreamId;
 exports.conversationStreamsIn = conversationStreamsIn;
@@ -27098,6 +27163,8 @@ exports.documentEditOf = documentEditOf;
 exports.listDocumentValues = listDocumentValues;
 exports.sourceKeyOf = sourceKeyOf;
 exports.valueEventOf = valueEventOf;
+exports.isDatedGrid = isDatedGrid;
+exports.answeredDateOf = answeredDateOf;
 exports.acceptProposedValues = acceptProposedValues;
 exports.answerQuestion = answerQuestion;
 exports.answerProposedValues = answerProposedValues;
@@ -27147,20 +27214,24 @@ exports.QUESTION_CODES = {
     /** 4.26.0: the kind of a document waiting for it, about a `proposed-document`. */
     WHICH_DOCUMENT_KIND: 'which-document-kind',
     /** 4.26.0: the date of a document waiting for it, about a `proposed-document`. */
-    WHICH_DOCUMENT_DATE: 'which-document-date'
+    WHICH_DOCUMENT_DATE: 'which-document-date',
+    /** 4.36.0: the day of one box of a row of a dated grid (`context.grid`, `context.anchor`). */
+    WHICH_ROW_DATE: 'which-row-date'
 };
+/** `proposed-value.reason` (4.36.0): the contact sees writing in this box of a dated grid and proposes nothing from it. */
+exports.REASON_NOT_READ = 'not-read';
 /** The options of `which-specimen`, registered in CONVERSATION.md § Specimen codes (4.26.0), with their labels. */
 exports.SPECIMEN_CODES = {
-    'serum-plasma': { en: 'Serum or plasma', fr: 'Sérum ou plasma', es: 'Suero o plasma' },
-    'whole-blood': { en: 'Whole blood', fr: 'Sang total', es: 'Sangre total' },
-    'citrated-plasma': { en: 'Citrated plasma (coagulation)', fr: 'Plasma citraté (coagulation)', es: 'Plasma citratado (coagulación)' },
-    rbc: { en: 'Red blood cells', fr: 'Globules rouges', es: 'Glóbulos rojos' },
-    urine: { en: 'Urine', fr: 'Urine', es: 'Orina' },
-    'urine-24h': { en: '24-hour urine', fr: 'Urines de 24 heures', es: 'Orina de 24 horas' },
-    semen: { en: 'Semen', fr: 'Sperme', es: 'Semen' },
-    csf: { en: 'Cerebrospinal fluid', fr: 'Liquide céphalorachidien', es: 'Líquido cefalorraquídeo' },
-    stool: { en: 'Stool', fr: 'Selles', es: 'Heces' },
-    saliva: { en: 'Saliva', fr: 'Salive', es: 'Saliva' }
+    'serum-plasma': { en: 'Serum or plasma', fr: 'Sérum ou plasma', es: 'Suero o plasma', it: 'Siero o plasma', 'pt-BR': 'Soro ou plasma' },
+    'whole-blood': { en: 'Whole blood', fr: 'Sang total', es: 'Sangre total', it: 'Sangue intero', 'pt-BR': 'Sangue total' },
+    'citrated-plasma': { en: 'Citrated plasma (coagulation)', fr: 'Plasma citraté (coagulation)', es: 'Plasma citratado (coagulación)', it: 'Plasma citrato (coagulazione)', 'pt-BR': 'Plasma citratado (coagulação)' },
+    rbc: { en: 'Red blood cells', fr: 'Globules rouges', es: 'Glóbulos rojos', it: 'Globuli rossi', 'pt-BR': 'Hemácias' },
+    urine: { en: 'Urine', fr: 'Urine', es: 'Orina', it: 'Urine', 'pt-BR': 'Urina' },
+    'urine-24h': { en: '24-hour urine', fr: 'Urines de 24 heures', es: 'Orina de 24 horas', it: 'Urine delle 24 ore', 'pt-BR': 'Urina de 24 horas' },
+    semen: { en: 'Semen', fr: 'Sperme', es: 'Semen', it: 'Liquido seminale', 'pt-BR': 'Sêmen' },
+    csf: { en: 'Cerebrospinal fluid', fr: 'Liquide céphalorachidien', es: 'Líquido cefalorraquídeo', it: 'Liquido cerebrospinale', 'pt-BR': 'Líquido cefalorraquidiano' },
+    stool: { en: 'Stool', fr: 'Selles', es: 'Heces', it: 'Feci', 'pt-BR': 'Fezes' },
+    saliva: { en: 'Saliva', fr: 'Salive', es: 'Saliva', it: 'Saliva', 'pt-BR': 'Saliva' }
 };
 /** The document `clientData` keys of 4.26.0 (DOCUMENTS.md, PROVENANCE.md). */
 exports.DOCUMENT_PENDING_KEY = 'hdsDocumentPending';
@@ -27209,7 +27280,7 @@ exports.CONVERSATION_ALERT_HDS_SCHEMA = {
             about: ID,
             status: { type: 'string', enum: [...exports.TASK_STATUSES] },
             attempt: { type: 'integer', minimum: 1 },
-            counts: { type: 'object', additionalProperties: false, properties: { proposed: COUNT, questions: COUNT, keptAside: COUNT, dropped: COUNT } },
+            counts: { type: 'object', additionalProperties: false, properties: { proposed: COUNT, questions: COUNT, keptAside: COUNT, dropped: COUNT, notRead: COUNT } },
             errorCode: CODE
         }),
         alertBranch('notice', ['code'], { code: CODE, about: ID }),
@@ -27294,6 +27365,13 @@ function taskStatusOf(alerts, about, direction = 'received') {
             best = a;
     }
     return best;
+}
+/**
+ * The latest `done` of the work on one document (her app's side), whatever the contact posted after it (the document shared
+ * again, then read or on hold): what the removal of her notes waits for (`notesToRemove`). Null when none.
+ */
+function latestDoneOf(alerts, about) {
+    return taskStatusOf((alerts ?? []).filter(a => a.hds?.status === 'done'), about);
 }
 // ---- streams ---- //
 /** A new conversation child id: `conv-` + 12 lowercase base36 characters, random. */
@@ -27519,7 +27597,7 @@ const KNOWN_CODES = new Set(Object.values(exports.QUESTION_CODES));
 function questionActions(code) {
     if (CHOOSE_CODES.has(code) || code === exports.QUESTION_CODES.WHICH_DOCUMENT_KIND)
         return new Set(['choose', 'skip']);
-    if (code === exports.QUESTION_CODES.WHICH_DATE || code === exports.QUESTION_CODES.WHICH_DOCUMENT_DATE)
+    if (code === exports.QUESTION_CODES.WHICH_DATE || code === exports.QUESTION_CODES.WHICH_DOCUMENT_DATE || code === exports.QUESTION_CODES.WHICH_ROW_DATE)
         return new Set(['confirm', 'skip']);
     if (code === exports.QUESTION_CODES.IS_THIS_YOURS)
         return new Set(['confirm', 'not-mine', 'skip']);
@@ -27788,7 +27866,7 @@ function checkConversationItem(content) {
         else if (code === exports.QUESTION_CODES.IS_THIS_YOURS) {
             if (has('candidateId') || has('options'))
                 issues.push('question is-this-yours: no candidateId, no options');
-            if (c.context?.dates != null)
+            if (c.context?.dates != null || c.context?.grid != null)
                 issues.push('question is-this-yours: context holds identity and anchor only');
         }
         else if (code === exports.QUESTION_CODES.WHICH_DOCUMENT_KIND) {
@@ -27811,6 +27889,14 @@ function checkConversationItem(content) {
             if (c.context != null && Object.keys(c.context).some(k => k !== 'dates'))
                 issues.push('question which-document-date: context holds dates only');
         }
+        else if (code === exports.QUESTION_CODES.WHICH_ROW_DATE) {
+            if (has('candidateId') || has('options'))
+                issues.push('question which-row-date: no candidateId, no options');
+            if (c.context?.grid == null || c.context?.anchor?.bbox == null)
+                issues.push('question which-row-date: context.grid and context.anchor with its bbox are required');
+            if (c.context != null && Object.keys(c.context).some(k => k !== 'grid' && k !== 'anchor'))
+                issues.push('question which-row-date: context holds grid and anchor only');
+        }
         else if (typeof code === 'string' && code.startsWith('x-')) {
             if (has('context'))
                 issues.push(`question ${code}: context is for is-this-yours and the date questions only`);
@@ -27822,6 +27908,14 @@ function checkConversationItem(content) {
     else if (c.kind === 'proposed-value') {
         if ((c.status === 'kept-aside' || c.status === 'unmapped') && c.reason == null)
             issues.push(`proposed-value ${c.status}: reason is required`);
+        if (c.reason === exports.REASON_NOT_READ) {
+            if (c.status !== 'unmapped')
+                issues.push('proposed-value not-read: status is unmapped');
+            if (c.grid == null || c.anchor?.bbox == null)
+                issues.push('proposed-value not-read: grid and anchor with its bbox are required');
+            if (c.printed?.value != null || c.proposal != null || c.requestKey != null)
+                issues.push('proposed-value not-read: no printed.value, no proposal, no requestKey');
+        }
         const p = c.proposal;
         if (p?.time != null && p.clientData?.hdsTimePrecision == null)
             issues.push('proposed-value: proposal with time needs clientData.hdsTimePrecision');
@@ -27907,6 +28001,9 @@ function checkAnswerFor(content, target, conv) {
             else if (c.timePrecision !== 'unknown' && c.time == null)
                 issues.push(`answer ${code}: time is required`);
         }
+        if (code === exports.QUESTION_CODES.WHICH_ROW_DATE && c.action === 'confirm' && (c.timePrecision !== 'day' || typeof c.time !== 'number' || ((c.time % DAY) + DAY) % DAY !== 12 * HOUR)) {
+            issues.push('answer which-row-date: a day at 12:00 UTC, with timePrecision day');
+        }
         if (c.applied != null)
             issues.push('answer to a question: no applied');
         if (c.basis != null && (c.basis !== exports.BASES.PROFILE_MATCH || code !== exports.QUESTION_CODES.IS_THIS_YOURS))
@@ -27943,7 +28040,7 @@ function checkAnswerFor(content, target, conv) {
                 issues.push(`answer: candidate ${id} is not a proposed value of the document`);
                 continue;
             }
-            if (c.action === 'request-item' && !['kept-aside', 'unmapped'].includes(pv.item.content.status))
+            if (c.action === 'request-item' && (!['kept-aside', 'unmapped'].includes(pv.item.content.status) || pv.item.content.reason === exports.REASON_NOT_READ))
                 issues.push(`answer request-item: candidate ${id} is not kept-aside or unmapped`);
         }
     }
@@ -28301,57 +28398,125 @@ async function findBySourceKey(connection, streamId, sourceKey, time) {
     const events = await connection.apiOne('events.get', params, 'events');
     return events.find(e => e.clientData?.sourceKey === sourceKey)?.id ?? null;
 }
+/** Whether the document is a dated grid (4.36.0): a `which-row-date` was asked, so a value's day is its `proposal.time` only. */
+function isDatedGrid(conv) {
+    return conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_ROW_DATE) || conv.proposedValues.some(p => p.item.content.grid != null);
+}
+/** The `which-date` answer that dates a proposed value without `proposal.time`; never one on a dated grid. */
+function answeredDateOf(conv, candidateId) {
+    if (isDatedGrid(conv))
+        return null;
+    return conv.candidateDates[candidateId] ?? conv.documentDate;
+}
 /**
  * Her app writes the values she confirmed or corrected (§ Writing a value, R3, R9), then the answers, then their
- * alerts. In order: the document's items read again; a candidate is refused when it changed since `shownAt` (Unix
- * seconds, when the cards were shown), when an `is-this-yours` question is not confirmed (or answered `not-mine`),
- * when it has no date (its `proposal.time` or a `which-date` answer), or when R9 refuses it (or the correction);
- * each accepted value is looked up by `sourceKey` and written only when missing; one answer carries every
- * confirmation (`inReplyTo` the first), each correction its own; each answer's alert on the relationship's collectors
- * stream. Refused candidates are returned, the others written. A failure after a value was written throws with
- * `reason: 'write-failed'`: calling again finds the values by `sourceKey` and writes none twice.
+ * alerts, 20 decisions at a time. For each batch: the document's items read again; a candidate is refused when it
+ * changed since `shownAt` (Unix seconds, when the cards were shown), when an `is-this-yours` question is not confirmed
+ * (or answered `not-mine`), when it has no date (its `proposal.time` or a `which-date` answer), or when R9 refuses it
+ * (or the correction); each accepted value is looked up by `sourceKey` and written only when missing; one answer
+ * carries the batch's confirmations (`inReplyTo` the first), each correction its own; each answer's alert on the
+ * relationship's collectors stream. Refused candidates are returned, the others written. A failure throws with
+ * `reason: 'write-failed'`: the values already written are answered (so `not-mine` still deletes them), and calling
+ * again finds them answered and writes the rest, none twice (`sourceKey`). A failed alert leaves its answer written: the
+ * rest goes on, then it throws `alert-not-posted`, whose `innerObject` carries `answers`, `refused` and `notPosted` (the
+ * answers to post again with `postConversationAlert`).
  */
 async function acceptProposedValues(connection, rel, params) {
     const { streams, collectorStreamId } = await personSide(connection, rel, 'acceptProposedValues');
     if (typeof params?.shownAt !== 'number')
         throw new errors_ts_1.HDSLibError('acceptProposedValues: shownAt is required');
-    const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    const decisions = [...(params.decisions ?? [])];
+    const read = async () => conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+    let conv = await read();
+    // a candidate already skipped or marked a duplicate may be confirmed: first, because once the open ones are answered
+    // the contact may settle the document and delete the rest between two batches (R10)
+    const settled = new Set(conv.proposedValues.filter(p => p.state === 'skipped' || p.state === 'duplicate').map(p => p.candidateId));
+    if (decisions.length > ACCEPT_BATCH)
+        decisions.sort((a, b) => Number(settled.has(b.candidateId)) - Number(settled.has(a.candidateId)));
     const refused = [];
-    const accepted = [];
-    for (const decision of params.decisions ?? []) {
-        const reason = acceptRefusal(conv, decision, params);
-        if (typeof reason === 'string')
-            refused.push({ candidateId: decision.candidateId, reason });
-        else
-            accepted.push(reason);
-    }
+    const answers = [];
     const written = new Map();
-    try {
-        for (const { pv, event } of accepted) {
-            const found = await findBySourceKey(connection, event.streamIds[0], event.clientData.sourceKey, event.time);
-            written.set(pv.candidateId, found ?? (await connection.apiOne('events.create', event, 'event')).id);
+    const notPosted = [];
+    // 4.26.0: the document lists the values written from it (best effort, after the answers)
+    const finish = async () => {
+        const earlier = conv.answers.flatMap(a => (a.content.written ?? []).map((w) => w?.eventId)).filter((id) => typeof id === 'string');
+        await indexDocumentValues(connection, params.about, [...written.values()], { written: earlier });
+    };
+    for (let start = 0; start < decisions.length; start += ACCEPT_BATCH) {
+        // R3: what an answer covers is read again just before writing
+        if (start > 0) {
+            try {
+                conv = await read();
+            }
+            catch (e) {
+                await finish();
+                throw writeFailed(written, e);
+            }
+        }
+        const accepted = [];
+        for (const decision of decisions.slice(start, start + ACCEPT_BATCH)) {
+            const reason = acceptRefusal(conv, decision, params);
+            if (typeof reason === 'string')
+                refused.push({ candidateId: decision.candidateId, reason });
+            else
+                accepted.push(reason);
+        }
+        const done = [];
+        let failure = null;
+        for (const a of accepted) {
+            try {
+                const found = await findBySourceKey(connection, a.event.streamIds[0], a.event.clientData.sourceKey, a.event.time);
+                written.set(a.pv.candidateId, found ?? (await connection.apiOne('events.create', a.event, 'event')).id);
+                done.push(a);
+            }
+            catch (e) {
+                failure = e;
+                break;
+            }
+        }
+        // the values of this batch are answered even when it stopped: one that no answer lists would stay after `not-mine`
+        for (const g of answerGroups(done)) {
+            const w = g.pvs.map(pv => ({ candidateId: pv.candidateId, eventId: written.get(pv.candidateId) }));
+            const content = { kind: 'answer', inReplyTo: g.pvs[0].item.id, about: params.about, action: g.action, candidateIds: g.pvs.map(p => p.candidateId), written: w };
+            if (answers.length === 0 && params.note != null)
+                content.note = params.note;
+            try {
+                answers.push({ ...await writeAnswer(connection, streams.sent, collectorStreamId, content, g.pvs[0].item, conv), action: g.action, written: w });
+            }
+            catch (e) {
+                const inner = e?.innerObject;
+                if (inner?.reason !== 'alert-not-posted') {
+                    await finish();
+                    throw written.size > 0 ? writeFailed(written, failure ?? e) : e;
+                }
+                // the answer is written: the rest goes on, and what was not announced is told at the end
+                notPosted.push(inner.answerEventId);
+                answers.push({ answerEventId: inner.answerEventId, alertEventId: '', action: g.action, written: w });
+            }
+        }
+        if (failure != null) {
+            await finish();
+            throw writeFailed(written, failure);
         }
     }
-    catch (e) {
-        throw new errors_ts_1.HDSLibError('acceptProposedValues: a value was not written', { reason: 'write-failed', written: Object.fromEntries(written), error: e });
+    await finish();
+    if (notPosted.length > 0) {
+        throw new errors_ts_1.HDSLibError('an answer was written, its alert was not posted', { reason: 'alert-not-posted', answerEventId: notPosted[0], notPosted, answers, refused });
     }
-    const groups = [];
-    const confirms = accepted.filter(a => a.decision.action === 'confirm').map(a => a.pv);
-    if (confirms.length > 0)
-        groups.push({ action: 'confirm', pvs: confirms });
-    for (const a of accepted.filter(a => a.decision.action === 'correct'))
-        groups.push({ action: 'correct', pvs: [a.pv] });
-    const answers = [];
-    for (const [i, g] of groups.entries()) {
-        const w = g.pvs.map(pv => ({ candidateId: pv.candidateId, eventId: written.get(pv.candidateId) }));
-        const content = { kind: 'answer', inReplyTo: g.pvs[0].item.id, about: params.about, action: g.action, candidateIds: g.pvs.map(p => p.candidateId), written: w };
-        if (i === 0 && params.note != null)
-            content.note = params.note;
-        answers.push({ ...await writeAnswer(connection, streams.sent, collectorStreamId, content, g.pvs[0].item, conv), action: g.action, written: w });
-    }
-    // 4.26.0: the document lists the values written from it (best effort, after the answers)
-    await indexDocumentValues(connection, params.about, [...written.values()]);
     return { answers, refused };
+}
+/** Values written and answered together: a failure leaves at most one batch's values behind an answer not written. */
+const ACCEPT_BATCH = 20;
+function writeFailed(written, error) {
+    return new errors_ts_1.HDSLibError('acceptProposedValues: a value was not written', { reason: 'write-failed', written: Object.fromEntries(written), error });
+}
+/** One answer for the batch's confirmations (`inReplyTo` the first), each correction its own. */
+function answerGroups(done) {
+    const confirms = done.filter(a => a.decision.action === 'confirm').map(a => a.pv);
+    return [
+        ...(confirms.length > 0 ? [{ action: 'confirm', pvs: confirms }] : []),
+        ...done.filter(a => a.decision.action === 'correct').map(a => ({ action: 'correct', pvs: [a.pv] }))
+    ];
 }
 function acceptRefusal(conv, decision, params) {
     const pv = conv.proposedValues.find(p => p.candidateId === decision.candidateId);
@@ -28376,7 +28541,7 @@ function acceptRefusal(conv, decision, params) {
         if (comparator != null && !COMPARATORS.has(comparator))
             return 'comparator';
     }
-    const date = conv.candidateDates[pv.candidateId] ?? conv.documentDate;
+    const date = answeredDateOf(conv, pv.candidateId);
     if (pv.item.content.proposal.time == null && date == null)
         return 'no-date';
     return { pv, decision, event: valueEventOf(pv.item, { correction: decision.action === 'correct' ? decision.correction : undefined, date }) };
@@ -28459,7 +28624,7 @@ function comparedDay(pv, conv) {
     const p = pv.item.content.proposal;
     if (typeof p?.time === 'number')
         return p.clientData?.hdsTimePrecision === 'day' ? utcDay(p.time) : null;
-    const date = conv.candidateDates[pv.candidateId] ?? conv.documentDate;
+    const date = answeredDateOf(conv, pv.candidateId);
     return date?.timePrecision === 'day' && typeof date.time === 'number' ? utcDay(date.time) : null;
 }
 /** Her event lies on day D: at `day` precision on that UTC day; with an exact time, while D runs in some zone (or in its own). */
@@ -28491,7 +28656,52 @@ function printedNumber(value) {
 }
 const sig12 = (n) => Number(n.toPrecision(12));
 const same = (a, b) => (a ?? null) === (b ?? null);
-/** Her event holds the proposed value: same type and content, a converted other type within the printed tolerance, or the same coded result. */
+/** JSON of a value with its keys in order, undefined ones left out. */
+function orderedJson(v) {
+    if (Array.isArray(v))
+        return '[' + v.map(orderedJson).join(',') + ']';
+    if (v != null && typeof v === 'object') {
+        return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + orderedJson(v[k])).join(',') + '}';
+    }
+    return JSON.stringify(v) ?? 'null';
+}
+/** A reading that says something: a text or a number, an object or an array that is not empty. */
+function isReading(v) {
+    if (typeof v === 'string')
+        return v.trim() !== '';
+    if (typeof v === 'number')
+        return Number.isFinite(v);
+    return v != null && typeof v === 'object' && Object.keys(v).length > 0;
+}
+/**
+ * What a convertible content (cervical fluid, mood) says: its method, what was read and its annotations (a Creighton
+ * frequency), and any other field it carries. Only its vectors and its engine and model versions are left out: derived,
+ * a newer converter writes other ones for the same reading. Null when it has no method or no reading to compare on (the
+ * whole content is then compared).
+ */
+function convertibleReading(itemKey, content) {
+    if (typeof itemKey !== 'string')
+        return null;
+    let type;
+    try {
+        type = (0, HDSModelInitAndSingleton_ts_1.getModel)().itemsDefs.forKey(itemKey, false)?.data.type;
+    }
+    catch {
+        return null;
+    }
+    const source = content?.source;
+    // `_raw`: the vectors are the reading
+    if (type !== 'convertible' || typeof source?.key !== 'string' || source.key === '_raw' || !isReading(source.sourceData))
+        return null;
+    const { vectors: _vectors, source: _source, ...others } = content;
+    const { engineVersion: _engine, modelVersion: _model, annotations, ...reading } = source;
+    const noted = annotations != null && Object.keys(annotations).length > 0 ? annotations : null;
+    return orderedJson([reading, noted, others]);
+}
+/**
+ * Her event holds the proposed value: same type and content (of a convertible item: same method, reading and
+ * annotations), a converted other type within the printed tolerance, or the same coded result.
+ */
 function holdsProposedValue(e, pv) {
     const p = pv.content.proposal;
     if (e.type === p.type) {
@@ -28507,7 +28717,11 @@ function holdsProposedValue(e, pv) {
         if (typeof p.content === 'number' && typeof e.content === 'number') {
             return sig12(p.content) === sig12(e.content) && same(p.clientData?.hdsComparator, e.clientData?.hdsComparator);
         }
-        return JSON.stringify(p.content) === JSON.stringify(e.content);
+        const mine = convertibleReading(p.itemKey, e.content);
+        if (mine != null && mine === convertibleReading(p.itemKey, p.content))
+            return true;
+        // 4.36.0: an item without content (activity/plain): null equals absent
+        return JSON.stringify(p.content ?? null) === JSON.stringify(e.content ?? null);
     }
     // another type of the same item: converted into the proposal's unit, within half the last printed digit (scaled)
     const printed = printedNumber(pv.content.printed?.value);
@@ -28558,7 +28772,7 @@ async function autoMarkDuplicates(connection, rel, params) {
         const key = streamId + '|' + c.day;
         if (!cache.has(key)) {
             const start = dayStart(c.day);
-            cache.set(key, await connection.apiOne('events.get', { streams: [streamId], fromTime: start - 14 * HOUR, toTime: start + DAY + 12 * HOUR, limit: 500 }, 'events'));
+            cache.set(key, await eventsOnStream(connection, { streams: [streamId], fromTime: start - 14 * HOUR, toTime: start + DAY + 12 * HOUR, limit: 500 }));
         }
         for (const e of cache.get(key)) {
             if (e.trashed === true || !itemDef.eventTypes.includes(e.type))
@@ -28602,12 +28816,14 @@ async function deleteWrittenValues(connection, conv) {
     for (const id of ids)
         await deleteTwice(connection, 'events.delete', { id });
     await bestEffort(async () => {
-        const doc = await readEvent(connection, conv.about);
-        const index = doc?.clientData?.[exports.DOCUMENT_VALUES_KEY];
-        if (index != null && typeof index === 'object') {
-            const kept = Object.fromEntries(Object.entries(index).filter(([id]) => !ids.includes(id)));
-            await connection.apiOne('events.update', { id: conv.about, update: { clientData: { [exports.DOCUMENT_VALUES_KEY]: Object.keys(kept).length > 0 ? kept : null } } }, 'event');
-        }
+        await oneAtATime(connection, conv.about, async () => {
+            const doc = await readEvent(connection, conv.about);
+            const index = doc?.clientData?.[exports.DOCUMENT_VALUES_KEY];
+            if (index != null && typeof index === 'object') {
+                const kept = Object.fromEntries(Object.entries(index).filter(([id]) => !ids.includes(id)));
+                await connection.apiOne('events.update', { id: conv.about, update: { clientData: { [exports.DOCUMENT_VALUES_KEY]: Object.keys(kept).length > 0 ? kept : null } } }, 'event');
+            }
+        });
     });
     await bestEffort(async () => {
         const printed = await connection.apiOne('events.get', { clientData: [{ path: `${exports.PRINTED_IN_KEY}.${conv.about}`, eq: true }], limit: 1000 }, 'events');
@@ -28618,29 +28834,100 @@ async function deleteWrittenValues(connection, conv) {
     });
     return ids;
 }
+/** Her events on a stream; none when she has no such stream yet (an item never used has none: nothing is there). */
+async function eventsOnStream(connection, params) {
+    try {
+        return await connection.apiOne('events.get', params, 'events');
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) === 'unknown-referenced-resource')
+            return [];
+        throw e;
+    }
+}
+/** A document with this many index entries at most has them all checked at a write; a longer one, a few each time. */
+const INDEX_CHECKED = 20;
+const INDEX_WINDOW = 5;
+/** The longest an index write waits for the one before it: one that never ends holds up no other. */
+const INDEX_WAIT_MS = 10_000;
+const indexQueues = new WeakMap();
+const indexCursors = new WeakMap();
+/**
+ * A few ids of a list, the next ones at each write: it goes on after the last one it gave (per connection, `key`),
+ * round and round, so each one gets its turn while the list grows. All of them when they are few.
+ */
+function nextOf(connection, key, list, size) {
+    if (list.length <= size)
+        return list;
+    const cursors = indexCursors.get(connection) ?? new Map();
+    indexCursors.set(connection, cursors);
+    const sorted = [...list].sort();
+    const last = cursors.get(key);
+    const at = last == null ? Math.floor(Math.random() * sorted.length) : sorted.findIndex(id => id > last);
+    const start = at === -1 ? 0 : at;
+    const given = Array.from({ length: size }, (_, i) => sorted[(start + i) % sorted.length]);
+    cursors.set(key, given[given.length - 1]);
+    return given;
+}
+/**
+ * The writes of one document's index one after the other (each reads it, then writes it whole): two taps lose nothing.
+ * Only within this connection: another tab or device can still lose an entry, restored by a later write. Not nested on
+ * one document.
+ */
+async function oneAtATime(connection, about, fn, waitMs = INDEX_WAIT_MS) {
+    const queues = indexQueues.get(connection) ?? new Map();
+    indexQueues.set(connection, queues);
+    const before = queues.get(about);
+    let timer;
+    const turn = before == null
+        ? Promise.resolve()
+        : Promise.race([before, new Promise(resolve => { timer = setTimeout(resolve, waitMs); })]).finally(() => clearTimeout(timer));
+    const run = turn.then(fn, fn);
+    const settled = run.catch(() => undefined);
+    queues.set(about, settled);
+    try {
+        return await run;
+    }
+    finally {
+        if (queues.get(about) === settled)
+            queues.delete(about);
+    }
+}
 /**
  * 4.26.0, after the answer and best effort: the values her app wrote from the document, added to its
- * `clientData.hdsDocumentValues` as `source` (PROVENANCE.md), the whole object written after a fresh read, the
- * dangling entries it finds (deleted, trashed) dropped. Returns the index written, or null when nothing was.
+ * `clientData.hdsDocumentValues` as `source` (PROVENANCE.md), the whole object written after a fresh read. `written`:
+ * the values of the document's earlier answers, of which a missing one is restored when its event is still there
+ * (CONVERSATION.md § The document lists them). Dangling entries (deleted, trashed) are dropped: all of them on an index
+ * of up to 20 entries, 5 in turn on a longer one, so the cost of a write does not grow with the document. Returns the
+ * index written, or null when nothing was.
  */
-async function indexDocumentValues(connection, about, eventIds) {
+async function indexDocumentValues(connection, about, eventIds, opts = {}) {
     if (eventIds.length === 0)
         return null;
-    return await bestEffort(async () => {
+    return await bestEffort(async () => await oneAtATime(connection, about, async () => {
         const doc = await readEvent(connection, about);
         if (doc?.type !== 'file/xds-v1')
             return null;
         const index = { ...(doc.clientData?.[exports.DOCUMENT_VALUES_KEY] ?? {}) };
-        for (const id of Object.keys(index)) {
-            const e = eventIds.includes(id) ? { trashed: false } : await readEvent(connection, id);
-            if (e == null || e.trashed === true)
+        const gone = async (id) => {
+            const e = await readEvent(connection, id);
+            return e == null || e.trashed === true;
+        };
+        const known = Object.keys(index).filter(id => !eventIds.includes(id));
+        const checked = known.length <= INDEX_CHECKED ? known : nextOf(connection, about + '|known', known, INDEX_WINDOW);
+        for (const id of checked)
+            if (await gone(id))
                 delete index[id];
-        }
+        // a value an answer lists that the index lost (a write that failed, or two at once): back, if it is still there
+        const missing = [...new Set(opts.written ?? [])].filter(id => index[id] == null && !eventIds.includes(id) && !known.includes(id));
+        for (const id of nextOf(connection, about + '|missing', missing, INDEX_WINDOW))
+            if (!await gone(id))
+                index[id] = 'source';
         for (const id of eventIds)
             index[id] = 'source';
         await connection.apiOne('events.update', { id: about, update: { clientData: { [exports.DOCUMENT_VALUES_KEY]: index } } }, 'event');
         return index;
-    });
+    }, opts.waitMs));
 }
 /**
  * 4.26.0, best effort: the document added to the `clientData.hdsPrintedIn` of her events an automatic `duplicate`
@@ -28805,19 +29092,22 @@ function holdsDocumentFields(document, fields) {
 }
 // ---- 4.26.0: her note (CONVERSATION.md § Her note) ---- //
 /**
- * The answers whose `note` her app removes now: once the contact's latest `task-status` (`status`) is `done` and later
- * than the answer; or 24 h after the answer when the work was already `done`, when she answered `not-mine`, or when the
- * document was unshared (`unshared`).
+ * The answers whose `note` her app removes now: once a `done` of the contact (`done`: the latest one, `latestDoneOf`) is
+ * later than the answer, whatever status follows that `done` (a document shared again, on hold for days); or 24 h after
+ * the answer when the work is done now (`current`: the latest status, `taskStatusOf`; left out, `done` is taken as the
+ * latest), when she answered `not-mine`, or when the document was unshared (`unshared`). An answer written while the work
+ * is in progress again waits for the next `done`.
  */
-function notesToRemove(conv, status, opts = {}) {
+function notesToRemove(conv, done, opts = {}) {
     const now = opts.now ?? Math.floor(Date.now() / 1000);
-    const doneAt = status?.hds?.status === 'done' ? status.time : null;
+    const doneAt = done?.hds?.status === 'done' ? done.time : null;
+    const idle = opts.current === undefined ? doneAt != null : opts.current?.hds?.status === 'done';
     return conv.answers.filter(a => {
         if (typeof a.content.note !== 'string')
             return false;
         if (doneAt != null && doneAt > a.created)
             return true;
-        return now - a.created >= DAY && (doneAt != null || conv.identity === 'not-mine' || opts.unshared === true);
+        return now - a.created >= DAY && (idle || conv.identity === 'not-mine' || opts.unshared === true);
     });
 }
 /**
@@ -28829,9 +29119,9 @@ async function removeNotes(connection, rel, params) {
     const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
     if (!conv.answers.some(a => typeof a.content.note === 'string'))
         return [];
-    const status = taskStatusOf(await listConversationAlerts(connection, collectorStreamId), params.about);
+    const alerts = await listConversationAlerts(connection, collectorStreamId);
     const out = [];
-    for (const a of notesToRemove(conv, status, params)) {
+    for (const a of notesToRemove(conv, latestDoneOf(alerts, params.about), { ...params, current: taskStatusOf(alerts, params.about) })) {
         const { note: _note, ...content } = a.content;
         await connection.apiOne('events.update', { id: a.id, update: { content } }, 'event');
         out.push(a.id);
@@ -28936,6 +29226,16 @@ async function writeQuestion(personConnection, streams, content) {
         const items = await listConversationItems(personConnection, streams, { about: content.about });
         if (conversationOf(items, content.about).identity === 'not-mine')
             notMine('writeQuestion');
+        const conv = conversationOf(items, content.about);
+        if (content.code === exports.QUESTION_CODES.WHICH_DATE && isDatedGrid(conv))
+            issues.push('question which-date: never on a dated grid');
+        if (content.code === exports.QUESTION_CODES.WHICH_ROW_DATE) {
+            if (conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_DATE))
+                issues.push('question which-row-date: the document has a which-date');
+            const rowOf = (c) => [c.context?.anchor?.attachmentId, c.context?.anchor?.page, c.context?.grid?.row].join('|');
+            if (conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_ROW_DATE && rowOf(q.item.content) === rowOf(content)))
+                issues.push('question which-row-date: the row was asked');
+        }
         const documentCode = DOCUMENT_CODES.has(content.code);
         const kind = documentCode ? 'proposed-document' : 'proposed-value';
         if (content.candidateId != null && !items.some(i => i.kind === kind && i.content.candidateId === content.candidateId)) {
@@ -28983,6 +29283,13 @@ async function writeProposedValues(personConnection, streams, about, contents) {
             const asked = conv.questions.some(q => q.item.content.candidateId === c.replaces && q.state === 'answered');
             if (old == null || old.writtenEventId != null || !asked)
                 own.push(`replaces ${c.replaces}: not a proposed value of the document answered by a question and not written`);
+        }
+        if (own.length === 0 && c.reason !== exports.REASON_NOT_READ && (c.grid != null || isDatedGrid(conv))) {
+            const p = c.proposal;
+            if (c.grid == null)
+                own.push('grid is required on a dated grid');
+            if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day'))
+                own.push('a value of a dated grid has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
         }
         issues.push(...own.map(i => `${c?.candidateId ?? '?'}: ${i}`));
     }
@@ -29080,34 +29387,34 @@ async function deleteTwice(connection, method, params) {
 }
 const ALERT_TEXT = {
     'task-status': {
-        title: { en: 'Document update', fr: 'Suivi du document' },
-        body: { en: 'Your contact updated the status of a document.', fr: 'Votre contact a mis à jour l\'état d\'un document.' }
+        title: { en: 'Document update', fr: 'Suivi du document', es: 'Actualización del documento', it: 'Aggiornamento del documento', 'pt-BR': 'Atualização do documento' },
+        body: { en: 'Your contact updated the status of a document.', fr: 'Votre contact a mis à jour l\'état d\'un document.', es: 'Su contacto ha actualizado el estado de un documento.', it: 'Il suo contatto ha aggiornato lo stato di un documento.', 'pt-BR': 'Seu contato atualizou o status de um documento.' }
     },
     notice: {
-        title: { en: 'Message', fr: 'Message' },
-        body: { en: 'Your contact sent you a message.', fr: 'Votre contact vous a envoyé un message.' }
+        title: { en: 'Message', fr: 'Message', es: 'Mensaje', it: 'Messaggio', 'pt-BR': 'Mensagem' },
+        body: { en: 'Your contact sent you a message.', fr: 'Votre contact vous a envoyé un message.', es: 'Su contacto le ha enviado un mensaje.', it: 'Il suo contatto le ha inviato un messaggio.', 'pt-BR': 'Seu contato enviou uma mensagem para você.' }
     },
     question: {
-        title: { en: 'Question', fr: 'Question' },
-        body: { en: 'Your contact asks you a question.', fr: 'Votre contact vous pose une question.' }
+        title: { en: 'Question', fr: 'Question', es: 'Pregunta', it: 'Domanda', 'pt-BR': 'Pergunta' },
+        body: { en: 'Your contact asks you a question.', fr: 'Votre contact vous pose une question.', es: 'Su contacto le hace una pregunta.', it: 'Il suo contatto le pone una domanda.', 'pt-BR': 'Seu contato faz uma pergunta a você.' }
     },
     'proposed-values': {
-        title: { en: 'Proposed values', fr: 'Valeurs proposées' },
-        body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.' }
+        title: { en: 'Proposed values', fr: 'Valeurs proposées', es: 'Valores propuestos', it: 'Valori proposti', 'pt-BR': 'Valores propostos' },
+        body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.', es: 'Su contacto propone valores leídos en un documento. Compruébelos, por favor.', it: 'Il suo contatto propone valori letti in un documento. Li controlli, per favore.', 'pt-BR': 'Seu contato propõe valores lidos em um documento. Confira-os.' }
     },
     answer: {
-        title: { en: 'Answer', fr: 'Réponse' },
-        body: { en: 'The person answered.', fr: 'La personne a répondu.' }
+        title: { en: 'Answer', fr: 'Réponse', es: 'Respuesta', it: 'Risposta', 'pt-BR': 'Resposta' },
+        body: { en: 'The person answered.', fr: 'La personne a répondu.', es: 'La persona ha respondido.', it: 'La persona ha risposto.', 'pt-BR': 'A pessoa respondeu.' }
     }
 };
 const STREAM_LABELS = {
     received: {
-        person: { en: 'Received in conversations', fr: 'Reçu dans les conversations', es: 'Recibido en las conversaciones' },
-        contact: { en: 'Items you send', fr: 'Éléments que vous envoyez', es: 'Elementos que usted envía' }
+        person: { en: 'Received in conversations', fr: 'Reçu dans les conversations', es: 'Recibido en las conversaciones', it: 'Ricevuto nelle conversazioni', 'pt-BR': 'Recebido nas conversas' },
+        contact: { en: 'Items you send', fr: 'Éléments que vous envoyez', es: 'Elementos que usted envía', it: 'Elementi che invia', 'pt-BR': 'Itens que você envia' }
     },
     sent: {
-        person: { en: 'Your answers', fr: 'Vos réponses', es: 'Sus respuestas' },
-        contact: { en: 'Answers shared with you', fr: 'Réponses partagées avec vous', es: 'Respuestas compartidas con usted' }
+        person: { en: 'Your answers', fr: 'Vos réponses', es: 'Sus respuestas', it: 'Le sue risposte', 'pt-BR': 'Suas respostas' },
+        contact: { en: 'Answers shared with you', fr: 'Réponses partagées avec vous', es: 'Respuestas compartidas con usted', it: 'Risposte condivise con lei', 'pt-BR': 'Respostas compartilhadas com você' }
     }
 };
 
@@ -31726,8 +32033,8 @@ function buildRawMethod(dimensions, dimensionNames) {
     return {
         methodId: '_raw',
         order: 0,
-        name: { en: 'HDS Native', fr: 'HDS Natif' },
-        description: { en: 'Direct dimensional input using the HDS scale stops.', fr: 'Saisie dimensionnelle directe utilisant les paliers de l\'échelle HDS.' },
+        name: { en: 'HDS Native', fr: 'HDS Natif', es: 'HDS nativo', it: 'HDS nativo', 'pt-BR': 'HDS Nativo' },
+        description: { en: 'Direct dimensional input using the HDS scale stops.', fr: 'Saisie dimensionnelle directe utilisant les paliers de l\'échelle HDS.', es: 'Entrada dimensional directa con los pasos de la escala HDS.', it: 'Inserimento dimensionale diretto con i livelli della scala HDS.', 'pt-BR': 'Entrada dimensional direta usando os pontos da escala HDS.' },
         components,
     };
 }
@@ -31810,6 +32117,56 @@ exports.EuclidianDistanceEngine = EuclidianDistanceEngine;
 
 /***/ },
 
+/***/ "./ts/converters/packTexts.ts"
+/*!************************************!*\
+  !*** ./ts/converters/packTexts.ts ***!
+  \************************************/
+(__unused_webpack_module, exports) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.addPackTexts = addPackTexts;
+const escapeKey = (key) => key.replace(/~/g, '~0').replace(/\//g, '~1');
+/** An array entry is `[value=<JSON>]` or `[id=<JSON>]` when it has one, else `[index]` (data-model `src/l10n.js`). */
+function segmentOf(entry, index) {
+    if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+        for (const key of ['value', 'id']) {
+            if (key in entry && (entry[key] === null || typeof entry[key] !== 'object'))
+                return `[${key}=${JSON.stringify(entry[key])}]`;
+        }
+    }
+    return `[${index}]`;
+}
+/**
+ * Adds the texts of a locale to a pack, in place: the engine and what it already handed out read the same text maps.
+ * A text the pack already has in that locale is kept. Returns the number of texts added.
+ */
+function addPackTexts(pack, locale, texts) {
+    let added = 0;
+    (function visit(node, at) {
+        if (node === null || typeof node !== 'object')
+            return;
+        if (Array.isArray(node)) {
+            node.forEach((entry, i) => { visit(entry, at + segmentOf(entry, i)); });
+            return;
+        }
+        if (typeof node.en === 'string' && node[locale] === undefined) {
+            const text = Object.hasOwn(texts, at) ? texts[at] : undefined;
+            if (typeof text === 'string' && text !== '') {
+                node[locale] = text;
+                added++;
+            }
+        }
+        for (const [key, value] of Object.entries(node))
+            visit(value, at === '' ? escapeKey(key) : `${at}/${escapeKey(key)}`);
+    })(pack, '');
+    return added;
+}
+
+
+/***/ },
+
 /***/ "./ts/errors.ts"
 /*!**********************!*\
   !*** ./ts/errors.ts ***!
@@ -31880,7 +32237,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.contentEventIds = exports.DOCUMENT_UNIQUE_ID_KEY = exports.IDENTIFIER_SYSTEM_URI = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.appDescription = exports.cmcText = exports.cmcConversation = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = void 0;
+exports.researchEligibility = exports.appDescription = exports.cmcText = exports.cmcConversation = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -32011,6 +32368,8 @@ const cmcConversation = __importStar(__webpack_require__(/*! ./cmc/conversation.
 exports.cmcConversation = cmcConversation;
 const appDescription = __importStar(__webpack_require__(/*! ./appDescription.js */ "./ts/appDescription.ts"));
 exports.appDescription = appDescription;
+const researchEligibility = __importStar(__webpack_require__(/*! ./research/eligibility.js */ "./ts/research/eligibility.ts"));
+exports.researchEligibility = researchEligibility;
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
 exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
@@ -32105,7 +32464,8 @@ const HDSLib = {
     cmcItemReminders,
     cmcConversation,
     cmcText: cmcText_ts_1.cmcText,
-    appDescription
+    appDescription,
+    researchEligibility
 };
 exports["default"] = HDSLib;
 
@@ -32367,6 +32727,514 @@ exports.encryption = _encryption;
 // direct `import 'pryv'`, which would be a second unpatched instance with
 // neither the monitor nor the socket.io plugin applied.
 exports.delegation = _delegation;
+
+
+/***/ },
+
+/***/ "./ts/research/eligibility.ts"
+/*!************************************!*\
+  !*** ./ts/research/eligibility.ts ***!
+  \************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ELIGIBILITY_LANGUAGES = exports.ELIGIBILITY_MAX_CRITERIA = exports.ELIGIBILITY_MIN_CRITERIA = exports.ELIGIBILITY_BANDS = exports.ELIGIBILITY_BAND_TYPE = void 0;
+exports.eligibilityBandOf = eligibilityBandOf;
+exports.revealedCriteria = revealedCriteria;
+exports.checkEligibilityRequest = checkEligibilityRequest;
+exports.eligibilityItemKeys = eligibilityItemKeys;
+exports.isEligibilityExpired = isEligibilityExpired;
+exports.readEligibilityOutcomes = readEligibilityOutcomes;
+exports.eligibilityQuestionsToAsk = eligibilityQuestionsToAsk;
+exports.eligibilityResult = eligibilityResult;
+exports.eligibilityBandContent = eligibilityBandContent;
+exports.sendEligibilityBand = sendEligibilityBand;
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const labResults_ts_1 = __webpack_require__(/*! ../HDSModel/labResults.js */ "./ts/HDSModel/labResults.ts");
+const appScope_ts_1 = __webpack_require__(/*! ../cmc/appScope.js */ "./ts/cmc/appScope.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+exports.ELIGIBILITY_BAND_TYPE = 'research/eligibility-band-v1';
+exports.ELIGIBILITY_BANDS = ['0-49', '50-100'];
+exports.ELIGIBILITY_MIN_CRITERIA = 3;
+exports.ELIGIBILITY_MAX_CRITERIA = 16;
+/** Languages every text of a request must have. */
+exports.ELIGIBILITY_LANGUAGES = ['en', 'fr'];
+const DAY = 86400;
+const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const RESERVED_IDS = ['__proto__'];
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const PAGE = 200;
+// ---------------------------------------------------------------- score
+function eligibilityBandOf(metWeight, totalWeight) {
+    return 2 * metWeight < totalWeight ? '0-49' : '50-100';
+}
+/**
+ * Indexes of the criteria a band would reveal: whoever knows the weights reads their result in the band. With two
+ * bands these are exactly the criteria that weigh half or more of the total.
+ */
+function revealedCriteria(weights) {
+    const total = weights.reduce((a, b) => a + b, 0);
+    return weights.flatMap((w, i) => 2 * w >= total ? [i] : []);
+}
+// ---------------------------------------------------------------- publish check
+/**
+ * Every reason to refuse a request; empty when it may be used. Run before a test, and at publish with `publish: true`,
+ * which also refuses deprecated items (a live request survives the deprecation of one).
+ */
+function checkEligibilityRequest(request, opts = {}) {
+    const issues = [];
+    const add = (path, code) => { issues.push({ path, code }); };
+    if (!isObject(request))
+        return [{ path: '', code: 'not-an-object' }];
+    const model = opts.model ?? (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    const now = opts.now ?? Date.now() / 1000;
+    onlyKeys(request, ['version', 'requestId', 'studyId', 'studyName', 'title', 'description', 'ethicsRef', 'expiresAt', 'criteria'], '', add);
+    if (request.version !== 1)
+        add('version', 'unknown-version');
+    for (const k of ['requestId', 'studyId'])
+        if (typeof request[k] !== 'string' || !ID_RE.test(request[k]))
+            add(k, 'invalid-id');
+    for (const k of ['studyName', 'title', 'description'])
+        checkText(request[k], k, add);
+    if (typeof request.ethicsRef !== 'string' || request.ethicsRef.trim() === '')
+        add('ethicsRef', 'missing');
+    if (!isNumber(request.expiresAt))
+        add('expiresAt', 'invalid-date');
+    else if (request.expiresAt <= now)
+        add('expiresAt', 'expired');
+    const criteria = request.criteria;
+    if (!Array.isArray(criteria)) {
+        add('criteria', 'missing');
+        return issues;
+    }
+    if (criteria.length < exports.ELIGIBILITY_MIN_CRITERIA)
+        add('criteria', 'too-few-criteria');
+    if (criteria.length > exports.ELIGIBILITY_MAX_CRITERIA)
+        add('criteria', 'too-many-criteria');
+    const ids = new Set();
+    criteria.forEach((c, i) => {
+        const path = `criteria[${i}]`;
+        if (!isObject(c)) {
+            add(path, 'not-an-object');
+            return;
+        }
+        onlyKeys(c, ['id', 'label', 'weight', 'rule', 'question'], path, add);
+        if (typeof c.id !== 'string' || !ID_RE.test(c.id) || RESERVED_IDS.includes(c.id))
+            add(path + '.id', 'invalid-id');
+        else if (ids.has(c.id))
+            add(path + '.id', 'duplicate-id');
+        ids.add(c.id);
+        checkText(c.label, path + '.label', add);
+        if (!isWeight(c.weight))
+            add(path + '.weight', 'invalid-weight');
+        if (c.rule === undefined && c.question === undefined)
+            add(path, 'no-rule-and-no-question');
+        if (c.rule !== undefined)
+            checkRule(c.rule, path + '.rule', model, opts.publish === true, add);
+        if (c.question !== undefined)
+            checkQuestion(c.question, path + '.question', add);
+    });
+    const weights = criteria.map((c) => c?.weight);
+    if (weights.every(isWeight))
+        for (const i of revealedCriteria(weights))
+            add(`criteria[${i}].weight`, 'weight-half-or-more');
+    return issues;
+}
+function checkRule(rule, path, model, publish, add) {
+    if (!isObject(rule)) {
+        add(path, 'not-an-object');
+        return;
+    }
+    const keys = {
+        exists: ['withinDays'],
+        range: ['eventType', 'min', 'max', 'withinDays'],
+        count: ['min', 'withinDays'],
+        in: ['values', 'withinDays'],
+        age: ['min', 'max']
+    };
+    if (typeof rule.op !== 'string' || !Object.hasOwn(keys, rule.op)) {
+        add(path + '.op', 'unknown-operator');
+        return;
+    }
+    onlyKeys(rule, ['op', 'itemKey', ...keys[rule.op]], path, add);
+    if (rule.withinDays !== undefined && !isPositiveInteger(rule.withinDays))
+        add(path + '.withinDays', 'invalid-number');
+    const item = typeof rule.itemKey === 'string' ? model.itemsDefs.forKey(rule.itemKey, false) : null;
+    if (item == null) {
+        add(path + '.itemKey', 'unknown-item');
+        return;
+    }
+    if (publish && item.isDeprecated)
+        add(path + '.itemKey', 'deprecated-item');
+    // what a person does not enter or import as health data, and roots covered by name only (genetics, ...)
+    if (item.isSystem || item.isAttachments || model.streams.isExplicitGrantOnly(item.data.streamId))
+        add(path + '.itemKey', 'item-not-allowed');
+    if (rule.op === 'range') {
+        if (!item.eventTypes.includes(rule.eventType))
+            add(path + '.eventType', 'not-a-type-of-the-item');
+        else if (contentType(model, rule.eventType) !== 'number')
+            add(path + '.eventType', 'not-a-number');
+        checkBounds(rule.min, rule.max, path, add);
+    }
+    if (rule.op === 'count' && !isPositiveInteger(rule.min))
+        add(path + '.min', 'invalid-number');
+    if (rule.op === 'in') {
+        const options = optionsOf(item, model);
+        if (options == null)
+            add(path + '.itemKey', 'not-a-select-item');
+        // an empty list, or every option, tests nothing
+        else if (!Array.isArray(rule.values) || rule.values.length === 0 || new Set(rule.values).size !== rule.values.length ||
+            rule.values.length >= options.length || rule.values.some((v) => !options.includes(v)))
+            add(path + '.values', 'invalid-options');
+    }
+    if (rule.op === 'age') {
+        if (item.eventTypes.length !== 1 || item.eventTypes[0] !== 'date/iso-8601')
+            add(path + '.itemKey', 'not-a-date-item');
+        checkBounds(rule.min, rule.max, path, add);
+    }
+}
+function checkQuestion(q, path, add) {
+    if (!isObject(q)) {
+        add(path, 'not-an-object');
+        return;
+    }
+    onlyKeys(q, ['text', 'answer'], path, add);
+    checkText(q.text, path + '.text', add);
+    const a = q.answer;
+    path += '.answer';
+    if (!isObject(a)) {
+        add(path, 'not-an-object');
+        return;
+    }
+    const keys = {
+        boolean: ['met'], number: ['unit', 'min', 'max'], choice: ['options', 'met'], date: ['withinDays', 'minYears', 'maxYears']
+    };
+    if (typeof a.type !== 'string' || !Object.hasOwn(keys, a.type)) {
+        add(path + '.type', 'unknown-answer-type');
+        return;
+    }
+    onlyKeys(a, ['type', ...keys[a.type]], path, add);
+    if (a.type === 'boolean' && typeof a.met !== 'boolean')
+        add(path + '.met', 'not-a-boolean');
+    if (a.type === 'number') {
+        if (a.unit !== undefined)
+            checkText(a.unit, path + '.unit', add);
+        checkBounds(a.min, a.max, path, add);
+    }
+    if (a.type === 'choice') {
+        const options = Array.isArray(a.options) ? a.options : [];
+        const values = options.map((o) => o?.value);
+        if (values.length < 2 || values.some((v) => typeof v !== 'string' || v === '') || new Set(values).size !== values.length)
+            add(path + '.options', 'invalid-options');
+        options.forEach((o, i) => {
+            if (isObject(o))
+                onlyKeys(o, ['value', 'label'], `${path}.options[${i}]`, add);
+            checkText(o?.label, `${path}.options[${i}].label`, add);
+        });
+        // an answer that always, or never, meets the criterion tells nothing
+        if (!Array.isArray(a.met) || a.met.length === 0 || new Set(a.met).size !== a.met.length ||
+            a.met.length >= values.length || a.met.some((v) => !values.includes(v)))
+            add(path + '.met', 'invalid-options');
+    }
+    if (a.type === 'date') {
+        if (a.withinDays !== undefined) {
+            if (!isPositiveInteger(a.withinDays))
+                add(path + '.withinDays', 'invalid-number');
+            if (a.minYears !== undefined || a.maxYears !== undefined)
+                add(path, 'invalid-range');
+        }
+        else
+            checkBounds(a.minYears, a.maxYears, path, add);
+    }
+}
+function checkText(text, path, add) {
+    if (isObject(text) && Object.values(text).some((v) => typeof v !== 'string'))
+        add(path, 'text-not-a-string');
+    for (const lang of exports.ELIGIBILITY_LANGUAGES) {
+        if (!isObject(text) || typeof text[lang] !== 'string' || text[lang].trim() === '')
+            add(path, 'missing-text:' + lang);
+    }
+}
+function checkBounds(min, max, path, add) {
+    if (min === undefined && max === undefined) {
+        add(path, 'missing-range');
+        return;
+    }
+    if ((min !== undefined && !isNumber(min)) || (max !== undefined && !isNumber(max)))
+        add(path, 'invalid-number');
+    else if (min !== undefined && max !== undefined && min > max)
+        add(path, 'invalid-range');
+}
+function onlyKeys(o, allowed, path, add) {
+    for (const k of Object.keys(o))
+        if (!allowed.includes(k))
+            add(path === '' ? k : path + '.' + k, 'unknown-field');
+}
+// ---------------------------------------------------------------- before the run: nothing is read
+/** Keys of the items the test will look at, for the screen shown before anything is read. */
+function eligibilityItemKeys(request) {
+    return [...new Set(request.criteria.flatMap((c) => c.rule == null ? [] : [c.rule.itemKey]))];
+}
+function isEligibilityExpired(request, now = Date.now() / 1000) {
+    return request.expiresAt <= now;
+}
+// ---------------------------------------------------------------- run
+/**
+ * Reads the items the rules name, and only those, and gives the outcome of each rule. Read-only.
+ * Throws when the request is expired or invalid, before any read.
+ */
+async function readEligibilityOutcomes(connection, request, opts = {}) {
+    const model = opts.model ?? (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    const now = opts.now ?? Date.now() / 1000;
+    const issues = checkEligibilityRequest(request, { model, now });
+    if (issues.length > 0)
+        throw new errors_ts_1.HDSLibError('Eligibility request refused: ' + issues.map((i) => `${i.path} ${i.code}`).join(', '));
+    const outcomes = {};
+    for (const key of eligibilityItemKeys(request)) {
+        const item = model.itemsDefs.forKey(key);
+        const pending = new Map(request.criteria.filter((c) => c.rule?.itemKey === key).map((c) => [c.id, newRuleState(c.rule)]));
+        for (let skip = 0; pending.size > 0; skip += PAGE) {
+            const page = await readPage(connection, item, skip);
+            for (const event of page) {
+                if (event.time > now || !isOfItem(event, item, model))
+                    continue;
+                for (const [id, state] of pending) {
+                    const outcome = state.take(event, now, model);
+                    if (outcome != null) {
+                        outcomes[id] = outcome;
+                        pending.delete(id);
+                    }
+                }
+            }
+            if (page.length < PAGE)
+                break;
+        }
+        for (const [id, state] of pending)
+            outcomes[id] = state.end();
+    }
+    return outcomes;
+}
+/** The event is one of the item, or of the item that replaced it on the same stream and type (a renamed key). */
+function isOfItem(event, item, model) {
+    const resolved = model.itemsDefs.forEvent(event, false);
+    return resolved != null && (resolved.key === item.key ||
+        (resolved.data.streamId === item.data.streamId && item.eventTypes.includes(event.type)));
+}
+async function readPage(connection, item, skip) {
+    try {
+        return await connection.apiOne('events.get', { streams: [item.data.streamId], types: item.eventTypes, limit: PAGE, skip }, 'events');
+    }
+    catch (e) {
+        // the stream does not exist on this account: nothing was ever recorded
+        if ((0, appScope_ts_1.pryvErrorCode)(e) === 'unknown-referenced-resource')
+            return [];
+        throw e;
+    }
+}
+/** Criteria whose question is to be asked: no data for the rule (or no rule), and a question. */
+function eligibilityQuestionsToAsk(request, outcomes) {
+    return request.criteria.filter((c) => c.question != null && outcomeIn(outcomes, c.id) === 'no-data');
+}
+/** The result, on the device. An answer counts only where the account has no data, and never overrules it. */
+function eligibilityResult(request, outcomes, answers = {}, now = Date.now() / 1000) {
+    const total = request.criteria.reduce((sum, c) => sum + c.weight, 0);
+    let met = 0;
+    const criteria = request.criteria.map((c) => {
+        let outcome = outcomeIn(outcomes, c.id);
+        let from = outcome === 'no-data' ? null : 'account';
+        if (outcome === 'no-data' && c.question != null) {
+            outcome = answerOutcome(c.question.answer, Object.hasOwn(answers, c.id) ? answers[c.id] : null, now);
+            if (outcome !== 'no-data')
+                from = 'answer';
+        }
+        if (outcome === 'met')
+            met += c.weight;
+        return { id: c.id, outcome, from, share: Math.round(100 * c.weight / total) };
+    });
+    return { criteria, score: Math.floor(100 * met / total), band: eligibilityBandOf(met, total) };
+}
+// ---------------------------------------------------------------- send, when the person chooses to
+/** Everything that may be written: the request and the band. */
+function eligibilityBandContent(requestId, band) {
+    if (!exports.ELIGIBILITY_BANDS.includes(band))
+        throw new errors_ts_1.HDSLibError(`Unknown eligibility band "${band}"`);
+    return { requestId, band };
+}
+/** Writes the band on `streamId`: one event per request, replaced when she sends again. Returns its id. */
+async function sendEligibilityBand(connection, streamId, request, band, now = Date.now() / 1000) {
+    if (isEligibilityExpired(request, now))
+        throw new errors_ts_1.HDSLibError('Eligibility request expired');
+    const content = eligibilityBandContent(request.requestId, band);
+    for (let skip = 0;; skip += PAGE) {
+        const page = await connection.apiOne('events.get', { streams: [streamId], types: [exports.ELIGIBILITY_BAND_TYPE], limit: PAGE, skip }, 'events');
+        const previous = page.find((e) => e.content?.requestId === request.requestId);
+        if (previous != null) {
+            const updated = await connection.apiOne('events.update', { id: previous.id, update: { content, time: now } }, 'event');
+            return updated.id;
+        }
+        if (page.length < PAGE)
+            break;
+    }
+    const created = await connection.apiOne('events.create', { streamIds: [streamId], type: exports.ELIGIBILITY_BAND_TYPE, content, time: now }, 'event');
+    return created.id;
+}
+function newRuleState(rule) {
+    if (rule.op === 'exists' || rule.op === 'count') {
+        const min = rule.op === 'count' ? rule.min : 1;
+        let inside = 0;
+        let maybe = 0;
+        let any = false;
+        return {
+            take(event, now) {
+                any = true;
+                const w = inWindow(event, rule.withinDays, now);
+                if (w === 'in')
+                    inside++;
+                else if (w === 'maybe')
+                    maybe++;
+                return inside >= min ? 'met' : null;
+            },
+            end: () => !any || inside + maybe >= min ? 'no-data' : 'not-met'
+        };
+    }
+    return {
+        take(event, now, model) {
+            if (rule.op === 'age')
+                return ageOutcome(event, rule, now);
+            const w = inWindow(event, rule.withinDays, now);
+            if (w === 'maybe')
+                return 'no-data';
+            if (rule.op === 'in') {
+                if (w === 'out')
+                    return 'not-met';
+                const options = optionsOf(model.itemsDefs.forKey(rule.itemKey), model);
+                return options?.includes(event.content) ? toOutcome(rule.values.includes(event.content)) : 'no-data';
+            }
+            const value = valueIn(event, rule.eventType, model, model.itemsDefs.forKey(rule.itemKey));
+            if (value == null)
+                return 'no-data';
+            return toOutcome(w === 'in' && inRange(value, rule.min, rule.max));
+        },
+        end: () => 'no-data'
+    };
+}
+function ageOutcome(event, rule, now) {
+    const years = typeof event.content === 'string' ? yearsSince(event.content.slice(0, 10), now) : null;
+    return years == null ? 'no-data' : toOutcome(inRange(years, rule.min, rule.max));
+}
+/** `maybe`: the date is not known well enough to say (PARTIAL-DATES.md). A span counts up to its end. */
+function inWindow(event, withinDays, now) {
+    if (withinDays == null)
+        return 'in';
+    const since = now - withinDays * DAY;
+    const precision = event.clientData?.hdsTimePrecision;
+    const endPrecision = event.clientData?.hdsEndPrecision ?? (event.duration > 0 ? undefined : precision);
+    if (event.duration === null)
+        return 'in';
+    const end = event.time + (event.duration ?? 0);
+    if (precision === 'unknown' || endPrecision === 'unknown' || endPrecision === 'approx')
+        return 'maybe';
+    if (end >= since)
+        return 'in';
+    const d = new Date(end * 1000);
+    let last = end;
+    if (event.duration > 0)
+        return 'out'; // a partial end is stored at the end of its period
+    if (endPrecision === 'month')
+        last = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 1000;
+    if (endPrecision === 'year')
+        last = Date.UTC(d.getUTCFullYear() + 1, 0, 1) / 1000;
+    return last >= since ? 'maybe' : 'out';
+}
+/** The event's number in `eventType`, or null when it is not an exact number or cannot be converted. */
+function valueIn(event, eventType, model, item) {
+    if (!isNumber(event.content) || !(0, labResults_ts_1.isExactLabValue)(event))
+        return null;
+    if (event.type === eventType)
+        return event.content;
+    // lab units: the item's own factors (data-model BLOOD-CHEMISTRY.md); a pair without one is never compared
+    for (const f of item.data.unitConversions?.factors ?? []) {
+        if (f.from === event.type && f.to === eventType)
+            return event.content * f.factor;
+        if (f.to === event.type && f.from === eventType)
+            return event.content / f.factor;
+    }
+    for (const system of ['metric', 'imperial']) {
+        const converted = model.conversions.convert(event.type, event.content, system);
+        if (converted?.targetEventType === eventType)
+            return converted.value;
+    }
+    return null;
+}
+function answerOutcome(def, answer, now) {
+    if (answer == null)
+        return 'no-data';
+    switch (def.type) {
+        case 'boolean':
+            return typeof answer === 'boolean' ? toOutcome(answer === def.met) : 'no-data';
+        case 'number':
+            return isNumber(answer) ? toOutcome(inRange(answer, def.min, def.max)) : 'no-data';
+        case 'choice':
+            return def.options.some((o) => o.value === answer) ? toOutcome(def.met.includes(answer)) : 'no-data';
+        case 'date': {
+            const days = typeof answer === 'string' ? daysSince(answer, now) : null;
+            if (days == null)
+                return 'no-data';
+            if (def.withinDays != null)
+                return toOutcome(days <= def.withinDays);
+            return toOutcome(inRange(yearsSince(answer, now), def.minYears, def.maxYears));
+        }
+    }
+}
+// ---------------------------------------------------------------- helpers
+/** JSON type of an eventType's content: `number`, `boolean`, `null`, ... */
+function contentType(model, eventType) {
+    const type = model.eventTypes.getEventTypeDefinition(eventType)?.type;
+    return typeof type === 'string' ? type : null;
+}
+/** The option values of a `select` item whose content is one of them; null for any other item. */
+function optionsOf(item, model) {
+    if (item.data.type !== 'select' || item.eventTypes.length !== 1 || !Array.isArray(item.data.options))
+        return null;
+    if (!['string', 'number'].includes(contentType(model, item.eventTypes[0]) ?? ''))
+        return null;
+    return item.data.options.map((o) => o.value);
+}
+function parseDate(date) {
+    const m = DATE_RE.exec(date);
+    if (m == null)
+        return null;
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    return d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3] ? d : null;
+}
+/** Whole days since a date, today included as 0; null for an invalid or future date. */
+function daysSince(date, now) {
+    const d = parseDate(date);
+    if (d == null)
+        return null;
+    const t = new Date(now * 1000);
+    const days = Math.round((Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()) - d.getTime()) / 1000 / DAY);
+    return days < 0 ? null : days;
+}
+function yearsSince(date, now) {
+    if (daysSince(date, now) == null)
+        return null;
+    const d = parseDate(date);
+    const t = new Date(now * 1000);
+    const before = t.getMonth() < d.getUTCMonth() || (t.getMonth() === d.getUTCMonth() && t.getDate() < d.getUTCDate());
+    return t.getFullYear() - d.getUTCFullYear() - (before ? 1 : 0);
+}
+function inRange(v, min, max) {
+    return (min == null || v >= min) && (max == null || v <= max);
+}
+function outcomeIn(outcomes, id) { return Object.hasOwn(outcomes, id) ? outcomes[id] : 'no-data'; }
+function toOutcome(met) { return met ? 'met' : 'not-met'; }
+function isObject(v) { return v != null && typeof v === 'object' && !Array.isArray(v); }
+function isNumber(v) { return typeof v === 'number' && Number.isFinite(v); }
+function isPositiveInteger(v) { return Number.isInteger(v) && v > 0; }
+function isWeight(v) { return isPositiveInteger(v) && v <= 100; }
 
 
 /***/ },
@@ -50269,16 +51137,21 @@ describe('[CNV] cmcConversation', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(strip(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.CONVERSATION_ALERT_HDS_SCHEMA), strip(published));
     });
 
+    it('[CNV10c] notRead is a count a contact may post (4.36.0)', () => {
+      const hds = { kind: 'task-status', about: DOC, status: 'awaiting-answers', attempt: 1, counts: { proposed: 140, questions: 6, notRead: 11 } };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent(hds).hds, hds);
+    });
+
     it('[CNV10b] on-hold is a status a contact may post (4.33.0)', () => {
       const hds = { kind: 'task-status', about: DOC, status: 'on-hold', attempt: 2 };
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent(hds).hds, hds);
     });
 
-    it('[CNV11] alert content: fixed words in en and fr, code, checked hds; never a value', () => {
+    it('[CNV11] alert content: fixed words in each language, `pt-BR` sent as `pt`, code, checked hds; never a value', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent({ kind: 'proposed-values', about: DOC, count: 2 }), {
         level: 'info',
-        title: { en: 'Proposed values', fr: 'Valeurs proposées' },
-        body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.' },
+        title: { en: 'Proposed values', fr: 'Valeurs proposées', es: 'Valores propuestos', it: 'Valori proposti', pt: 'Valores propostos' },
+        body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.', es: 'Su contacto propone valores leídos en un documento. Compruébelos, por favor.', it: 'Il suo contatto propone valori letti in un documento. Li controlli, per favore.', pt: 'Seu contato propõe valores lidos em um documento. Confira-os.' },
         code: 'hds-proposed-values',
         hds: { kind: 'proposed-values', about: DOC, count: 2 }
       });
@@ -50522,6 +51395,184 @@ describe('[CNV] cmcConversation', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.answers.length, 1);
     });
 
+    it('[CNV41b] many values: one answer per 20, each listing its own values; the note on the first; every value answered', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 45 }, (_, i) => 'c' + (i + 1));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: person.clock, engines: ENGINES, note: 'all mine' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.refused, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.answers.map(a => a.written.length), [20, 20, 5]);
+      const sent = [...person.events.values()].filter(e => e.content?.kind === 'answer');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(sent.map(e => e.content.inReplyTo), [0, 20, 40].map(i => {
+        const c = [...person.events.values()].find(e => e.content?.kind === 'proposed-value' && e.content.candidateId === ids[i]);
+        return c.id;
+      }));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(sent.map(e => e.content.note ?? null), ['all mine', null, null]);
+      const seen = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(new Set(seen.proposedValues.map(p => p.state)), new Set(['confirmed']));
+    });
+
+    it('[CNV41c] a write that fails in the middle: what was written is answered, not-mine deletes it, a retry writes the rest once', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 25 }, (_, i) => 'c' + (i + 1));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const qId = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, identityQuestion);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'confirm', shownAt: person.clock });
+      const values = () => [...person.events.values()].filter(e => e.type === 'concentration/ug-l');
+      const shownAt = person.clock;
+      const apiOne = person.apiOne;
+      let creates = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'concentration/ug-l' && ++creates === 23) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      const decisions = ids.map(candidateId => ({ candidateId, action: 'confirm' }));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions, shownAt, engines: ENGINES }),
+        (e) => e.innerObject?.reason === 'write-failed' && Object.keys(e.innerObject.written).length === 22);
+      person.apiOne = apiOne;
+      const seen = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(seen.proposedValues.filter(p => p.state === 'confirmed').length, 22, 'every value written is answered');
+      const rest = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions, shownAt: person.clock, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(rest.refused.length, 22, 'the answered ones are not asked twice');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(rest.answers.map(a => a.written.length), [3]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(values().length, 25);
+      const no = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'not-mine', shownAt: person.clock });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(no.deletedValueIds.length, 25);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(values().length, 0);
+    });
+
+    it('[CNV41d] not-mine before the retry deletes the values of a failed write', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = ['c1', 'c2', 'c3'];
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const qId = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, identityQuestion);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'confirm', shownAt: person.clock });
+      const apiOne = person.apiOne;
+      let creates = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'concentration/ug-l' && ++creates === 3) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: person.clock, engines: ENGINES }),
+        (e) => e.innerObject?.reason === 'write-failed');
+      person.apiOne = apiOne;
+      const no = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'not-mine', shownAt: person.clock });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(no.deletedValueIds.length, 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual([...person.events.values()].filter(e => e.type === 'concentration/ug-l').length, 0);
+    });
+
+    it('[CNV41e] a first batch written, its alert not posted: the next batches still written, then alert-not-posted', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 25 }, (_, i) => 'c' + (i + 1));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const apiOne = person.apiOne;
+      let alerts = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'notification/alert-cmc' && ++alerts === 1) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      const err = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [...ids.map(candidateId => ({ candidateId, action: 'confirm' })), { candidateId: 'zz', action: 'confirm' }], shownAt: person.clock, engines: ENGINES })
+        .then(() => null, (e) => e);
+      person.apiOne = apiOne;
+      const sent = [...person.events.values()].filter(e => e.content?.kind === 'answer');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(sent.map(e => e.content.written.length), [20, 5], 'both batches are answered');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(err.innerObject.reason, 'alert-not-posted');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(err.innerObject.notPosted, [sent[0].id]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(err.innerObject.refused, [{ candidateId: 'zz', reason: 'unknown-candidate' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(alertsOf(person).length, 1, 'the second answer is announced');
+      const seen = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(seen.proposedValues.filter(p => p.state === 'confirmed').length, 25);
+    });
+
+    it('[CNV41g] the answer itself fails after values were written: write-failed lists them, a retry heals and not-mine then deletes them', async () => {
+      const { person, rel: r, streams } = await setup();
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [pv('c1'), pv('c2')]);
+      const qId = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, identityQuestion);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'confirm', shownAt: person.clock });
+      const apiOne = person.apiOne;
+      let answers = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.content?.kind === 'answer' && ++answers === 1) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      const decisions = ['c1', 'c2'].map(candidateId => ({ candidateId, action: 'confirm' }));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions, shownAt: person.clock, engines: ENGINES }),
+        (e) => e.innerObject?.reason === 'write-failed' && Object.keys(e.innerObject.written).length === 2);
+      person.apiOne = apiOne;
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions, shownAt: person.clock, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.answers.map(a => a.written.length), [2]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual([...person.events.values()].filter(e => e.type === 'concentration/ug-l').length, 2);
+      const no = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: qId, action: 'not-mine', shownAt: person.clock });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(no.deletedValueIds.length, 2);
+    });
+
+    it('[CNV41h] a conversation that cannot be read between two batches: write-failed, the first batch answered', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 21 }, (_, i) => 'c' + (i + 1));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const apiOne = person.apiOne;
+      let answered = false;
+      person.apiOne = async (method, params, key) => {
+        if (answered && method === 'events.get') throw new Error('offline');
+        const out = await apiOne(method, params, key);
+        if (method === 'events.create' && params.content?.kind === 'answer') answered = true;
+        return out;
+      };
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: person.clock, engines: ENGINES }),
+        (e) => e.innerObject?.reason === 'write-failed' && Object.keys(e.innerObject.written).length === 20);
+      person.apiOne = apiOne;
+      const seen = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(seen.proposedValues.filter(p => p.state === 'confirmed').length, 20);
+    });
+
+    it('[CNV41i] corrections keep their own answer across batches; a first batch wholly refused leaves the note for the next', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 21 }, (_, i) => 'c' + (i + 1));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const correction = { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 50 };
+      const mixed = [...ids.slice(0, 20).map(candidateId => ({ candidateId, action: 'confirm' })), { candidateId: 'c21', action: 'correct', correction }];
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: mixed, shownAt: person.clock, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.answers.map(a => [a.action, a.written.length]), [['confirm', 20], ['correct', 1]]);
+      const D4 = 'ckdoc0000004';
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, D4, [pv('k1', { about: D4 })]);
+      const unknown = Array.from({ length: 20 }, (_, i) => ({ candidateId: 'x' + i, action: 'confirm' }));
+      const late = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: D4, decisions: [...unknown, { candidateId: 'k1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES, note: 'mine' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(late.refused.length, 20);
+      const noted = [...person.events.values()].filter(e => e.content?.kind === 'answer' && e.content.about === D4);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(noted.map(e => e.content.note ?? null), ['mine']);
+    });
+
+    it('[CNV41j] a run over several batches confirms the skipped and duplicate candidates first', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 22 }, (_, i) => 'c' + (i + 1));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerProposedValues(person, r, { about: DOC, candidateIds: ['c22'], action: 'skip', shownAt: person.clock });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: person.clock, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.refused, []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(res.answers[0].written.some(w => w.candidateId === 'c22'), 'the skipped one is in the first batch');
+    });
+
+    it('[CNV41f] a candidate that changed between two batches is refused, not written', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 21 }, (_, i) => 'c' + (i + 1));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const shownAt = person.clock;
+      const apiOne = person.apiOne;
+      let changed = false;
+      person.apiOne = async (method, params, key) => {
+        const out = await apiOne(method, params, key);
+        if (!changed && method === 'events.create' && params.content?.kind === 'answer') {
+          changed = true;
+          const last = [...person.events.values()].find(e => e.content?.kind === 'proposed-value' && e.content.candidateId === 'c21');
+          last.modified = shownAt + 1000;
+        }
+        return out;
+      };
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt, engines: ENGINES });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.refused, [{ candidateId: 'c21', reason: 'changed-since-shown' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.answers[0].written.length, 20);
+    });
+
     it('[CNV42] which-unit: choose writes no value, the contact re-proposes with replaces, the old one is no longer confirmable', async () => {
       const { person, rel: r, streams } = await setup();
       await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [noProposal(pv('c1', { status: 'unit-missing' }))]);
@@ -50659,6 +51710,71 @@ describe('[CNV] cmcConversation', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(person.events.has(value.id), 'her values stay');
       for (const c of person.calls.filter(c => c.method === 'streams.delete')) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.params.mergeEventsWithParent, false);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationStreams(account()), []);
+    });
+  });
+
+  describe('[CNV-G] a dated grid (4.36.0)', () => {
+    const X = { engine: 'hds-reader', engineVersion: '0.9.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
+    const box = (column, row = 2) => ({ grid: { row, column }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [column * 2.5, 22.4, 2.5, 12.9] } });
+    const DAY1 = Date.parse('2026-03-12T12:00:00Z') / 1000;
+    const value = (column, over = {}) => ({ kind: 'proposed-value', about: DOC, candidateId: 'c-' + column, printed: { label: String(column), value: 'P' }, ...box(column), proposal: { itemKey: 'fertility-cycles-peak-day', type: 'activity/plain', content: null, time: DAY1, clientData: { hdsTimePrecision: 'day' } }, status: 'check', extraction: X, ...over });
+    const notRead = (column) => ({ kind: 'proposed-value', about: DOC, candidateId: 'n-' + column, printed: { label: String(column) }, ...box(column), status: 'unmapped', reason: 'not-read', extraction: X });
+    const rowDate = (row = 2) => ({ kind: 'question', about: DOC, code: 'which-row-date', context: box(1, row) });
+    const item = (id, kind, content, created = 10) => ({ id, kind, about: DOC, direction: kind === 'answer' ? 'sent' : 'received', content, created, modified: created, time: created });
+
+    it('[CNVG1] a peak mark (null content), a box not read and a row question are valid', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(value(14)), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(notRead(15)), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(rowDate()), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal(value(14).proposal), null);
+    });
+
+    it('[CNVG2] a box not read carries its box and nothing read; a value read carries what is written', () => {
+      const bad = [
+        { ...notRead(15), printed: { label: '15', value: '10KL' } }, { ...notRead(15), proposal: value(15).proposal }, { ...notRead(15), requestKey: 'x' },
+        { ...notRead(15), status: 'check' }, { ...notRead(15), grid: undefined }, { ...notRead(15), anchor: { attachmentId: 'att1', page: 1 } },
+        { ...value(14), printed: { label: '14' } }
+      ];
+      for (const b of bad) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(JSON.parse(JSON.stringify(b))), [], JSON.stringify(b));
+    });
+
+    it('[CNVG3] a row question: its box and anchor, no candidate, no dates; answered with a day at 12:00 UTC', () => {
+      for (const b of [{ ...rowDate(), candidateId: 'c-1' }, { ...rowDate(), context: { grid: box(1).grid } }, { ...rowDate(), context: { anchor: box(1).anchor } }, { ...rowDate(), context: { ...box(1), dates: [{ day: '2026-03-12', text: '12/3' }] } }]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(b), [], JSON.stringify(b));
+      }
+      const q = item('q1', 'question', rowDate());
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([q], DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conv.questions[0].answerable, true);
+      const answer = (over) => ({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day', ...over });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer({}), q, conv), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'skip' }, q, conv), []);
+      for (const over of [{ time: DAY1 + 3600 }, { timePrecision: 'month' }, { timePrecision: 'unknown', time: undefined }, { time: undefined, timePrecision: undefined }]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(JSON.parse(JSON.stringify(answer(over))), q, conv), [], JSON.stringify(over));
+      }
+    });
+
+    it('[CNVG4] a which-date answer never dates a value of a dated grid', () => {
+      const undated = { ...value(14), proposal: { itemKey: 'fertility-cycles-peak-day', type: 'activity/plain', content: null } };
+      const whole = [item('q0', 'question', { kind: 'question', about: DOC, code: 'which-date' }), item('a0', 'answer', { kind: 'answer', inReplyTo: 'q0', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day' }, 20)];
+      const grid = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([...whole, item('v1', 'proposed-value', undated)], DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(grid.documentDate, { time: DAY1, timePrecision: 'day' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answeredDateOf(grid, 'c-14'), null);
+      const { grid: _g, ...plain } = undated;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answeredDateOf(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([...whole, item('v1', 'proposed-value', plain)], DOC), 'c-14'), { time: DAY1, timePrecision: 'day' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answeredDateOf(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([...whole, item('q1', 'question', rowDate()), item('v1', 'proposed-value', plain)], DOC), 'c-14'), null);
+    });
+
+    it('[CNVG6] a value with no content she already has: null equals absent', () => {
+      const pv = item('v1', 'proposed-value', value(14));
+      for (const e of [{ type: 'activity/plain', content: null }, { type: 'activity/plain' }]) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue(e, pv), true);
+    });
+
+    it('[CNVG5] request-item does not answer a box not read; skip does', () => {
+      const pv = item('v2', 'proposed-value', notRead(15));
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([pv], DOC);
+      const answer = (action) => ({ kind: 'answer', inReplyTo: 'v2', about: DOC, action, candidateIds: ['n-15'] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer('request-item'), pv, conv), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer('skip'), pv, conv), []);
     });
   });
 });
@@ -50839,6 +51955,7 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     const pack = await (await fetch(`${MODEL_BASE}/pack.json`)).json();
     pack.streams.find(s => s.id === 'documents').children = [{ id: 'documents-clinical', name: 'Clinical documents', parentId: 'documents', children: [] }];
     pack.documentKinds.kinds['laboratory-report'].stream = 'documents-clinical';
+    delete pack.documentKinds.kinds['consultation-report'].stream; // a kind with none: the live pack may give it one (4.35.0)
     (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().loadFromObject(pack);
     (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().laziliyLoadedMap = {}; // a reload keeps the maps built from the previous pack
     const delayMs = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.streamsCheck.delayMs;
@@ -50952,6 +52069,18 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, done(300), { now: 500 + 86400 }).map(a => a.id), ['a1', 'a2'], 'a2 24 h later');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, null, { now: 500 + 86400, unshared: true }).map(a => a.id), ['a1', 'a2']);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conv.proposedValues[0].state, 'skipped', 'a comment alone is a skip');
+    // the document shared again after `done`, then on hold for days: the notes answered before that `done` still go
+    const on = (status, time, attempt) => ({ ...done(time), hds: { kind: 'task-status', about: 'doc1', status, attempt } });
+    const alerts = [on('reading', 100, 1), done(300), on('on-hold', 400, 2), { ...done(350), hds: { kind: 'task-status', about: 'doc2', status: 'done', attempt: 1 } }];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.taskStatusOf(alerts, 'doc1').hds.status, 'on-hold');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.latestDoneOf(alerts, 'doc1').time, 300);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.taskStatusOf(alerts, 'doc1'), { now: 500 + 86400 }), [], 'the latest status alone would keep them');
+    const due = (now, list = alerts) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.latestDoneOf(list, 'doc1'), { now, current: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.taskStatusOf(list, 'doc1') }).map(a => a.id);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(600), ['a1']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(500 + 86400), ['a1'], 'answered during the second round: waits for its done');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(500 + 86400, alerts.slice(0, 2)), ['a1', 'a2'], 'the work is done now: 24 h');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(600, [...alerts, on('done', 550, 2)]), ['a1', 'a2'], 'the second round done');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.latestDoneOf([on('reading', 100, 1)], 'doc1'), null);
   });
 
   it('[CNVD9] a tapped skip on a proposed document (and a comment alone): settles nothing, she confirms later', async () => {
@@ -50987,6 +52116,151 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentEditOf({ content: {}, clientData: {} }, { documentKind: 'other' }).clientData.hdsDocumentPending, undefined, 'no flag: none written');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentEditOf(all, {}), null);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.documentEditOf(all, { documentKind: 'no-such-kind' }), /unknown-kind/);
+  });
+
+  it('[CNVD8b] a write that fails in the middle: the document lists the values already written, and not-mine removes them', async () => {
+    const { person, rel, streams, DOC, document } = await setup([]);
+    const value = (candidateId, content) => ({ kind: 'proposed-value', about: DOC, candidateId, printed: { label: 'Ferritine', value: String(content), unit: 'µg/l' }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content, time: D, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value('c1', 48), value('c2', 84), value('c3', 90)]);
+    const apiOne = person.apiOne;
+    let creates = 0;
+    person.apiOne = async (method, params, key) => {
+      if (method === 'events.create' && params.type === 'concentration/ug-l' && ++creates === 3) throw new Error('offline');
+      return apiOne(method, params, key);
+    };
+    const decisions = ['c1', 'c2', 'c3'].map(candidateId => ({ candidateId, action: 'confirm' }));
+    const err = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, rel, { about: DOC, decisions, shownAt: person.clock, engines: ENGINES }).then(() => null, (e) => e);
+    person.apiOne = apiOne;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(err.innerObject.reason, 'write-failed');
+    const ids = Object.values(err.innerObject.written);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys((await document()).clientData.hdsDocumentValues).sort(), [...ids].sort());
+    const qid = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'is-this-yours' });
+    const no = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, rel, { questionId: qid, action: 'not-mine', shownAt: person.clock });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([...no.deletedValueIds].sort(), [...ids].sort());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await document()).clientData.hdsDocumentValues, undefined);
+  });
+
+  describe('[CNVDI] the index of a document (hdsDocumentValues) on a long run', () => {
+    const value = (DOC, candidateId, content) => ({ kind: 'proposed-value', about: DOC, candidateId, printed: { label: 'Ferritine', value: String(content), unit: 'µg/l' }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content, time: D, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction });
+    const run = async (n) => {
+      const all = await setup([]);
+      const ids = Array.from({ length: n }, (_, i) => 'c' + (i + 1));
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(all.person, all.streams, all.DOC, ids.map((id, i) => value(all.DOC, id, 40 + i)));
+      return { ...all, ids };
+    };
+    const one = (all, id) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(all.person, all.rel, { about: all.DOC, decisions: [{ candidateId: id, action: 'confirm' }], shownAt: all.person.clock, engines: ENGINES });
+    const index = async (all) => (await all.document()).clientData.hdsDocumentValues ?? {};
+
+    it('[CNVDI1] twenty confirms at once lose no entry', async () => {
+      const all = await run(20);
+      const res = await Promise.all(all.ids.map(id => one(all, id)));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(await index(all)).sort(), res.map(r => r.answers[0].written[0].eventId).sort());
+    });
+
+    it('[CNVDI2] the cost of a confirm does not grow with the document', async () => {
+      const all = await run(62);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(all.person, all.rel, { about: all.DOC, decisions: all.ids.slice(0, 60).map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: all.person.clock, engines: ENGINES });
+      const apiOne = all.person.apiOne;
+      let gets = 0;
+      all.person.apiOne = async (method, params, key) => { if (method === 'events.getOne') gets++; return apiOne(method, params, key); };
+      await one(all, 'c61');
+      all.person.apiOne = apiOne;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(gets <= 8, `${gets} events.getOne`);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(Object.keys(await index(all)).length, 61);
+    });
+
+    it('[CNVDI3] an entry the index lost comes back from the answers; a value she deleted or trashed does not', async () => {
+      const all = await run(4);
+      const written = {};
+      for (const id of ['c1', 'c2', 'c3']) written[id] = (await one(all, id)).answers[0].written[0].eventId;
+      await all.person.apiOne('events.update', { id: all.DOC, update: { clientData: { hdsDocumentValues: null } } });
+      await all.person.apiOne('events.delete', { id: written.c2 });
+      await all.person.apiOne('events.delete', { id: written.c3 });
+      await all.person.apiOne('events.delete', { id: written.c3 });
+      const c4 = (await one(all, 'c4')).answers[0].written[0].eventId;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(await index(all)).sort(), [written.c1, c4].sort());
+    });
+
+    it('[CNVDI4] on a short document the dangling entries found are dropped, as before', async () => {
+      const all = await run(2);
+      const c1 = (await one(all, 'c1')).answers[0].written[0].eventId;
+      await all.person.apiOne('events.delete', { id: c1 });
+      await all.person.apiOne('events.delete', { id: c1 });
+      const c2 = (await one(all, 'c2')).answers[0].written[0].eventId;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(await index(all)), [c2]);
+    });
+
+    it('[CNVDI6] a failed write of the index before another one, at once: the second still goes and restores the first', async () => {
+      const all = await run(3);
+      const apiOne = all.person.apiOne;
+      let first = true;
+      all.person.apiOne = async (method, params, key) => {
+        if (first && method === 'events.update' && params.id === all.DOC) { first = false; throw new Error('offline'); }
+        return apiOne(method, params, key);
+      };
+      const [a, b] = await Promise.all([one(all, 'c1'), one(all, 'c2')]);
+      all.person.apiOne = apiOne;
+      const c3 = (await one(all, 'c3')).answers[0].written[0].eventId;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(await index(all)).sort(), [a, b].map(r => r.answers[0].written[0].eventId).concat(c3).sort());
+    });
+
+    it('[CNVDI7] a request that never ends does not hold up the next write', async () => {
+      const all = await run(2);
+      const apiOne = all.person.apiOne;
+      let hung = true;
+      all.person.apiOne = async (method, params, key) => {
+        if (hung && method === 'events.update' && params.id === all.DOC) { hung = false; return await new Promise(() => {}); }
+        return apiOne(method, params, key);
+      };
+      const values = [];
+      for (const content of [1, 2]) values.push((await all.person.apiOne('events.create', { streamIds: ['x'], type: 'concentration/ug-l', content }, 'event')).id);
+      const stuck = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.indexDocumentValues(all.person, all.DOC, [values[0]], { waitMs: 30 });
+      const second = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.indexDocumentValues(all.person, all.DOC, [values[1]], { waitMs: 30 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(second), [values[1]]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(stuck instanceof Promise);
+    });
+
+    it('[CNVDI8] on a long document: a dangling entry gets its turn, and lost entries come back over the next writes', async () => {
+      const all = await run(64);
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(all.person, all.rel, { about: all.DOC, decisions: all.ids.slice(0, 40).map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: all.person.clock, engines: ENGINES });
+      const written = res.answers.flatMap(a => a.written.map(w => w.eventId));
+      await all.person.apiOne('events.delete', { id: written[3] });
+      await all.person.apiOne('events.delete', { id: written[3] });
+      const kept = await index(all);
+      const lost = written.slice(5, 11);
+      await all.person.apiOne('events.update', { id: all.DOC, update: { clientData: { hdsDocumentValues: Object.fromEntries(Object.entries(kept).filter(([id]) => !lost.includes(id))) } } });
+      for (const id of all.ids.slice(40, 64)) await one(all, id);
+      const after = await index(all);
+      for (const id of lost) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(after[id], 'source', 'a lost entry is back');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(after[written[3]], undefined, 'the dangling one had its turn');
+    });
+
+    it('[CNVDI9] many values she deleted do not keep a lost one out, and never come back', async () => {
+      const all = await run(40);
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(all.person, all.rel, { about: all.DOC, decisions: all.ids.slice(0, 26).map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: all.person.clock, engines: ENGINES });
+      const written = res.answers.flatMap(a => a.written.map(w => w.eventId));
+      const gone = written.slice(0, 22);
+      for (const id of gone) { await all.person.apiOne('events.delete', { id }); await all.person.apiOne('events.delete', { id }); }
+      await all.person.apiOne('events.update', { id: all.DOC, update: { clientData: { hdsDocumentValues: null } } });
+      for (const id of all.ids.slice(26, 40)) await one(all, id);
+      const after = await index(all);
+      for (const id of gone) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(after[id], undefined, 'never restored');
+      for (const id of written.slice(22)) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(after[id], 'source', 'a lost one is back');
+    });
+
+    it('[CNVDI5] a write of the index that fails does not block the next one', async () => {
+      const all = await run(2);
+      const apiOne = all.person.apiOne;
+      let first = true;
+      all.person.apiOne = async (method, params, key) => {
+        if (first && method === 'events.update' && params.id === all.DOC) { first = false; throw new Error('offline'); }
+        return apiOne(method, params, key);
+      };
+      const c1 = (await one(all, 'c1')).answers[0].written[0].eventId;
+      const c2 = (await one(all, 'c2')).answers[0].written[0].eventId;
+      all.person.apiOne = apiOne;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(await index(all)).sort(), [c1, c2].sort(), 'c1 is restored from its answer');
+    });
   });
 
   it('[CNVD8] the document lists the values written from it (source); a value she had gets hdsPrintedIn, nothing on the document; not-mine removes both', async () => {
@@ -51200,6 +52474,58 @@ describe('[CNVX] a value she already has (basis existing-value), the self-contai
     const codedPv = { ...ferritin('k'), proposal: { itemKey: 'body-blood-coded', type: 'lab-result/coded-v1', content: coded([{ system: 'http://loinc.org', code: '2947-0' }], 140), time: D, clientData: { hdsTimePrecision: 'day' } } };
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'lab-result/coded-v1', content: coded([{ system: 'http://loinc.org', code: '2947-0' }], 140) }, item(codedPv)));
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'lab-result/coded-v1', content: coded([{ system: 'http://loinc.org', code: '2951-2' }], 140) }, item(codedPv)));
+  });
+
+  it('[CNVX5b] a convertible value (Creighton): method, reading and annotations; vectors, versions and key order do not count', async () => {
+    const TYPE = 'vulva-mucus-inspect/9d-vector';
+    const KEY = 'body-vulva-mucus-inspect';
+    const at = (source, vectors = { threadiness: 1, wetness: 1 }) => ({ vectors, source: { key: 'creighton', sourceData: '10KL', engineVersion: 'v1', modelVersion: 'v1', ...source } });
+    const proposed = (content) => ({ content: { ...ferritin('m'), proposal: { itemKey: KEY, type: TYPE, content, time: D, clientData: { hdsTimePrecision: 'day' } } } });
+    const holds = (mine, theirs) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: TYPE, content: mine }, proposed(theirs));
+    const x2 = { annotations: { frequency: 'X2' } };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(holds(at(x2, { wetness: 0.9, threadiness: 0.8 }), at(x2)), 'other vectors');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(holds(at({ ...x2, engineVersion: 'v2', modelVersion: 'v3' }), at(x2)), 'other versions');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(holds({ source: { annotations: { frequency: 'X2' }, sourceData: '10KL', key: 'creighton' }, vectors: {} }, at(x2)), 'other key order, versions absent');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(holds(at({ annotations: {} }), at({})), 'no annotation and an empty one');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds(at(x2), at({ annotations: { frequency: 'X1' } })), 'another frequency');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds(at(x2), at({})), 'a frequency and none');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds(at({ sourceData: '8KL' }), at({})), 'another code');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds(at({ key: 'billings', sourceData: 'peak' }), at({})), 'another method');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds({ vectors: {} }, at({})), 'no method');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds(at({ note: 'peak' }), at({})), 'any other field of the source counts');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds({ ...at({}), extra: 1 }, at({})), 'any other field of the content counts');
+    for (const empty of ['', '  ', {}, []]) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds(at({ sourceData: empty }, { wetness: 1 }), at({ sourceData: empty }, { wetness: 0.2 })), 'no reading: the whole content is compared');
+    }
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(holds(at({ sourceData: { a: 1, b: 2 } }), at({ sourceData: { b: 2, a: 1 } })), 'an object reading');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!holds(at({ key: '_raw', sourceData: 'x' }, { wetness: 1 }), at({ key: '_raw', sourceData: 'x' }, { wetness: 0.2 })), '_raw: the vectors are the reading');
+    const mood = (vectors) => ({ vectors, source: { key: 'hds', sourceData: 'happy', engineVersion: 'v1', modelVersion: 'v1' } });
+    const moodPv = { content: { ...ferritin('m'), proposal: { itemKey: 'wellbeing-mood', type: 'mood/5d-vectors', content: mood({ valence: 1 }), time: D, clientData: { hdsTimePrecision: 'day' } } } };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.holdsProposedValue({ type: 'mood/5d-vectors', content: mood({ valence: 0.9 }) }, moodPv), 'mood, same reading');
+    const { person, rel, her, conv } = await setup([{ ...ferritin('c1'), proposal: { itemKey: KEY, type: TYPE, content: at(x2), time: D, clientData: { hdsTimePrecision: 'day' } } }]);
+    await her(KEY, TYPE, at({ ...x2, engineVersion: 'v9' }, { wetness: 0.1 }), D);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }))?.candidateIds, ['c1']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((await conv()).proposedValues[0].state, 'duplicate');
+  });
+
+  it('[CNVX5c] an item she never used has no stream: no record there, and the other values are still compared', async () => {
+    const mucus = { ...ferritin('c1'), proposal: { itemKey: 'body-vulva-mucus-inspect', type: 'vulva-mucus-inspect/9d-vector', content: { vectors: {}, source: { key: 'creighton', sourceData: '10KL' } }, time: D, clientData: { hdsTimePrecision: 'day' } } };
+    const { person, rel, her } = await setup([mucus, ferritin('c2', 48)]);
+    await her('body-blood-serum-ferritin', 'concentration/ug-l', 48, D);
+    const apiOne = person.apiOne;
+    const missing = streamOf('body-vulva-mucus-inspect');
+    person.apiOne = async (method, params, key) => {
+      if (method === 'events.get' && params.streams?.includes(missing)) throw apiError('unknown-referenced-resource');
+      return apiOne(method, params, key);
+    };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }))?.candidateIds, ['c2']);
+    const other = await setup([mucus]);
+    const otherOne = other.person.apiOne;
+    other.person.apiOne = async (method, params, key) => {
+      if (method === 'events.get' && params.streams?.includes(missing)) throw apiError('forbidden');
+      return otherOne(method, params, key);
+    };
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoMarkDuplicates(other.person, other.rel, { about: DOC, engines: ENGINES }), (e) => e.message === 'forbidden', 'any other error is told');
   });
 
   it('[CNVX6] basis rules: existing-value only on a duplicate of proposed values, profile-match only on a confirm of is-this-yours', () => {
@@ -55087,6 +56413,165 @@ describe('[CPKV] converter pack version', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('new-item', ['v0', 'v1']), 'v0');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('new-item', ['v1']), null);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', undefined), null);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/converterTexts.test.js"
+/*!**************************************!*\
+  !*** ./tests/converterTexts.test.js ***!
+  \**************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+/* harmony import */ var _ts_converters_packTexts_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/converters/packTexts.ts */ "./ts/converters/packTexts.ts");
+
+
+
+
+
+/**
+ * The texts of a converter in the other languages (plan 138): data-model publishes them beside its frozen packs,
+ * `converters/{itemKey}/l10n-{locale}.json`. `fetch` is stubbed: no network.
+ */
+const ITEM = 'cervical-fluid';
+// one per test: the converters of an earlier test still follow the preferred languages
+let base = '';
+let count = 0;
+const url = (file) => `${base}converters/${ITEM}/${file}`;
+
+function packOf () {
+  return {
+    itemKey: ITEM,
+    converterVersion: 'v1',
+    engine: 'euclidian-distance',
+    eventType: 'test/vector',
+    dimensionNames: ['a'],
+    dimensions: { a: { label: { en: 'Dim', fr: 'Dimension' }, shortLabel: { en: 'D' }, description: { en: 'A' }, weight: 1, stops: [{ value: 0, label: { en: 'None', fr: 'Rien' } }, { value: 1, label: { en: 'Full' } }] } },
+    temperatureRules: { 'three/over~six': { label: { en: 'Three over six' } } },
+    methods: [
+      { methodId: 'm', name: { en: 'Two days', fr: 'Deux jours' }, description: { en: 'M' }, components: [{ field: 'code', label: { en: 'Code' }, options: [{ value: 'x', label: { en: 'Dry' }, vector: { a: 0.5 } }, { value: null, label: { en: 'Nothing' }, vector: { a: 0 } }] }] }
+    ]
+  };
+}
+
+const TEXTS = {
+  'methods[0]/name': 'Dois dias',
+  'methods[0]/components[0]/options[value="x"]/label': 'Seco',
+  'methods[0]/components[0]/options[value=null]/label': 'Nada',
+  'dimensions/a/stops[value=0]/label': 'Nenhum',
+  'temperatureRules/three~1over~0six/label': 'Três sobre seis'
+};
+const sidecar = (locale, texts = TEXTS, file = 'pack-v1.json') => ({ locale, packs: { [file]: texts } });
+
+function convertersFor (versions = ['v0', 'v1']) {
+  return new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModelConverters({
+    modelUrl: `${base}pack.json`,
+    modelData: {
+      items: { [ITEM]: { key: ITEM, streamId: 'test-stream', eventType: 'test/vector', type: 'convertible', 'converter-engine': { models: ITEM } } },
+      converters: { [ITEM]: { versions } }
+    }
+  });
+}
+
+describe('[CVTX] converter texts in the other languages', () => {
+  const realFetch = globalThis.fetch;
+  let served, requested;
+
+  beforeEach(() => {
+    requested = [];
+    base = `https://model-${++count}.example.test/`;
+    served = { [url('pack-v1.json')]: packOf() };
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.resetPreferredLocales)();
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['en']);
+    globalThis.fetch = async (u) => {
+      if (!u.startsWith(base)) return { ok: false, status: 404 };
+      requested.push(u.replace(url(''), ''));
+      const body = served[u];
+      if (body instanceof Error) throw body;
+      if (typeof body === 'number') return { ok: false, status: body, json: async () => ({}) };
+      if (body == null) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => structuredClone(body) };
+    };
+  });
+  afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['en']); globalThis.fetch = realFetch; });
+
+  const nameOf = (engine) => (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(engine.getMethodDef('m').name);
+
+  it('[CVTX1] English and French ask for nothing: the pack has them', async () => {
+    await convertersFor().ensureEngine(ITEM);
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(nameOf(await convertersFor().ensureEngine(ITEM)), 'Deux jours');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, ['pack-v1.json', 'pack-v1.json']);
+  });
+
+  it('[CVTX2] the texts of the preferred language are there when the engine is', async () => {
+    served[url('l10n-pt-BR.json')] = sidecar('pt-BR');
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['pt-BR']);
+    const engine = await convertersFor().ensureEngine(ITEM);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, ['pack-v1.json', 'l10n-pt-BR.json', 'l10n-pt.json']);
+    const options = engine.getMethodDef('m').components[0].options;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([nameOf(engine), (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(options[0].label), (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(options[1].label)], ['Dois dias', 'Seco', 'Nada']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(engine.dimensions.a.stops[0].label), 'Nenhum');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(engine.temperatureRules['three/over~six'].label), 'Três sobre seis');
+    // no text in the file: the next preferred language of the pack
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(engine.dimensions.a.stops[1].label), 'Full');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(engine.toVector('m', 'x').a, 0.5);
+  });
+
+  it('[CVTX3] the texts of the pack file read, pack-latest.json included', async () => {
+    served = { [url('pack-latest.json')]: packOf(), [url('l10n-it.json')]: { locale: 'it', packs: { 'pack-v1.json': { 'methods[0]/name': 'no' }, 'pack-latest.json': { 'methods[0]/name': 'Due giorni' } } } };
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['it']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(nameOf(await convertersFor().ensureEngine(ITEM)), 'Due giorni');
+  });
+
+  it('[CVTX4] no file, a failing one, a network error, another shape: the texts of the pack', async () => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['es']);
+    for (const body of [404, 503, new Error('offline'), null, 'text', [], { packs: null }, { packs: { 'pack-v1.json': 'x' } }, sidecar('es', { 'methods[0]/name': '', 'dimensions/a/label': 3 })]) {
+      served[url('l10n-es.json')] = body;
+      const engine = await convertersFor().ensureEngine(ITEM);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([nameOf(engine), (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(engine.dimensions.a.label)], ['Two days', 'Dim'], JSON.stringify(body));
+    }
+  });
+
+  it('[CVTX5] a change of language loads its texts, once, into what the engine already handed out', async () => {
+    served[url('l10n-it.json')] = sidecar('it', { 'methods[0]/name': 'Due giorni' });
+    const converters = convertersFor();
+    const name = (await converters.ensureEngine(ITEM)).getMethodDef('m').name;
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['it']);
+    await converters.loadTexts();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.localizeText)(name), 'Due giorni');
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['en']);
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['it']);
+    await converters.loadTexts();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested.filter((f) => f === 'l10n-it.json').length, 1);
+  });
+
+  it('[CVTX6] a change of language while the pack loads is followed', async () => {
+    served[url('l10n-it.json')] = sidecar('it', { 'methods[0]/name': 'Due giorni' });
+    const converters = convertersFor();
+    const loading = converters.ensureEngine(ITEM);
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['it']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(nameOf(await loading), 'Due giorni');
+  });
+
+  it('[CVTX7] addPackTexts keeps a text the pack has, and adds nothing but text', () => {
+    const pack = packOf();
+    pack.methods[0].name.it = 'Già qui';
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_converters_packTexts_ts__WEBPACK_IMPORTED_MODULE_3__.addPackTexts)(pack, 'it', { 'methods[0]/name': 'Due giorni', 'methods[0]/components': 'x', 'dimensions/a/label': 'Dimensione', constructor: 'x' }), 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([pack.methods[0].name.it, pack.dimensions.a.label.it], ['Già qui', 'Dimensione']);
+  });
+
+  it('[CVTX8] nothing loaded: loadTexts asks for nothing', async () => {
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['it']);
+    await convertersFor().loadTexts();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, []);
   });
 });
 
@@ -61644,6 +63129,422 @@ describe('[REMX] Reminders', () => {
 
 /***/ },
 
+/***/ "./tests/researchEligibility.test.js"
+/*!*******************************************!*\
+  !*** ./tests/researchEligibility.test.js ***!
+  \*******************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+/** Eligibility test of a study (data-model documentation/ELIGIBILITY.md). */
+
+const NOW = Date.UTC(2026, 10, 25, 12) / 1000;
+const DAY = 86400;
+const t = (en) => ({ en, fr: 'fr ' + en });
+
+function makeModel () {
+  const item = (streamId, eventType, type) => ({ version: 'v1', label: t(streamId), description: t(streamId), streamId, eventType, type });
+  const model = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('');
+  model.loadFromObject({
+    items: {
+      weight: {
+        version: 'v1',
+        label: t('weight'),
+        description: t('weight'),
+        streamId: 'weight',
+        type: 'number',
+        variations: { eventType: { options: [{ value: 'mass/kg', label: t('kg') }, { value: 'mass/lb', label: t('lb') }] } }
+      },
+      headache: item('headache', 'activity/plain', 'checkbox'),
+      smoker: { ...item('smoker', 'lifestyle/use-status-v1', 'select'), options: ['never', 'former', 'current'].map((value) => ({ value, label: t(value) })) },
+      birth: item('birth', 'date/iso-8601', 'date'),
+      variant: item('genetics-variant', 'genetic-variant/coded-v1', 'imported'),
+      sync: item('sync', 'sync-status/connector-v1', 'system'),
+      other: item('other', 'mass/kg', 'number'),
+      'old-other': { ...item('other', 'mass/kg', 'number'), deprecated: true },
+      lipid: {
+        version: 'v1',
+        label: t('lipid'),
+        description: t('lipid'),
+        streamId: 'lipid',
+        type: 'number',
+        variations: { eventType: { options: ['mg-dl', 'mmol-l', 'iu-l'].map((u) => ({ value: 'concentration/' + u, label: t(u) })) } },
+        unitConversions: { factors: [{ from: 'concentration/mg-dl', to: 'concentration/mmol-l', factor: 0.02586 }] }
+      }
+    },
+    streams: [
+      ...['weight', 'headache', 'smoker', 'birth', 'sync', 'other', 'lipid'].map((id) => ({ id, name: id, parentId: null })),
+      { id: 'headache-child', name: 'child', parentId: 'headache' },
+      { id: 'genetics', name: 'Genetics', parentId: null, explicitGrantOnly: true },
+      { id: 'genetics-variant', name: 'Variant', parentId: 'genetics' }
+    ],
+    eventTypes: {
+      types: {
+        'mass/kg': { type: 'number' },
+        'mass/lb': { type: 'number' },
+        'concentration/mg-dl': { type: 'number' },
+        'concentration/mmol-l': { type: 'number' },
+        'concentration/iu-l': { type: 'number' },
+        'activity/plain': { type: 'null' },
+        'lifestyle/use-status-v1': { type: 'string' },
+        'date/iso-8601': { type: 'string' },
+        'genetic-variant/coded-v1': { type: 'object' },
+        'sync-status/connector-v1': { type: 'object' }
+      },
+      extras: {}
+    },
+    conversions: { mass: { metric: 'kg', imperial: 'lb', factors: { kg: { lb: 2.20462 }, lb: { kg: 0.453592 } } } },
+    datasources: [],
+    authorizations: {}
+  });
+  return model;
+}
+
+const model = makeModel();
+
+const criterion = (id, rule, more = {}) => ({ id, label: t(id), weight: 1, ...(rule ? { rule } : {}), ...more });
+const request = (criteria, more = {}) => ({
+  version: 1,
+  requestId: 'req-1',
+  studyId: 'study-1',
+  studyName: t('XYZ'),
+  title: t('Test if you\'re eligible for XYZ'),
+  description: t('A study'),
+  ethicsRef: 'CER-2026-1',
+  expiresAt: NOW + 30 * DAY,
+  criteria,
+  ...more
+});
+const three = (rule) => request([criterion('a', rule), criterion('b', { op: 'exists', itemKey: 'headache' }), criterion('c', { op: 'exists', itemKey: 'smoker' })]);
+const codes = (r) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.checkEligibilityRequest(r, { model, now: NOW }).map((i) => `${i.path} ${i.code}`);
+
+/** A connection that records every call and only knows the given events. */
+function fakeConnection (events = [], { known } = {}) {
+  const calls = [];
+  return {
+    calls,
+    events,
+    async apiOne (method, params, key) {
+      calls.push({ method, params });
+      if (method === 'events.get') {
+        const [streamId] = params.streams;
+        if (known && !known.includes(streamId)) { const e = new Error('unknown'); e.innerObject = { id: 'unknown-referenced-resource' }; throw e; }
+        const found = events
+          .filter((e) => params.types.includes(e.type) && e.streamIds.some((s) => s === streamId || s.startsWith(streamId + '-')))
+          .sort((a, b) => b.time - a.time);
+        return found.slice(params.skip, params.skip + params.limit);
+      }
+      if (method === 'events.create') { const e = { id: 'new' + events.length, ...params }; events.push(e); return e; }
+      if (method === 'events.update') { const e = events.find((x) => x.id === params.id); Object.assign(e, params.update); return e; }
+      throw new Error('unexpected ' + method);
+    }
+  };
+}
+const ev = (streamId, type, content, daysAgo = 1, more = {}) => ({ id: streamId + daysAgo, streamIds: [streamId], type, content, time: NOW - daysAgo * DAY, ...more });
+const outcomeOf = async (rule, events) => (await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.readEligibilityOutcomes(fakeConnection(events), three(rule), { model, now: NOW })).a;
+
+describe('[ELIG] eligibility test of a study', function () {
+  describe('[ELIG-P] publish check', function () {
+    const ok = { op: 'exists', itemKey: 'weight' };
+
+    it('[ELIG-P1] a valid request has no issue', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(three(ok)), []);
+    });
+
+    it('[ELIG-P2] fewer than 3 criteria, and too many', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(request([criterion('a', ok), criterion('b', ok)])).includes('criteria too-few-criteria'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(request(Array.from({ length: 17 }, (_, i) => criterion('c' + i, ok)))).includes('criteria too-many-criteria'));
+    });
+
+    it('[ELIG-P3] unknown item, operator and field', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'exists', itemKey: 'nope' })).includes('criteria[0].rule.itemKey unknown-item'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'script', itemKey: 'weight' })).includes('criteria[0].rule.op unknown-operator'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'toString', itemKey: 'weight' })).includes('criteria[0].rule.op unknown-operator'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ ...ok, code: 'x' })).includes('criteria[0].rule.code unknown-field'));
+    });
+
+    it('[ELIG-P4] missing or invalid weights', () => {
+      for (const weight of [undefined, 0, -1, 1.5, 101, '1', null]) {
+        const r = three(ok);
+        r.criteria[0].weight = weight;
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(r).includes('criteria[0].weight invalid-weight'), String(weight));
+      }
+    });
+
+    it('[ELIG-P5] EN and FR are required on every text', () => {
+      const r = three(ok);
+      r.criteria[0].label = { en: 'only' };
+      r.criteria[1].question = { text: { en: 'q', fr: 'q' }, answer: { type: 'choice', options: [{ value: 'x', label: { fr: 'x' } }, { value: 'y', label: t('y') }], met: ['x'] } };
+      const c = codes(r);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(c.includes('criteria[0].label missing-text:fr'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(c.includes('criteria[1].question.answer.options[0].label missing-text:en'));
+    });
+
+    it('[ELIG-P6] items not allowed: system, and roots granted by name only', () => {
+      for (const item of ['sync', 'variant']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'exists', itemKey: item })).includes('criteria[0].rule.itemKey item-not-allowed'), item);
+    });
+
+    it('[ELIG-P7] an operator that does not fit its item', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'range', itemKey: 'weight', eventType: 'mass/st', min: 1 })).includes('criteria[0].rule.eventType not-a-type-of-the-item'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'range', itemKey: 'weight', eventType: 'mass/kg' })).includes('criteria[0].rule missing-range'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'range', itemKey: 'weight', eventType: 'mass/kg', min: 5, max: 1 })).includes('criteria[0].rule invalid-range'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'in', itemKey: 'weight', values: ['x'] })).includes('criteria[0].rule.itemKey not-a-select-item'));
+      for (const values of [undefined, [], ['nope'], ['never', 'never'], ['never', 'former', 'current']]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'in', itemKey: 'smoker', values })).includes('criteria[0].rule.values invalid-options'), String(values));
+      }
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'boolean', itemKey: 'headache', value: true })).includes('criteria[0].rule.op unknown-operator'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(three({ op: 'age', itemKey: 'weight', min: 18 })).includes('criteria[0].rule.itemKey not-a-date-item'));
+    });
+
+    it('[ELIG-P8] a question alone is allowed, neither rule nor question is not, free text is not', () => {
+      const r = three(ok);
+      r.criteria[0] = criterion('a', null, { question: { text: t('q'), answer: { type: 'boolean', met: true } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(r), []);
+      r.criteria[0] = criterion('a', null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(r).includes('criteria[0] no-rule-and-no-question'));
+      r.criteria[0] = criterion('a', null, { question: { text: t('q'), answer: { type: 'text' } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(r).includes('criteria[0].question.answer.type unknown-answer-type'));
+    });
+
+    it('[ELIG-P9] expired, duplicate ids, ids with other characters', () => {
+      const r = three(ok);
+      r.expiresAt = NOW;
+      r.criteria[1].id = 'a';
+      r.requestId = 'a b';
+      const c = codes(r);
+      for (const x of ['expiresAt expired', 'criteria[1].id duplicate-id', 'requestId invalid-id']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(c.includes(x), x);
+    });
+
+    it('[ELIG-P10] a weight of half or more of the total reveals its criterion, and is refused', () => {
+      for (const good of [[1, 1, 1], [40, 30, 30], [40, 35, 25], [40, 20, 20, 20], [30, 30, 20, 20]]) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.revealedCriteria(good), [], String(good));
+      for (const bad of [[90, 5, 5], [50, 25, 25], [50, 30, 20], [100, 1, 1]]) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.revealedCriteria(bad), [0], String(bad));
+      const r = three(ok);
+      r.criteria[0].weight = 2;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(r), ['criteria[0].weight weight-half-or-more']);
+    });
+
+    it('[ELIG-P12] a deprecated item is refused at publish only', () => {
+      const r = three({ op: 'exists', itemKey: 'old-other' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(r), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.checkEligibilityRequest(r, { model, now: NOW, publish: true }).map((i) => i.code), ['deprecated-item']);
+    });
+
+    it('[ELIG-P13] every text is a string, in any language', () => {
+      const r = three(ok);
+      r.title.de = 5;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(r).includes('title text-not-a-string'));
+    });
+
+    it('[ELIG-P11] against a direct enumeration, for every weights up to 8 on 3 criteria and 5 on 4', () => {
+      const combos = (n, max) => n === 0 ? [[]] : combos(n - 1, max).flatMap((c) => Array.from({ length: max }, (_, i) => [...c, i + 1]));
+      for (const w of [...combos(3, 8), ...combos(4, 5)]) {
+        const total = w.reduce((a, b) => a + b, 0);
+        const groups = {};
+        for (const c of combos(w.length, 2).map((x) => x.map((v) => v - 1))) {
+          const band = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityBandOf(c.reduce((s, v, i) => s + v * w[i], 0), total);
+          (groups[band] ??= []).push(c);
+        }
+        const expected = w.flatMap((_, i) => Object.values(groups).some((g) => new Set(g.map((c) => c[i])).size === 1) ? [i] : []);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.revealedCriteria(w), expected, String(w));
+      }
+    });
+  });
+
+  describe('[ELIG-R] rules', function () {
+    it('[ELIG-R1] exists, with and without a window', async () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'exists', itemKey: 'weight' }, []), 'no-data');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'exists', itemKey: 'weight' }, [ev('weight', 'mass/kg', 70, 900)]), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'exists', itemKey: 'weight', withinDays: 30 }, [ev('weight', 'mass/kg', 70, 900)]), 'not-met');
+    });
+
+    it('[ELIG-R2] a future event is not data', async () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'exists', itemKey: 'weight' }, [ev('weight', 'mass/kg', 70, -2)]), 'no-data');
+    });
+
+    it('[ELIG-R3] range reads the latest value, converts units, ignores a type it cannot convert', async () => {
+      const rule = { op: 'range', itemKey: 'weight', eventType: 'mass/kg', min: 60, max: 80 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('weight', 'mass/kg', 70, 1), ev('weight', 'mass/kg', 100, 2)]), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('weight', 'mass/kg', 100, 1), ev('weight', 'mass/kg', 70, 2)]), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('weight', 'mass/lb', 154, 1)]), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('weight', 'mass/lb', 70, 1)]), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ ...rule, withinDays: 30 }, [ev('weight', 'mass/kg', 70, 90)]), 'not-met');
+    });
+
+    it('[ELIG-R4] a printed limit is not an exact value', async () => {
+      const rule = { op: 'range', itemKey: 'weight', eventType: 'mass/kg', min: 60 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('weight', 'mass/kg', 70, 1, { clientData: { hdsComparator: '<' } })]), 'no-data');
+    });
+
+    it('[ELIG-R5] count', async () => {
+      const rule = { op: 'count', itemKey: 'headache', min: 2, withinDays: 30 };
+      const one = ev('headache', 'activity/plain', null, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, []), 'no-data');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [one, ev('headache', 'activity/plain', null, 90)]), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [one, ev('headache-child', 'activity/plain', null, 2)]), 'met');
+    });
+
+    it('[ELIG-R6] in: the latest value is one of the list', async () => {
+      const rule = { op: 'in', itemKey: 'smoker', values: ['never', 'former'] };
+      const at = (content, daysAgo) => ev('smoker', 'lifestyle/use-status-v1', content, daysAgo);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [at('former', 1), at('current', 9)]), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [at('current', 1), at('never', 9)]), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ ...rule, withinDays: 30 }, [at('never', 90)]), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [at('notSet', 1)]), 'no-data');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, []), 'no-data');
+    });
+
+    it('[ELIG-R7] age, around the birthday', async () => {
+      const rule = { op: 'age', itemKey: 'birth', min: 18, max: 40 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('birth', 'date/iso-8601', '2008-11-25')]), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('birth', 'date/iso-8601', '2008-11-26')]), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('birth', 'date/iso-8601', '1986-11-25')]), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('birth', 'date/iso-8601', '1985-11-25')]), 'not-met');
+      for (const bad of ['1990', '1990-02-31', 'x']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('birth', 'date/iso-8601', bad)]), 'no-data', bad);
+    });
+
+    it('[ELIG-R8] partial dates: no claim beyond what is known; a span counts up to its end', async () => {
+      const rule = { op: 'exists', itemKey: 'headache', withinDays: 30 };
+      const at = (date, clientData, more = {}) => [{ id: 'x', streamIds: ['headache'], type: 'activity/plain', content: null, time: Date.parse(date + 'T12:00:00Z') / 1000, clientData, ...more }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, at('2026-01-01', { hdsTimePrecision: 'year' })), 'no-data');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, at('2025-01-01', { hdsTimePrecision: 'year' })), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, at('2026-10-01', { hdsTimePrecision: 'month' })), 'no-data');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, at('2026-09-01', { hdsTimePrecision: 'month' })), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, at('2026-11-24', { hdsTimePrecision: 'unknown' })), 'no-data');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, at('2024-01-01', {}, { duration: null })), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, at('2024-01-01', {}, { duration: 60 * DAY })), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'exists', itemKey: 'headache' }, at('2026-11-24', { hdsTimePrecision: 'unknown' })), 'met');
+    });
+
+    it('[ELIG-R10] lab units: the factors of the item, both ways; no factor, no comparison', async () => {
+      const rule = { op: 'range', itemKey: 'lipid', eventType: 'concentration/mg-dl', max: 200 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('lipid', 'concentration/mmol-l', 4.8)]), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('lipid', 'concentration/mmol-l', 6)]), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ ...rule, eventType: 'concentration/mmol-l', max: 5 }, [ev('lipid', 'concentration/mg-dl', 190)]), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [ev('lipid', 'concentration/iu-l', 1)]), 'no-data');
+    });
+
+    it('[ELIG-R11] a live request survives a renamed item', async () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'exists', itemKey: 'old-other' }, [ev('other', 'mass/kg', 1)]), 'met');
+    });
+
+    it('[ELIG-R9] more than one page', async () => {
+      const events = Array.from({ length: 450 }, (_, i) => ev('headache', 'activity/plain', null, i + 1));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'count', itemKey: 'headache', min: 450 }, events), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'count', itemKey: 'headache', min: 451 }, events), 'not-met');
+    });
+  });
+
+  describe('[ELIG-D] what is read and written', function () {
+    it('[ELIG-D1] only the items of the rules are read, and nothing is written', async () => {
+      const c = fakeConnection([ev('other', 'mass/kg', 1)]);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.readEligibilityOutcomes(c, three({ op: 'exists', itemKey: 'weight' }), { model, now: NOW });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(c.calls.every((x) => x.method === 'events.get'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([...new Set(c.calls.flatMap((x) => x.params.streams))].sort(), ['headache', 'smoker', 'weight']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityItemKeys(three({ op: 'exists', itemKey: 'weight' })).sort(), ['headache', 'smoker', 'weight']);
+    });
+
+    it('[ELIG-D2] an expired or invalid request is refused before any read', async () => {
+      for (const r of [three({ op: 'exists', itemKey: 'weight' }), three({ op: 'exists', itemKey: 'nope' })]) {
+        const c = fakeConnection();
+        if (r.criteria[0].rule.itemKey === 'weight') r.expiresAt = NOW - 1;
+        await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.readEligibilityOutcomes(c, r, { model, now: NOW }));
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(c.calls.length, 0);
+      }
+    });
+
+    it('[ELIG-D3] a stream missing from the account is no data; any other error is thrown', async () => {
+      const r = three({ op: 'exists', itemKey: 'weight' });
+      const o = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.readEligibilityOutcomes(fakeConnection([], { known: ['smoker'] }), r, { model, now: NOW });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(o, { a: 'no-data', b: 'no-data', c: 'no-data' });
+      const broken = { apiOne: async () => { const e = new Error('no'); e.innerObject = { id: 'forbidden' }; throw e; } };
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.readEligibilityOutcomes(broken, r, { model, now: NOW }));
+    });
+
+    it('[ELIG-D4] only the request id and the band are written, and sending again replaces', async () => {
+      const r = three({ op: 'exists', itemKey: 'weight' });
+      const c = fakeConnection([]);
+      const id = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.sendEligibilityBand(c, 'hds-research', r, '0-49', NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.sendEligibilityBand(c, 'hds-research', r, '50-100', NOW), id);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.sendEligibilityBand(c, 'hds-research', { ...r, requestId: 'req-2' }, '0-49', NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(c.events.map((e) => [e.type, e.content]), [
+        ['research/eligibility-band-v1', { requestId: 'req-1', band: '50-100' }],
+        ['research/eligibility-band-v1', { requestId: 'req-2', band: '0-49' }]
+      ]);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.sendEligibilityBand(c, 'hds-research', { ...r, expiresAt: NOW }, '0-49', NOW));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityBandContent('req-1', '33'));
+    });
+  });
+
+  describe('[ELIG-S] score, questions and answers', function () {
+    const yes = { text: t('q'), answer: { type: 'boolean', met: true } };
+    const r = request([
+      criterion('a', { op: 'exists', itemKey: 'weight' }, { weight: 40, question: yes }),
+      criterion('b', { op: 'exists', itemKey: 'headache' }, { weight: 30, question: yes }),
+      criterion('c', { op: 'exists', itemKey: 'smoker' }, { weight: 30 })
+    ]);
+
+    it('[ELIG-S1] weights given by the requester, no data counts as not met', () => {
+      const res = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityResult(r, { a: 'met', b: 'not-met', c: 'no-data' }, {}, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.score, 40);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(res.band, '0-49');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(res.criteria.map((c) => [c.outcome, c.from, c.share]), [['met', 'account', 40], ['not-met', 'account', 30], ['no-data', null, 30]]);
+    });
+
+    it('[ELIG-S2] questions only where there is no data', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityQuestionsToAsk(r, { a: 'no-data', b: 'not-met', c: 'no-data' }).map((c) => c.id), ['a']);
+    });
+
+    it('[ELIG-S3] an answer fills no data, never overrules the account, and can be skipped', () => {
+      const o = { a: 'no-data', b: 'not-met', c: 'no-data' };
+      const res = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityResult(r, o, { a: true, b: true, c: true }, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(res.criteria.map((c) => [c.outcome, c.from]), [['met', 'answer'], ['not-met', 'account'], ['no-data', null]]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityResult(r, o, { a: null }, NOW).score, 0);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityResult(r, o, { a: false }, NOW).criteria[0].outcome, 'not-met');
+    });
+
+    it('[ELIG-S4] answer types', () => {
+      const of = (answer, value) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityResult(request([criterion('a', null, { question: { text: t('q'), answer } })]), {}, { a: value }, NOW).criteria[0].outcome;
+      const num = { type: 'number', min: 2, max: 5 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([2, 5, 6, NaN, '3'].map((v) => of(num, v)), ['met', 'met', 'not-met', 'no-data', 'no-data']);
+      const choice = { type: 'choice', options: [{ value: 'x', label: t('x') }, { value: 'y', label: t('y') }], met: ['x'] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(['x', 'y', 'z'].map((v) => of(choice, v)), ['met', 'not-met', 'no-data']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(['2026-11-20', '2026-01-01', '2027-01-01', 'x'].map((v) => of({ type: 'date', withinDays: 30 }, v)), ['met', 'not-met', 'no-data', 'no-data']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(['2000-01-01', '2020-01-01'].map((v) => of({ type: 'date', minYears: 18 }, v)), ['met', 'not-met']);
+    });
+
+    it('[ELIG-S6] ids that are names of Object.prototype', () => {
+      const p = request(['constructor', 'toString', 'valueOf'].map((id) => criterion(id, null, { question: yes })));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(p), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityQuestionsToAsk(p, {}).length, 3);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityResult(p, {}, {}, NOW).criteria.every((c) => c.outcome === 'no-data' && c.from === null));
+      p.criteria[0].id = '__proto__';
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(codes(p).includes('criteria[0].id invalid-id'));
+    });
+
+    it('[ELIG-S5] the band and the shown score agree around 50', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityBandOf(0, 100), '0-49');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityBandOf(499, 1000), '0-49');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityBandOf(50, 100), '50-100');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityBandOf(100, 100), '50-100');
+      const near = request([criterion('a', null, { weight: 68, question: yes }), criterion('b', null, { weight: 69 }), criterion('c', null, { weight: 1 })]);
+      const res = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityResult(near, {}, { a: true }, NOW); // 68 / 138 = 49.3
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([res.score, res.band], [49, '0-49']);
+      near.criteria[1].weight = 68; near.criteria[2].weight = 1; // 68 / 137 = 49.6, not 50
+      const up = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchEligibility.eligibilityResult(near, {}, { a: true }, NOW);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([up.score, up.band], [49, '0-49']);
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/resolveStream.test.js"
 /*!*************************************!*\
   !*** ./tests/resolveStream.test.js ***!
@@ -63098,52 +64999,56 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _converterEngine_test_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./converterEngine.test.js */ "./tests/converterEngine.test.js");
 /* harmony import */ var _converterEngineFlags_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./converterEngineFlags.test.js */ "./tests/converterEngineFlags.test.js");
 /* harmony import */ var _converterPackVersion_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./converterPackVersion.test.js */ "./tests/converterPackVersion.test.js");
-/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
-/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
-/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
-/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
-/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
-/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
-/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
-/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
-/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
-/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
-/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
-/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_64__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
+/* harmony import */ var _converterTexts_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./converterTexts.test.js */ "./tests/converterTexts.test.js");
+/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
+/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
+/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
+/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
+/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
+/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
+/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
+/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
+/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
+/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _researchEligibility_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./researchEligibility.test.js */ "./tests/researchEligibility.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_64__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_65__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_66__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Every `*.test.js` file is listed here, except the node-only ones:
  * - validatorDrift.test.js (reads the file system and runs the validator build)
  * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
+
 
 
 
