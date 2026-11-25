@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A dated grid (a paper cycle chart, data-model 4.36.0, plan 128):** `QUESTION_CODES.WHICH_ROW_DATE`, `REASON_NOT_READ`, the count
+  `notRead`, `isDatedGrid`, `answeredDateOf`, and the writer checks (a box not read carries its box and nothing read; a row asked
+  once; no `which-date` and no value without its day on such a document). **A `which-date` answer never dates a value of a
+  dated grid**: `acceptProposedValues` and `autoMarkDuplicates` read `answeredDateOf`. A value with no content (`null`) she
+  already has is recognised.
+
 ### Changed
 
 - **`acceptProposedValues` answers 20 values at a time (plan 128).** A run of confirmations used to write every value and one answer at

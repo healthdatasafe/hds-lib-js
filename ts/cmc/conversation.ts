@@ -64,8 +64,13 @@ export const QUESTION_CODES = {
   /** 4.26.0: the kind of a document waiting for it, about a `proposed-document`. */
   WHICH_DOCUMENT_KIND: 'which-document-kind',
   /** 4.26.0: the date of a document waiting for it, about a `proposed-document`. */
-  WHICH_DOCUMENT_DATE: 'which-document-date'
+  WHICH_DOCUMENT_DATE: 'which-document-date',
+  /** 4.36.0: the day of one box of a row of a dated grid (`context.grid`, `context.anchor`). */
+  WHICH_ROW_DATE: 'which-row-date'
 } as const;
+
+/** `proposed-value.reason` (4.36.0): the contact sees writing in this box of a dated grid and proposes nothing from it. */
+export const REASON_NOT_READ = 'not-read';
 
 /** The options of `which-specimen`, registered in CONVERSATION.md § Specimen codes (4.26.0), with their labels. */
 export const SPECIMEN_CODES: Readonly<Record<string, Record<'en' | 'fr' | 'es', string> & localizableText>> = {
@@ -183,7 +188,7 @@ export const CONVERSATION_ALERT_HDS_SCHEMA = {
       about: ID,
       status: { type: 'string', enum: [...TASK_STATUSES] },
       attempt: { type: 'integer', minimum: 1 },
-      counts: { type: 'object', additionalProperties: false, properties: { proposed: COUNT, questions: COUNT, keptAside: COUNT, dropped: COUNT } },
+      counts: { type: 'object', additionalProperties: false, properties: { proposed: COUNT, questions: COUNT, keptAside: COUNT, dropped: COUNT, notRead: COUNT } },
       errorCode: CODE
     }),
     alertBranch('notice', ['code'], { code: CODE, about: ID }),
@@ -577,7 +582,7 @@ const KNOWN_CODES = new Set<string>(Object.values(QUESTION_CODES));
 /** The actions an answer to a question with `code` may carry (§ Answers, by what they answer). */
 function questionActions (code: string): Set<string> {
   if (CHOOSE_CODES.has(code) || code === QUESTION_CODES.WHICH_DOCUMENT_KIND) return new Set(['choose', 'skip']);
-  if (code === QUESTION_CODES.WHICH_DATE || code === QUESTION_CODES.WHICH_DOCUMENT_DATE) return new Set(['confirm', 'skip']);
+  if (code === QUESTION_CODES.WHICH_DATE || code === QUESTION_CODES.WHICH_DOCUMENT_DATE || code === QUESTION_CODES.WHICH_ROW_DATE) return new Set(['confirm', 'skip']);
   if (code === QUESTION_CODES.IS_THIS_YOURS) return new Set(['confirm', 'not-mine', 'skip']);
   return new Set(['skip']);
 }
@@ -809,7 +814,7 @@ export function checkConversationItem (content: Record<string, any>): string[] {
       if (c.context != null && Object.keys(c.context).some(k => k !== 'dates')) issues.push('question which-date: context holds dates only');
     } else if (code === QUESTION_CODES.IS_THIS_YOURS) {
       if (has('candidateId') || has('options')) issues.push('question is-this-yours: no candidateId, no options');
-      if (c.context?.dates != null) issues.push('question is-this-yours: context holds identity and anchor only');
+      if (c.context?.dates != null || c.context?.grid != null) issues.push('question is-this-yours: context holds identity and anchor only');
     } else if (code === QUESTION_CODES.WHICH_DOCUMENT_KIND) {
       if (!has('candidateId')) issues.push('question which-document-kind: candidateId (a proposed-document) is required');
       if (!has('options') || c.options.length < 2 || c.options.length > 8) issues.push('question which-document-kind: 2 to 8 options');
@@ -819,6 +824,10 @@ export function checkConversationItem (content: Record<string, any>): string[] {
       if (!has('candidateId')) issues.push('question which-document-date: candidateId (a proposed-document) is required');
       if (has('options')) issues.push('question which-document-date: no options');
       if (c.context != null && Object.keys(c.context).some(k => k !== 'dates')) issues.push('question which-document-date: context holds dates only');
+    } else if (code === QUESTION_CODES.WHICH_ROW_DATE) {
+      if (has('candidateId') || has('options')) issues.push('question which-row-date: no candidateId, no options');
+      if (c.context?.grid == null || c.context?.anchor?.bbox == null) issues.push('question which-row-date: context.grid and context.anchor with its bbox are required');
+      if (c.context != null && Object.keys(c.context).some(k => k !== 'grid' && k !== 'anchor')) issues.push('question which-row-date: context holds grid and anchor only');
     } else if (typeof code === 'string' && code.startsWith('x-')) {
       if (has('context')) issues.push(`question ${code}: context is for is-this-yours and the date questions only`);
     } else {
@@ -826,6 +835,11 @@ export function checkConversationItem (content: Record<string, any>): string[] {
     }
   } else if (c.kind === 'proposed-value') {
     if ((c.status === 'kept-aside' || c.status === 'unmapped') && c.reason == null) issues.push(`proposed-value ${c.status}: reason is required`);
+    if (c.reason === REASON_NOT_READ) {
+      if (c.status !== 'unmapped') issues.push('proposed-value not-read: status is unmapped');
+      if (c.grid == null || c.anchor?.bbox == null) issues.push('proposed-value not-read: grid and anchor with its bbox are required');
+      if (c.printed?.value != null || c.proposal != null || c.requestKey != null) issues.push('proposed-value not-read: no printed.value, no proposal, no requestKey');
+    }
     const p = c.proposal;
     if (p?.time != null && p.clientData?.hdsTimePrecision == null) issues.push('proposed-value: proposal with time needs clientData.hdsTimePrecision');
     if (p?.clientData?.hdsTimePrecision === 'unknown' && c.replaces == null) issues.push('proposed-value: hdsTimePrecision unknown only on a re-proposal (replaces)');
@@ -880,6 +894,9 @@ export function checkAnswerFor (content: Record<string, any>, target: Conversati
       if (c.timePrecision == null) issues.push(`answer ${code}: timePrecision is required`);
       else if (c.timePrecision !== 'unknown' && c.time == null) issues.push(`answer ${code}: time is required`);
     }
+    if (code === QUESTION_CODES.WHICH_ROW_DATE && c.action === 'confirm' && (c.timePrecision !== 'day' || typeof c.time !== 'number' || ((c.time % DAY) + DAY) % DAY !== 12 * HOUR)) {
+      issues.push('answer which-row-date: a day at 12:00 UTC, with timePrecision day');
+    }
     if (c.applied != null) issues.push('answer to a question: no applied');
     if (c.basis != null && (c.basis !== BASES.PROFILE_MATCH || code !== QUESTION_CODES.IS_THIS_YOURS)) issues.push('answer: on a question, basis is profile-match on is-this-yours only');
   } else if (target.kind === 'proposed-document') {
@@ -898,7 +915,7 @@ export function checkAnswerFor (content: Record<string, any>, target: Conversati
     for (const id of ids) {
       const pv = conv.proposedValues.find(p => p.candidateId === id);
       if (pv == null) { issues.push(`answer: candidate ${id} is not a proposed value of the document`); continue; }
-      if (c.action === 'request-item' && !['kept-aside', 'unmapped'].includes(pv.item.content.status)) issues.push(`answer request-item: candidate ${id} is not kept-aside or unmapped`);
+      if (c.action === 'request-item' && (!['kept-aside', 'unmapped'].includes(pv.item.content.status) || pv.item.content.reason === REASON_NOT_READ)) issues.push(`answer request-item: candidate ${id} is not kept-aside or unmapped`);
     }
   } else {
     issues.push('answer: the target is not a question, a proposed value or a proposed document');
@@ -1252,6 +1269,17 @@ async function findBySourceKey (connection: pryv.Connection, streamId: string, s
   return events.find(e => e.clientData?.sourceKey === sourceKey)?.id ?? null;
 }
 
+/** Whether the document is a dated grid (4.36.0): a `which-row-date` was asked, so a value's day is its `proposal.time` only. */
+export function isDatedGrid (conv: DocumentConversation): boolean {
+  return conv.questions.some(q => q.code === QUESTION_CODES.WHICH_ROW_DATE) || conv.proposedValues.some(p => p.item.content.grid != null);
+}
+
+/** The `which-date` answer that dates a proposed value without `proposal.time`; never one on a dated grid. */
+export function answeredDateOf (conv: DocumentConversation, candidateId: string): AnsweredDate | null {
+  if (isDatedGrid(conv)) return null;
+  return conv.candidateDates[candidateId] ?? conv.documentDate;
+}
+
 export interface Decision {
   candidateId: string;
   action: 'confirm' | 'correct';
@@ -1396,7 +1424,7 @@ function acceptRefusal (
     const comparator = decision.correction.clientData?.hdsComparator;
     if (comparator != null && !COMPARATORS.has(comparator as string)) return 'comparator';
   }
-  const date = conv.candidateDates[pv.candidateId] ?? conv.documentDate;
+  const date = answeredDateOf(conv, pv.candidateId);
   if (pv.item.content.proposal.time == null && date == null) return 'no-date';
   return { pv, decision, event: valueEventOf(pv.item, { correction: decision.action === 'correct' ? decision.correction : undefined, date }) };
 }
@@ -1485,7 +1513,7 @@ const dayStart = (day: string): number => Date.parse(day + 'T00:00:00Z') / 1000;
 function comparedDay (pv: ProposedValueView, conv: DocumentConversation): string | null {
   const p = pv.item.content.proposal;
   if (typeof p?.time === 'number') return p.clientData?.hdsTimePrecision === 'day' ? utcDay(p.time) : null;
-  const date = conv.candidateDates[pv.candidateId] ?? conv.documentDate;
+  const date = answeredDateOf(conv, pv.candidateId);
   return date?.timePrecision === 'day' && typeof date.time === 'number' ? utcDay(date.time) : null;
 }
 
@@ -1571,7 +1599,8 @@ export function holdsProposedValue (e: { type: string; content?: any; clientData
     }
     const mine = convertibleReading(p.itemKey, e.content);
     if (mine != null && mine === convertibleReading(p.itemKey, p.content)) return true;
-    return JSON.stringify(p.content) === JSON.stringify(e.content);
+    // 4.36.0: an item without content (activity/plain): null equals absent
+    return JSON.stringify(p.content ?? null) === JSON.stringify(e.content ?? null);
   }
   // another type of the same item: converted into the proposal's unit, within half the last printed digit (scaled)
   const printed = printedNumber(pv.content.printed?.value);
@@ -1995,6 +2024,13 @@ export async function writeQuestion (personConnection: pryv.Connection, streams:
   if (issues.length === 0) {
     const items = await listConversationItems(personConnection, streams, { about: content.about });
     if (conversationOf(items, content.about).identity === 'not-mine') notMine('writeQuestion');
+    const conv = conversationOf(items, content.about);
+    if (content.code === QUESTION_CODES.WHICH_DATE && isDatedGrid(conv)) issues.push('question which-date: never on a dated grid');
+    if (content.code === QUESTION_CODES.WHICH_ROW_DATE) {
+      if (conv.questions.some(q => q.code === QUESTION_CODES.WHICH_DATE)) issues.push('question which-row-date: the document has a which-date');
+      const rowOf = (c: any): string => [c.context?.anchor?.attachmentId, c.context?.anchor?.page, c.context?.grid?.row].join('|');
+      if (conv.questions.some(q => q.code === QUESTION_CODES.WHICH_ROW_DATE && rowOf(q.item.content) === rowOf(content))) issues.push('question which-row-date: the row was asked');
+    }
     const documentCode = DOCUMENT_CODES.has(content.code);
     const kind = documentCode ? 'proposed-document' : 'proposed-value';
     if (content.candidateId != null && !items.some(i => i.kind === kind && i.content.candidateId === content.candidateId)) {
@@ -2044,6 +2080,11 @@ export async function writeProposedValues (personConnection: pryv.Connection, st
       const old = conv.proposedValues.find(p => p.candidateId === c.replaces);
       const asked = conv.questions.some(q => q.item.content.candidateId === c.replaces && q.state === 'answered');
       if (old == null || old.writtenEventId != null || !asked) own.push(`replaces ${c.replaces}: not a proposed value of the document answered by a question and not written`);
+    }
+    if (own.length === 0 && c.reason !== REASON_NOT_READ && (c.grid != null || isDatedGrid(conv))) {
+      const p = c.proposal;
+      if (c.grid == null) own.push('grid is required on a dated grid');
+      if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day')) own.push('a value of a dated grid has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
     }
     issues.push(...own.map(i => `${c?.candidateId ?? '?'}: ${i}`));
   }
