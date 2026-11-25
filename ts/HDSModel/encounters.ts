@@ -275,13 +275,13 @@ export function checkRelatedMirror (event: EncounterEventLike, targets?: Targets
 
 /** Visit kinds, for a model without the `encounter-visit` item (labels as the item's, data-model ENCOUNTER.md). */
 const KIND_LABELS: Record<string, localizableText> = {
-  consultation: { en: 'Consultation', fr: 'Consultation' },
-  'hospital-stay': { en: 'Hospital stay', fr: 'Séjour hospitalier' },
-  emergency: { en: 'Emergency', fr: 'Urgence' },
-  'day-case': { en: 'Day hospital', fr: 'Hôpital de jour' },
-  teleconsultation: { en: 'Teleconsultation', fr: 'Téléconsultation' },
-  'home-visit': { en: 'Home visit', fr: 'Visite à domicile' },
-  other: { en: 'Other', fr: 'Autre' }
+  consultation: { en: 'Consultation', fr: 'Consultation', es: 'Consulta', it: 'Visita', 'pt-BR': 'Consulta' },
+  'hospital-stay': { en: 'Hospital stay', fr: 'Séjour hospitalier', es: 'Hospitalización', it: 'Ricovero ospedaliero', 'pt-BR': 'Internação' },
+  emergency: { en: 'Emergency', fr: 'Urgence', es: 'Urgencias', it: 'Pronto soccorso', 'pt-BR': 'Emergência' },
+  'day-case': { en: 'Day hospital', fr: 'Hôpital de jour', es: 'Hospital de día', it: 'Day hospital', 'pt-BR': 'Hospital-dia' },
+  teleconsultation: { en: 'Teleconsultation', fr: 'Téléconsultation', es: 'Teleconsulta', it: 'Teleconsulto', 'pt-BR': 'Teleconsulta' },
+  'home-visit': { en: 'Home visit', fr: 'Visite à domicile', es: 'Visita a domicilio', it: 'Visita a domicilio', 'pt-BR': 'Visita domiciliar' },
+  other: { en: 'Other', fr: 'Autre', es: 'Otro', it: 'Altro', 'pt-BR': 'Outro' }
 };
 
 function labelText (label: any): string | null {

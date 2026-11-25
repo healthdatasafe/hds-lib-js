@@ -26,7 +26,7 @@ export function isCodedDrug (drug: any): boolean {
   return Array.isArray(drug?.codes) && drug.codes.some((c: any) => typeof c?.code === 'string' && c.code !== '');
 }
 
-const STOPPED = { en: 'stopped', fr: 'arrêté', es: 'suspendido' };
+const STOPPED = { en: 'stopped', fr: 'arrêté', es: 'suspendido', it: 'interrotto', 'pt-BR': 'interrompido' };
 
 function lowerFirst (s: string): string {
   return s.charAt(0).toLowerCase() + s.slice(1);

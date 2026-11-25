@@ -74,16 +74,16 @@ export const REASON_NOT_READ = 'not-read';
 
 /** The options of `which-specimen`, registered in CONVERSATION.md § Specimen codes (4.26.0), with their labels. */
 export const SPECIMEN_CODES: Readonly<Record<string, Record<'en' | 'fr' | 'es', string> & localizableText>> = {
-  'serum-plasma': { en: 'Serum or plasma', fr: 'Sérum ou plasma', es: 'Suero o plasma' },
-  'whole-blood': { en: 'Whole blood', fr: 'Sang total', es: 'Sangre total' },
-  'citrated-plasma': { en: 'Citrated plasma (coagulation)', fr: 'Plasma citraté (coagulation)', es: 'Plasma citratado (coagulación)' },
-  rbc: { en: 'Red blood cells', fr: 'Globules rouges', es: 'Glóbulos rojos' },
-  urine: { en: 'Urine', fr: 'Urine', es: 'Orina' },
-  'urine-24h': { en: '24-hour urine', fr: 'Urines de 24 heures', es: 'Orina de 24 horas' },
-  semen: { en: 'Semen', fr: 'Sperme', es: 'Semen' },
-  csf: { en: 'Cerebrospinal fluid', fr: 'Liquide céphalorachidien', es: 'Líquido cefalorraquídeo' },
-  stool: { en: 'Stool', fr: 'Selles', es: 'Heces' },
-  saliva: { en: 'Saliva', fr: 'Salive', es: 'Saliva' }
+  'serum-plasma': { en: 'Serum or plasma', fr: 'Sérum ou plasma', es: 'Suero o plasma', it: 'Siero o plasma', 'pt-BR': 'Soro ou plasma' },
+  'whole-blood': { en: 'Whole blood', fr: 'Sang total', es: 'Sangre total', it: 'Sangue intero', 'pt-BR': 'Sangue total' },
+  'citrated-plasma': { en: 'Citrated plasma (coagulation)', fr: 'Plasma citraté (coagulation)', es: 'Plasma citratado (coagulación)', it: 'Plasma citrato (coagulazione)', 'pt-BR': 'Plasma citratado (coagulação)' },
+  rbc: { en: 'Red blood cells', fr: 'Globules rouges', es: 'Glóbulos rojos', it: 'Globuli rossi', 'pt-BR': 'Hemácias' },
+  urine: { en: 'Urine', fr: 'Urine', es: 'Orina', it: 'Urine', 'pt-BR': 'Urina' },
+  'urine-24h': { en: '24-hour urine', fr: 'Urines de 24 heures', es: 'Orina de 24 horas', it: 'Urine delle 24 ore', 'pt-BR': 'Urina de 24 horas' },
+  semen: { en: 'Semen', fr: 'Sperme', es: 'Semen', it: 'Liquido seminale', 'pt-BR': 'Sêmen' },
+  csf: { en: 'Cerebrospinal fluid', fr: 'Liquide céphalorachidien', es: 'Líquido cefalorraquídeo', it: 'Liquido cerebrospinale', 'pt-BR': 'Líquido cefalorraquidiano' },
+  stool: { en: 'Stool', fr: 'Selles', es: 'Heces', it: 'Feci', 'pt-BR': 'Fezes' },
+  saliva: { en: 'Saliva', fr: 'Salive', es: 'Saliva', it: 'Saliva', 'pt-BR': 'Saliva' }
 };
 
 /** The document `clientData` keys of 4.26.0 (DOCUMENTS.md, PROVENANCE.md). */
@@ -2264,34 +2264,34 @@ async function deleteTwice (connection: pryv.Connection, method: 'events.delete'
 
 const ALERT_TEXT: Record<ConversationAlertKind, { title: Record<string, string>; body: Record<string, string> }> = {
   'task-status': {
-    title: { en: 'Document update', fr: 'Suivi du document' },
-    body: { en: 'Your contact updated the status of a document.', fr: 'Votre contact a mis à jour l\'état d\'un document.' }
+    title: { en: 'Document update', fr: 'Suivi du document', es: 'Actualización del documento', it: 'Aggiornamento del documento', 'pt-BR': 'Atualização do documento' },
+    body: { en: 'Your contact updated the status of a document.', fr: 'Votre contact a mis à jour l\'état d\'un document.', es: 'Su contacto ha actualizado el estado de un documento.', it: 'Il suo contatto ha aggiornato lo stato di un documento.', 'pt-BR': 'Seu contato atualizou o status de um documento.' }
   },
   notice: {
-    title: { en: 'Message', fr: 'Message' },
-    body: { en: 'Your contact sent you a message.', fr: 'Votre contact vous a envoyé un message.' }
+    title: { en: 'Message', fr: 'Message', es: 'Mensaje', it: 'Messaggio', 'pt-BR': 'Mensagem' },
+    body: { en: 'Your contact sent you a message.', fr: 'Votre contact vous a envoyé un message.', es: 'Su contacto le ha enviado un mensaje.', it: 'Il suo contatto le ha inviato un messaggio.', 'pt-BR': 'Seu contato enviou uma mensagem para você.' }
   },
   question: {
-    title: { en: 'Question', fr: 'Question' },
-    body: { en: 'Your contact asks you a question.', fr: 'Votre contact vous pose une question.' }
+    title: { en: 'Question', fr: 'Question', es: 'Pregunta', it: 'Domanda', 'pt-BR': 'Pergunta' },
+    body: { en: 'Your contact asks you a question.', fr: 'Votre contact vous pose une question.', es: 'Su contacto le hace una pregunta.', it: 'Il suo contatto le pone una domanda.', 'pt-BR': 'Seu contato faz uma pergunta a você.' }
   },
   'proposed-values': {
-    title: { en: 'Proposed values', fr: 'Valeurs proposées' },
-    body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.' }
+    title: { en: 'Proposed values', fr: 'Valeurs proposées', es: 'Valores propuestos', it: 'Valori proposti', 'pt-BR': 'Valores propostos' },
+    body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.', es: 'Su contacto propone valores leídos en un documento. Compruébelos, por favor.', it: 'Il suo contatto propone valori letti in un documento. Li controlli, per favore.', 'pt-BR': 'Seu contato propõe valores lidos em um documento. Confira-os.' }
   },
   answer: {
-    title: { en: 'Answer', fr: 'Réponse' },
-    body: { en: 'The person answered.', fr: 'La personne a répondu.' }
+    title: { en: 'Answer', fr: 'Réponse', es: 'Respuesta', it: 'Risposta', 'pt-BR': 'Resposta' },
+    body: { en: 'The person answered.', fr: 'La personne a répondu.', es: 'La persona ha respondido.', it: 'La persona ha risposto.', 'pt-BR': 'A pessoa respondeu.' }
   }
 };
 
 const STREAM_LABELS: Record<ConversationDirection, Record<'person' | 'contact', Record<string, string>>> = {
   received: {
-    person: { en: 'Received in conversations', fr: 'Reçu dans les conversations', es: 'Recibido en las conversaciones' },
-    contact: { en: 'Items you send', fr: 'Éléments que vous envoyez', es: 'Elementos que usted envía' }
+    person: { en: 'Received in conversations', fr: 'Reçu dans les conversations', es: 'Recibido en las conversaciones', it: 'Ricevuto nelle conversazioni', 'pt-BR': 'Recebido nas conversas' },
+    contact: { en: 'Items you send', fr: 'Éléments que vous envoyez', es: 'Elementos que usted envía', it: 'Elementi che invia', 'pt-BR': 'Itens que você envia' }
   },
   sent: {
-    person: { en: 'Your answers', fr: 'Vos réponses', es: 'Sus respuestas' },
-    contact: { en: 'Answers shared with you', fr: 'Réponses partagées avec vous', es: 'Respuestas compartidas con usted' }
+    person: { en: 'Your answers', fr: 'Vos réponses', es: 'Sus respuestas', it: 'Le sue risposte', 'pt-BR': 'Suas respostas' },
+    contact: { en: 'Answers shared with you', fr: 'Réponses partagées avec vous', es: 'Respuestas compartidas con usted', it: 'Risposte condivise con lei', 'pt-BR': 'Respostas compartilhadas com você' }
   }
 };

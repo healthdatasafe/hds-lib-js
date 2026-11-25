@@ -7,12 +7,12 @@ import { localizeText } from '../localizeText.ts';
 export const CHART_STAMP = 'fertility/chart-stamp-v1';
 
 const STAMP_LABELS: Record<string, Record<string, string>> = {
-  red: { en: 'Red', fr: 'Rouge', es: 'Rojo' },
-  green: { en: 'Green', fr: 'Vert', es: 'Verde' },
-  'green-baby': { en: 'Green with a baby', fr: 'Vert avec un bébé', es: 'Verde con un bebé' },
-  'white-baby': { en: 'White with a baby', fr: 'Blanc avec un bébé', es: 'Blanco con un bebé' },
-  yellow: { en: 'Yellow', fr: 'Jaune', es: 'Amarillo' },
-  'yellow-baby': { en: 'Yellow with a baby', fr: 'Jaune avec un bébé', es: 'Amarillo con un bebé' }
+  red: { en: 'Red', fr: 'Rouge', es: 'Rojo', it: 'Rosso', 'pt-BR': 'Vermelho' },
+  green: { en: 'Green', fr: 'Vert', es: 'Verde', it: 'Verde', 'pt-BR': 'Verde' },
+  'green-baby': { en: 'Green with a baby', fr: 'Vert avec un bébé', es: 'Verde con un bebé', it: 'Verde con un bambino', 'pt-BR': 'Verde com um bebê' },
+  'white-baby': { en: 'White with a baby', fr: 'Blanc avec un bébé', es: 'Blanco con un bebé', it: 'Bianco con un bambino', 'pt-BR': 'Branco com um bebê' },
+  yellow: { en: 'Yellow', fr: 'Jaune', es: 'Amarillo', it: 'Giallo', 'pt-BR': 'Amarelo' },
+  'yellow-baby': { en: 'Yellow with a baby', fr: 'Jaune avec un bébé', es: 'Amarillo con un bebé', it: 'Giallo con un bambino', 'pt-BR': 'Amarelo com um bebê' }
 };
 
 /** Short text of a charted stamp: its name, "Yellow with a baby" (an unknown one as stored). Null without a stamp. */
