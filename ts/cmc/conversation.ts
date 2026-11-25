@@ -1270,13 +1270,16 @@ export type AcceptRefusal = ProposalRefusal | 'unknown-candidate' | 'changed-sin
 
 /**
  * Her app writes the values she confirmed or corrected (§ Writing a value, R3, R9), then the answers, then their
- * alerts. In order: the document's items read again; a candidate is refused when it changed since `shownAt` (Unix
- * seconds, when the cards were shown), when an `is-this-yours` question is not confirmed (or answered `not-mine`),
- * when it has no date (its `proposal.time` or a `which-date` answer), or when R9 refuses it (or the correction);
- * each accepted value is looked up by `sourceKey` and written only when missing; one answer carries every
- * confirmation (`inReplyTo` the first), each correction its own; each answer's alert on the relationship's collectors
- * stream. Refused candidates are returned, the others written. A failure after a value was written throws with
- * `reason: 'write-failed'`: calling again finds the values by `sourceKey` and writes none twice.
+ * alerts, 20 decisions at a time. For each batch: the document's items read again; a candidate is refused when it
+ * changed since `shownAt` (Unix seconds, when the cards were shown), when an `is-this-yours` question is not confirmed
+ * (or answered `not-mine`), when it has no date (its `proposal.time` or a `which-date` answer), or when R9 refuses it
+ * (or the correction); each accepted value is looked up by `sourceKey` and written only when missing; one answer
+ * carries the batch's confirmations (`inReplyTo` the first), each correction its own; each answer's alert on the
+ * relationship's collectors stream. Refused candidates are returned, the others written. A failure throws with
+ * `reason: 'write-failed'`: the values already written are answered (so `not-mine` still deletes them), and calling
+ * again finds them answered and writes the rest, none twice (`sourceKey`). A failed alert leaves its answer written: the
+ * rest goes on, then it throws `alert-not-posted`, whose `innerObject` carries `answers`, `refused` and `notPosted` (the
+ * answers to post again with `postConversationAlert`).
  */
 export async function acceptProposedValues (
   connection: pryv.Connection,
@@ -1285,44 +1288,100 @@ export async function acceptProposedValues (
 ): Promise<{ answers: AnswerWritten[]; refused: Array<{ candidateId: string; reason: AcceptRefusal }> }> {
   const { streams, collectorStreamId } = await personSide(connection, rel, 'acceptProposedValues');
   if (typeof params?.shownAt !== 'number') throw new HDSLibError('acceptProposedValues: shownAt is required');
-  const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+  const decisions = [...(params.decisions ?? [])];
+  const read = async (): Promise<DocumentConversation> => conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
+  let conv = await read();
+  // a candidate already skipped or marked a duplicate may be confirmed: first, because once the open ones are answered
+  // the contact may settle the document and delete the rest between two batches (R10)
+  const settled = new Set(conv.proposedValues.filter(p => p.state === 'skipped' || p.state === 'duplicate').map(p => p.candidateId));
+  if (decisions.length > ACCEPT_BATCH) decisions.sort((a, b) => Number(settled.has(b.candidateId)) - Number(settled.has(a.candidateId)));
   const refused: Array<{ candidateId: string; reason: AcceptRefusal }> = [];
-  const accepted: Array<{ pv: ProposedValueView; decision: Decision; event: Record<string, any> }> = [];
-  for (const decision of params.decisions ?? []) {
-    const reason = acceptRefusal(conv, decision, params);
-    if (typeof reason === 'string') refused.push({ candidateId: decision.candidateId, reason });
-    else accepted.push(reason);
-  }
-  const written = new Map<string, string>();
-  try {
-    for (const { pv, event } of accepted) {
-      const found = await findBySourceKey(connection, event.streamIds[0], event.clientData.sourceKey, event.time);
-      written.set(pv.candidateId, found ?? (await connection.apiOne('events.create', event as any, 'event') as { id: string }).id);
-    }
-  } catch (e) {
-    throw new HDSLibError('acceptProposedValues: a value was not written', { reason: 'write-failed', written: Object.fromEntries(written), error: e });
-  }
-  const groups: Array<{ action: 'confirm' | 'correct'; pvs: ProposedValueView[] }> = [];
-  const confirms = accepted.filter(a => a.decision.action === 'confirm').map(a => a.pv);
-  if (confirms.length > 0) groups.push({ action: 'confirm', pvs: confirms });
-  for (const a of accepted.filter(a => a.decision.action === 'correct')) groups.push({ action: 'correct', pvs: [a.pv] });
   const answers: AnswerWritten[] = [];
-  for (const [i, g] of groups.entries()) {
-    const w = g.pvs.map(pv => ({ candidateId: pv.candidateId, eventId: written.get(pv.candidateId)! }));
-    const content: Record<string, any> = { kind: 'answer', inReplyTo: g.pvs[0].item.id, about: params.about, action: g.action, candidateIds: g.pvs.map(p => p.candidateId), written: w };
-    if (i === 0 && params.note != null) content.note = params.note;
-    answers.push({ ...await writeAnswer(connection, streams.sent, collectorStreamId, content, g.pvs[0].item, conv), action: g.action, written: w });
-  }
+  const written = new Map<string, string>();
+  const notPosted: string[] = [];
   // 4.26.0: the document lists the values written from it (best effort, after the answers)
-  await indexDocumentValues(connection, params.about, [...written.values()]);
+  const finish = async (): Promise<void> => { await indexDocumentValues(connection, params.about, [...written.values()]); };
+  for (let start = 0; start < decisions.length; start += ACCEPT_BATCH) {
+    // R3: what an answer covers is read again just before writing
+    if (start > 0) {
+      try {
+        conv = await read();
+      } catch (e) {
+        await finish();
+        throw writeFailed(written, e);
+      }
+    }
+    const accepted: AcceptedDecision[] = [];
+    for (const decision of decisions.slice(start, start + ACCEPT_BATCH)) {
+      const reason = acceptRefusal(conv, decision, params);
+      if (typeof reason === 'string') refused.push({ candidateId: decision.candidateId, reason });
+      else accepted.push(reason);
+    }
+    const done: AcceptedDecision[] = [];
+    let failure: unknown = null;
+    for (const a of accepted) {
+      try {
+        const found = await findBySourceKey(connection, a.event.streamIds[0], a.event.clientData.sourceKey, a.event.time);
+        written.set(a.pv.candidateId, found ?? (await connection.apiOne('events.create', a.event as any, 'event') as { id: string }).id);
+        done.push(a);
+      } catch (e) {
+        failure = e;
+        break;
+      }
+    }
+    // the values of this batch are answered even when it stopped: one that no answer lists would stay after `not-mine`
+    for (const g of answerGroups(done)) {
+      const w = g.pvs.map(pv => ({ candidateId: pv.candidateId, eventId: written.get(pv.candidateId)! }));
+      const content: Record<string, any> = { kind: 'answer', inReplyTo: g.pvs[0].item.id, about: params.about, action: g.action, candidateIds: g.pvs.map(p => p.candidateId), written: w };
+      if (answers.length === 0 && params.note != null) content.note = params.note;
+      try {
+        answers.push({ ...await writeAnswer(connection, streams.sent, collectorStreamId, content, g.pvs[0].item, conv), action: g.action, written: w });
+      } catch (e) {
+        const inner = (e as any)?.innerObject;
+        if (inner?.reason !== 'alert-not-posted') {
+          await finish();
+          throw written.size > 0 ? writeFailed(written, failure ?? e) : e;
+        }
+        // the answer is written: the rest goes on, and what was not announced is told at the end
+        notPosted.push(inner.answerEventId);
+        answers.push({ answerEventId: inner.answerEventId, alertEventId: '', action: g.action, written: w });
+      }
+    }
+    if (failure != null) {
+      await finish();
+      throw writeFailed(written, failure);
+    }
+  }
+  await finish();
+  if (notPosted.length > 0) {
+    throw new HDSLibError('an answer was written, its alert was not posted', { reason: 'alert-not-posted', answerEventId: notPosted[0], notPosted, answers, refused });
+  }
   return { answers, refused };
+}
+
+/** Values written and answered together: a failure leaves at most one batch's values behind an answer not written. */
+const ACCEPT_BATCH = 20;
+
+type AcceptedDecision = { pv: ProposedValueView; decision: Decision; event: Record<string, any> };
+
+function writeFailed (written: Map<string, string>, error: unknown): HDSLibError {
+  return new HDSLibError('acceptProposedValues: a value was not written', { reason: 'write-failed', written: Object.fromEntries(written), error });
+}
+
+/** One answer for the batch's confirmations (`inReplyTo` the first), each correction its own. */
+function answerGroups (done: AcceptedDecision[]): Array<{ action: 'confirm' | 'correct'; pvs: ProposedValueView[] }> {
+  const confirms = done.filter(a => a.decision.action === 'confirm').map(a => a.pv);
+  return [
+    ...(confirms.length > 0 ? [{ action: 'confirm' as const, pvs: confirms }] : []),
+    ...done.filter(a => a.decision.action === 'correct').map(a => ({ action: 'correct' as const, pvs: [a.pv] }))
+  ];
 }
 
 function acceptRefusal (
   conv: DocumentConversation,
   decision: Decision,
   params: { shownAt: number; engines: readonly string[] }
-): AcceptRefusal | { pv: ProposedValueView; decision: Decision; event: Record<string, any> } {
+): AcceptRefusal | AcceptedDecision {
   const pv = conv.proposedValues.find(p => p.candidateId === decision.candidateId);
   if (pv == null) return 'unknown-candidate';
   if (pv.item.modified > params.shownAt) return 'changed-since-shown';
@@ -1457,7 +1516,44 @@ function printedNumber (value: unknown): { n: number; halfUnit: number } | null 
 const sig12 = (n: number): number => Number(n.toPrecision(12));
 const same = (a: unknown, b: unknown): boolean => (a ?? null) === (b ?? null);
 
-/** Her event holds the proposed value: same type and content, a converted other type within the printed tolerance, or the same coded result. */
+/** JSON of a value with its keys in order, undefined ones left out. */
+function orderedJson (v: any): string {
+  if (Array.isArray(v)) return '[' + v.map(orderedJson).join(',') + ']';
+  if (v != null && typeof v === 'object') {
+    return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + orderedJson(v[k])).join(',') + '}';
+  }
+  return JSON.stringify(v) ?? 'null';
+}
+
+/** A reading that says something: a text or a number, an object or an array that is not empty. */
+function isReading (v: unknown): boolean {
+  if (typeof v === 'string') return v.trim() !== '';
+  if (typeof v === 'number') return Number.isFinite(v);
+  return v != null && typeof v === 'object' && Object.keys(v).length > 0;
+}
+
+/**
+ * What a convertible content (cervical fluid, mood) says: its method, what was read and its annotations (a Creighton
+ * frequency), and any other field it carries. Only its vectors and its engine and model versions are left out: derived,
+ * a newer converter writes other ones for the same reading. Null when it has no method or no reading to compare on (the
+ * whole content is then compared).
+ */
+function convertibleReading (itemKey: unknown, content: any): string | null {
+  if (typeof itemKey !== 'string') return null;
+  let type: unknown;
+  try { type = getModel().itemsDefs.forKey(itemKey, false)?.data.type; } catch { return null; }
+  const source = content?.source;
+  if (type !== 'convertible' || typeof source?.key !== 'string' || !isReading(source.sourceData)) return null;
+  const { vectors: _vectors, source: _source, ...others } = content;
+  const { engineVersion: _engine, modelVersion: _model, annotations, ...reading } = source;
+  const noted = annotations != null && Object.keys(annotations).length > 0 ? annotations : null;
+  return orderedJson([reading, noted, others]);
+}
+
+/**
+ * Her event holds the proposed value: same type and content (of a convertible item: same method, reading and
+ * annotations), a converted other type within the printed tolerance, or the same coded result.
+ */
 export function holdsProposedValue (e: { type: string; content?: any; clientData?: Record<string, any> }, pv: ConversationItem): boolean {
   const p = pv.content.proposal;
   if (e.type === p.type) {
@@ -1472,6 +1568,8 @@ export function holdsProposedValue (e: { type: string; content?: any; clientData
     if (typeof p.content === 'number' && typeof e.content === 'number') {
       return sig12(p.content) === sig12(e.content) && same(p.clientData?.hdsComparator, e.clientData?.hdsComparator);
     }
+    const mine = convertibleReading(p.itemKey, e.content);
+    if (mine != null && mine === convertibleReading(p.itemKey, p.content)) return true;
     return JSON.stringify(p.content) === JSON.stringify(e.content);
   }
   // another type of the same item: converted into the proposal's unit, within half the last printed digit (scaled)

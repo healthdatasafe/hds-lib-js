@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`acceptProposedValues` answers 20 values at a time (plan 128).** A run of confirmations used to write every value and one answer at
+  the end: when a write failed in the middle, the values already written had no answer, and a later `not-mine` did not delete
+  them. Each batch of 20 decisions now writes its values, then its answer (`inReplyTo` the first of the batch), reading the
+  document again before the next one; the values of a batch that stops are answered. A failed alert no longer stops the next batches:
+  `alert-not-posted` is thrown at the end, with `answers`, `refused` and `notPosted` on its `innerObject`. Up to 20 confirmations give one answer, as before. On a retry, the candidates
+  already answered come back as `refused: answered`.
+- **`autoMarkDuplicates` / `holdsProposedValue` compare a convertible value by its reading (plan 128):** the method, what was read and
+  its annotations (a Creighton frequency), and any other field the content carries. The vectors and the engine and model versions, which a newer converter writes differently for
+  the same reading, and the order of the keys, no longer hide a value she already has. The contract text is pending in
+  data-model (CONVERSATION.md § A value she already has, "Same type").
+
 ### Added
 
 - Converter texts in the other languages (plan 138): `converters/{itemKey}/l10n-{locale}.json`, published by data-model beside

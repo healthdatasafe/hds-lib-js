@@ -427,6 +427,184 @@ describe('[CNV] cmcConversation', function () {
       assert.strictEqual(res.answers.length, 1);
     });
 
+    it('[CNV41b] many values: one answer per 20, each listing its own values; the note on the first; every value answered', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 45 }, (_, i) => 'c' + (i + 1));
+      await cv.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const res = await cv.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: person.clock, engines: ENGINES, note: 'all mine' });
+      assert.deepStrictEqual(res.refused, []);
+      assert.deepStrictEqual(res.answers.map(a => a.written.length), [20, 20, 5]);
+      const sent = [...person.events.values()].filter(e => e.content?.kind === 'answer');
+      assert.deepStrictEqual(sent.map(e => e.content.inReplyTo), [0, 20, 40].map(i => {
+        const c = [...person.events.values()].find(e => e.content?.kind === 'proposed-value' && e.content.candidateId === ids[i]);
+        return c.id;
+      }));
+      assert.deepStrictEqual(sent.map(e => e.content.note ?? null), ['all mine', null, null]);
+      const seen = cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC }), DOC);
+      assert.deepStrictEqual(new Set(seen.proposedValues.map(p => p.state)), new Set(['confirmed']));
+    });
+
+    it('[CNV41c] a write that fails in the middle: what was written is answered, not-mine deletes it, a retry writes the rest once', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 25 }, (_, i) => 'c' + (i + 1));
+      await cv.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const qId = await cv.writeQuestion(person, streams, identityQuestion);
+      await cv.answerQuestion(person, r, { questionId: qId, action: 'confirm', shownAt: person.clock });
+      const values = () => [...person.events.values()].filter(e => e.type === 'concentration/ug-l');
+      const shownAt = person.clock;
+      const apiOne = person.apiOne;
+      let creates = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'concentration/ug-l' && ++creates === 23) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      const decisions = ids.map(candidateId => ({ candidateId, action: 'confirm' }));
+      await assert.rejects(cv.acceptProposedValues(person, r, { about: DOC, decisions, shownAt, engines: ENGINES }),
+        (e) => e.innerObject?.reason === 'write-failed' && Object.keys(e.innerObject.written).length === 22);
+      person.apiOne = apiOne;
+      const seen = cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC }), DOC);
+      assert.strictEqual(seen.proposedValues.filter(p => p.state === 'confirmed').length, 22, 'every value written is answered');
+      const rest = await cv.acceptProposedValues(person, r, { about: DOC, decisions, shownAt: person.clock, engines: ENGINES });
+      assert.strictEqual(rest.refused.length, 22, 'the answered ones are not asked twice');
+      assert.deepStrictEqual(rest.answers.map(a => a.written.length), [3]);
+      assert.strictEqual(values().length, 25);
+      const no = await cv.answerQuestion(person, r, { questionId: qId, action: 'not-mine', shownAt: person.clock });
+      assert.strictEqual(no.deletedValueIds.length, 25);
+      assert.strictEqual(values().length, 0);
+    });
+
+    it('[CNV41d] not-mine before the retry deletes the values of a failed write', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = ['c1', 'c2', 'c3'];
+      await cv.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const qId = await cv.writeQuestion(person, streams, identityQuestion);
+      await cv.answerQuestion(person, r, { questionId: qId, action: 'confirm', shownAt: person.clock });
+      const apiOne = person.apiOne;
+      let creates = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'concentration/ug-l' && ++creates === 3) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      await assert.rejects(cv.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: person.clock, engines: ENGINES }),
+        (e) => e.innerObject?.reason === 'write-failed');
+      person.apiOne = apiOne;
+      const no = await cv.answerQuestion(person, r, { questionId: qId, action: 'not-mine', shownAt: person.clock });
+      assert.strictEqual(no.deletedValueIds.length, 2);
+      assert.strictEqual([...person.events.values()].filter(e => e.type === 'concentration/ug-l').length, 0);
+    });
+
+    it('[CNV41e] a first batch written, its alert not posted: the next batches still written, then alert-not-posted', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 25 }, (_, i) => 'c' + (i + 1));
+      await cv.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const apiOne = person.apiOne;
+      let alerts = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.type === 'notification/alert-cmc' && ++alerts === 1) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      const err = await cv.acceptProposedValues(person, r, { about: DOC, decisions: [...ids.map(candidateId => ({ candidateId, action: 'confirm' })), { candidateId: 'zz', action: 'confirm' }], shownAt: person.clock, engines: ENGINES })
+        .then(() => null, (e) => e);
+      person.apiOne = apiOne;
+      const sent = [...person.events.values()].filter(e => e.content?.kind === 'answer');
+      assert.deepStrictEqual(sent.map(e => e.content.written.length), [20, 5], 'both batches are answered');
+      assert.strictEqual(err.innerObject.reason, 'alert-not-posted');
+      assert.deepStrictEqual(err.innerObject.notPosted, [sent[0].id]);
+      assert.deepStrictEqual(err.innerObject.refused, [{ candidateId: 'zz', reason: 'unknown-candidate' }]);
+      assert.strictEqual(alertsOf(person).length, 1, 'the second answer is announced');
+      const seen = cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC }), DOC);
+      assert.strictEqual(seen.proposedValues.filter(p => p.state === 'confirmed').length, 25);
+    });
+
+    it('[CNV41g] the answer itself fails after values were written: write-failed lists them, a retry heals and not-mine then deletes them', async () => {
+      const { person, rel: r, streams } = await setup();
+      await cv.writeProposedValues(person, streams, DOC, [pv('c1'), pv('c2')]);
+      const qId = await cv.writeQuestion(person, streams, identityQuestion);
+      await cv.answerQuestion(person, r, { questionId: qId, action: 'confirm', shownAt: person.clock });
+      const apiOne = person.apiOne;
+      let answers = 0;
+      person.apiOne = async (method, params, key) => {
+        if (method === 'events.create' && params.content?.kind === 'answer' && ++answers === 1) throw new Error('offline');
+        return apiOne(method, params, key);
+      };
+      const decisions = ['c1', 'c2'].map(candidateId => ({ candidateId, action: 'confirm' }));
+      await assert.rejects(cv.acceptProposedValues(person, r, { about: DOC, decisions, shownAt: person.clock, engines: ENGINES }),
+        (e) => e.innerObject?.reason === 'write-failed' && Object.keys(e.innerObject.written).length === 2);
+      person.apiOne = apiOne;
+      const res = await cv.acceptProposedValues(person, r, { about: DOC, decisions, shownAt: person.clock, engines: ENGINES });
+      assert.deepStrictEqual(res.answers.map(a => a.written.length), [2]);
+      assert.strictEqual([...person.events.values()].filter(e => e.type === 'concentration/ug-l').length, 2);
+      const no = await cv.answerQuestion(person, r, { questionId: qId, action: 'not-mine', shownAt: person.clock });
+      assert.strictEqual(no.deletedValueIds.length, 2);
+    });
+
+    it('[CNV41h] a conversation that cannot be read between two batches: write-failed, the first batch answered', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 21 }, (_, i) => 'c' + (i + 1));
+      await cv.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const apiOne = person.apiOne;
+      let answered = false;
+      person.apiOne = async (method, params, key) => {
+        if (answered && method === 'events.get') throw new Error('offline');
+        const out = await apiOne(method, params, key);
+        if (method === 'events.create' && params.content?.kind === 'answer') answered = true;
+        return out;
+      };
+      await assert.rejects(cv.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: person.clock, engines: ENGINES }),
+        (e) => e.innerObject?.reason === 'write-failed' && Object.keys(e.innerObject.written).length === 20);
+      person.apiOne = apiOne;
+      const seen = cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC }), DOC);
+      assert.strictEqual(seen.proposedValues.filter(p => p.state === 'confirmed').length, 20);
+    });
+
+    it('[CNV41i] corrections keep their own answer across batches; a first batch wholly refused leaves the note for the next', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 21 }, (_, i) => 'c' + (i + 1));
+      await cv.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const correction = { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 50 };
+      const mixed = [...ids.slice(0, 20).map(candidateId => ({ candidateId, action: 'confirm' })), { candidateId: 'c21', action: 'correct', correction }];
+      const res = await cv.acceptProposedValues(person, r, { about: DOC, decisions: mixed, shownAt: person.clock, engines: ENGINES });
+      assert.deepStrictEqual(res.answers.map(a => [a.action, a.written.length]), [['confirm', 20], ['correct', 1]]);
+      const D4 = 'ckdoc0000004';
+      await cv.writeProposedValues(person, streams, D4, [pv('k1', { about: D4 })]);
+      const unknown = Array.from({ length: 20 }, (_, i) => ({ candidateId: 'x' + i, action: 'confirm' }));
+      const late = await cv.acceptProposedValues(person, r, { about: D4, decisions: [...unknown, { candidateId: 'k1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES, note: 'mine' });
+      assert.strictEqual(late.refused.length, 20);
+      const noted = [...person.events.values()].filter(e => e.content?.kind === 'answer' && e.content.about === D4);
+      assert.deepStrictEqual(noted.map(e => e.content.note ?? null), ['mine']);
+    });
+
+    it('[CNV41j] a run over several batches confirms the skipped and duplicate candidates first', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 22 }, (_, i) => 'c' + (i + 1));
+      await cv.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      await cv.answerProposedValues(person, r, { about: DOC, candidateIds: ['c22'], action: 'skip', shownAt: person.clock });
+      const res = await cv.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: person.clock, engines: ENGINES });
+      assert.deepStrictEqual(res.refused, []);
+      assert.ok(res.answers[0].written.some(w => w.candidateId === 'c22'), 'the skipped one is in the first batch');
+    });
+
+    it('[CNV41f] a candidate that changed between two batches is refused, not written', async () => {
+      const { person, rel: r, streams } = await setup();
+      const ids = Array.from({ length: 21 }, (_, i) => 'c' + (i + 1));
+      await cv.writeProposedValues(person, streams, DOC, ids.map(id => pv(id)));
+      const shownAt = person.clock;
+      const apiOne = person.apiOne;
+      let changed = false;
+      person.apiOne = async (method, params, key) => {
+        const out = await apiOne(method, params, key);
+        if (!changed && method === 'events.create' && params.content?.kind === 'answer') {
+          changed = true;
+          const last = [...person.events.values()].find(e => e.content?.kind === 'proposed-value' && e.content.candidateId === 'c21');
+          last.modified = shownAt + 1000;
+        }
+        return out;
+      };
+      const res = await cv.acceptProposedValues(person, r, { about: DOC, decisions: ids.map(candidateId => ({ candidateId, action: 'confirm' })), shownAt, engines: ENGINES });
+      assert.deepStrictEqual(res.refused, [{ candidateId: 'c21', reason: 'changed-since-shown' }]);
+      assert.strictEqual(res.answers[0].written.length, 20);
+    });
+
     it('[CNV42] which-unit: choose writes no value, the contact re-proposes with replaces, the old one is no longer confirmable', async () => {
       const { person, rel: r, streams } = await setup();
       await cv.writeProposedValues(person, streams, DOC, [noProposal(pv('c1', { status: 'unit-missing' }))]);

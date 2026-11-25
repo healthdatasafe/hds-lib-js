@@ -322,6 +322,28 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     assert.throws(() => cv.documentEditOf(all, { documentKind: 'no-such-kind' }), /unknown-kind/);
   });
 
+  it('[CNVD8b] a write that fails in the middle: the document lists the values already written, and not-mine removes them', async () => {
+    const { person, rel, streams, DOC, document } = await setup([]);
+    const value = (candidateId, content) => ({ kind: 'proposed-value', about: DOC, candidateId, printed: { label: 'Ferritine', value: String(content), unit: 'µg/l' }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content, time: D, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction });
+    await cv.writeProposedValues(person, streams, DOC, [value('c1', 48), value('c2', 84), value('c3', 90)]);
+    const apiOne = person.apiOne;
+    let creates = 0;
+    person.apiOne = async (method, params, key) => {
+      if (method === 'events.create' && params.type === 'concentration/ug-l' && ++creates === 3) throw new Error('offline');
+      return apiOne(method, params, key);
+    };
+    const decisions = ['c1', 'c2', 'c3'].map(candidateId => ({ candidateId, action: 'confirm' }));
+    const err = await cv.acceptProposedValues(person, rel, { about: DOC, decisions, shownAt: person.clock, engines: ENGINES }).then(() => null, (e) => e);
+    person.apiOne = apiOne;
+    assert.strictEqual(err.innerObject.reason, 'write-failed');
+    const ids = Object.values(err.innerObject.written);
+    assert.deepStrictEqual(Object.keys((await document()).clientData.hdsDocumentValues).sort(), [...ids].sort());
+    const qid = await cv.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'is-this-yours' });
+    const no = await cv.answerQuestion(person, rel, { questionId: qid, action: 'not-mine', shownAt: person.clock });
+    assert.deepStrictEqual([...no.deletedValueIds].sort(), [...ids].sort());
+    assert.strictEqual((await document()).clientData.hdsDocumentValues, undefined);
+  });
+
   it('[CNVD8] the document lists the values written from it (source); a value she had gets hdsPrintedIn, nothing on the document; not-mine removes both', async () => {
     const { person, rel, streams, DOC, document } = await setup([]);
     const streamOf = (k) => getModel().itemsDefs.forKey(k).data.streamId;
