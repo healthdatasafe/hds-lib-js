@@ -345,6 +345,129 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     assert.strictEqual((await document()).clientData.hdsDocumentValues, undefined);
   });
 
+  describe('[CNVDI] the index of a document (hdsDocumentValues) on a long run', () => {
+    const value = (DOC, candidateId, content) => ({ kind: 'proposed-value', about: DOC, candidateId, printed: { label: 'Ferritine', value: String(content), unit: 'µg/l' }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content, time: D, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction });
+    const run = async (n) => {
+      const all = await setup([]);
+      const ids = Array.from({ length: n }, (_, i) => 'c' + (i + 1));
+      await cv.writeProposedValues(all.person, all.streams, all.DOC, ids.map((id, i) => value(all.DOC, id, 40 + i)));
+      return { ...all, ids };
+    };
+    const one = (all, id) => cv.acceptProposedValues(all.person, all.rel, { about: all.DOC, decisions: [{ candidateId: id, action: 'confirm' }], shownAt: all.person.clock, engines: ENGINES });
+    const index = async (all) => (await all.document()).clientData.hdsDocumentValues ?? {};
+
+    it('[CNVDI1] twenty confirms at once lose no entry', async () => {
+      const all = await run(20);
+      const res = await Promise.all(all.ids.map(id => one(all, id)));
+      assert.deepStrictEqual(Object.keys(await index(all)).sort(), res.map(r => r.answers[0].written[0].eventId).sort());
+    });
+
+    it('[CNVDI2] the cost of a confirm does not grow with the document', async () => {
+      const all = await run(62);
+      await cv.acceptProposedValues(all.person, all.rel, { about: all.DOC, decisions: all.ids.slice(0, 60).map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: all.person.clock, engines: ENGINES });
+      const apiOne = all.person.apiOne;
+      let gets = 0;
+      all.person.apiOne = async (method, params, key) => { if (method === 'events.getOne') gets++; return apiOne(method, params, key); };
+      await one(all, 'c61');
+      all.person.apiOne = apiOne;
+      assert.ok(gets <= 8, `${gets} events.getOne`);
+      assert.strictEqual(Object.keys(await index(all)).length, 61);
+    });
+
+    it('[CNVDI3] an entry the index lost comes back from the answers; a value she deleted or trashed does not', async () => {
+      const all = await run(4);
+      const written = {};
+      for (const id of ['c1', 'c2', 'c3']) written[id] = (await one(all, id)).answers[0].written[0].eventId;
+      await all.person.apiOne('events.update', { id: all.DOC, update: { clientData: { hdsDocumentValues: null } } });
+      await all.person.apiOne('events.delete', { id: written.c2 });
+      await all.person.apiOne('events.delete', { id: written.c3 });
+      await all.person.apiOne('events.delete', { id: written.c3 });
+      const c4 = (await one(all, 'c4')).answers[0].written[0].eventId;
+      assert.deepStrictEqual(Object.keys(await index(all)).sort(), [written.c1, c4].sort());
+    });
+
+    it('[CNVDI4] on a short document the dangling entries found are dropped, as before', async () => {
+      const all = await run(2);
+      const c1 = (await one(all, 'c1')).answers[0].written[0].eventId;
+      await all.person.apiOne('events.delete', { id: c1 });
+      await all.person.apiOne('events.delete', { id: c1 });
+      const c2 = (await one(all, 'c2')).answers[0].written[0].eventId;
+      assert.deepStrictEqual(Object.keys(await index(all)), [c2]);
+    });
+
+    it('[CNVDI6] a failed write of the index before another one, at once: the second still goes and restores the first', async () => {
+      const all = await run(3);
+      const apiOne = all.person.apiOne;
+      let first = true;
+      all.person.apiOne = async (method, params, key) => {
+        if (first && method === 'events.update' && params.id === all.DOC) { first = false; throw new Error('offline'); }
+        return apiOne(method, params, key);
+      };
+      const [a, b] = await Promise.all([one(all, 'c1'), one(all, 'c2')]);
+      all.person.apiOne = apiOne;
+      const c3 = (await one(all, 'c3')).answers[0].written[0].eventId;
+      assert.deepStrictEqual(Object.keys(await index(all)).sort(), [a, b].map(r => r.answers[0].written[0].eventId).concat(c3).sort());
+    });
+
+    it('[CNVDI7] a request that never ends does not hold up the next write', async () => {
+      const all = await run(2);
+      const apiOne = all.person.apiOne;
+      let hung = true;
+      all.person.apiOne = async (method, params, key) => {
+        if (hung && method === 'events.update' && params.id === all.DOC) { hung = false; return await new Promise(() => {}); }
+        return apiOne(method, params, key);
+      };
+      const values = [];
+      for (const content of [1, 2]) values.push((await all.person.apiOne('events.create', { streamIds: ['x'], type: 'concentration/ug-l', content }, 'event')).id);
+      const stuck = cv.indexDocumentValues(all.person, all.DOC, [values[0]], { waitMs: 30 });
+      const second = await cv.indexDocumentValues(all.person, all.DOC, [values[1]], { waitMs: 30 });
+      assert.deepStrictEqual(Object.keys(second), [values[1]]);
+      assert.ok(stuck instanceof Promise);
+    });
+
+    it('[CNVDI8] on a long document: a dangling entry gets its turn, and lost entries come back over the next writes', async () => {
+      const all = await run(64);
+      const res = await cv.acceptProposedValues(all.person, all.rel, { about: all.DOC, decisions: all.ids.slice(0, 40).map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: all.person.clock, engines: ENGINES });
+      const written = res.answers.flatMap(a => a.written.map(w => w.eventId));
+      await all.person.apiOne('events.delete', { id: written[3] });
+      await all.person.apiOne('events.delete', { id: written[3] });
+      const kept = await index(all);
+      const lost = written.slice(5, 11);
+      await all.person.apiOne('events.update', { id: all.DOC, update: { clientData: { hdsDocumentValues: Object.fromEntries(Object.entries(kept).filter(([id]) => !lost.includes(id))) } } });
+      for (const id of all.ids.slice(40, 64)) await one(all, id);
+      const after = await index(all);
+      for (const id of lost) assert.strictEqual(after[id], 'source', 'a lost entry is back');
+      assert.strictEqual(after[written[3]], undefined, 'the dangling one had its turn');
+    });
+
+    it('[CNVDI9] many values she deleted do not keep a lost one out, and never come back', async () => {
+      const all = await run(40);
+      const res = await cv.acceptProposedValues(all.person, all.rel, { about: all.DOC, decisions: all.ids.slice(0, 26).map(candidateId => ({ candidateId, action: 'confirm' })), shownAt: all.person.clock, engines: ENGINES });
+      const written = res.answers.flatMap(a => a.written.map(w => w.eventId));
+      const gone = written.slice(0, 22);
+      for (const id of gone) { await all.person.apiOne('events.delete', { id }); await all.person.apiOne('events.delete', { id }); }
+      await all.person.apiOne('events.update', { id: all.DOC, update: { clientData: { hdsDocumentValues: null } } });
+      for (const id of all.ids.slice(26, 40)) await one(all, id);
+      const after = await index(all);
+      for (const id of gone) assert.strictEqual(after[id], undefined, 'never restored');
+      for (const id of written.slice(22)) assert.strictEqual(after[id], 'source', 'a lost one is back');
+    });
+
+    it('[CNVDI5] a write of the index that fails does not block the next one', async () => {
+      const all = await run(2);
+      const apiOne = all.person.apiOne;
+      let first = true;
+      all.person.apiOne = async (method, params, key) => {
+        if (first && method === 'events.update' && params.id === all.DOC) { first = false; throw new Error('offline'); }
+        return apiOne(method, params, key);
+      };
+      const c1 = (await one(all, 'c1')).answers[0].written[0].eventId;
+      const c2 = (await one(all, 'c2')).answers[0].written[0].eventId;
+      all.person.apiOne = apiOne;
+      assert.deepStrictEqual(Object.keys(await index(all)).sort(), [c1, c2].sort(), 'c1 is restored from its answer');
+    });
+  });
+
   it('[CNVD8] the document lists the values written from it (source); a value she had gets hdsPrintedIn, nothing on the document; not-mine removes both', async () => {
     const { person, rel, streams, DOC, document } = await setup([]);
     const streamOf = (k) => getModel().itemsDefs.forKey(k).data.streamId;

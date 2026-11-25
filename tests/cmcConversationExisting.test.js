@@ -200,6 +200,26 @@ describe('[CNVX] a value she already has (basis existing-value), the self-contai
     assert.strictEqual((await conv()).proposedValues[0].state, 'duplicate');
   });
 
+  it('[CNVX5c] an item she never used has no stream: no record there, and the other values are still compared', async () => {
+    const mucus = { ...ferritin('c1'), proposal: { itemKey: 'body-vulva-mucus-inspect', type: 'vulva-mucus-inspect/9d-vector', content: { vectors: {}, source: { key: 'creighton', sourceData: '10KL' } }, time: D, clientData: { hdsTimePrecision: 'day' } } };
+    const { person, rel, her } = await setup([mucus, ferritin('c2', 48)]);
+    await her('body-blood-serum-ferritin', 'concentration/ug-l', 48, D);
+    const apiOne = person.apiOne;
+    const missing = streamOf('body-vulva-mucus-inspect');
+    person.apiOne = async (method, params, key) => {
+      if (method === 'events.get' && params.streams?.includes(missing)) throw apiError('unknown-referenced-resource');
+      return apiOne(method, params, key);
+    };
+    assert.deepStrictEqual((await cv.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }))?.candidateIds, ['c2']);
+    const other = await setup([mucus]);
+    const otherOne = other.person.apiOne;
+    other.person.apiOne = async (method, params, key) => {
+      if (method === 'events.get' && params.streams?.includes(missing)) throw apiError('forbidden');
+      return otherOne(method, params, key);
+    };
+    await assert.rejects(cv.autoMarkDuplicates(other.person, other.rel, { about: DOC, engines: ENGINES }), (e) => e.message === 'forbidden', 'any other error is told');
+  });
+
   it('[CNVX6] basis rules: existing-value only on a duplicate of proposed values, profile-match only on a confirm of is-this-yours', () => {
     const answer = { kind: 'answer', inReplyTo: 'ev-1', about: DOC, candidateIds: ['c1'] };
     assert.deepStrictEqual(cv.checkConversationItem({ ...answer, action: 'duplicate', basis: 'existing-value' }), []);

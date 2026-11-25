@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A document's index of values (`hdsDocumentValues`) on a long document (plan 128).** The index was read entry by entry at each
+  confirm (a 157-value chart: 16,732 requests in all) and two confirms at once lost entries. Each write now checks at most a few
+  entries on a long document, so a confirm costs the same at the end as at the start; the writes of one document's index go one
+  after the other, waiting 10 s at most for the one before; an entry that an answer lists and the index lost is restored when its event is still there. Dangling
+  entries are dropped: all of them on a document of up to 20 entries, as before, 5 in turn on a longer one.
+- **`autoMarkDuplicates` when she has no stream for an item yet (plan 128):** the whole check stopped
+  (`unknown-referenced-resource`) and nothing was recognised as already in her record. It now means "nothing there" for that item.
+  Any other error is still thrown.
+
 ### Changed
 
 - **`acceptProposedValues` answers 20 values at a time (plan 128).** A run of confirmations used to write every value and one answer at
