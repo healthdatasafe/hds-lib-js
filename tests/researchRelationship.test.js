@@ -120,6 +120,14 @@ describe('[RESR] research relationship', function () {
       assert.deepStrictEqual(await res.readResearchTopics(conn, { model }), ['metabolic']);
     });
 
+    it('[RESR-T3b] a choice made only of unknown keys is kept as written, never read as "none chosen"', async () => {
+      const conn = fakeConnection([topicsEvent('a', ['astrology', 'gardening'], NOW)]);
+      assert.deepStrictEqual(await res.readResearchTopics(conn, { model }), ['astrology', 'gardening']);
+      assert.deepStrictEqual(await res.readResearchTopics(fakeConnection([topicsEvent('b', [], NOW)]), { model }), []);
+      assert.deepStrictEqual(await res.readResearchTopics(fakeConnection([topicsEvent('c', 'sleep', NOW)]), { model }), [], 'not a list: none');
+      assert.deepStrictEqual(await res.readResearchTopics(fakeConnection([topicsEvent('d', [3, 'sleep', null], NOW)]), { model }), ['sleep'], 'non-strings dropped');
+    });
+
     it('[RESR-T4] save creates one event, then updates it; vocabulary order, no duplicate', async () => {
       const conn = fakeConnection([]);
       const id = await res.saveResearchTopics(conn, ['sleep', 'cardiovascular', 'sleep'], { model, now: NOW });
