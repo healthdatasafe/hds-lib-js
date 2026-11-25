@@ -1300,7 +1300,10 @@ export async function acceptProposedValues (
   const written = new Map<string, string>();
   const notPosted: string[] = [];
   // 4.26.0: the document lists the values written from it (best effort, after the answers)
-  const finish = async (): Promise<void> => { await indexDocumentValues(connection, params.about, [...written.values()]); };
+  const finish = async (): Promise<void> => {
+    const earlier = conv.answers.flatMap(a => (a.content.written ?? []).map((w: any) => w?.eventId)).filter((id: unknown): id is string => typeof id === 'string');
+    await indexDocumentValues(connection, params.about, [...written.values()], { written: earlier });
+  };
   for (let start = 0; start < decisions.length; start += ACCEPT_BATCH) {
     // R3: what an answer covers is read again just before writing
     if (start > 0) {
@@ -1621,7 +1624,7 @@ export async function autoMarkDuplicates (
     const key = streamId + '|' + c.day;
     if (!cache.has(key)) {
       const start = dayStart(c.day);
-      cache.set(key, await connection.apiOne('events.get', { streams: [streamId], fromTime: start - 14 * HOUR, toTime: start + DAY + 12 * HOUR, limit: 500 } as any, 'events') as any[]);
+      cache.set(key, await eventsOnStream(connection, { streams: [streamId], fromTime: start - 14 * HOUR, toTime: start + DAY + 12 * HOUR, limit: 500 }));
     }
     for (const e of cache.get(key)!) {
       if (e.trashed === true || !itemDef.eventTypes.includes(e.type)) continue;
@@ -1660,12 +1663,14 @@ async function deleteWrittenValues (connection: pryv.Connection, conv: DocumentC
   const ids = [...new Set(conv.answers.flatMap(a => (a.content.written ?? []).map((w: any) => w.eventId)))] as string[];
   for (const id of ids) await deleteTwice(connection, 'events.delete', { id });
   await bestEffort(async () => {
-    const doc = await readEvent(connection, conv.about);
-    const index = doc?.clientData?.[DOCUMENT_VALUES_KEY];
-    if (index != null && typeof index === 'object') {
-      const kept = Object.fromEntries(Object.entries(index).filter(([id]) => !ids.includes(id)));
-      await connection.apiOne('events.update', { id: conv.about, update: { clientData: { [DOCUMENT_VALUES_KEY]: Object.keys(kept).length > 0 ? kept : null } } } as any, 'event');
-    }
+    await oneAtATime(connection, conv.about, async () => {
+      const doc = await readEvent(connection, conv.about);
+      const index = doc?.clientData?.[DOCUMENT_VALUES_KEY];
+      if (index != null && typeof index === 'object') {
+        const kept = Object.fromEntries(Object.entries(index).filter(([id]) => !ids.includes(id)));
+        await connection.apiOne('events.update', { id: conv.about, update: { clientData: { [DOCUMENT_VALUES_KEY]: Object.keys(kept).length > 0 ? kept : null } } } as any, 'event');
+      }
+    });
   });
   await bestEffort(async () => {
     const printed = await connection.apiOne('events.get', { clientData: [{ path: `${PRINTED_IN_KEY}.${conv.about}`, eq: true }], limit: 1000 } as any, 'events') as any[];
@@ -1677,25 +1682,98 @@ async function deleteWrittenValues (connection: pryv.Connection, conv: DocumentC
   return ids;
 }
 
+/** Her events on a stream; none when she has no such stream yet (an item never used has none: nothing is there). */
+async function eventsOnStream (connection: pryv.Connection, params: Record<string, unknown>): Promise<any[]> {
+  try {
+    return await connection.apiOne('events.get', params as any, 'events') as any[];
+  } catch (e) {
+    if (pryvErrorCode(e) === 'unknown-referenced-resource') return [];
+    throw e;
+  }
+}
+
+/** A document with this many index entries at most has them all checked at a write; a longer one, a few each time. */
+const INDEX_CHECKED = 20;
+const INDEX_WINDOW = 5;
+/** The longest an index write waits for the one before it: one that never ends holds up no other. */
+const INDEX_WAIT_MS = 10_000;
+
+const indexQueues = new WeakMap<object, Map<string, Promise<unknown>>>();
+const indexCursors = new WeakMap<object, Map<string, string>>();
+
+/**
+ * A few ids of a list, the next ones at each write: it goes on after the last one it gave (per connection, `key`),
+ * round and round, so each one gets its turn while the list grows. All of them when they are few.
+ */
+function nextOf (connection: pryv.Connection, key: string, list: string[], size: number): string[] {
+  if (list.length <= size) return list;
+  const cursors = indexCursors.get(connection) ?? new Map<string, string>();
+  indexCursors.set(connection, cursors);
+  const sorted = [...list].sort();
+  const last = cursors.get(key);
+  const at = last == null ? Math.floor(Math.random() * sorted.length) : sorted.findIndex(id => id > last);
+  const start = at === -1 ? 0 : at;
+  const given = Array.from({ length: size }, (_, i) => sorted[(start + i) % sorted.length]);
+  cursors.set(key, given[given.length - 1]);
+  return given;
+}
+
+/**
+ * The writes of one document's index one after the other (each reads it, then writes it whole): two taps lose nothing.
+ * Only within this connection: another tab or device can still lose an entry, restored by a later write. Not nested on
+ * one document.
+ */
+async function oneAtATime<T> (connection: pryv.Connection, about: string, fn: () => Promise<T>, waitMs = INDEX_WAIT_MS): Promise<T> {
+  const queues = indexQueues.get(connection) ?? new Map<string, Promise<unknown>>();
+  indexQueues.set(connection, queues);
+  const before = queues.get(about);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const turn = before == null
+    ? Promise.resolve()
+    : Promise.race([before, new Promise<void>(resolve => { timer = setTimeout(resolve, waitMs); })]).finally(() => clearTimeout(timer));
+  const run = turn.then(fn, fn);
+  const settled = run.catch(() => undefined);
+  queues.set(about, settled);
+  try {
+    return await run;
+  } finally {
+    if (queues.get(about) === settled) queues.delete(about);
+  }
+}
+
 /**
  * 4.26.0, after the answer and best effort: the values her app wrote from the document, added to its
- * `clientData.hdsDocumentValues` as `source` (PROVENANCE.md), the whole object written after a fresh read, the
- * dangling entries it finds (deleted, trashed) dropped. Returns the index written, or null when nothing was.
+ * `clientData.hdsDocumentValues` as `source` (PROVENANCE.md), the whole object written after a fresh read. `written`:
+ * the values of the document's earlier answers, of which a missing one is restored when its event is still there
+ * (CONVERSATION.md § The document lists them). Dangling entries (deleted, trashed) are dropped: all of them on an index
+ * of up to 20 entries, 5 in turn on a longer one, so the cost of a write does not grow with the document. Returns the
+ * index written, or null when nothing was.
  */
-export async function indexDocumentValues (connection: pryv.Connection, about: string, eventIds: string[]): Promise<Record<string, string> | null> {
+export async function indexDocumentValues (
+  connection: pryv.Connection,
+  about: string,
+  eventIds: string[],
+  opts: { written?: string[]; waitMs?: number } = {}
+): Promise<Record<string, string> | null> {
   if (eventIds.length === 0) return null;
-  return await bestEffort(async () => {
+  return await bestEffort(async () => await oneAtATime(connection, about, async () => {
     const doc = await readEvent(connection, about);
     if (doc?.type !== 'file/xds-v1') return null;
     const index: Record<string, string> = { ...(doc.clientData?.[DOCUMENT_VALUES_KEY] ?? {}) };
-    for (const id of Object.keys(index)) {
-      const e = eventIds.includes(id) ? { trashed: false } : await readEvent(connection, id);
-      if (e == null || e.trashed === true) delete index[id];
-    }
+    const gone = async (id: string): Promise<boolean> => {
+      const e = await readEvent(connection, id);
+      return e == null || e.trashed === true;
+    };
+    const known = Object.keys(index).filter(id => !eventIds.includes(id));
+    const checked = known.length <= INDEX_CHECKED ? known : nextOf(connection, about + '|known', known, INDEX_WINDOW);
+    for (const id of checked) if (await gone(id)) delete index[id];
+    // a value an answer lists that the index lost (a write that failed, or two at once): back, if it is still there
+    const missing = [...new Set(opts.written ?? [])].filter(id => index[id] == null && !eventIds.includes(id) && !known.includes(id));
+    for (const id of nextOf(connection, about + '|missing', missing, INDEX_WINDOW)) if (!await gone(id)) index[id] = 'source';
     for (const id of eventIds) index[id] = 'source';
     await connection.apiOne('events.update', { id: about, update: { clientData: { [DOCUMENT_VALUES_KEY]: index } } } as any, 'event');
     return index;
-  });
+  }, opts.waitMs));
 }
 
 /**
