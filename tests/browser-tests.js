@@ -64,6 +64,7 @@ import './permissionLabels.test.js';
 import './preferred.test.js';
 import './questionnaire.test.js';
 import './reminders.test.js';
+import './researchEligibility.test.js';
 import './resolveStream.test.js';
 import './systemItems.test.js';
 import './temperatureShift.test.js';

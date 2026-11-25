@@ -17,6 +17,10 @@
 
 ### Added
 
+- `researchEligibility`: the eligibility test of a study, run on the person's device. Publish check, a
+  weight of half or more refused; rules read on the account, only the items they name; questions for what is
+  missing; weighted score, and the band (`0-49` or `50-100`) as the only thing written (`research/eligibility-band-v1`).
+  Data-model documentation/ELIGIBILITY.md.
 - Converter texts in the other languages (plan 138): `converters/{itemKey}/l10n-{locale}.json`, published by data-model beside
   its frozen packs, is read with the pack for the languages preferred to English, and when they change
   (`converters.loadTexts()`, awaitable). Without the file, the pack's own texts. No such file is published yet.
