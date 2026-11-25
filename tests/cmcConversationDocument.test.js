@@ -160,6 +160,7 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     const pack = await (await fetch(`${MODEL_BASE}/pack.json`)).json();
     pack.streams.find(s => s.id === 'documents').children = [{ id: 'documents-clinical', name: 'Clinical documents', parentId: 'documents', children: [] }];
     pack.documentKinds.kinds['laboratory-report'].stream = 'documents-clinical';
+    delete pack.documentKinds.kinds['consultation-report'].stream; // a kind with none: the live pack may give it one (4.35.0)
     getModel().loadFromObject(pack);
     getModel().laziliyLoadedMap = {}; // a reload keeps the maps built from the previous pack
     const delayMs = cmcDocuments.streamsCheck.delayMs;
