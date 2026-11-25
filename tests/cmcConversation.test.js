@@ -174,6 +174,11 @@ describe('[CNV] cmcConversation', function () {
       assert.deepStrictEqual(strip(cv.CONVERSATION_ALERT_HDS_SCHEMA), strip(published));
     });
 
+    it('[CNV10b] on-hold is a status a contact may post (4.33.0)', () => {
+      const hds = { kind: 'task-status', about: DOC, status: 'on-hold', attempt: 2 };
+      assert.deepStrictEqual(cv.buildConversationAlertContent(hds).hds, hds);
+    });
+
     it('[CNV11] alert content: fixed words in en and fr, code, checked hds; never a value', () => {
       assert.deepStrictEqual(cv.buildConversationAlertContent({ kind: 'proposed-values', about: DOC, count: 2 }), {
         level: 'info',

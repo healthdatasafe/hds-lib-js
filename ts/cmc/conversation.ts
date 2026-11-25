@@ -89,7 +89,8 @@ export type DocumentField = 'time' | 'kind';
 /** `answer.note`: her comment, plain text (CONVERSATION.md § Her note). */
 export const NOTE_MAX_LENGTH = 1000;
 
-export const TASK_STATUSES = ['received', 'reading', 'awaiting-answers', 'done', 'error'] as const;
+/** `on-hold` (data-model 4.33.0): the contact has the document and cannot work on it now; not settled, nothing confirmable. */
+export const TASK_STATUSES = ['received', 'reading', 'on-hold', 'awaiting-answers', 'done', 'error'] as const;
 export type TaskStatus = typeof TASK_STATUSES[number];
 
 export const ANSWER_ACTIONS = ['confirm', 'correct', 'not-mine', 'skip', 'choose', 'request-item', 'duplicate'] as const;

@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.67.0] - 2026-11-25
+
+### Added
+
+- **`task-status` `on-hold` (plan 128, data-model 4.33.0).** `TASK_STATUSES` and the mirrored alert schema hold it: a contact
+  posts it for a document it has and cannot work on now. Reading is unchanged: an app that does not know it already shows
+  it as in progress. `CNV10` compares with the published schema, so it needs data-model 4.33.0.
+
 ## [2.66.0] - 2026-11-24
 
 ### Added
