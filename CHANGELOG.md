@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `researchRelationship.readResearchTopics`: a choice made only of topic keys the model does not know (a newer
+  vocabulary) is returned as written instead of `[]`, which read as "none chosen" and offered every study. Test
+  `[RESR-T3b]`.
+
+## [Unreleased]
+
 ### Added
 
 - **The research relationship (`researchRelationship`, data-model RESEARCH.md, needs the data-model release with

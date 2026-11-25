@@ -82,13 +82,16 @@ export function researchTopicKeys (model: HDSModel = getModel()): string[] {
 /**
  * The topics the person chose: the latest `research/topics-v1` event by `modified`, keys the model does not know
  * dropped (a newer model). `null` when there is no event or no stream: none chosen, so every study may be offered.
+ * A choice made only of keys this model does not know is returned as written, never as an empty list: an empty list
+ * means "none chosen", which would offer every study to a person who narrowed them.
  */
 export async function readResearchTopics (connection: pryv.Connection, opts: { model?: HDSModel; topicKeys?: string[] } = {}): Promise<string[] | null> {
   const latest = await latestTopicsEvent(connection);
   if (latest == null) return null;
   const known = new Set(opts.topicKeys ?? researchTopicKeys(opts.model));
-  const topics = Array.isArray(latest.content?.topics) ? latest.content.topics : [];
-  return topics.filter((t: unknown): t is string => typeof t === 'string' && known.has(t));
+  const written = (Array.isArray(latest.content?.topics) ? latest.content.topics : []).filter((t: unknown): t is string => typeof t === 'string');
+  const kept = written.filter((t: string) => known.has(t));
+  return kept.length > 0 || written.length === 0 ? kept : written;
 }
 
 /**
