@@ -124,6 +124,8 @@ describe('[RESR] research relationship', function () {
       const conn = fakeConnection([topicsEvent('a', ['astrology', 'gardening'], NOW)]);
       assert.deepStrictEqual(await res.readResearchTopics(conn, { model }), ['astrology', 'gardening']);
       assert.deepStrictEqual(await res.readResearchTopics(fakeConnection([topicsEvent('b', [], NOW)]), { model }), []);
+      assert.deepStrictEqual(await res.readResearchTopics(fakeConnection([topicsEvent('c', 'sleep', NOW)]), { model }), [], 'not a list: none');
+      assert.deepStrictEqual(await res.readResearchTopics(fakeConnection([topicsEvent('d', [3, 'sleep', null], NOW)]), { model }), ['sleep'], 'non-strings dropped');
     });
 
     it('[RESR-T4] save creates one event, then updates it; vocabulary order, no duplicate', async () => {
