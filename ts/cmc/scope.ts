@@ -39,6 +39,7 @@ import { HDSLibError } from '../errors.ts';
 import { cmc } from '../patchedPryv.ts';
 import type { pryv } from '../patchedPryv.ts';
 import { deriveCmcPermissions, formSpecFingerprint, formSpecForPerson, mirrorFormSpecOnAcceptEvent } from './formSpec.ts';
+import { canonicalPermissions, canonicalStreamId } from './shareIds.ts';
 import type { FormSpec } from './formSpec.ts';
 
 export const ET_SCOPE_UPDATE = 'consent/scope-update-cmc';
@@ -149,7 +150,7 @@ function streamsAbove (streamId: string, parentIds: string[] = []): Set<string> 
  * `{ feature, setting }`).
  */
 export function personPermissions (perms: ScopePermission[]): ScopePermission[] {
-  return (perms ?? [])
+  return canonicalPermissions(perms)
     .filter(p => !(typeof p.streamId === 'string' && p.streamId.startsWith(':_cmc:')))
     .map(p => p.streamId != null
       ? { streamId: p.streamId, level: p.level ?? 'read' }
@@ -185,7 +186,7 @@ export function scopeDiff (current: ScopePermission[], requested: ScopePermissio
   changed: Array<{ streamId: string; from: string; to: string }>;
 } {
   const levels = (perms: ScopePermission[]): Map<string, string> => new Map(
-    (perms ?? []).filter(p => isDataStream(p.streamId)).map(p => [p.streamId as string, p.level ?? 'read'])
+    canonicalPermissions(perms).filter(p => isDataStream(p.streamId)).map(p => [p.streamId as string, p.level ?? 'read'])
   );
   const now = levels(current);
   const asked = levels(requested);
@@ -234,7 +235,7 @@ export async function shareStreamsAgain (
 ): Promise<ScopeChangeResult> {
   const collectorStreamId = requireCollectorStream(rel, 'shareStreamsAgain');
   const now = personPermissions(rel.grantedPermissions);
-  const back = [...new Set(streamIds)].filter(id => isDataStream(id) && !now.some(p => p.streamId === id));
+  const back = [...new Set(streamIds.map(canonicalStreamId))].filter(id => isDataStream(id) && !now.some(p => p.streamId === id));
   if (back.length === 0) {
     throw new HDSLibError('shareStreamsAgain: every stream is already shared', { reason: 'already-shared', streamIds });
   }

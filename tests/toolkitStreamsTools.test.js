@@ -106,6 +106,8 @@ describe('[TKTX] toolKit Streams Tools', function () {
 
     it('[TKPB] a reading permission on the stream, a parent or * reads it', () => {
       assert.equal(permissionsRead([{ streamId: 'body', level: 'read' }], ['body-weight'], streams), true);
+      assert.equal(permissionsRead([{ streamId: ':local:body', level: 'read' }], ['body-weight'], streams), true);
+      assert.equal(permissionsRead([{ streamId: ':local:', level: 'read' }], ['body-weight'], streams), true);
       assert.equal(permissionsRead([{ streamId: 'body-weight', level: 'contribute' }], ['body-weight'], streams), true);
       assert.equal(permissionsRead([{ streamId: '*', level: 'manage' }], ['diary'], streams), true);
       assert.equal(permissionsRead([{ streamId: 'body' }], ['body-weight'], streams), true);

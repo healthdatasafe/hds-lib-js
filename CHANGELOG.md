@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.68.0] - 2026-11-25
+
+### Fixed
+
+- Stream ids are read in canonical form in permissions: `permissionView`, `readsDocument`, `shareStreamsOf`,
+  `sharesAllDocuments`, `scopeDiff`, `personPermissions`, `shareStreamsAgain`, `toolkit.StreamTools.permissionsRead`,
+  `Contact`.
+
+### Added
+
+- `cmcDocuments.canonicalPermissions`, `cmcDocuments.namesAliasedStreams`.
+
 ## [2.67.0] - 2026-11-25
 
 ### Added

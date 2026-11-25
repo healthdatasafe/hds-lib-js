@@ -305,6 +305,11 @@ describe('[CTFS] Contact.aggregateCmc hdsFormSpec pass-through', function () {
     assert.equal(out[0].cmcRelationships[0].hdsFormSpec, spec);
   });
 
+  it('[CTFS20] grantedPermissions have canonical stream ids', () => {
+    const out = Contact.aggregateCmc([counterpartyAccess({ permissions: [{ streamId: ':local:health', level: 'read' }, { streamId: ':account::system:email', level: 'read' }] })], [acceptEvent()], SCOPE);
+    assert.deepEqual(out[0].cmcRelationships[0].grantedPermissions.map(p => p.streamId), ['health', ':system:email']);
+  });
+
   it('[CTFS2] hdsFormSpec defaults to null when accept event has none', () => {
     const out = Contact.aggregateCmc(
       [counterpartyAccess()],

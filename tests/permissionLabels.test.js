@@ -30,6 +30,17 @@ describe('[PLBL] permission labels', function () {
     assert.strictEqual(dataName('not-a-model-stream'), 'not-a-model-stream');
   });
 
+  it('[PLBL9] stream ids are read in canonical form', () => {
+    const view = (streamId) => permissionView({ streamId, level: 'read', defaultName: 'My notes' }, { locale: 'en' });
+    for (const [spelled, id] of [[':local:', '*'], [':local:*', '*'], [':local:body', 'body'], [':local:body-weight', 'body-weight'], [':local::system:email', ':system:email'], [':account::system:email', ':system:email']]) {
+      const { streamId, requesterLabel, ...shown } = view(spelled);
+      const { streamId: _id, requesterLabel: _label, ...expected } = view(id);
+      assert.deepStrictEqual(shown, expected);
+      assert.strictEqual(streamId, spelled);
+    }
+    assert.ok(view(':local:custom-x').label.includes('My notes') && view(':local:custom-x').inModel === false);
+  });
+
   it('[PLBL3] permissionView names a model stream from the model, never from the requester label', () => {
     const view = permissionView({ streamId: 'body-weight', level: 'read', defaultName: 'Cycle length' }, { locale: 'en' });
     assert.strictEqual(view.kind, 'data');
@@ -77,7 +88,7 @@ describe('[PLBL] permission labels', function () {
     assert.strictEqual(view.label, 'Symptômes et tout ce qui en dépend');
   });
 
-  it('[PLBL9] a child stream named by its own label reads "Parent › Child" on a permission; roots and item names stay bare', () => {
+  it('[PLBL9] stream ids are read in canonical form', () => {
     assert.strictEqual(permissionView({ streamId: 'symptom-general' }, { locale: 'fr' }).name, 'Symptômes › Généraux');
     assert.strictEqual(permissionView({ streamId: 'treatment-fertility' }, { locale: 'fr' }).name, 'Traitements › Fertilité');
     assert.strictEqual(permissionView({ streamId: 'symptom-general' }, { locale: 'fr' }).label, 'Symptômes › Généraux et tout ce qui en dépend');

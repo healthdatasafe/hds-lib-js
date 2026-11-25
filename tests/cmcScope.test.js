@@ -66,6 +66,15 @@ describe('[CSCP] cmcScope', function () {
       assert.deepStrictEqual(cmcScope.planStopSharing(single, 'body-weight'), { ok: false, reason: 'nothing-left' });
     });
 
+    it('[CSCP30] stream ids are read in canonical form', () => {
+      const held = [{ streamId: ':local:body', level: 'read' }, { streamId: 'mood', level: 'read' }];
+      assert.deepStrictEqual(cmcScope.personPermissions([{ streamId: ':local::_cmc:inbox', level: 'create-only' }, ...held]),
+        [{ streamId: 'body', level: 'read' }, { streamId: 'mood', level: 'read' }]);
+      assert.deepStrictEqual(cmcScope.planStopSharing(held, 'body'), { ok: true, newPermissions: [{ streamId: 'mood', level: 'read' }] });
+      assert.deepStrictEqual(cmcScope.scopeDiff(held, [{ streamId: 'body', level: 'read' }, { streamId: ':local:', level: 'read' }]),
+        { added: ['*'], removed: ['mood'], changed: [] });
+    });
+
     it('[CSCP4] scopeDiff reports added, removed and level changes, platform streams left out', () => {
       const diff = cmcScope.scopeDiff(grant, [
         { streamId: 'body-weight', level: 'contribute' },
