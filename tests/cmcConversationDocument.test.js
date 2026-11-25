@@ -273,6 +273,18 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     assert.deepStrictEqual(cv.notesToRemove(conv, done(300), { now: 500 + 86400 }).map(a => a.id), ['a1', 'a2'], 'a2 24 h later');
     assert.deepStrictEqual(cv.notesToRemove(conv, null, { now: 500 + 86400, unshared: true }).map(a => a.id), ['a1', 'a2']);
     assert.strictEqual(conv.proposedValues[0].state, 'skipped', 'a comment alone is a skip');
+    // the document shared again after `done`, then on hold for days: the notes answered before that `done` still go
+    const on = (status, time, attempt) => ({ ...done(time), hds: { kind: 'task-status', about: 'doc1', status, attempt } });
+    const alerts = [on('reading', 100, 1), done(300), on('on-hold', 400, 2), { ...done(350), hds: { kind: 'task-status', about: 'doc2', status: 'done', attempt: 1 } }];
+    assert.strictEqual(cv.taskStatusOf(alerts, 'doc1').hds.status, 'on-hold');
+    assert.strictEqual(cv.latestDoneOf(alerts, 'doc1').time, 300);
+    assert.deepStrictEqual(cv.notesToRemove(conv, cv.taskStatusOf(alerts, 'doc1'), { now: 500 + 86400 }), [], 'the latest status alone would keep them');
+    const due = (now, list = alerts) => cv.notesToRemove(conv, cv.latestDoneOf(list, 'doc1'), { now, current: cv.taskStatusOf(list, 'doc1') }).map(a => a.id);
+    assert.deepStrictEqual(due(600), ['a1']);
+    assert.deepStrictEqual(due(500 + 86400), ['a1'], 'answered during the second round: waits for its done');
+    assert.deepStrictEqual(due(500 + 86400, alerts.slice(0, 2)), ['a1', 'a2'], 'the work is done now: 24 h');
+    assert.deepStrictEqual(due(600, [...alerts, on('done', 550, 2)]), ['a1', 'a2'], 'the second round done');
+    assert.strictEqual(cv.latestDoneOf([on('reading', 100, 1)], 'doc1'), null);
   });
 
   it('[CNVD9] a tapped skip on a proposed document (and a comment alone): settles nothing, she confirms later', async () => {

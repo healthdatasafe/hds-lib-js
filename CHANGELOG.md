@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.69.0] - 2026-11-25
+
+### Fixed
+
+- **Her note removed after `done`, whatever came after it (plan 128).** `removeNotes` looked at the contact's latest
+  `task-status`: after `done`, a document shared again and then read, or on hold for days, kept a note until the next `done`.
+  It looks at the latest `done` (`cmcConversation.latestDoneOf`, new), and at the latest status for the 24 h rule: an answer
+  written while the work is in progress again waits for the next `done`. **An app that calls `notesToRemove` itself (hds-forms-js
+  does) passes `latestDoneOf(alerts, about)`, and `current: taskStatusOf(alerts, about)`.** An older caller is unchanged.
+
 ## [2.68.0] - 2026-11-25
 
 ### Fixed
