@@ -29,7 +29,12 @@ export const CMC_APP_CODES = {
    * HDS Reader engine (plan 128): reads a document sent to its inbox, asks in its dialogue, writes confirmed values.
    * Equals `connectorCmcAppCode('bridge-reader')`. Its streams: data-model `documentation/HDS-READER.md`.
    */
-  BRIDGE_READER: 'hds-bridge-reader'
+  BRIDGE_READER: 'hds-bridge-reader',
+  /**
+   * HDS research (one `hds-research` account per platform): sends research invitations and eligibility tests to a
+   * person who opted in, and reads only the `hds-research` tree. data-model `documentation/RESEARCH.md`.
+   */
+  RESEARCH: 'hds-research'
 } as const;
 
 export type CmcAppCode = typeof CMC_APP_CODES[keyof typeof CMC_APP_CODES];
