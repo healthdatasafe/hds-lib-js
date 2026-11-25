@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.70.0] - 2026-11-25
 
 ### Added
 
@@ -31,8 +31,8 @@
   already answered come back as `refused: answered`.
 - **`autoMarkDuplicates` / `holdsProposedValue` compare a convertible value by its reading (plan 128):** the method, what was read and
   its annotations (a Creighton frequency), and any other field the content carries. The vectors and the engine and model versions, which a newer converter writes differently for
-  the same reading, and the order of the keys, no longer hide a value she already has. The contract text is pending in
-  data-model (CONVERSATION.md § A value she already has, "Same type").
+  the same reading, and the order of the keys, no longer hide a value she already has. The contract text is in
+  data-model 4.36.0 (CONVERSATION.md § A value she already has, "Same type").
 
 ### Added
 
