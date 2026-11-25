@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **The research relationship (`researchRelationship`, data-model RESEARCH.md, needs the data-model release with
+  `hds-research`):** `CMC_APP_CODES.RESEARCH` (`hds-research`); `researchInvitePermissions` (one `read` on the
+  `explicitGrantOnly` root, so `*` never reaches it: the existing marker handling covers it); `ensureResearchStreams`;
+  topics (`researchTopicKeys` from the model vocabulary, `readResearchTopics`, `saveResearchTopics`: one event, updated
+  in place, unknown keys refused on write and dropped on read); `deleteEligibilityBands` (expired requests, or all on
+  opt-out); the two alert kinds (`RESEARCH_ALERT_HDS_SCHEMA` mirroring `hds-research-alert.json`,
+  `buildResearchAlertContent`, `readResearchAlert`, `researchAlertKey`). Tests `[RESR-*]`.
+
 ## [2.70.0] - 2026-11-25
 
 ### Added
