@@ -1698,23 +1698,24 @@ const INDEX_WINDOW = 5;
 /** The longest an index write waits for the one before it: one that never ends holds up no other. */
 const INDEX_WAIT_MS = 10_000;
 
-/** A few entries of a list, the next ones at each write (`turn`): the cost stays the same, each gets its turn. */
-function windowOf<T> (list: T[], size: number, turn: number): T[] {
-  if (list.length <= size) return list;
-  const start = (turn * size) % list.length;
-  return Array.from({ length: size }, (_, i) => list[(start + i) % list.length]);
-}
-
 const indexQueues = new WeakMap<object, Map<string, Promise<unknown>>>();
-const indexTurns = new WeakMap<object, Map<string, number>>();
+const indexCursors = new WeakMap<object, Map<string, string>>();
 
-/** The number of the index write, for one document in this connection; a random one to start with. */
-function nextTurn (connection: pryv.Connection, about: string): number {
-  const turns = indexTurns.get(connection) ?? new Map<string, number>();
-  indexTurns.set(connection, turns);
-  const turn = turns.get(about) ?? Math.floor(Math.random() * 1000);
-  turns.set(about, turn + 1);
-  return turn;
+/**
+ * A few ids of a list, the next ones at each write: it goes on after the last one it gave (per connection, `key`),
+ * round and round, so each one gets its turn while the list grows. All of them when they are few.
+ */
+function nextOf (connection: pryv.Connection, key: string, list: string[], size: number): string[] {
+  if (list.length <= size) return list;
+  const cursors = indexCursors.get(connection) ?? new Map<string, string>();
+  indexCursors.set(connection, cursors);
+  const sorted = [...list].sort();
+  const last = cursors.get(key);
+  const at = last == null ? Math.floor(Math.random() * sorted.length) : sorted.findIndex(id => id > last);
+  const start = at === -1 ? 0 : at;
+  const given = Array.from({ length: size }, (_, i) => sorted[(start + i) % sorted.length]);
+  cursors.set(key, given[given.length - 1]);
+  return given;
 }
 
 /**
@@ -1764,12 +1765,11 @@ export async function indexDocumentValues (
       return e == null || e.trashed === true;
     };
     const known = Object.keys(index).filter(id => !eventIds.includes(id));
-    const turn = nextTurn(connection, about);
-    const checked = known.length <= INDEX_CHECKED ? known : windowOf(known, INDEX_WINDOW, turn);
+    const checked = known.length <= INDEX_CHECKED ? known : nextOf(connection, about + '|known', known, INDEX_WINDOW);
     for (const id of checked) if (await gone(id)) delete index[id];
     // a value an answer lists that the index lost (a write that failed, or two at once): back, if it is still there
     const missing = [...new Set(opts.written ?? [])].filter(id => index[id] == null && !eventIds.includes(id) && !known.includes(id));
-    for (const id of windowOf(missing, INDEX_WINDOW, turn)) if (!await gone(id)) index[id] = 'source';
+    for (const id of nextOf(connection, about + '|missing', missing, INDEX_WINDOW)) if (!await gone(id)) index[id] = 'source';
     for (const id of eventIds) index[id] = 'source';
     await connection.apiOne('events.update', { id: about, update: { clientData: { [DOCUMENT_VALUES_KEY]: index } } } as any, 'event');
     return index;
