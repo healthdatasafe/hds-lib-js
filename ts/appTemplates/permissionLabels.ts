@@ -9,6 +9,7 @@
 
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
 import { localizeText, type Localizable, type localizableText } from '../localizeText.ts';
+import { canonicalStreamId } from '../cmc/shareIds.ts';
 
 export interface PermissionLabelOptions {
   /** Language of the names; defaults to the preferred locales (`localizeText`). */
@@ -98,10 +99,11 @@ export function dataName (streamId: string, opts: PermissionLabelOptions & { fal
  * deserves a warning. Works before the model is loaded (then `inModel: false`).
  */
 export function permissionView (perm: { streamId?: string; level?: string; defaultName?: string }, opts: PermissionLabelOptions = {}): PermissionView {
-  const streamId = perm.streamId ?? '';
+  // named by the canonical id; `streamId` stays as given
+  const streamId = canonicalStreamId(perm.streamId ?? '');
   const level = perm.level ?? 'read';
   const requesterLabel = perm.defaultName ?? null;
-  const base = { streamId, level, requesterLabel };
+  const base = { streamId: perm.streamId ?? '', level, requesterLabel };
   if (streamId === '*') {
     const name = pick(TEXTS.allData, opts.locale) as string;
     return { ...base, kind: 'all-data', name, label: name, beyondRead: true, inModel: true, hasChildren: true };

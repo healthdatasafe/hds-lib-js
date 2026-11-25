@@ -490,6 +490,27 @@ describe('[CDOC] cmcDocuments', function () {
       assert.deepStrictEqual(cmcDocuments.shareStreamsOf([{ streamId: R, level: 'manage' }, { streamId: O, level: 'none' }]), { shared: null, received: null });
     });
 
+    it('[CDOC69] grants are read with canonical stream ids', () => {
+      const at = (streamId, level = 'read') => [{ streamId, level }];
+      assert.strictEqual(cmcDocuments.canonicalStreamId(':local:'), '*');
+      assert.strictEqual(cmcDocuments.canonicalStreamId(''), '');
+      for (const [id, to] of [[':account::local:', '*'], [':account::local:body', 'body'], [':account::account::system:email', ':system:email'], [':account:email', ':account:email'], [':_audit:access-a', ':_audit:access-a']]) assert.strictEqual(cmcDocuments.canonicalStreamId(id), to);
+      const own = at(':_audit:access-acc-1');
+      assert.deepStrictEqual([undefined, 'acc-1', 'acc-1:4', 'acc-2'].map(id => cmcDocuments.namesAliasedStreams(own, id)), [true, false, false, true]);
+      for (const id of [':local:', ':local:*', ':local:documents']) {
+        assert.strictEqual(cmcDocuments.readsDocument(at(id), doc('d')), true, id);
+        assert.strictEqual(cmcDocuments.sharesAllDocuments(at(id)), true, id);
+      }
+      assert.strictEqual(cmcDocuments.readsDocument([...at('documents'), ...at(':local:documents', 'none')].reverse(), doc('d', ['documents'])), true);
+      assert.deepStrictEqual(cmcDocuments.shareStreamsOf([...at(':local:' + S), ...at(':local:share-rrrrrrrrrrrr', 'contribute')]), { shared: S, received: 'share-rrrrrrrrrrrr' });
+      assert.strictEqual(cmcDocuments.namesAliasedStreams([{ streamId: 'body' }, { feature: 'selfRevoke' }, { streamId: ':_cmc:inbox' }, { streamId: ':system:email' }]), false);
+      for (const id of [':local:body', ':local:', ':account::system:email', ':account:email', ':_audit:', ':LOCAL:', ':x']) assert.strictEqual(cmcDocuments.namesAliasedStreams(at(id)), true, id);
+      for (const id of [':_system:account', ':_cmc:apps:a:b', ':_emails:x', 'a:local:b', '*']) assert.strictEqual(cmcDocuments.namesAliasedStreams(at(id)), false, id);
+      assert.strictEqual(cmcDocuments.namesAliasedStreams(undefined), false);
+      const feature = { feature: 'selfRevoke', setting: 'forbidden' };
+      assert.deepStrictEqual(cmcDocuments.canonicalPermissions([feature, ...at(':local:body')]), [feature, { streamId: 'body', level: 'read' }]);
+    });
+
     it('[CDOC51] readsDocument: nearest entry wins, one readable stream is enough, none and create-only hide', () => {
       const reads = (perms, ...streamIds) => cmcDocuments.readsDocument(perms.map(([streamId, level]) => ({ streamId, level })), { streamIds });
       assert.strictEqual(reads([['documents', 'read']], CLINICAL), true);

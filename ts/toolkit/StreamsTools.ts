@@ -1,4 +1,5 @@
 import type { pryv as Pryv } from '../patchedPryv.ts';
+import { canonicalPermissions } from '../cmc/shareIds.ts';
 
 /**
  * Iterate all streams and children
@@ -49,6 +50,7 @@ export function permissionsRead (
   if (streamIds.length === 0) return false;
   const covered = new Set(streamIds.flatMap(id => streamAndParents(id, streamsById)));
   const level = (p: { level?: string }) => p.level ?? 'read';
-  if (permissions.some(p => level(p) === 'none' && p.streamId != null && covered.has(p.streamId))) return false;
-  return permissions.some(p => READING_LEVELS.includes(level(p)) && p.streamId != null && (p.streamId === '*' || covered.has(p.streamId)));
+  const held = canonicalPermissions(permissions);
+  if (held.some(p => level(p) === 'none' && p.streamId != null && covered.has(p.streamId))) return false;
+  return held.some(p => READING_LEVELS.includes(level(p)) && p.streamId != null && (p.streamId === '*' || covered.has(p.streamId)));
 }

@@ -47,9 +47,9 @@ import { provisionHdsNoop } from './formSpec.ts';
 import { changeSharedLevel, personPermissions, replaceSharedStream, shareStreamsAgain, stopSharingStream } from './scope.ts';
 import type { ScopeChangeOptions, ScopeChangeResult, ScopePermission, ScopeRelationship } from './scope.ts';
 
-import { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, canonicalStreamId, isShareStreamId, namesShareStreams } from './shareIds.ts';
+import { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, canonicalPermissions, canonicalStreamId, isShareStreamId, namesAliasedStreams, namesShareStreams } from './shareIds.ts';
 
-export { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, canonicalStreamId, isShareStreamId, namesShareStreams };
+export { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, canonicalPermissions, canonicalStreamId, isShareStreamId, namesAliasedStreams, namesShareStreams };
 export const DOCUMENTS_STREAM_ID = 'documents';
 export const ET_DOCUMENT = 'file/xds-v1';
 
@@ -117,7 +117,7 @@ export function relationshipIdOf (accessId: string): string {
 export function shareStreamsOf (perms: ScopePermission[]): { shared: string | null; received: string | null } {
   let shared: string | null = null;
   let received: string | null = null;
-  for (const p of perms ?? []) {
+  for (const p of canonicalPermissions(perms)) {
     if (!isShareStreamId(p.streamId)) continue;
     const direction = directionAt(p.level);
     if (direction === 'received') received ??= p.streamId;
@@ -134,7 +134,7 @@ function directionAt (level: string | undefined): ShareDirection | null {
 
 /** The grant already reads every document (`documents` or `*`): sharing one only posts the alert. */
 export function sharesAllDocuments (perms: ScopePermission[]): boolean {
-  return (perms ?? []).some(p => (p.streamId === DOCUMENTS_STREAM_ID || p.streamId === '*') && READ_LEVELS.has(p.level ?? 'read'));
+  return canonicalPermissions(perms).some(p => (p.streamId === DOCUMENTS_STREAM_ID || p.streamId === '*') && READ_LEVELS.has(p.level ?? 'read'));
 }
 
 /**
@@ -143,7 +143,7 @@ export function sharesAllDocuments (perms: ScopePermission[]): boolean {
  */
 export function readsDocument (perms: ScopePermission[], document: { streamIds?: string[] } | null | undefined): boolean {
   const levels = new Map<string, string>();
-  for (const p of perms ?? []) if (p.streamId != null) levels.set(p.streamId, p.level ?? 'read');
+  for (const p of canonicalPermissions(perms)) if (p.streamId != null) levels.set(p.streamId, p.level ?? 'read');
   let reads = false;
   for (const id of document?.streamIds ?? []) {
     const at = [id, ...ancestorsOf(id), '*'].find(s => levels.has(s));
@@ -200,7 +200,7 @@ export function offeredShareIssues (
   const own = rel != null ? relationshipIdOf(rel.accessId) : null;
   const out: OfferedShareIssue[] = [];
   // what it is granted now tells the direction of a child not marked yet
-  const granted = new Map((rel?.grantedPermissions ?? []).map(p => [p.streamId, directionAt(p.level)]));
+  const granted = new Map(canonicalPermissions(rel?.grantedPermissions).map(p => [p.streamId, directionAt(p.level)]));
   const seen: Record<ShareDirection, Set<string>> = { shared: new Set(), received: new Set() };
   for (const p of perms ?? []) {
     const streamId = canonicalStreamId(p.streamId ?? '');
@@ -227,7 +227,7 @@ export async function checkOfferedShares (
   rel?: Pick<DocumentRelationship, 'accessId' | 'grantedPermissions'>
 ): Promise<OfferedShareIssue[]> {
   if (!namesShareStreams(perms)) return [];
-  const asked = perms.map(p => ({ ...p, streamId: canonicalStreamId(p.streamId ?? '') })) as ScopePermission[];
+  const asked = canonicalPermissions(perms) as ScopePermission[];
   const existing = await listShareStreams(connection, { includeTrashed: true });
   const issues = offeredShareIssues(asked, existing, rel);
   const own = rel != null ? relationshipIdOf(rel.accessId) : '';
@@ -665,7 +665,7 @@ export async function cleanupDocumentShares (
   const { marked } = await shareChildren(connection, true);
   const mine = marked.filter(s => s.relationship === base);
   const unmarked: string[] = [];
-  const offered = (opts.permissions ?? []).map(p => p.streamId).filter(isShareStreamId).filter(id => !marked.some(s => s.id === id));
+  const offered = canonicalPermissions(opts.permissions).map(p => p.streamId).filter(isShareStreamId).filter(id => !marked.some(s => s.id === id));
   if (offered.length > 0) {
     // anywhere: an older consent screen creates them at the root
     const streams = await connection.apiOne('streams.get', { state: 'all' }, 'streams') as any[];
@@ -714,7 +714,7 @@ export async function cleanupOrphanDocumentShares (connection: pryv.Connection, 
     for (const id of unmarked) if (await holdsEvents(connection, id)) held.push(id);
     const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses') as Array<{ id: string; permissions?: ScopePermission[] }>;
     liveRelationships = accesses.map(a => a.id);
-    const named = new Set(accesses.flatMap(a => (a.permissions ?? []).map(p => p.streamId)));
+    const named = new Set(accesses.flatMap(a => canonicalPermissions(a.permissions).map(p => p.streamId)));
     abandoned.push(...held.filter(id => !named.has(id)));
   }
   const live = new Set(liveRelationships.map(relationshipIdOf));
@@ -858,7 +858,7 @@ async function namedByAnother (connection: pryv.Connection, relationship: string
   if (info?.type !== 'personal') throw new HDSLibError('document shares: needs a personal token', { reason: 'not-personal' });
   const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses') as Array<{ id: string; createdBy?: string; permissions?: ScopePermission[] }>;
   const own = (id: string | undefined): boolean => relationship !== '' && id != null && relationshipIdOf(id.split(' ')[0]) === relationship;
-  return accesses.some(a => !own(a.id) && !own(a.createdBy) && (a.permissions ?? []).some(p => p.streamId === streamId));
+  return accesses.some(a => !own(a.id) && !own(a.createdBy) && canonicalPermissions(a.permissions).some(p => p.streamId === streamId));
 }
 
 function findStream (list: any[], id: string): any {

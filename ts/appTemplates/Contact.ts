@@ -4,6 +4,7 @@ import { pryv, cmc } from '../patchedPryv.ts';
 import type { FormSpec } from '../cmc/formSpec.ts';
 import { legacyChatStreams, legacyChatSource, legacyChatMessages } from './legacyChat.ts';
 import type { LegacyChatEventLike, LegacyChatMessage, LegacyChatSource } from './legacyChat.ts';
+import { canonicalPermissions } from '../cmc/shareIds.ts';
 
 // ---- Plan 59 Phase 5a — CMC-shaped Contact types ---- //
 
@@ -198,7 +199,7 @@ export class Contact {
       if (!access.permissions) continue;
       const grant = { ids: new Set<string>(), forbidden: new Set<string>() };
       this.#grantsByAccess.push(grant);
-      for (const p of access.permissions) {
+      for (const p of canonicalPermissions(access.permissions as Permission[])) {
         if (!p.streamId) continue;
         if (p.level === 'none') {
           // An exclusion mask: the core refuses the stream and its children whatever else this access grants
@@ -624,7 +625,7 @@ export class Contact {
         localCollectorStreamId,
         appCode,
         features,
-        grantedPermissions: access.permissions ?? [],
+        grantedPermissions: canonicalPermissions(access.permissions),
         acceptedAt: matchingAccept?.acceptedAt ?? null,
         hdsFormSpec: matchingAccept?.hdsFormSpec ?? null,
         requesterName: matchingAccept?.requesterName ?? null
