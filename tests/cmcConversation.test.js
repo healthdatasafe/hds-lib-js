@@ -174,6 +174,11 @@ describe('[CNV] cmcConversation', function () {
       assert.deepStrictEqual(strip(cv.CONVERSATION_ALERT_HDS_SCHEMA), strip(published));
     });
 
+    it('[CNV10c] notRead is a count a contact may post (4.36.0)', () => {
+      const hds = { kind: 'task-status', about: DOC, status: 'awaiting-answers', attempt: 1, counts: { proposed: 140, questions: 6, notRead: 11 } };
+      assert.deepStrictEqual(cv.buildConversationAlertContent(hds).hds, hds);
+    });
+
     it('[CNV10b] on-hold is a status a contact may post (4.33.0)', () => {
       const hds = { kind: 'task-status', about: DOC, status: 'on-hold', attempt: 2 };
       assert.deepStrictEqual(cv.buildConversationAlertContent(hds).hds, hds);
@@ -742,6 +747,71 @@ describe('[CNV] cmcConversation', function () {
       assert.ok(person.events.has(value.id), 'her values stay');
       for (const c of person.calls.filter(c => c.method === 'streams.delete')) assert.strictEqual(c.params.mergeEventsWithParent, false);
       assert.deepStrictEqual(await cv.listConversationStreams(account()), []);
+    });
+  });
+
+  describe('[CNV-G] a dated grid (4.36.0)', () => {
+    const X = { engine: 'hds-reader', engineVersion: '0.9.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
+    const box = (column, row = 2) => ({ grid: { row, column }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [column * 2.5, 22.4, 2.5, 12.9] } });
+    const DAY1 = Date.parse('2026-03-12T12:00:00Z') / 1000;
+    const value = (column, over = {}) => ({ kind: 'proposed-value', about: DOC, candidateId: 'c-' + column, printed: { label: String(column), value: 'P' }, ...box(column), proposal: { itemKey: 'fertility-cycles-peak-day', type: 'activity/plain', content: null, time: DAY1, clientData: { hdsTimePrecision: 'day' } }, status: 'check', extraction: X, ...over });
+    const notRead = (column) => ({ kind: 'proposed-value', about: DOC, candidateId: 'n-' + column, printed: { label: String(column) }, ...box(column), status: 'unmapped', reason: 'not-read', extraction: X });
+    const rowDate = (row = 2) => ({ kind: 'question', about: DOC, code: 'which-row-date', context: box(1, row) });
+    const item = (id, kind, content, created = 10) => ({ id, kind, about: DOC, direction: kind === 'answer' ? 'sent' : 'received', content, created, modified: created, time: created });
+
+    it('[CNVG1] a peak mark (null content), a box not read and a row question are valid', () => {
+      assert.deepStrictEqual(cv.checkConversationItem(value(14)), []);
+      assert.deepStrictEqual(cv.checkConversationItem(notRead(15)), []);
+      assert.deepStrictEqual(cv.checkConversationItem(rowDate()), []);
+      assert.strictEqual(cv.checkValueProposal(value(14).proposal), null);
+    });
+
+    it('[CNVG2] a box not read carries its box and nothing read; a value read carries what is written', () => {
+      const bad = [
+        { ...notRead(15), printed: { label: '15', value: '10KL' } }, { ...notRead(15), proposal: value(15).proposal }, { ...notRead(15), requestKey: 'x' },
+        { ...notRead(15), status: 'check' }, { ...notRead(15), grid: undefined }, { ...notRead(15), anchor: { attachmentId: 'att1', page: 1 } },
+        { ...value(14), printed: { label: '14' } }
+      ];
+      for (const b of bad) assert.notDeepEqual(cv.checkConversationItem(JSON.parse(JSON.stringify(b))), [], JSON.stringify(b));
+    });
+
+    it('[CNVG3] a row question: its box and anchor, no candidate, no dates; answered with a day at 12:00 UTC', () => {
+      for (const b of [{ ...rowDate(), candidateId: 'c-1' }, { ...rowDate(), context: { grid: box(1).grid } }, { ...rowDate(), context: { anchor: box(1).anchor } }, { ...rowDate(), context: { ...box(1), dates: [{ day: '2026-03-12', text: '12/3' }] } }]) {
+        assert.notDeepEqual(cv.checkConversationItem(b), [], JSON.stringify(b));
+      }
+      const q = item('q1', 'question', rowDate());
+      const conv = cv.conversationOf([q], DOC);
+      assert.strictEqual(conv.questions[0].answerable, true);
+      const answer = (over) => ({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day', ...over });
+      assert.deepStrictEqual(cv.checkAnswerFor(answer({}), q, conv), []);
+      assert.deepStrictEqual(cv.checkAnswerFor({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'skip' }, q, conv), []);
+      for (const over of [{ time: DAY1 + 3600 }, { timePrecision: 'month' }, { timePrecision: 'unknown', time: undefined }, { time: undefined, timePrecision: undefined }]) {
+        assert.notDeepEqual(cv.checkAnswerFor(JSON.parse(JSON.stringify(answer(over))), q, conv), [], JSON.stringify(over));
+      }
+    });
+
+    it('[CNVG4] a which-date answer never dates a value of a dated grid', () => {
+      const undated = { ...value(14), proposal: { itemKey: 'fertility-cycles-peak-day', type: 'activity/plain', content: null } };
+      const whole = [item('q0', 'question', { kind: 'question', about: DOC, code: 'which-date' }), item('a0', 'answer', { kind: 'answer', inReplyTo: 'q0', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day' }, 20)];
+      const grid = cv.conversationOf([...whole, item('v1', 'proposed-value', undated)], DOC);
+      assert.deepStrictEqual(grid.documentDate, { time: DAY1, timePrecision: 'day' });
+      assert.strictEqual(cv.answeredDateOf(grid, 'c-14'), null);
+      const { grid: _g, ...plain } = undated;
+      assert.deepStrictEqual(cv.answeredDateOf(cv.conversationOf([...whole, item('v1', 'proposed-value', plain)], DOC), 'c-14'), { time: DAY1, timePrecision: 'day' });
+      assert.strictEqual(cv.answeredDateOf(cv.conversationOf([...whole, item('q1', 'question', rowDate()), item('v1', 'proposed-value', plain)], DOC), 'c-14'), null);
+    });
+
+    it('[CNVG6] a value with no content she already has: null equals absent', () => {
+      const pv = item('v1', 'proposed-value', value(14));
+      for (const e of [{ type: 'activity/plain', content: null }, { type: 'activity/plain' }]) assert.strictEqual(cv.holdsProposedValue(e, pv), true);
+    });
+
+    it('[CNVG5] request-item does not answer a box not read; skip does', () => {
+      const pv = item('v2', 'proposed-value', notRead(15));
+      const conv = cv.conversationOf([pv], DOC);
+      const answer = (action) => ({ kind: 'answer', inReplyTo: 'v2', about: DOC, action, candidateIds: ['n-15'] });
+      assert.notDeepEqual(cv.checkAnswerFor(answer('request-item'), pv, conv), []);
+      assert.deepStrictEqual(cv.checkAnswerFor(answer('skip'), pv, conv), []);
     });
   });
 });
