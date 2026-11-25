@@ -190,6 +190,7 @@ describe('[CNVX] a value she already has (basis existing-value), the self-contai
       assert.ok(!holds(at({ sourceData: empty }, { wetness: 1 }), at({ sourceData: empty }, { wetness: 0.2 })), 'no reading: the whole content is compared');
     }
     assert.ok(holds(at({ sourceData: { a: 1, b: 2 } }), at({ sourceData: { b: 2, a: 1 } })), 'an object reading');
+    assert.ok(!holds(at({ key: '_raw', sourceData: 'x' }, { wetness: 1 }), at({ key: '_raw', sourceData: 'x' }, { wetness: 0.2 })), '_raw: the vectors are the reading');
     const mood = (vectors) => ({ vectors, source: { key: 'hds', sourceData: 'happy', engineVersion: 'v1', modelVersion: 'v1' } });
     const moodPv = { content: { ...ferritin('m'), proposal: { itemKey: 'wellbeing-mood', type: 'mood/5d-vectors', content: mood({ valence: 1 }), time: D, clientData: { hdsTimePrecision: 'day' } } } };
     assert.ok(cv.holdsProposedValue({ type: 'mood/5d-vectors', content: mood({ valence: 0.9 }) }, moodPv), 'mood, same reading');

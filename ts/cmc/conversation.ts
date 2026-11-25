@@ -1543,7 +1543,8 @@ function convertibleReading (itemKey: unknown, content: any): string | null {
   let type: unknown;
   try { type = getModel().itemsDefs.forKey(itemKey, false)?.data.type; } catch { return null; }
   const source = content?.source;
-  if (type !== 'convertible' || typeof source?.key !== 'string' || !isReading(source.sourceData)) return null;
+  // `_raw`: the vectors are the reading
+  if (type !== 'convertible' || typeof source?.key !== 'string' || source.key === '_raw' || !isReading(source.sourceData)) return null;
   const { vectors: _vectors, source: _source, ...others } = content;
   const { engineVersion: _engine, modelVersion: _model, annotations, ...reading } = source;
   const noted = annotations != null && Object.keys(annotations).length > 0 ? annotations : null;
