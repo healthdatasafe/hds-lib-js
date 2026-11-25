@@ -1,6 +1,8 @@
 import { HDSModel } from './HDSModel.ts';
 import * as logger from '../logger.ts';
 import { EuclidianDistanceEngine } from '../converters/EuclidianDistanceEngine.ts';
+import { addPackTexts } from '../converters/packTexts.ts';
+import { getPreferredLocales, onPreferredLocalesChange } from '../localizeText.ts';
 import type { ConverterPack, ObservationVector, ConversionResult, SourceBlock } from '../converters/types.ts';
 
 /**
@@ -36,6 +38,15 @@ async function fetchPack (url: string, missingOk: boolean): Promise<ConverterPac
 }
 
 /**
+ * The locales whose converter texts may be shown: those preferred to `en`. A pack carries `en` and `fr` itself, so
+ * nothing after `en` is ever read, and `fr` needs no file.
+ */
+function textLocales (): string[] {
+  const preferred = getPreferredLocales();
+  return preferred.slice(0, preferred.indexOf('en')).filter((l) => l !== 'fr');
+}
+
+/**
  * Converters — Extension of HDSModel
  *
  * Lazy-loads converter packs from the model's base URL:
@@ -48,12 +59,19 @@ async function fetchPack (url: string, missingOk: boolean): Promise<ConverterPac
  * Full converter data (dimensions + methods) is fetched on first use and cached.
  *
  * All conversion methods are async (first call fetches, subsequent calls are instant).
+ *
+ * The texts of the other languages are in `{modelBaseUrl}/converters/{itemKey}/l10n-{locale}.json` (data-model
+ * `documentation/L10N.md`): fetched with the pack for the preferred languages, and again when they change (`loadTexts`).
+ * A missing or unreadable file leaves the texts of the pack.
  */
 export class HDSModelConverters {
   #model: HDSModel;
   #engines: Record<string, EuclidianDistanceEngine> = {};
   #pendingLoads: Record<string, Promise<EuclidianDistanceEngine>> = {};
   #itemKeyByEventType: Record<string, string> = {};
+  /** The fetched packs: their url, and per locale the load of its texts (once, failed or not). */
+  #packs: Record<string, { pack: ConverterPack, url: string, texts: Record<string, Promise<void>> }> = {};
+  #followsLocales = false;
 
   constructor (model: HDSModel) {
     this.#model = model;
@@ -102,6 +120,14 @@ export class HDSModelConverters {
     } finally {
       delete this.#pendingLoads[itemKey];
     }
+  }
+
+  /**
+   * Load the texts of the preferred languages for the engines already loaded. Called on each change of the preferred
+   * languages; an app that switches language awaits it to render the converter texts in the new one. Never throws.
+   */
+  async loadTexts (): Promise<void> {
+    await Promise.all(Object.keys(this.#packs).map((itemKey) => this.#loadTextsOf(itemKey)));
   }
 
   /**
@@ -181,20 +207,56 @@ export class HDSModelConverters {
 
     // Derive URL from model base URL
     const modelUrl = this.#model.modelUrl;
-    const baseUrl = modelUrl.substring(0, modelUrl.lastIndexOf('/') + 1);
+    const converterUrl = `${modelUrl.substring(0, modelUrl.lastIndexOf('/') + 1)}converters/${itemKey}/`;
     const version = packVersionFor(itemKey, converters[itemKey].versions);
-    let pack = version ? await fetchPack(`${baseUrl}converters/${itemKey}/pack-${version}.json`, true) : null;
+    let url = `${converterUrl}pack-${version}.json`;
+    let pack = version ? await fetchPack(url, true) : null;
     if (version && !pack) logger.warn(`Converter pack ${itemKey} ${version} not found; reading pack-latest.json`);
-    pack ??= (await fetchPack(`${baseUrl}converters/${itemKey}/pack-latest.json`, false))!;
+    if (!pack) {
+      url = `${converterUrl}pack-latest.json`;
+      pack = (await fetchPack(url, false))!;
+    }
 
     if (pack.engine !== 'euclidian-distance') {
       throw new Error(`Unknown converter engine: "${pack.engine}" in pack for "${itemKey}"`);
     }
 
+    this.#packs[itemKey] = { pack, url, texts: {} };
+    if (!this.#followsLocales) {
+      this.#followsLocales = true;
+      // weak: the listener must not keep a replaced model in memory
+      const self = new WeakRef(this);
+      const stop = onPreferredLocalesChange(() => {
+        const converters = self.deref();
+        if (converters) converters.loadTexts(); else stop();
+      });
+    }
+    await this.#loadTextsOf(itemKey);
+
     const engine = new EuclidianDistanceEngine(pack);
     this.#engines[itemKey] = engine;
     this.#itemKeyByEventType[engine.eventType] = itemKey;
     return engine;
+  }
+
+  async #loadTextsOf (itemKey: string): Promise<void> {
+    const { pack, url, texts } = this.#packs[itemKey];
+    await Promise.all(textLocales().map((locale) => (texts[locale] ??= this.#fetchTexts(pack, url, locale))));
+  }
+
+  /** A language without its file (404), or whose file cannot be read, keeps the pack's own texts. */
+  async #fetchTexts (pack: ConverterPack, packUrl: string, locale: string): Promise<void> {
+    const at = packUrl.lastIndexOf('/') + 1;
+    const url = `${packUrl.substring(0, at)}l10n-${locale}.json`;
+    try {
+      const response = await fetch(url);
+      if (response.status === 404) return;
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const texts = (await response.json())?.packs?.[packUrl.substring(at)];
+      if (texts != null && typeof texts === 'object') addPackTexts(pack, locale, texts);
+    } catch (e: any) {
+      logger.warn(`Converter texts not loaded: ${url} (${e?.message ?? e})`);
+    }
   }
 
   #getItemDef (itemKey: string): any {
