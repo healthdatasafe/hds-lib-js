@@ -251,3 +251,21 @@ HDSLib.logger.setLogger({
   warn: (...args) => myLogger.warn(...args),
 });
 ```
+
+## Eligibility test of a study
+
+`researchEligibility` runs the eligibility test of a study on the person's device (data-model
+`documentation/ELIGIBILITY.md`). Before she presses "Run the test", use only what reads nothing.
+
+```js
+import { researchEligibility as elig } from 'hds-lib';
+
+const issues = elig.checkEligibilityRequest(request);        // [] when it may be run; { publish: true } before publishing
+const itemKeys = elig.eligibilityItemKeys(request);          // what the test will look at; nothing is read
+
+const outcomes = await elig.readEligibilityOutcomes(connection, request);  // reads those items only
+const toAsk = elig.eligibilityQuestionsToAsk(request, outcomes);           // keep the answers in memory
+const result = elig.eligibilityResult(request, outcomes, answers);         // { criteria, score, band }
+
+await elig.sendEligibilityBand(connection, streamId, request, result.band); // only when she chooses to
+```
