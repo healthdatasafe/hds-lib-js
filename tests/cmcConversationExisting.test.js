@@ -168,6 +168,38 @@ describe('[CNVX] a value she already has (basis existing-value), the self-contai
     assert.ok(!cv.holdsProposedValue({ type: 'lab-result/coded-v1', content: coded([{ system: 'http://loinc.org', code: '2951-2' }], 140) }, item(codedPv)));
   });
 
+  it('[CNVX5b] a convertible value (Creighton): method, reading and annotations; vectors, versions and key order do not count', async () => {
+    const TYPE = 'vulva-mucus-inspect/9d-vector';
+    const KEY = 'body-vulva-mucus-inspect';
+    const at = (source, vectors = { threadiness: 1, wetness: 1 }) => ({ vectors, source: { key: 'creighton', sourceData: '10KL', engineVersion: 'v1', modelVersion: 'v1', ...source } });
+    const proposed = (content) => ({ content: { ...ferritin('m'), proposal: { itemKey: KEY, type: TYPE, content, time: D, clientData: { hdsTimePrecision: 'day' } } } });
+    const holds = (mine, theirs) => cv.holdsProposedValue({ type: TYPE, content: mine }, proposed(theirs));
+    const x2 = { annotations: { frequency: 'X2' } };
+    assert.ok(holds(at(x2, { wetness: 0.9, threadiness: 0.8 }), at(x2)), 'other vectors');
+    assert.ok(holds(at({ ...x2, engineVersion: 'v2', modelVersion: 'v3' }), at(x2)), 'other versions');
+    assert.ok(holds({ source: { annotations: { frequency: 'X2' }, sourceData: '10KL', key: 'creighton' }, vectors: {} }, at(x2)), 'other key order, versions absent');
+    assert.ok(holds(at({ annotations: {} }), at({})), 'no annotation and an empty one');
+    assert.ok(!holds(at(x2), at({ annotations: { frequency: 'X1' } })), 'another frequency');
+    assert.ok(!holds(at(x2), at({})), 'a frequency and none');
+    assert.ok(!holds(at({ sourceData: '8KL' }), at({})), 'another code');
+    assert.ok(!holds(at({ key: 'billings', sourceData: 'peak' }), at({})), 'another method');
+    assert.ok(!holds({ vectors: {} }, at({})), 'no method');
+    assert.ok(!holds(at({ note: 'peak' }), at({})), 'any other field of the source counts');
+    assert.ok(!holds({ ...at({}), extra: 1 }, at({})), 'any other field of the content counts');
+    for (const empty of ['', '  ', {}, []]) {
+      assert.ok(!holds(at({ sourceData: empty }, { wetness: 1 }), at({ sourceData: empty }, { wetness: 0.2 })), 'no reading: the whole content is compared');
+    }
+    assert.ok(holds(at({ sourceData: { a: 1, b: 2 } }), at({ sourceData: { b: 2, a: 1 } })), 'an object reading');
+    assert.ok(!holds(at({ key: '_raw', sourceData: 'x' }, { wetness: 1 }), at({ key: '_raw', sourceData: 'x' }, { wetness: 0.2 })), '_raw: the vectors are the reading');
+    const mood = (vectors) => ({ vectors, source: { key: 'hds', sourceData: 'happy', engineVersion: 'v1', modelVersion: 'v1' } });
+    const moodPv = { content: { ...ferritin('m'), proposal: { itemKey: 'wellbeing-mood', type: 'mood/5d-vectors', content: mood({ valence: 1 }), time: D, clientData: { hdsTimePrecision: 'day' } } } };
+    assert.ok(cv.holdsProposedValue({ type: 'mood/5d-vectors', content: mood({ valence: 0.9 }) }, moodPv), 'mood, same reading');
+    const { person, rel, her, conv } = await setup([{ ...ferritin('c1'), proposal: { itemKey: KEY, type: TYPE, content: at(x2), time: D, clientData: { hdsTimePrecision: 'day' } } }]);
+    await her(KEY, TYPE, at({ ...x2, engineVersion: 'v9' }, { wetness: 0.1 }), D);
+    assert.deepStrictEqual((await cv.autoMarkDuplicates(person, rel, { about: DOC, engines: ENGINES }))?.candidateIds, ['c1']);
+    assert.strictEqual((await conv()).proposedValues[0].state, 'duplicate');
+  });
+
   it('[CNVX6] basis rules: existing-value only on a duplicate of proposed values, profile-match only on a confirm of is-this-yours', () => {
     const answer = { kind: 'answer', inReplyTo: 'ev-1', about: DOC, candidateIds: ['c1'] };
     assert.deepStrictEqual(cv.checkConversationItem({ ...answer, action: 'duplicate', basis: 'existing-value' }), []);
