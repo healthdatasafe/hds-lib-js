@@ -238,8 +238,8 @@ function buildRawMethod (dimensions: Record<string, DimensionDef>, dimensionName
   return {
     methodId: '_raw',
     order: 0,
-    name: { en: 'HDS Native', fr: 'HDS Natif' },
-    description: { en: 'Direct dimensional input using the HDS scale stops.', fr: 'Saisie dimensionnelle directe utilisant les paliers de l\'échelle HDS.' },
+    name: { en: 'HDS Native', fr: 'HDS Natif', es: 'HDS nativo', it: 'HDS nativo', 'pt-BR': 'HDS Nativo' },
+    description: { en: 'Direct dimensional input using the HDS scale stops.', fr: 'Saisie dimensionnelle directe utilisant les paliers de l\'échelle HDS.', es: 'Entrada dimensional directa con los pasos de la escala HDS.', it: 'Inserimento dimensionale diretto con i livelli della scala HDS.', 'pt-BR': 'Entrada dimensional direta usando os pontos da escala HDS.' },
     components,
   };
 }

@@ -184,11 +184,11 @@ describe('[CNV] cmcConversation', function () {
       assert.deepStrictEqual(cv.buildConversationAlertContent(hds).hds, hds);
     });
 
-    it('[CNV11] alert content: fixed words in en and fr, code, checked hds; never a value', () => {
+    it('[CNV11] alert content: fixed words in each language, `pt-BR` sent as `pt`, code, checked hds; never a value', () => {
       assert.deepStrictEqual(cv.buildConversationAlertContent({ kind: 'proposed-values', about: DOC, count: 2 }), {
         level: 'info',
-        title: { en: 'Proposed values', fr: 'Valeurs proposées' },
-        body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.' },
+        title: { en: 'Proposed values', fr: 'Valeurs proposées', es: 'Valores propuestos', it: 'Valori proposti', pt: 'Valores propostos' },
+        body: { en: 'Your contact proposes values read from a document. Please check them.', fr: 'Votre contact propose des valeurs lues dans un document. Merci de les vérifier.', es: 'Su contacto propone valores leídos en un documento. Compruébelos, por favor.', it: 'Il suo contatto propone valori letti in un documento. Li controlli, per favore.', pt: 'Seu contato propõe valores lidos em um documento. Confira-os.' },
         code: 'hds-proposed-values',
         hds: { kind: 'proposed-values', about: DOC, count: 2 }
       });

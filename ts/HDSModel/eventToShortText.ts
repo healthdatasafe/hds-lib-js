@@ -71,8 +71,8 @@ export interface EventDateSource {
   } | null;
 }
 
-const ABOUT = { en: 'about', fr: 'vers', es: 'hacia' };
-const DATE_UNKNOWN = { en: 'date unknown', fr: 'date inconnue', es: 'fecha desconocida' };
+const ABOUT = { en: 'about', fr: 'vers', es: 'hacia', it: 'circa', 'pt-BR': 'cerca de' };
+const DATE_UNKNOWN = { en: 'date unknown', fr: 'date inconnue', es: 'fecha desconocida', it: 'data sconosciuta', 'pt-BR': 'data desconhecida' };
 
 /** `texts` in `locale` (or its language, `fr` for `fr-CH`) when given and translated, else in the preferred locales. */
 function wordIn (texts: Record<string, string>, locale: string | undefined): string {
@@ -308,7 +308,7 @@ function compositePartText (value: any, def: any): string | null {
 
 const ALLERGY_CODED = 'allergy/coded-v1';
 const ALLERGY_BASIC = 'allergy/basic-v1';
-const HIGH_RISK = { en: 'high risk', fr: 'risque élevé', es: 'riesgo alto' };
+const HIGH_RISK = { en: 'high risk', fr: 'risque élevé', es: 'riesgo alto', it: 'rischio elevato', 'pt-BR': 'alto risco' };
 
 /**
  * An allergy as its allergen (the coded entry's label, or the name as written), then what changes how it reads: a
@@ -520,9 +520,9 @@ function formatFallback (event: any, content: any, model: any): string | null {
 }
 
 const TEST_RESULT_LABELS = {
-  positive: { en: 'Positive', fr: 'Positif', es: 'Positivo' },
-  negative: { en: 'Negative', fr: 'Négatif', es: 'Negativo' },
-  indeterminate: { en: 'Indeterminate', fr: 'Indéterminé', es: 'Indeterminado' },
+  positive: { en: 'Positive', fr: 'Positif', es: 'Positivo', it: 'Positivo', 'pt-BR': 'Positivo' },
+  negative: { en: 'Negative', fr: 'Négatif', es: 'Negativo', it: 'Negativo', 'pt-BR': 'Negativo' },
+  indeterminate: { en: 'Indeterminate', fr: 'Indéterminé', es: 'Indeterminado', it: 'Indeterminato', 'pt-BR': 'Indeterminado' },
 };
 
 function formatTestResult (content: number): string {
@@ -829,9 +829,9 @@ function doseUnitLabel (doseUnit: unknown): string {
   return typeof doseUnit === 'string' ? doseUnit.replace(/^(dose|mass|volume)\//, '') : '';
 }
 
-const AS_NEEDED = { en: 'as needed', fr: 'si besoin', es: 'si es necesario' };
-const FOR = { en: 'for', fr: 'pendant', es: 'durante' };
-const UNTIL = { en: 'until', fr: 'jusqu’au', es: 'hasta el' };
+const AS_NEEDED = { en: 'as needed', fr: 'si besoin', es: 'si es necesario', it: 'al bisogno', 'pt-BR': 'se necessário' };
+const FOR = { en: 'for', fr: 'pendant', es: 'durante', it: 'per', 'pt-BR': 'por' };
+const UNTIL = { en: 'until', fr: 'jusqu’au', es: 'hasta el', it: 'fino al', 'pt-BR': 'até' };
 
 /**
  * The regimen of a medication intake (data-model 3.23.0, the `posology` spelling):

@@ -38,9 +38,9 @@ export interface PermissionView {
 }
 
 const TEXTS: Record<'allData' | 'email' | 'under', localizableText> = {
-  allData: { en: 'All your data', fr: 'Toutes vos données', es: 'Todos sus datos' },
-  email: { en: 'Your e-mail address', fr: 'Votre adresse e-mail', es: 'Su dirección de correo electrónico' },
-  under: { en: '{name} and everything under it', fr: '{name} et tout ce qui en dépend', es: '{name} y todo lo que contiene' }
+  allData: { en: 'All your data', fr: 'Toutes vos données', es: 'Todos sus datos', it: 'Tutti i suoi dati', 'pt-BR': 'Todos os seus dados' },
+  email: { en: 'Your e-mail address', fr: 'Votre adresse e-mail', es: 'Su dirección de correo electrónico', it: 'Il suo indirizzo e-mail', 'pt-BR': 'Seu endereço de e-mail' },
+  under: { en: '{name} and everything under it', fr: '{name} et tout ce qui en dépend', es: '{name} y todo lo que contiene', it: '{name} e tutto ciò che contiene', 'pt-BR': '{name} e tudo o que contém' }
 };
 
 function pick (text: Localizable | null | undefined, locale?: string): string | null {

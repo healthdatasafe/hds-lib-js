@@ -1896,7 +1896,6 @@ not a mechanical fix.
   Verified across the major bumps: `tsc` clean, `eslint` clean, webpack compiled, and **595 tests
   still passing — the same count as before**, so the mocha upgrade did not silently drop any.
 
-
 ## [1.5.0] - 2026-08-25
 
 ### Added
@@ -1917,7 +1916,6 @@ not a mechanical fix.
   plan-78 L1 precedence behaviour (an unstored profile must not clobber a legacy per-app locale) is
   untouched and still covered by `[HDSPL1]`–`[HDSPL3]`.
 
-
 ## [1.4.0] - 2026-08-07
 
 ### Added
@@ -1928,6 +1926,14 @@ not a mechanical fix.
   renders its label rather than raw content.
 
 ## [Unreleased]
+
+## [2.71.0] - 2026-11-25
+
+### Added
+
+- **Spanish, Italian and Brazilian Portuguese** (plan 138, machine drafts, native review to follow): the texts of
+  encounters, medications, event short texts, permission labels, conversation alerts, chart stamps and the converter engine.
+  Alerts travel through `cmcText`, so `pt-BR` reaches the core as `pt`.
 
 ## [1.3.6] - 2026-07-30
 
