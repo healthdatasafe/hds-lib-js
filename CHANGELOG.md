@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Converter texts in the other languages (plan 138): `converters/{itemKey}/l10n-{locale}.json`, published by data-model beside
+  its frozen packs, is read with the pack for the languages preferred to English, and when they change
+  (`converters.loadTexts()`, awaitable). Without the file, the pack's own texts. No such file is published yet.
+
 ## [2.69.0] - 2026-11-25
 
 ### Fixed
