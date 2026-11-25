@@ -268,6 +268,14 @@ export function taskStatusOf (alerts: ConversationAlert[], about: string, direct
   return best;
 }
 
+/**
+ * The latest `done` of the work on one document (her app's side), whatever the contact posted after it (the document shared
+ * again, then read or on hold): what the removal of her notes waits for (`notesToRemove`). Null when none.
+ */
+export function latestDoneOf (alerts: ConversationAlert[], about: string): ConversationAlert | null {
+  return taskStatusOf((alerts ?? []).filter(a => a.hds?.status === 'done'), about);
+}
+
 // ---- streams ---- //
 
 /** A new conversation child id: `conv-` + 12 lowercase base36 characters, random. */
@@ -1743,17 +1751,24 @@ function holdsDocumentFields (document: { time?: number; content?: any; clientDa
 // ---- 4.26.0: her note (CONVERSATION.md § Her note) ---- //
 
 /**
- * The answers whose `note` her app removes now: once the contact's latest `task-status` (`status`) is `done` and later
- * than the answer; or 24 h after the answer when the work was already `done`, when she answered `not-mine`, or when the
- * document was unshared (`unshared`).
+ * The answers whose `note` her app removes now: once a `done` of the contact (`done`: the latest one, `latestDoneOf`) is
+ * later than the answer, whatever status follows that `done` (a document shared again, on hold for days); or 24 h after
+ * the answer when the work is done now (`current`: the latest status, `taskStatusOf`; left out, `done` is taken as the
+ * latest), when she answered `not-mine`, or when the document was unshared (`unshared`). An answer written while the work
+ * is in progress again waits for the next `done`.
  */
-export function notesToRemove (conv: DocumentConversation, status: ConversationAlert | null, opts: { now?: number; unshared?: boolean } = {}): ConversationItem[] {
+export function notesToRemove (
+  conv: DocumentConversation,
+  done: ConversationAlert | null,
+  opts: { now?: number; unshared?: boolean; current?: ConversationAlert | null } = {}
+): ConversationItem[] {
   const now = opts.now ?? Math.floor(Date.now() / 1000);
-  const doneAt = status?.hds?.status === 'done' ? status.time : null;
+  const doneAt = done?.hds?.status === 'done' ? done.time : null;
+  const idle = opts.current === undefined ? doneAt != null : opts.current?.hds?.status === 'done';
   return conv.answers.filter(a => {
     if (typeof a.content.note !== 'string') return false;
     if (doneAt != null && doneAt > a.created) return true;
-    return now - a.created >= DAY && (doneAt != null || conv.identity === 'not-mine' || opts.unshared === true);
+    return now - a.created >= DAY && (idle || conv.identity === 'not-mine' || opts.unshared === true);
   });
 }
 
@@ -1769,9 +1784,9 @@ export async function removeNotes (
   const { streams, collectorStreamId } = await personSide(connection, rel, 'removeNotes');
   const conv = conversationOf(await listConversationItems(connection, streams, { about: params.about }), params.about);
   if (!conv.answers.some(a => typeof a.content.note === 'string')) return [];
-  const status = taskStatusOf(await listConversationAlerts(connection, collectorStreamId), params.about);
+  const alerts = await listConversationAlerts(connection, collectorStreamId);
   const out: string[] = [];
-  for (const a of notesToRemove(conv, status, params)) {
+  for (const a of notesToRemove(conv, latestDoneOf(alerts, params.about), { ...params, current: taskStatusOf(alerts, params.about) })) {
     const { note: _note, ...content } = a.content;
     await connection.apiOne('events.update', { id: a.id, update: { content } } as any, 'event');
     out.push(a.id);
