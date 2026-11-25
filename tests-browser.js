@@ -23503,6 +23503,7 @@ exports.Contact = void 0;
 const StreamsTools_ts_1 = __webpack_require__(/*! ../toolkit/StreamsTools.js */ "./ts/toolkit/StreamsTools.ts");
 const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 const legacyChat_ts_1 = __webpack_require__(/*! ./legacyChat.js */ "./ts/appTemplates/legacyChat.ts");
+const shareIds_ts_1 = __webpack_require__(/*! ../cmc/shareIds.js */ "./ts/cmc/shareIds.ts");
 /**
  * Plan 66 composite-id base extractor. Refs serialise as either bare cuid
  * (`"abc123"`) for never-updated accesses or composite (`"abc123:3"`) for
@@ -23598,7 +23599,7 @@ class Contact {
                 continue;
             const grant = { ids: new Set(), forbidden: new Set() };
             this.#grantsByAccess.push(grant);
-            for (const p of access.permissions) {
+            for (const p of (0, shareIds_ts_1.canonicalPermissions)(access.permissions)) {
                 if (!p.streamId)
                     continue;
                 if (p.level === 'none') {
@@ -24012,7 +24013,7 @@ class Contact {
                 localCollectorStreamId,
                 appCode,
                 features,
-                grantedPermissions: access.permissions ?? [],
+                grantedPermissions: (0, shareIds_ts_1.canonicalPermissions)(access.permissions),
                 acceptedAt: matchingAccept?.acceptedAt ?? null,
                 hdsFormSpec: matchingAccept?.hdsFormSpec ?? null,
                 requesterName: matchingAccept?.requesterName ?? null
@@ -26393,6 +26394,7 @@ exports.dataName = dataName;
 exports.permissionView = permissionView;
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const shareIds_ts_1 = __webpack_require__(/*! ../cmc/shareIds.js */ "./ts/cmc/shareIds.ts");
 const TEXTS = {
     allData: { en: 'All your data', fr: 'Toutes vos données', es: 'Todos sus datos' },
     email: { en: 'Your e-mail address', fr: 'Votre adresse e-mail', es: 'Su dirección de correo electrónico' },
@@ -26460,10 +26462,11 @@ function dataName(streamId, opts = {}) {
  * deserves a warning. Works before the model is loaded (then `inModel: false`).
  */
 function permissionView(perm, opts = {}) {
-    const streamId = perm.streamId ?? '';
+    // named by the canonical id; `streamId` stays as given
+    const streamId = (0, shareIds_ts_1.canonicalStreamId)(perm.streamId ?? '');
     const level = perm.level ?? 'read';
     const requesterLabel = perm.defaultName ?? null;
-    const base = { streamId, level, requesterLabel };
+    const base = { streamId: perm.streamId ?? '', level, requesterLabel };
     if (streamId === '*') {
         const name = pick(TEXTS.allData, opts.locale);
         return { ...base, kind: 'all-data', name, label: name, beyondRead: true, inModel: true, hasChildren: true };
@@ -27165,7 +27168,8 @@ exports.DOCUMENT_VALUES_KEY = 'hdsDocumentValues';
 exports.PRINTED_IN_KEY = 'hdsPrintedIn';
 /** `answer.note`: her comment, plain text (CONVERSATION.md § Her note). */
 exports.NOTE_MAX_LENGTH = 1000;
-exports.TASK_STATUSES = ['received', 'reading', 'awaiting-answers', 'done', 'error'];
+/** `on-hold` (data-model 4.33.0): the contact has the document and cannot work on it now; not settled, nothing confirmable. */
+exports.TASK_STATUSES = ['received', 'reading', 'on-hold', 'awaiting-answers', 'done', 'error'];
 exports.ANSWER_ACTIONS = ['confirm', 'correct', 'not-mine', 'skip', 'choose', 'request-item', 'duplicate'];
 exports.NOTICE_CODES = {
     NO_RESULT_FOUND: 'no-result-found',
@@ -29346,7 +29350,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.streamsCheck = exports.DOCUMENT_ALERT_KINDS = exports.ET_DOCUMENT = exports.DOCUMENTS_STREAM_ID = exports.namesShareStreams = exports.isShareStreamId = exports.canonicalStreamId = exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = void 0;
+exports.streamsCheck = exports.DOCUMENT_ALERT_KINDS = exports.ET_DOCUMENT = exports.DOCUMENTS_STREAM_ID = exports.namesShareStreams = exports.namesAliasedStreams = exports.isShareStreamId = exports.canonicalStreamId = exports.canonicalPermissions = exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = void 0;
 exports.newShareStreamId = newShareStreamId;
 exports.relationshipIdOf = relationshipIdOf;
 exports.shareStreamsOf = shareStreamsOf;
@@ -29388,8 +29392,10 @@ const scope_ts_1 = __webpack_require__(/*! ./scope.js */ "./ts/cmc/scope.ts");
 const shareIds_ts_1 = __webpack_require__(/*! ./shareIds.js */ "./ts/cmc/shareIds.ts");
 Object.defineProperty(exports, "DOCUMENT_SHARES_ROOT_ID", ({ enumerable: true, get: function () { return shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID; } }));
 Object.defineProperty(exports, "SHARE_STREAM_PREFIX", ({ enumerable: true, get: function () { return shareIds_ts_1.SHARE_STREAM_PREFIX; } }));
+Object.defineProperty(exports, "canonicalPermissions", ({ enumerable: true, get: function () { return shareIds_ts_1.canonicalPermissions; } }));
 Object.defineProperty(exports, "canonicalStreamId", ({ enumerable: true, get: function () { return shareIds_ts_1.canonicalStreamId; } }));
 Object.defineProperty(exports, "isShareStreamId", ({ enumerable: true, get: function () { return shareIds_ts_1.isShareStreamId; } }));
+Object.defineProperty(exports, "namesAliasedStreams", ({ enumerable: true, get: function () { return shareIds_ts_1.namesAliasedStreams; } }));
 Object.defineProperty(exports, "namesShareStreams", ({ enumerable: true, get: function () { return shareIds_ts_1.namesShareStreams; } }));
 exports.DOCUMENTS_STREAM_ID = 'documents';
 exports.ET_DOCUMENT = 'file/xds-v1';
@@ -29423,7 +29429,7 @@ function relationshipIdOf(accessId) {
 function shareStreamsOf(perms) {
     let shared = null;
     let received = null;
-    for (const p of perms ?? []) {
+    for (const p of (0, shareIds_ts_1.canonicalPermissions)(perms)) {
         if (!(0, shareIds_ts_1.isShareStreamId)(p.streamId))
             continue;
         const direction = directionAt(p.level);
@@ -29442,7 +29448,7 @@ function directionAt(level) {
 }
 /** The grant already reads every document (`documents` or `*`): sharing one only posts the alert. */
 function sharesAllDocuments(perms) {
-    return (perms ?? []).some(p => (p.streamId === exports.DOCUMENTS_STREAM_ID || p.streamId === '*') && READ_LEVELS.has(p.level ?? 'read'));
+    return (0, shareIds_ts_1.canonicalPermissions)(perms).some(p => (p.streamId === exports.DOCUMENTS_STREAM_ID || p.streamId === '*') && READ_LEVELS.has(p.level ?? 'read'));
 }
 /**
  * Whether a grant reads this document, as the platform decides: the level of each of its streams is the nearest entry
@@ -29450,7 +29456,7 @@ function sharesAllDocuments(perms) {
  */
 function readsDocument(perms, document) {
     const levels = new Map();
-    for (const p of perms ?? [])
+    for (const p of (0, shareIds_ts_1.canonicalPermissions)(perms))
         if (p.streamId != null)
             levels.set(p.streamId, p.level ?? 'read');
     let reads = false;
@@ -29493,7 +29499,7 @@ function offeredShareIssues(perms, existing, rel) {
     const own = rel != null ? relationshipIdOf(rel.accessId) : null;
     const out = [];
     // what it is granted now tells the direction of a child not marked yet
-    const granted = new Map((rel?.grantedPermissions ?? []).map(p => [p.streamId, directionAt(p.level)]));
+    const granted = new Map((0, shareIds_ts_1.canonicalPermissions)(rel?.grantedPermissions).map(p => [p.streamId, directionAt(p.level)]));
     const seen = { shared: new Set(), received: new Set() };
     for (const p of perms ?? []) {
         const streamId = (0, shareIds_ts_1.canonicalStreamId)(p.streamId ?? '');
@@ -29522,7 +29528,7 @@ function offeredShareIssues(perms, existing, rel) {
 async function checkOfferedShares(connection, perms, rel) {
     if (!(0, shareIds_ts_1.namesShareStreams)(perms))
         return [];
-    const asked = perms.map(p => ({ ...p, streamId: (0, shareIds_ts_1.canonicalStreamId)(p.streamId ?? '') }));
+    const asked = (0, shareIds_ts_1.canonicalPermissions)(perms);
     const existing = await listShareStreams(connection, { includeTrashed: true });
     const issues = offeredShareIssues(asked, existing, rel);
     const own = rel != null ? relationshipIdOf(rel.accessId) : '';
@@ -29936,7 +29942,7 @@ async function cleanupDocumentShares(connection, relationship, opts = {}) {
     const { marked } = await shareChildren(connection, true);
     const mine = marked.filter(s => s.relationship === base);
     const unmarked = [];
-    const offered = (opts.permissions ?? []).map(p => p.streamId).filter(shareIds_ts_1.isShareStreamId).filter(id => !marked.some(s => s.id === id));
+    const offered = (0, shareIds_ts_1.canonicalPermissions)(opts.permissions).map(p => p.streamId).filter(shareIds_ts_1.isShareStreamId).filter(id => !marked.some(s => s.id === id));
     if (offered.length > 0) {
         // anywhere: an older consent screen creates them at the root
         const streams = await connection.apiOne('streams.get', { state: 'all' }, 'streams');
@@ -29989,7 +29995,7 @@ async function cleanupOrphanDocumentShares(connection, liveRelationships) {
                 held.push(id);
         const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses');
         liveRelationships = accesses.map(a => a.id);
-        const named = new Set(accesses.flatMap(a => (a.permissions ?? []).map(p => p.streamId)));
+        const named = new Set(accesses.flatMap(a => (0, shareIds_ts_1.canonicalPermissions)(a.permissions).map(p => p.streamId)));
         abandoned.push(...held.filter(id => !named.has(id)));
     }
     const live = new Set(liveRelationships.map(relationshipIdOf));
@@ -30129,7 +30135,7 @@ async function namedByAnother(connection, relationship, streamId) {
         throw new errors_ts_1.HDSLibError('document shares: needs a personal token', { reason: 'not-personal' });
     const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses');
     const own = (id) => relationship !== '' && id != null && relationshipIdOf(id.split(' ')[0]) === relationship;
-    return accesses.some(a => !own(a.id) && !own(a.createdBy) && (a.permissions ?? []).some(p => p.streamId === streamId));
+    return accesses.some(a => !own(a.id) && !own(a.createdBy) && (0, shareIds_ts_1.canonicalPermissions)(a.permissions).some(p => p.streamId === streamId));
 }
 function findStream(list, id) {
     for (const s of list ?? []) {
@@ -30912,6 +30918,7 @@ const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSMod
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patchedPryv.ts");
 const formSpec_ts_1 = __webpack_require__(/*! ./formSpec.js */ "./ts/cmc/formSpec.ts");
+const shareIds_ts_1 = __webpack_require__(/*! ./shareIds.js */ "./ts/cmc/shareIds.ts");
 exports.ET_SCOPE_UPDATE = 'consent/scope-update-cmc';
 exports.ET_SCOPE_REQUEST = 'consent/scope-request-cmc';
 /** A data stream the person would recognise as shared data (not a platform stream, not the chat-only placeholder). */
@@ -30940,7 +30947,7 @@ function streamsAbove(streamId, parentIds = []) {
  * `{ feature, setting }`).
  */
 function personPermissions(perms) {
-    return (perms ?? [])
+    return (0, shareIds_ts_1.canonicalPermissions)(perms)
         .filter(p => !(typeof p.streamId === 'string' && p.streamId.startsWith(':_cmc:')))
         .map(p => p.streamId != null
         ? { streamId: p.streamId, level: p.level ?? 'read' }
@@ -30973,7 +30980,7 @@ function planStopSharing(perms, streamId, opts = {}) {
  * card: a request for data already shared but at a higher level is a `changed` entry, not nothing.
  */
 function scopeDiff(current, requested) {
-    const levels = (perms) => new Map((perms ?? []).filter(p => isDataStream(p.streamId)).map(p => [p.streamId, p.level ?? 'read']));
+    const levels = (perms) => new Map((0, shareIds_ts_1.canonicalPermissions)(perms).filter(p => isDataStream(p.streamId)).map(p => [p.streamId, p.level ?? 'read']));
     const now = levels(current);
     const asked = levels(requested);
     return {
@@ -31009,7 +31016,7 @@ async function stopSharingStream(connection, rel, streamId, opts = {}) {
 async function shareStreamsAgain(connection, rel, streamIds, opts = {}) {
     const collectorStreamId = requireCollectorStream(rel, 'shareStreamsAgain');
     const now = personPermissions(rel.grantedPermissions);
-    const back = [...new Set(streamIds)].filter(id => isDataStream(id) && !now.some(p => p.streamId === id));
+    const back = [...new Set(streamIds.map(shareIds_ts_1.canonicalStreamId))].filter(id => isDataStream(id) && !now.some(p => p.streamId === id));
     if (back.length === 0) {
         throw new errors_ts_1.HDSLibError('shareStreamsAgain: every stream is already shared', { reason: 'already-shared', streamIds });
     }
@@ -31397,13 +31404,44 @@ async function waitForOutcome(connection, eventId, opts) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = void 0;
 exports.canonicalStreamId = canonicalStreamId;
+exports.canonicalPermissions = canonicalPermissions;
+exports.namesAliasedStreams = namesAliasedStreams;
 exports.namesShareStreams = namesShareStreams;
 exports.isShareStreamId = isShareStreamId;
 exports.DOCUMENT_SHARES_ROOT_ID = 'document-shares';
 exports.SHARE_STREAM_PREFIX = 'share-';
-/** The platform reads `:local:<id>` as `<id>` (and stores it so): compare what a requester sends by this id. */
+const LOCAL_PREFIX = ':local:';
+const ACCOUNT_PREFIX = ':account:';
+// the namespaces whose `:…` ids are their own spelling (open-pryv.io `storeDataUtils`)
+const OWN_SPELLING = /^:(_?system|_cmc|_shared-secrets|_delegation|_emails):/;
+/** A stream id in its canonical form, as the platform's `canonicalStreamId`. */
 function canonicalStreamId(streamId) {
-    return streamId.replace(/^(?::local:)+/, '');
+    let id = streamId;
+    for (let i = 0; i < 8; i++) {
+        if (id.startsWith(LOCAL_PREFIX)) {
+            id = id.slice(LOCAL_PREFIX.length);
+            if (id === '')
+                return '*';
+        }
+        else if (id.startsWith(ACCOUNT_PREFIX + ':'))
+            id = id.slice(ACCOUNT_PREFIX.length);
+        else
+            break;
+    }
+    return id;
+}
+const isPrefixed = (id) => typeof id === 'string' && id.startsWith(':') && !OWN_SPELLING.test(id);
+/** Permissions with their stream ids in canonical form; feature permissions as they are. */
+function canonicalPermissions(perms) {
+    return (perms ?? []).map(p => isPrefixed(p.streamId) ? { ...p, streamId: canonicalStreamId(p.streamId) } : p);
+}
+/**
+ * Whether permissions name a stream with a store prefix. HDS requesters use canonical ids only, and an app takes nothing
+ * else. `accessId`: the access that holds them, whose own audit stream the platform may list in its permissions.
+ */
+function namesAliasedStreams(perms, accessId) {
+    const audit = accessId != null ? ':_audit:access-' + accessId.split(':')[0] : null;
+    return (perms ?? []).some(p => isPrefixed(p.streamId) && !(audit != null && p.streamId.split(':').slice(0, 3).join(':') === audit));
 }
 /** Whether permissions name a share child or their root, under any spelling. */
 function namesShareStreams(perms) {
@@ -33422,7 +33460,7 @@ exports.StreamsAutoCreate = StreamsAutoCreate;
 /*!************************************!*\
   !*** ./ts/toolkit/StreamsTools.ts ***!
   \************************************/
-(__unused_webpack_module, exports) {
+(__unused_webpack_module, exports, __webpack_require__) {
 
 "use strict";
 
@@ -33432,6 +33470,7 @@ exports.allStreamsAndChildren = allStreamsAndChildren;
 exports.getStreamIdAndChildrenIds = getStreamIdAndChildrenIds;
 exports.streamAndParents = streamAndParents;
 exports.permissionsRead = permissionsRead;
+const shareIds_ts_1 = __webpack_require__(/*! ../cmc/shareIds.js */ "./ts/cmc/shareIds.ts");
 /**
  * Iterate all streams and children
  */
@@ -33474,9 +33513,10 @@ function permissionsRead(permissions, streamIds, streamsById) {
         return false;
     const covered = new Set(streamIds.flatMap(id => streamAndParents(id, streamsById)));
     const level = (p) => p.level ?? 'read';
-    if (permissions.some(p => level(p) === 'none' && p.streamId != null && covered.has(p.streamId)))
+    const held = (0, shareIds_ts_1.canonicalPermissions)(permissions);
+    if (held.some(p => level(p) === 'none' && p.streamId != null && covered.has(p.streamId)))
         return false;
-    return permissions.some(p => exports.READING_LEVELS.includes(level(p)) && p.streamId != null && (p.streamId === '*' || covered.has(p.streamId)));
+    return held.some(p => exports.READING_LEVELS.includes(level(p)) && p.streamId != null && (p.streamId === '*' || covered.has(p.streamId)));
 }
 
 
@@ -50229,6 +50269,11 @@ describe('[CNV] cmcConversation', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(strip(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.CONVERSATION_ALERT_HDS_SCHEMA), strip(published));
     });
 
+    it('[CNV10b] on-hold is a status a contact may post (4.33.0)', () => {
+      const hds = { kind: 'task-status', about: DOC, status: 'on-hold', attempt: 2 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent(hds).hds, hds);
+    });
+
     it('[CNV11] alert content: fixed words in en and fr, code, checked hds; never a value', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent({ kind: 'proposed-values', about: DOC, count: 2 }), {
         level: 'info',
@@ -51801,6 +51846,27 @@ describe('[CDOC] cmcDocuments', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsOf([{ streamId: R, level: 'manage' }, { streamId: O, level: 'none' }]), { shared: null, received: null });
     });
 
+    it('[CDOC69] grants are read with canonical stream ids', () => {
+      const at = (streamId, level = 'read') => [{ streamId, level }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.canonicalStreamId(':local:'), '*');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.canonicalStreamId(''), '');
+      for (const [id, to] of [[':account::local:', '*'], [':account::local:body', 'body'], [':account::account::system:email', ':system:email'], [':account:email', ':account:email'], [':_audit:access-a', ':_audit:access-a']]) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.canonicalStreamId(id), to);
+      const own = at(':_audit:access-acc-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([undefined, 'acc-1', 'acc-1:4', 'acc-2'].map(id => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.namesAliasedStreams(own, id)), [true, false, false, true]);
+      for (const id of [':local:', ':local:*', ':local:documents']) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.readsDocument(at(id), doc('d')), true, id);
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.sharesAllDocuments(at(id)), true, id);
+      }
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.readsDocument([...at('documents'), ...at(':local:documents', 'none')].reverse(), doc('d', ['documents'])), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsOf([...at(':local:' + S), ...at(':local:share-rrrrrrrrrrrr', 'contribute')]), { shared: S, received: 'share-rrrrrrrrrrrr' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.namesAliasedStreams([{ streamId: 'body' }, { feature: 'selfRevoke' }, { streamId: ':_cmc:inbox' }, { streamId: ':system:email' }]), false);
+      for (const id of [':local:body', ':local:', ':account::system:email', ':account:email', ':_audit:', ':LOCAL:', ':x']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.namesAliasedStreams(at(id)), true, id);
+      for (const id of [':_system:account', ':_cmc:apps:a:b', ':_emails:x', 'a:local:b', '*']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.namesAliasedStreams(at(id)), false, id);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.namesAliasedStreams(undefined), false);
+      const feature = { feature: 'selfRevoke', setting: 'forbidden' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.canonicalPermissions([feature, ...at(':local:body')]), [feature, { streamId: 'body', level: 'read' }]);
+    });
+
     it('[CDOC51] readsDocument: nearest entry wins, one readable stream is enough, none and create-only hide', () => {
       const reads = (perms, ...streamIds) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.readsDocument(perms.map(([streamId, level]) => ({ streamId, level })), { streamIds });
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(reads([['documents', 'read']], CLINICAL), true);
@@ -52412,6 +52478,11 @@ describe('[CTFS] Contact.aggregateCmc hdsFormSpec pass-through', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(out[0].cmcRelationships[0].hdsFormSpec, spec);
   });
 
+  it('[CTFS20] grantedPermissions have canonical stream ids', () => {
+    const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_2__.Contact.aggregateCmc([counterpartyAccess({ permissions: [{ streamId: ':local:health', level: 'read' }, { streamId: ':account::system:email', level: 'read' }] })], [acceptEvent()], SCOPE);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out[0].cmcRelationships[0].grantedPermissions.map(p => p.streamId), ['health', ':system:email']);
+  });
+
   it('[CTFS2] hdsFormSpec defaults to null when accept event has none', () => {
     const out = _ts_appTemplates_Contact_ts__WEBPACK_IMPORTED_MODULE_2__.Contact.aggregateCmc(
       [counterpartyAccess()],
@@ -52849,6 +52920,15 @@ describe('[CSCP] cmcScope', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing([{ streamId: '*', level: 'read' }], 'body-weight'), { ok: false, reason: 'shared-through-parent' });
       const single = [{ streamId: 'body-weight', level: 'read' }, { streamId: COLLECTORS, level: 'contribute' }];
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing(single, 'body-weight'), { ok: false, reason: 'nothing-left' });
+    });
+
+    it('[CSCP30] stream ids are read in canonical form', () => {
+      const held = [{ streamId: ':local:body', level: 'read' }, { streamId: 'mood', level: 'read' }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.personPermissions([{ streamId: ':local::_cmc:inbox', level: 'create-only' }, ...held]),
+        [{ streamId: 'body', level: 'read' }, { streamId: 'mood', level: 'read' }]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.planStopSharing(held, 'body'), { ok: true, newPermissions: [{ streamId: 'mood', level: 'read' }] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcScope.scopeDiff(held, [{ streamId: 'body', level: 'read' }, { streamId: ':local:', level: 'read' }]),
+        { added: ['*'], removed: ['mood'], changed: [] });
     });
 
     it('[CSCP4] scopeDiff reports added, removed and level changes, platform streams left out', () => {
@@ -60490,6 +60570,17 @@ describe('[PLBL] permission labels', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('not-a-model-stream'), 'not-a-model-stream');
   });
 
+  it('[PLBL9] stream ids are read in canonical form', () => {
+    const view = (streamId) => permissionView({ streamId, level: 'read', defaultName: 'My notes' }, { locale: 'en' });
+    for (const [spelled, id] of [[':local:', '*'], [':local:*', '*'], [':local:body', 'body'], [':local:body-weight', 'body-weight'], [':local::system:email', ':system:email'], [':account::system:email', ':system:email']]) {
+      const { streamId, requesterLabel, ...shown } = view(spelled);
+      const { streamId: _id, requesterLabel: _label, ...expected } = view(id);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(shown, expected);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(streamId, spelled);
+    }
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(view(':local:custom-x').label.includes('My notes') && view(':local:custom-x').inModel === false);
+  });
+
   it('[PLBL3] permissionView names a model stream from the model, never from the requester label', () => {
     const view = permissionView({ streamId: 'body-weight', level: 'read', defaultName: 'Cycle length' }, { locale: 'en' });
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.kind, 'data');
@@ -60537,7 +60628,7 @@ describe('[PLBL] permission labels', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(view.label, 'Symptômes et tout ce qui en dépend');
   });
 
-  it('[PLBL9] a child stream named by its own label reads "Parent › Child" on a permission; roots and item names stay bare', () => {
+  it('[PLBL9] stream ids are read in canonical form', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'symptom-general' }, { locale: 'fr' }).name, 'Symptômes › Généraux');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'treatment-fertility' }, { locale: 'fr' }).name, 'Traitements › Fertilité');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'symptom-general' }, { locale: 'fr' }).label, 'Symptômes › Généraux et tout ce qui en dépend');
@@ -62672,6 +62763,8 @@ describe('[TKTX] toolKit Streams Tools', function () {
 
     it('[TKPB] a reading permission on the stream, a parent or * reads it', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body', level: 'read' }], ['body-weight'], streams), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: ':local:body', level: 'read' }], ['body-weight'], streams), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: ':local:', level: 'read' }], ['body-weight'], streams), true);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body-weight', level: 'contribute' }], ['body-weight'], streams), true);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: '*', level: 'manage' }], ['diary'], streams), true);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_toolkit_StreamsTools_ts__WEBPACK_IMPORTED_MODULE_1__.permissionsRead)([{ streamId: 'body' }], ['body-weight'], streams), true);
