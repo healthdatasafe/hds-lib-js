@@ -930,6 +930,10 @@ function formatConvertible (content: any, itemDef: any, model: any): ShortTextRe
     : formatSourceLabel(source);
   const sourceMethodName = getMethodName(engine, source?.key);
   const sourceKey: string | null = typeof source?.key === 'string' ? source.key : null;
+  // What was recorded with the observation in its own method (Creighton frequency X1, X2, X3, AD:
+  // `source.annotations`, plan 131), shown after it; never after a value converted into another method.
+  const noted = annotationsText(source);
+  const recorded = sourceLabel && noted ? `${sourceLabel} · ${noted}` : sourceLabel;
   /** The origin of a value shown as recorded (no conversion), or converted into `target`. */
   const origin = (target: { key: string; name: string; match: number } | null): ShortTextOrigin => ({
     sourceKey,
@@ -951,7 +955,7 @@ function formatConvertible (content: any, itemDef: any, model: any): ShortTextRe
       if (targetMethod && typeof targetMethod === 'string') {
         // Skip conversion if target method equals source method
         if (source?.key === targetMethod && sourceLabel) {
-          return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
+          return { text: `${recorded} (${sourceMethodName})`, origin: origin(null) };
         }
         if (engine) {
           const result = engine.fromVector(targetMethod, vectors);
@@ -971,7 +975,7 @@ function formatConvertible (content: any, itemDef: any, model: any): ShortTextRe
 
   // No autoConvert: show source observation + method name
   if (sourceLabel) {
-    return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
+    return { text: `${recorded} (${sourceMethodName})`, origin: origin(null) };
   }
 
   // No source — RAW vector input, convert via _raw virtual method
@@ -999,6 +1003,14 @@ function formatConvertible (content: any, itemDef: any, model: any): ShortTextRe
   }
 
   return { text: formatObject(content), origin: null };
+}
+
+/** The annotations of a convertible's source as written ("X2"), in their stored order; null when none. */
+function annotationsText (source: any): string | null {
+  const a = source?.annotations;
+  if (a == null || typeof a !== 'object' || Array.isArray(a)) return null;
+  const values = Object.values(a).filter((v): v is string => typeof v === 'string' && v.trim() !== '').map(v => v.trim());
+  return values.length > 0 ? values.join(' ') : null;
 }
 
 /** True when the vector carries a number for every dimension the engine knows. */

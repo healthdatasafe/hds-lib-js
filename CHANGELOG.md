@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.73.2] - 2026-11-26
+
+### Fixed
+
+- **`eventToShortText` shows what was recorded with a convertible's observation in its own method**
+  (`source.annotations`, the Creighton frequency of plan 131): "6C — … · X2 (Creighton)"; it was dropped, so a diary
+  row read as the bare code. Not shown after a value converted into another method. Test `[EST21f]`.
+
 ## [2.73.1] - 2026-11-26
 
 ### Fixed
