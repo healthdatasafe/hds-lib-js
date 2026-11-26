@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.73.0] - 2026-11-26
+
+### Added
+
+- **`createInviteWithFormSpec({ requireVerifiedEmail: true })`** (pryv/open-pryv.io#173): the offer asks that the
+  accepting account's primary email address be proved; the accept is refused with
+  `cmc.errorIds.VERIFIED_EMAIL_REQUIRED` until it is. Pass-through only: needs a core at 2.0.0-rc.88 or later
+  (`features.cmcRequireVerifiedEmail` in service info; an earlier core stores the flag and ignores it), and
+  `requestedPermissions` must ask `:system:email` at `read`, mandatory when `allowUserChoice`. Not a guarantee to the
+  requester: a grant made by hand bypasses the accepting core's check, so read `verification/email` through the grant
+  each time the address is used. Tests `[CFS63]`, `[CFS64]`.
+
 ## [2.72.0] - 2026-11-26
 
 ### Added

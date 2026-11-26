@@ -422,6 +422,19 @@ export async function createInviteWithFormSpec (
      * Defaults to the CMC plugin's `'shared'` behavior when omitted.
      */
     accessType?: 'shared' | 'app';
+    /**
+     * Opt-in (@pryv/cmc ≥ 3.24): the accept is refused
+     * (`cmc.errorIds.VERIFIED_EMAIL_REQUIRED`) unless the accepting person's
+     * primary email address is verified. Needs core rc.88+
+     * (`features.cmcRequireVerifiedEmail` in service info); an older core
+     * stores the flag and ignores it. `requestedPermissions` must ask
+     * `:system:email` at level `read`, mandatory when `allowUserChoice`.
+     *
+     * Not a guarantee to the requester: a grant made by hand bypasses the
+     * accepting core's check. A requester relying on the address must read
+     * the `verification/email` event through the grant each time it uses it.
+     */
+    requireVerifiedEmail?: boolean;
     title?: localizableText;
     description?: localizableText;
     consent?: localizableText;
@@ -447,6 +460,7 @@ export async function createInviteWithFormSpec (
   if (params.expiresAt === null) request.expiresAt = null;
   else if (params.expiresAt) request.expiresAt = params.expiresAt;
   if (params.accessType) request.accessType = params.accessType;
+  if (params.requireVerifiedEmail === true) request.requireVerifiedEmail = true;
   const content: any = {
     to: params.to === undefined ? null : params.to,
     capabilityRequested: true,

@@ -239,6 +239,20 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       assert.ok(!('accessType' in calls[0].params.content.request));
     });
 
+    it('[CFS63] forwards requireVerifiedEmail: true to the CMC request (@pryv/cmc 3.24)', async () => {
+      const calls = [];
+      await cmcFormSpec.createInviteWithFormSpec(captureConn(calls), inviteParams({ requireVerifiedEmail: true }));
+      assert.equal(calls[0].params.content.request.requireVerifiedEmail, true);
+    });
+
+    it('[CFS64] omits requireVerifiedEmail from the request when not given or false', async () => {
+      for (const extra of [{}, { requireVerifiedEmail: false }]) {
+        const calls = [];
+        await cmcFormSpec.createInviteWithFormSpec(captureConn(calls), inviteParams(extra));
+        assert.ok(!('requireVerifiedEmail' in calls[0].params.content.request));
+      }
+    });
+
     it('[CFS62] the snapshot sent to the patient carries no openLink (its capability URL)', async () => {
       const calls = [];
       const openLink = { inviteEventId: 'inv', capabilityUrl: 'https://cap@x/', createdAt: 1, expiresAt: null };
