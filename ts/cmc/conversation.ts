@@ -66,7 +66,9 @@ export const QUESTION_CODES = {
   /** 4.26.0: the date of a document waiting for it, about a `proposed-document`. */
   WHICH_DOCUMENT_DATE: 'which-document-date',
   /** 4.36.0: the day of one box of a row of a dated grid (`context.grid`, `context.anchor`). */
-  WHICH_ROW_DATE: 'which-row-date'
+  WHICH_ROW_DATE: 'which-row-date',
+  /** 4.39.0: the day of one result column of a table read per column on a picture (`context.column`, `context.anchor`). */
+  WHICH_COLUMN_DATE: 'which-column-date'
 } as const;
 
 /** `proposed-value.reason` (4.36.0): the contact sees writing in this box of a dated grid and proposes nothing from it. */
@@ -582,7 +584,7 @@ const KNOWN_CODES = new Set<string>(Object.values(QUESTION_CODES));
 /** The actions an answer to a question with `code` may carry (§ Answers, by what they answer). */
 function questionActions (code: string): Set<string> {
   if (CHOOSE_CODES.has(code) || code === QUESTION_CODES.WHICH_DOCUMENT_KIND) return new Set(['choose', 'skip']);
-  if (code === QUESTION_CODES.WHICH_DATE || code === QUESTION_CODES.WHICH_DOCUMENT_DATE || code === QUESTION_CODES.WHICH_ROW_DATE) return new Set(['confirm', 'skip']);
+  if (code === QUESTION_CODES.WHICH_DATE || code === QUESTION_CODES.WHICH_DOCUMENT_DATE || code === QUESTION_CODES.WHICH_ROW_DATE || code === QUESTION_CODES.WHICH_COLUMN_DATE) return new Set(['confirm', 'skip']);
   if (code === QUESTION_CODES.IS_THIS_YOURS) return new Set(['confirm', 'not-mine', 'skip']);
   return new Set(['skip']);
 }
@@ -814,7 +816,7 @@ export function checkConversationItem (content: Record<string, any>): string[] {
       if (c.context != null && Object.keys(c.context).some(k => k !== 'dates')) issues.push('question which-date: context holds dates only');
     } else if (code === QUESTION_CODES.IS_THIS_YOURS) {
       if (has('candidateId') || has('options')) issues.push('question is-this-yours: no candidateId, no options');
-      if (c.context?.dates != null || c.context?.grid != null) issues.push('question is-this-yours: context holds identity and anchor only');
+      if (c.context?.dates != null || c.context?.grid != null || c.context?.column != null) issues.push('question is-this-yours: context holds identity and anchor only');
     } else if (code === QUESTION_CODES.WHICH_DOCUMENT_KIND) {
       if (!has('candidateId')) issues.push('question which-document-kind: candidateId (a proposed-document) is required');
       if (!has('options') || c.options.length < 2 || c.options.length > 8) issues.push('question which-document-kind: 2 to 8 options');
@@ -828,6 +830,10 @@ export function checkConversationItem (content: Record<string, any>): string[] {
       if (has('candidateId') || has('options')) issues.push('question which-row-date: no candidateId, no options');
       if (c.context?.grid == null || c.context?.anchor?.bbox == null) issues.push('question which-row-date: context.grid and context.anchor with its bbox are required');
       if (c.context != null && Object.keys(c.context).some(k => k !== 'grid' && k !== 'anchor')) issues.push('question which-row-date: context holds grid and anchor only');
+    } else if (code === QUESTION_CODES.WHICH_COLUMN_DATE) {
+      if (has('candidateId') || has('options')) issues.push('question which-column-date: no candidateId, no options');
+      if (c.context?.column == null || c.context?.anchor?.bbox == null) issues.push('question which-column-date: context.column and context.anchor with the heading\'s bbox are required');
+      if (c.context != null && Object.keys(c.context).some(k => k !== 'column' && k !== 'anchor')) issues.push('question which-column-date: context holds column and anchor only (no date a model read)');
     } else if (typeof code === 'string' && code.startsWith('x-')) {
       if (has('context')) issues.push(`question ${code}: context is for is-this-yours and the date questions only`);
     } else {
@@ -894,8 +900,8 @@ export function checkAnswerFor (content: Record<string, any>, target: Conversati
       if (c.timePrecision == null) issues.push(`answer ${code}: timePrecision is required`);
       else if (c.timePrecision !== 'unknown' && c.time == null) issues.push(`answer ${code}: time is required`);
     }
-    if (code === QUESTION_CODES.WHICH_ROW_DATE && c.action === 'confirm' && (c.timePrecision !== 'day' || typeof c.time !== 'number' || ((c.time % DAY) + DAY) % DAY !== 12 * HOUR)) {
-      issues.push('answer which-row-date: a day at 12:00 UTC, with timePrecision day');
+    if ((code === QUESTION_CODES.WHICH_ROW_DATE || code === QUESTION_CODES.WHICH_COLUMN_DATE) && c.action === 'confirm' && (c.timePrecision !== 'day' || typeof c.time !== 'number' || ((c.time % DAY) + DAY) % DAY !== 12 * HOUR)) {
+      issues.push(`answer ${code}: a day at 12:00 UTC, with timePrecision day`);
     }
     if (c.applied != null) issues.push('answer to a question: no applied');
     if (c.basis != null && (c.basis !== BASES.PROFILE_MATCH || code !== QUESTION_CODES.IS_THIS_YOURS)) issues.push('answer: on a question, basis is profile-match on is-this-yours only');
@@ -1274,9 +1280,17 @@ export function isDatedGrid (conv: DocumentConversation): boolean {
   return conv.questions.some(q => q.code === QUESTION_CODES.WHICH_ROW_DATE) || conv.proposedValues.some(p => p.item.content.grid != null);
 }
 
-/** The `which-date` answer that dates a proposed value without `proposal.time`; never one on a dated grid. */
+/**
+ * Whether the document is a table read per column on a picture (4.39.0): a `which-column-date` was asked, or a value names its
+ * column, so a value's day is its `proposal.time` only.
+ */
+export function isTableByColumn (conv: DocumentConversation): boolean {
+  return conv.questions.some(q => q.code === QUESTION_CODES.WHICH_COLUMN_DATE) || conv.proposedValues.some(p => p.item.content.column != null);
+}
+
+/** The `which-date` answer that dates a proposed value without `proposal.time`; never one on a dated grid or a table read per column. */
 export function answeredDateOf (conv: DocumentConversation, candidateId: string): AnsweredDate | null {
-  if (isDatedGrid(conv)) return null;
+  if (isDatedGrid(conv) || isTableByColumn(conv)) return null;
   return conv.candidateDates[candidateId] ?? conv.documentDate;
 }
 
@@ -2104,6 +2118,12 @@ export async function writeQuestion (personConnection: pryv.Connection, streams:
     if (conversationOf(items, content.about).identity === 'not-mine') notMine('writeQuestion');
     const conv = conversationOf(items, content.about);
     if (content.code === QUESTION_CODES.WHICH_DATE && isDatedGrid(conv)) issues.push('question which-date: never on a dated grid');
+    if (content.code === QUESTION_CODES.WHICH_DATE && isTableByColumn(conv)) issues.push('question which-date: never on a table read per column');
+    if (content.code === QUESTION_CODES.WHICH_COLUMN_DATE) {
+      if (conv.questions.some(q => q.code === QUESTION_CODES.WHICH_DATE)) issues.push('question which-column-date: the document has a which-date');
+      const columnOf = (c: any): string => [c.context?.anchor?.attachmentId, c.context?.anchor?.page, c.context?.column?.index].join('|');
+      if (conv.questions.some(q => q.code === QUESTION_CODES.WHICH_COLUMN_DATE && columnOf(q.item.content) === columnOf(content))) issues.push('question which-column-date: the column was asked');
+    }
     if (content.code === QUESTION_CODES.WHICH_ROW_DATE) {
       if (conv.questions.some(q => q.code === QUESTION_CODES.WHICH_DATE)) issues.push('question which-row-date: the document has a which-date');
       const rowOf = (c: any): string => [c.context?.anchor?.attachmentId, c.context?.anchor?.page, c.context?.grid?.row].join('|');
@@ -2163,6 +2183,12 @@ export async function writeProposedValues (personConnection: pryv.Connection, st
       const p = c.proposal;
       if (c.grid == null) own.push('grid is required on a dated grid');
       if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day')) own.push('a value of a dated grid has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
+    }
+    if (own.length === 0 && (c.column != null || isTableByColumn(conv))) {
+      const p = c.proposal;
+      if (c.column == null) own.push('column is required on a table read per column');
+      if (c.grid != null) own.push('a value has a column or a box, never both');
+      if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day')) own.push('a value of a table read per column has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
     }
     issues.push(...own.map(i => `${c?.candidateId ?? '?'}: ${i}`));
   }
