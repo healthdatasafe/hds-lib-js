@@ -37,6 +37,17 @@ describe('[MODX] Model', () => {
     }
   });
 
+  it('[MODR] a second load answers from the new pack, not the parts read from the first', async () => {
+    const pack = await (await fetch(modelURL)).json();
+    const modelLoad = new HDSModel(modelURL);
+    modelLoad.loadFromObject(structuredClone(pack));
+    assert.ok(modelLoad.itemsDefs.forKey('body-weight'));
+    const smaller = structuredClone(pack);
+    delete smaller.items['body-weight'];
+    modelLoad.loadFromObject(smaller);
+    assert.equal(modelLoad.itemsDefs.forKey('body-weight', false), null);
+  });
+
   // ---------- deprecated --------- //
   describe('[MDPX] deprecated items', function () {
     it('[MDPA] isDeprecated getter returns true for items flagged in pack.json', () => {
