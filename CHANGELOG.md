@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.73.1] - 2026-11-26
+
+### Fixed
+
+- **`HDSModel.loadFromObject` (and so `load`) drops the parts read on demand from the previous pack**: after a second
+  load, `itemsDefs`, `streams`, `documentKinds` and the others answered from the first one. Test `[MODR]`.
+
+### Tests
+
+- A GET of the tests to `*.datasafe.dev` (the model site, the demo service) is retried twice on a network failure or a
+  5xx (`tests/test-utils/fetchRetry.js`, loaded by `.mocharc.json`), so a short outage of either no longer turns CI
+  red. The library's own fetches are unchanged.
+
 ## [2.73.0] - 2026-11-26
 
 ### Added

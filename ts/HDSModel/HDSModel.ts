@@ -128,6 +128,8 @@ export class HDSModel {
       applyOverload(data, overload);
     }
     this.#modelData = data;
+    // the parts read on demand were built from the previous pack
+    this.laziliyLoadedMap = {};
     // add key to items before freezing;
     for (const [key, item] of Object.entries(this.#modelData.items)) {
       (item as any).key = key;
