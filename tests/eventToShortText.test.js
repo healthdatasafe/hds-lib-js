@@ -747,6 +747,17 @@ describe('[ESTX] eventToShortText', () => {
       event.content.source.sourceData = { mucus: '10kl' };
       assert.equal(eventToShortText(event), expected);
     });
+
+    it('[EST21f] the Creighton frequency recorded with the code is shown after it (B-2026-11-21-3)', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'creighton', '6C');
+      event.time = Date.now() / 1000;
+      const bare = eventToShortText(event);
+      event.content.source.annotations = { frequency: 'X2' };
+      const result = eventToShortText(event);
+      assert.equal(result, bare.replace(' (Creighton)', ' · X2 (Creighton)'));
+      event.content.source.annotations = {};
+      assert.equal(eventToShortText(event), bare);
+    });
   });
 
   // ─── Convertible: autoConvert via eventToShortText ──
