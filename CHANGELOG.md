@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.72.0] - 2026-11-26
 
 ### Added
 
@@ -12,6 +12,24 @@
   written so it never reads as "none chosen"); `deleteEligibilityBands` (expired requests, or all on
   opt-out); the two alert kinds (`RESEARCH_ALERT_HDS_SCHEMA` mirroring `hds-research-alert.json`,
   `buildResearchAlertContent`, `readResearchAlert`, `researchAlertKey`). Tests `[RESR-*]`.
+
+### Changed
+
+- **pryv 3.20.0** (with `@pryv/delegation`, `@pryv/encryption`, `@pryv/monitor` and `@pryv/socket.io` 3.20.0) and
+  **`@pryv/cmc` 3.24.0**. Seen through the `pryv` this library re-exports: the sign-in button's custom HTML is filtered,
+  `Browser.serviceInfoFromUrl()` returns `undefined` for a value that is not an absolute http(s) URL (new option
+  `allowedServiceInfoUrls`), and a sign-in is stored per platform, so a sign-in stored by an earlier version is asked once more
+  on a page whose address names a platform. `@pryv/cmc` refuses an `authUrl` that is not http(s), and adds
+  `createInvite({ requireVerifiedEmail })`, `readOffer().requireVerifiedEmail` and `errorIds.VERIFIED_EMAIL_REQUIRED`
+  (enforced only by a core at 2.0.0-rc.88 or later). No API change in this library for these bumps.
+
+## [2.71.0] - 2026-11-25
+
+### Added
+
+- **Spanish, Italian and Brazilian Portuguese** (plan 138, machine drafts, native review to follow): the texts of
+  encounters, medications, event short texts, permission labels, conversation alerts, chart stamps and the converter engine.
+  Alerts travel through `cmcText`, so `pt-BR` reaches the core as `pt`.
 
 ## [2.70.0] - 2026-11-25
 
@@ -1937,16 +1955,6 @@ not a mechanical fix.
   localized option labels ("White, Hispanic or Latino") instead of falling through to a generic
   formatter. Tolerates a scalar as well, so an event written before the item became multi-valued still
   renders its label rather than raw content.
-
-## [Unreleased]
-
-## [2.71.0] - 2026-11-25
-
-### Added
-
-- **Spanish, Italian and Brazilian Portuguese** (plan 138, machine drafts, native review to follow): the texts of
-  encounters, medications, event short texts, permission labels, conversation alerts, chart stamps and the converter engine.
-  Alerts travel through `cmcText`, so `pt-BR` reaches the core as `pt`.
 
 ## [1.3.6] - 2026-07-30
 
