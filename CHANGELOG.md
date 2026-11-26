@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.74.0] - 2026-11-26
+
+### Added
+
+- data-model 4.39.0 (R8, plan 128 PER-COLUMN-READING.md § 9): `QUESTION_CODES.WHICH_COLUMN_DATE` (`which-column-date`), answered
+  `confirm` (a day at 12:00 UTC, `timePrecision: day`) or `skip`; `checkConversationItem` requires `context.column` and the
+  heading's `context.anchor.bbox`, no date and no candidate; `writeQuestion` refuses a column asked twice and a `which-date` beside
+  it; `writeProposedValues` requires `column` and the value's day on such a table; `isTableByColumn`, and `answeredDateOf` never
+  dates a value of such a table from a `which-date`.
+
 ## [2.73.2] - 2026-11-26
 
 ### Fixed

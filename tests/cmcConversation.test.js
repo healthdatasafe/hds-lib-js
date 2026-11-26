@@ -750,6 +750,42 @@ describe('[CNV] cmcConversation', function () {
     });
   });
 
+  describe('[CNV-T] a table read per column on a picture (4.39.0)', () => {
+    const X = { engine: 'hds-reader', engineVersion: '0.11.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
+    const DAY1 = Date.parse('2026-03-12T12:00:00Z') / 1000;
+    const heading = (index) => ({ column: { index }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [30 + index * 10, 18.3, 9, 4.2] } });
+    const columnDate = (index = 2) => ({ kind: 'question', about: DOC, code: 'which-column-date', context: heading(index) });
+    const value = (index, over = {}) => ({ kind: 'proposed-value', about: DOC, candidateId: 'c-t' + index, printed: { label: 'Ferritine', value: '48', unit: 'ng/mL' }, column: { index }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1 }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48, time: DAY1, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction: X, ...over });
+    const item = (id, kind, content, created = 10) => ({ id, kind, about: DOC, direction: kind === 'answer' ? 'sent' : 'received', content, created, modified: created, time: created });
+
+    it('[CNVT1] a column question: its column and heading box, no candidate, no date; answered with a day at 12:00 UTC', () => {
+      assert.deepStrictEqual(cv.checkConversationItem(columnDate()), []);
+      for (const b of [{ ...columnDate(), candidateId: 'c-1' }, { ...columnDate(), context: { column: { index: 2 } } }, { ...columnDate(), context: { anchor: heading(2).anchor } },
+        { ...columnDate(), context: { ...heading(2), anchor: { attachmentId: 'att1', page: 1 } } }, { ...columnDate(), context: { ...heading(2), dates: [{ day: '2026-03-12', text: '12.03.26' }] } }]) {
+        assert.notDeepEqual(cv.checkConversationItem(JSON.parse(JSON.stringify(b))), [], JSON.stringify(b));
+      }
+      const q = item('q1', 'question', columnDate());
+      const conv = cv.conversationOf([q], DOC);
+      assert.strictEqual(conv.questions[0].answerable, true);
+      const answer = (over) => ({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day', ...over });
+      assert.deepStrictEqual(cv.checkAnswerFor(answer({}), q, conv), []);
+      assert.deepStrictEqual(cv.checkAnswerFor({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'skip' }, q, conv), []);
+      for (const over of [{ time: DAY1 + 3600 }, { timePrecision: 'month' }, { time: undefined, timePrecision: undefined }]) {
+        assert.notDeepEqual(cv.checkAnswerFor(JSON.parse(JSON.stringify(answer(over))), q, conv), [], JSON.stringify(over));
+      }
+    });
+
+    it('[CNVT2] a value names its column; a which-date answer never dates a value of such a table', () => {
+      assert.deepStrictEqual(cv.checkConversationItem(value(2)), []);
+      const undated = { ...value(2), proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48 } };
+      const whole = [item('q0', 'question', { kind: 'question', about: DOC, code: 'which-date' }), item('a0', 'answer', { kind: 'answer', inReplyTo: 'q0', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day' }, 20)];
+      assert.strictEqual(cv.answeredDateOf(cv.conversationOf([...whole, item('v1', 'proposed-value', undated)], DOC), 'c-t2'), null);
+      const { column: _c, ...plain } = undated;
+      assert.strictEqual(cv.answeredDateOf(cv.conversationOf([...whole, item('q1', 'question', columnDate()), item('v1', 'proposed-value', plain)], DOC), 'c-t2'), null);
+      assert.deepStrictEqual(cv.answeredDateOf(cv.conversationOf([...whole, item('v1', 'proposed-value', plain)], DOC), 'c-t2'), { time: DAY1, timePrecision: 'day' });
+    });
+  });
+
   describe('[CNV-G] a dated grid (4.36.0)', () => {
     const X = { engine: 'hds-reader', engineVersion: '0.9.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
     const box = (column, row = 2) => ({ grid: { row, column }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [column * 2.5, 22.4, 2.5, 12.9] } });
