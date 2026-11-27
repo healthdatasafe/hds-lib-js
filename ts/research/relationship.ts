@@ -1,7 +1,8 @@
 /**
  * The HDS research relationship (data-model documentation/RESEARCH.md).
  *
- * A person who says yes to the research opt-in accepts the `hds-research` CMC invite. Its one permission is `read` on
+ * A person who says yes to the research opt-in accepts the `hds-research` CMC invite, which needs a verified email.
+ * It asks `read` on the person's email and `read` on
  * the `explicitGrantOnly` root `hds-research`, whose two children hold what HDS may read: the score ranges the person
  * chose to send (`hds-research-eligibility`, band events of `./eligibility.ts`) and the topics they chose
  * (`hds-research-topics`, one `research/topics-v1` event). HDS sends two `notification/alert-cmc` kinds, ids only.
@@ -34,9 +35,15 @@ const PAGE = 200;
 
 // ---------------------------------------------------------------- the invite and the streams
 
-/** The one permission the research invite requests: `read` on the root, which reaches its two children only. */
+/** The account email stream the research invite also reads (the invite requires it verified at accept). */
+export const RESEARCH_EMAIL_STREAM_ID = ':system:email';
+
+/**
+ * The permissions the research invite requests: `read` on the root, which reaches its two children only, and `read`
+ * on the person's email (`:system:email`), which the invite requires verified (`requireVerifiedEmail`).
+ */
 export function researchInvitePermissions (): Array<{ streamId: string; level: 'read' }> {
-  return [{ streamId: RESEARCH_ROOT_STREAM_ID, level: 'read' }];
+  return [{ streamId: RESEARCH_ROOT_STREAM_ID, level: 'read' }, { streamId: RESEARCH_EMAIL_STREAM_ID, level: 'read' }];
 }
 
 function modelStreamName (id: string, model: HDSModel | null): string {

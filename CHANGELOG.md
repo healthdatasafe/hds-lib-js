@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.79.0] - 2026-11-27
+
+### Changed
+
+- `researchRelationship.researchInvitePermissions()` also asks `read` on the person's email (`:system:email`, exported
+  as `RESEARCH_EMAIL_STREAM_ID`), next to `read` on `hds-research`: the research invite is created with
+  `requireVerifiedEmail`, which needs that permission. A grant checked for the research root (`some(streamId ===
+  'hds-research')`) is unaffected; a comparison with the whole list is not.
+
 ## [2.78.0] - 2026-11-27
 
 ### Added
