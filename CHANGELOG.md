@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.83.0] - 2026-11-27
+
+data-model 4.47.0 (plan 128 SUB-F, L6): her other names in the profile match, a date's anchor, `pages-not-read`.
+
+### Added
+
+- `cmcConversation.profileMatch` / `autoConfirmIdentity`: `ProfileForMatch.otherNames?: OtherNameForMatch[]`
+  (`{ given?, family?, use? }`, CONVERSATION.md R3, PROFILE.md § Other names). The printed name also matches an other
+  name: its `given` else her profile's, with its `family` else her profile's, normalised as before (whole token-set
+  equality). `use` `nickname` or a value not in `OTHER_NAME_USES_MATCHED` never matches; an absent `use` does. A pair
+  with a part empty after normalisation never matches (no fallback to the profile's). The birth date condition is
+  unchanged. The answer is the same `confirm` with `basis: profile-match`, whichever name matched.
+- `cmcConversation.otherNamesOf(connection)`: her non-trashed `contact/other-name-v1` events on the `other-names` root,
+  for the app to pass as `otherNames`; `[]` when the root does not exist or is not granted (`unknown-referenced-resource`,
+  `unknown-resource`, `forbidden`). Constants `OTHER_NAMES_STREAM_ID`, `OTHER_NAME_ITEM_KEY`, `ET_OTHER_NAME`,
+  `OTHER_NAME_USES_MATCHED`; type `OtherNameForMatch`.
+- `NOTICE_CODES.PAGES_NOT_READ` (`pages-not-read`): a document read page by page has a page not read; the work goes on.
+
+### Changed
+
+- `cmcConversation.checkConversationItem`, the anchor rows of § What a writer MUST include: a `context.dates[]` entry
+  with `anchor` (4.47.0) needs its `bbox`, `anchor.eventId` = `about`, and no `label`; a question's `context.anchor` and
+  a proposed value's `anchor`, when they carry `eventId`, carry `about` (as a proposed document's already did).
+- The CMC `*` expansion masks `other-names` with a pack ≥ 4.47.0: it reads the marked roots from the pack, no change.
+
 ## [2.82.0] - 2026-11-27
 
 ### Changed

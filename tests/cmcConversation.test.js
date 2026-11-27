@@ -244,6 +244,12 @@ describe('[CNV] cmcConversation', function () {
       assert.deepStrictEqual(sent.map(p => p.alertEventId), ['s1', 'r3']);
       assert.deepStrictEqual(Object.values(N).filter(c => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(c)), []);
     });
+
+    it('[CNV13b] pages-not-read (4.47.0): a notice a contact may post about a document', () => {
+      assert.strictEqual(cv.NOTICE_CODES.PAGES_NOT_READ, 'pages-not-read');
+      const hds = { kind: 'notice', code: cv.NOTICE_CODES.PAGES_NOT_READ, about: DOC };
+      assert.deepStrictEqual(cv.buildConversationAlertContent(hds).hds, hds);
+    });
   });
 
   describe('[CNV-R] writer rules', () => {
@@ -266,6 +272,30 @@ describe('[CNV] cmcConversation', function () {
       assert.match(cv.checkConversationItem({ kind: 'answer', inReplyTo: 'q', about: DOC, action: 'choose' }).join(), /option is required/);
     });
 
+    it('[CNV20b] a date\'s anchor (4.47.0): with its bbox and eventId = about, and no label; the other anchors name their document', () => {
+      const anchor = { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [60.2, 9.1, 18.5, 2.4] };
+      const whichDate = (date, code = 'which-date', extra = {}) => ({ kind: 'question', about: DOC, code, context: { dates: [date] }, ...extra });
+      const read = { day: '2026-03-12', text: '12.03.2026', role: 'sampling', anchor };
+      assert.deepStrictEqual(cv.checkConversationItem(whichDate(read)), []);
+      assert.deepStrictEqual(cv.checkConversationItem(whichDate(read, 'which-document-date', { candidateId: 'd1' })), []);
+      // a date copied from a text layer: a label, and an anchor or none
+      assert.deepStrictEqual(cv.checkConversationItem(whichDate({ day: '2026-03-12', text: '12.03.2026', label: 'Prélevé le', role: 'sampling' })), []);
+      const { bbox: _b, ...noBox } = anchor;
+      assert.match(cv.checkConversationItem(whichDate({ ...read, anchor: noBox })).join(), /dates\[0\]\.anchor needs its bbox/);
+      assert.match(cv.checkConversationItem(whichDate({ ...read, anchor: { ...anchor, eventId: 'other' } })).join(), /dates\[0\]\.anchor\.eventId must be about/);
+      const { eventId: _e, ...noEventId } = anchor;
+      assert.match(cv.checkConversationItem(whichDate({ ...read, anchor: noEventId })).join(), /dates\[0\]\.anchor\.eventId must be about/);
+      assert.match(cv.checkConversationItem(whichDate({ ...read, label: 'Prélevé le' })).join(), /carries no label/);
+      assert.match(cv.checkConversationItem(whichDate({ ...read, anchor: { ...anchor, text: '12.03.2026' } })).join(), /not allowed/, 'the anchor shape is closed');
+      // the second date of two is checked too
+      assert.match(cv.checkConversationItem({ ...whichDate(read), context: { dates: [read, { ...read, day: '2026-03-13', anchor: noBox }] } }).join(), /dates\[1\]/);
+      // is-this-yours on a picture: the identity block's box, no identity; its anchor names its document
+      assert.deepStrictEqual(cv.checkConversationItem({ kind: 'question', about: DOC, code: 'is-this-yours', context: { anchor } }), []);
+      assert.match(cv.checkConversationItem({ kind: 'question', about: DOC, code: 'is-this-yours', context: { anchor: { ...anchor, eventId: 'other' } } }).join(), /context\.anchor\.eventId must be about/);
+      assert.match(cv.checkConversationItem(pv('c1', { anchor: { ...anchor, eventId: 'other' } })).join(), /anchor\.eventId must be about/);
+      assert.deepStrictEqual(cv.checkConversationItem(pv('c1', { anchor })), []);
+    });
+
     it('[CNV21] R9: the value alone', () => {
       assert.strictEqual(cv.checkValueProposal({ itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48 }), null);
       assert.strictEqual(cv.checkValueProposal({ itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: '48' }), 'invalid-content');
@@ -286,6 +316,59 @@ describe('[CNV] cmcConversation', function () {
       assert.strictEqual(cv.profileMatch({ name: 'DUPONT Marie-Claire' }, PROFILE), false);
       assert.strictEqual(cv.profileMatch(id, { ...PROFILE, dateOfBirth: null }), false);
       assert.strictEqual(cv.profileMatch(id, { ...PROFILE, dateOfBirth: '1985-03-15' }), false);
+    });
+
+    it('[CNV22b] profile match with her other names (4.47.0): a missing part is her profile\'s; nickname, an unknown use or a blank part never matches', () => {
+      const born = '1985-03-14';
+      const maiden = { name: 'MARTIN Marie-Claire', birthDay: born };
+      const match = (identity, otherNames, profile = PROFILE) => cv.profileMatch(identity, { ...profile, otherNames });
+      // family only: her profile's given name with it; absent use matches
+      assert.strictEqual(match(maiden, [{ family: 'Martin', use: 'maiden' }]), true);
+      assert.strictEqual(match(maiden, [{ family: 'Martin' }]), true, 'absent use matches');
+      assert.strictEqual(match(maiden, [{ family: 'Martin', use: null }]), true, 'null use is absent');
+      assert.strictEqual(match(maiden, []), false);
+      assert.strictEqual(match(maiden, null), false);
+      // given only: with her profile's family name
+      assert.strictEqual(match({ name: 'DUPONT Claire', birthDay: born }, [{ given: 'Claire', use: 'usual' }]), true);
+      // both parts, the profile's names not needed
+      assert.strictEqual(match({ name: 'Martin, Anne', birthDay: born }, [{ given: 'Anne', family: 'MARTIN', use: 'old' }], { dateOfBirth: born }), true);
+      assert.strictEqual(match({ name: 'Martin, Anne', birthDay: born }, [{ given: 'Anne', use: 'old' }], { dateOfBirth: born }), false, 'a part missing on both sides never matches');
+      // nickname, an unknown use
+      assert.strictEqual(match(maiden, [{ family: 'Martin', use: 'nickname' }]), false);
+      assert.strictEqual(match(maiden, [{ family: 'Martin', use: 'anonymous' }]), false);
+      // a blank part after normalisation never matches, nor falls back to the profile's
+      assert.strictEqual(match({ name: 'MARTIN', birthDay: born }, [{ given: ' - ', family: 'Martin', use: 'official' }]), false);
+      assert.strictEqual(match({ name: 'Marie Claire', birthDay: born }, [{ family: '', given: 'Marie Claire' }]), false);
+      assert.strictEqual(match({ name: 'Marie Claire', birthDay: born }, [{ family: ' ', given: 'Marie Claire' }]), false);
+      // whole token-set equality, as for the profile: an initial, a missing or an extra token never matches
+      assert.strictEqual(match({ name: 'MARTIN M.', birthDay: born }, [{ family: 'Martin' }]), false);
+      assert.strictEqual(match({ name: 'MARTIN Marie-Claire Anne', birthDay: born }, [{ family: 'Martin' }]), false);
+      assert.strictEqual(match({ name: 'Märtin marie claire', birthDay: born }, [{ family: 'MARTIN' }]), true);
+      // the birth date condition is unchanged; the profile's own names still match beside other names
+      assert.strictEqual(match({ ...maiden, birthDay: '1985-03-15' }, [{ family: 'Martin' }]), false);
+      assert.strictEqual(match(maiden, [{ family: 'Martin' }], { ...PROFILE, dateOfBirth: null }), false);
+      assert.strictEqual(match({ name: 'DUPONT Marie-Claire', birthDay: born }, [{ family: 'Martin', use: 'nickname' }]), true);
+      assert.strictEqual(match(maiden, [{ family: 'Durand' }, { family: 'Martin', use: 'nickname' }, { family: 'Martin', use: 'maiden' }]), true, 'any one of them');
+    });
+
+    it('[CNV22c] otherNamesOf: her non-trashed other names; none when the root is absent or not granted', async () => {
+      const person = account({
+        streams: [{ id: 'other-names', name: 'Other names', parentId: null }],
+        events: [
+          { id: 'o1', streamIds: ['other-names'], type: 'contact/other-name-v1', time: 1, content: { family: 'Martin', use: 'maiden' } },
+          { id: 'o2', streamIds: ['other-names'], type: 'contact/other-name-v1', time: 2, content: { given: 'Claire' } },
+          { id: 'o3', streamIds: ['other-names'], type: 'contact/other-name-v1', time: 3, content: { family: 'Durand' }, trashed: true },
+          { id: 'o4', streamIds: ['other-names'], type: 'note/txt', time: 4, content: 'Martin' }
+        ]
+      });
+      assert.deepStrictEqual(await cv.otherNamesOf(person), [{ family: 'Martin', use: 'maiden' }, { given: 'Claire' }]);
+      const call = person.calls.find(c => c.method === 'events.get');
+      assert.deepStrictEqual([call.params.streams, call.params.types], [['other-names'], ['contact/other-name-v1']]);
+      assert.deepStrictEqual(await cv.otherNamesOf(account()), []);
+      for (const id of ['unknown-referenced-resource', 'forbidden', 'unknown-resource']) {
+        assert.deepStrictEqual(await cv.otherNamesOf({ apiOne: async () => { throw apiError(id); } }), [], id);
+      }
+      await assert.rejects(cv.otherNamesOf({ apiOne: async () => { throw apiError('invalid-access-token'); } }));
     });
 
     it('[CNV23] labels from direction and viewer, never the name; ids conv- and 12 base36', () => {
@@ -436,6 +519,19 @@ describe('[CNV] cmcConversation', function () {
       assert.deepStrictEqual(again.skipped, [{ candidateId: 'c1', reason: 'written' }]);
       const twice = await cv.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
       assert.deepStrictEqual(twice.refused, [{ candidateId: 'c1', reason: 'answered' }]);
+    });
+
+    it('[CNV40b] autoConfirmIdentity on her other name (4.47.0): the same profile-match confirm; never on a nickname', async () => {
+      const { person, rel: r, streams } = await setup();
+      const maidenQuestion = { ...identityQuestion, context: { identity: { ...identityQuestion.context.identity, name: 'MARTIN Marie-Claire' } } };
+      const qId = await cv.writeQuestion(person, streams, maidenQuestion);
+      assert.strictEqual(await cv.autoConfirmIdentity(person, r, { about: DOC, profile: PROFILE }), null);
+      assert.strictEqual(await cv.autoConfirmIdentity(person, r, { about: DOC, profile: { ...PROFILE, otherNames: [{ family: 'Martin', use: 'nickname' }] } }), null);
+      const auto = await cv.autoConfirmIdentity(person, r, { about: DOC, profile: { ...PROFILE, otherNames: [{ family: 'Martin', use: 'maiden' }] } });
+      assert.ok(auto?.answerEventId);
+      const answer = person.events.get(auto.answerEventId).content;
+      assert.deepStrictEqual([answer.inReplyTo, answer.action, answer.basis], [qId, 'confirm', 'profile-match']);
+      assert.ok(!JSON.stringify(answer).includes('aiden') && !JSON.stringify(alertsOf(person)).toLowerCase().includes('martin'), 'nothing of her other names reaches the contact');
     });
 
     it('[CNV41] a write that failed half-way is retried without writing a value twice (sourceKey)', async () => {
