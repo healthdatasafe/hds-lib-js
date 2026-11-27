@@ -185,6 +185,7 @@ an export to `ts/index.ts`, add a row here.**
 - Bump `version` in `package.json` for **every** change that consumers can observe.
 - Add a `## [x.y.z] - YYYY-MM-DD` block in [CHANGELOG.md](CHANGELOG.md). Group changes under `Added` / `Changed` / `Removed`. Keep the wording concrete (one bullet = one observable change).
 - Consumers pin to git URLs, not npm versions, but the version + changelog is still how humans read the diff.
+- **Once the release is merged, publish it: `npm run deploy` from an up-to-date `main`** (needs `npm run setup` once). Nothing else publishes GitHub Pages, CI included. That deploy is what updates the documentation site, the rolling browser bundle (`/hds-lib.js`), the pinned `/v<version>/` copy and the published JSON Schema (`/schemas/appTemplate.json`); external pages load them. Skipping it once left the site on 2.71.0 while `main` reached 2.85.1.
 
 ### Gotchas
 

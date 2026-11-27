@@ -95,9 +95,10 @@ processes it as a single flat site.
 The `dist/` directory is a separate git checkout on the `gh-pages` branch.
 Docs are copied flat into `dist/` by the webpack build alongside JS bundles.
 
-**Deploy workflow:**
-1. `npm run build` — compiles TS, bundles JS, copies docs to `dist/`
-2. `npm run deploy` — commits and pushes `dist/` to gh-pages
+**Deploy workflow:** `npm run deploy`, from an up-to-date `main`, after every release
+(and after a docs-only merge you want live). It builds (compiles TS, bundles JS, copies
+docs to `dist/`), commits and pushes `dist/` to gh-pages, then waits until the site
+serves it. No CI job does this: an undeployed release leaves the site on the previous one.
 
 Jekyll processes the gh-pages branch root. Our custom `_layouts/default.html`
 provides the nav bar and mermaid rendering (no remote theme dependency).
