@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.82.0] - 2026-11-27
+
+### Changed
+
+- Reads cervical-fluid converter v3 (data-model 4.46.0, plan 136): `SUPPORTED_CONVERTER_VERSIONS['cervical-fluid']` is
+  `v3`, so `pack-v3.json` is fetched. Creighton model v3 changes which codes a conversion produces: never one of the 11
+  incomplete codes, and `6CL`, `8KL`, `8CKL`, `6PY` may now be produced (no conversion that was peak-type becomes
+  non-peak or dry). A conversion into Creighton may land on another code than with 2.81.0, so a reader on 2.81.0 and
+  one on 2.82.0 can show the same event differently: release the apps together. Stored events do not change.
+
 ## [2.81.0] - 2026-11-27
 
 ### Added
