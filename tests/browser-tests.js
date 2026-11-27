@@ -31,6 +31,7 @@ import './converterEngineFlags.test.js';
 import './converterPackVersion.test.js';
 import './converterTexts.test.js';
 import './corrections.test.js';
+import './correctionStreams.test.js';
 import './cyclePhase.test.js';
 import './datasetTemplate.test.js';
 import './delegation.test.js';
