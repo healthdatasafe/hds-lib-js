@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.85.2] - 2026-11-27
+
+### Changed
+
+- `.npmignore` (the `.gitignore` rules without `/js/`): a git install no longer warns `npm warn gitignore-fallback`.
+  The packed files are the same 385 as 2.85.1 (`npm pack --dry-run` lists compared), `js/` included.
+
 ## [2.85.1] - 2026-11-27
 
 ### Fixed
