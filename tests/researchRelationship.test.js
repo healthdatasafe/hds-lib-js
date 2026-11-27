@@ -72,9 +72,9 @@ const band = (id, requestId) => ({ id, streamIds: ['hds-research-eligibility'], 
 
 describe('[RESR] research relationship', function () {
   describe('[RESR-S] streams, invite, marker', function () {
-    it('[RESR-S1] the CMC app code and the invite: one read permission, on the root', () => {
+    it('[RESR-S1] the CMC app code and the invite: read on the root and on the person\'s email', () => {
       assert.strictEqual(cmcConstants.CMC_APP_CODES.RESEARCH, 'hds-research');
-      assert.deepStrictEqual(res.researchInvitePermissions(), [{ streamId: 'hds-research', level: 'read' }]);
+      assert.deepStrictEqual(res.researchInvitePermissions(), [{ streamId: 'hds-research', level: 'read' }, { streamId: ':system:email', level: 'read' }]);
     });
 
     it('[RESR-S2] the root and both children are explicit-grant-only: `*` never reaches them', () => {
