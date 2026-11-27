@@ -67367,7 +67367,7 @@ async function createUserPermissions (user, permissions, initialStreams = [], ap
     params: {
       type: 'app',
       name: appName,
-      permissions
+      permissions: await maskExplicitGrantOnly(permissions)
     }
   };
   const apiCalls = [...createStreams, accessRequest];
@@ -67382,6 +67382,23 @@ async function createUserPermissions (user, permissions, initialStreams = [], ap
   };
 
   return result;
+}
+
+/**
+ * A `*` grant gets a `{ <root>, none }` mask for every `explicitGrantOnly` root of the model it does not name
+ * (itself or through a child), as app-web-user-account does at consent: test accesses stay as narrow as real ones.
+ * A test that needs a marked root names it. No `defaultName`, so the core does not create the stream.
+ * @param {Array<Object>} permissions
+ * @returns {Promise<Array<Object>>}
+ */
+async function maskExplicitGrantOnly (permissions) {
+  if (!permissions.some(p => p.streamId === '*' && p.level !== 'none')) return permissions;
+  await init();
+  const model = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.initHDSModel();
+  const above = (id) => [id, ...(model.streams.getParentsIds(id, false) ?? [])];
+  const named = new Set(permissions.filter(p => p.streamId !== '*').flatMap(p => above(p.streamId)));
+  const masks = model.streams.explicitGrantOnlyRootIds().filter(id => !named.has(id)).map(streamId => ({ streamId, level: 'none' }));
+  return [...permissions, ...masks];
 }
 
 /**
@@ -67551,6 +67568,16 @@ describe('[TKSX] toolKit Stream Auto Create', function () {
     connection.api = (c) => { calls.push(...c.map((x) => x.method)); return api(c); };
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await streamsAutoCreate.ensureExistsForItems(['body-weight']), []);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(calls, [], 'the created streams are known: no API call');
+  });
+
+  it('[TKSM] a test `*` access carries the mask of every explicitGrantOnly root (B-2026-11-27-23)', async () => {
+    const user = await (0,_test_utils_pryvService_js__WEBPACK_IMPORTED_MODULE_2__.createUserAndPermissions)(null, [{ streamId: '*', level: 'manage' }], [], 'tk-test TKSM');
+    const info = await new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.pryv.Connection(user.appApiEndpoint).accessInfo();
+    const marked = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel().streams.explicitGrantOnlyRootIds();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(marked.length > 0);
+    for (const streamId of marked) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(info.permissions.some((p) => p.streamId === streamId && p.level === 'none'), streamId);
+    }
   });
 
   it('[TKSF] ensureExistsForItems with item-already-exists error continues normally', async () => {
