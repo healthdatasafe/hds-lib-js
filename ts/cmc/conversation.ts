@@ -120,7 +120,9 @@ export const NOTICE_CODES = {
   /** 4.45.0: a dated grid (or a document that may be one) whose grid is not located; nothing read, ends the work. */
   GRID_NOT_LOCATED: 'grid-not-located',
   /** 4.45.0: the contact does not read this kind of document; ends the work. */
-  KIND_NOT_READ: 'kind-not-read'
+  KIND_NOT_READ: 'kind-not-read',
+  /** 4.47.0: a document read page by page has at least one page not read; the other pages' values stand, the work goes on. */
+  PAGES_NOT_READ: 'pages-not-read'
 } as const;
 export const ERROR_CODES = { NO_ATTACHMENT: 'no-attachment', WRITE_FAILED: 'write-failed', READING_FAILED: 'reading-failed' } as const;
 
@@ -865,7 +867,18 @@ export function checkConversationItem (content: Record<string, any>): string[] {
     } else {
       issues.push(`question: unknown code "${code}" (bare codes are HDS's; a third party's start with x-<vendor>-)`);
     }
+    // 4.47.0: a date not copied from a text layer carries its anchor, with its bbox and eventId = about, and no label
+    // (that it was not copied from a text layer is the writer's to know: a date with an anchor is held to it)
+    const dates: any[] = Array.isArray(c.context?.dates) ? c.context.dates : [];
+    dates.forEach((d, i) => {
+      if (d?.anchor == null) return;
+      if (d.anchor.bbox == null) issues.push(`question ${code}: context.dates[${i}].anchor needs its bbox`);
+      if (d.anchor.eventId !== c.about) issues.push(`question ${code}: context.dates[${i}].anchor.eventId must be about`);
+      if (d.label != null) issues.push(`question ${code}: context.dates[${i}] with an anchor carries no label`);
+    });
+    if (c.context?.anchor?.eventId != null && c.context.anchor.eventId !== c.about) issues.push(`question ${code}: context.anchor.eventId must be about`);
   } else if (c.kind === 'proposed-value') {
+    if (c.anchor?.eventId != null && c.anchor.eventId !== c.about) issues.push('proposed-value: anchor.eventId must be about');
     if ((c.status === 'kept-aside' || c.status === 'unmapped') && c.reason == null) issues.push(`proposed-value ${c.status}: reason is required`);
     if (c.reason === REASON_NOT_READ) {
       if (c.status !== 'unmapped') issues.push('proposed-value not-read: status is unmapped');
@@ -1009,28 +1022,85 @@ export function proposalRefusal (pv: ProposedValueView, engines: readonly string
 
 // ---- R3: profile match ---- //
 
-/** The person's profile as the match reads it (`HDSProfile` values fit: `name` is the given name, `surname` the family one). */
-export interface ProfileForMatch { name?: string | null; surname?: string | null; dateOfBirth?: string | null }
+/**
+ * One of her other names (data-model 4.47.0, PROFILE.md § Other names): FHIR HumanName, `contact/other-name-v1`. A
+ * missing part is her profile's.
+ */
+export interface OtherNameForMatch { given?: string | null; family?: string | null; use?: string | null }
+
+/**
+ * The person's profile as the match reads it (`HDSProfile` values fit: `name` is the given name, `surname` the family
+ * one), with her other names (4.47.0, `otherNamesOf`).
+ */
+export interface ProfileForMatch { name?: string | null; surname?: string | null; dateOfBirth?: string | null; otherNames?: OtherNameForMatch[] | null }
+
+/** `contact/other-name-v1.use` values her app matches (4.47.0); `nickname`, or a value it does not know, never matches. */
+export const OTHER_NAME_USES_MATCHED: readonly string[] = ['official', 'usual', 'maiden', 'old'];
+/** 4.47.0: the `explicitGrantOnly` root holding her other names, its item and eventType (PROFILE.md § Other names). */
+export const OTHER_NAMES_STREAM_ID = 'other-names';
+export const OTHER_NAME_ITEM_KEY = 'other-name';
+export const ET_OTHER_NAME = 'contact/other-name-v1';
 
 function nameTokens (s: string): string[] {
   return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(/[\s,-]+/).filter(t => t.length > 0).sort();
 }
 
+/** The given and family pairs she may be printed as: her profile's, then each other name matched (R3, 4.47.0). */
+function namePairs (profile: ProfileForMatch): Array<[unknown, unknown]> {
+  const pairs: Array<[unknown, unknown]> = [[profile.name, profile.surname]];
+  for (const o of profile.otherNames ?? []) {
+    if (o == null || typeof o !== 'object') continue;
+    if (o.use != null && !OTHER_NAME_USES_MATCHED.includes(o.use)) continue;
+    pairs.push([o.given ?? profile.name, o.family ?? profile.surname]);
+  }
+  return pairs;
+}
+
 /**
  * R3, `basis: profile-match`: true only when the printed name holds exactly her full given and family names (case,
- * accents, hyphens, commas, spaces and order aside: "DUPONT, MARIE"; an initial never matches) and `birthDay` equals
- * her birth date. A profile
- * without a given name, a family name or a birth date never matches.
+ * accents, hyphens, commas, spaces and order aside: "DUPONT, MARIE"; an initial never matches), or those of one of her
+ * `otherNames` (4.47.0: its `given` else her profile's, with its `family` else her profile's; `nickname` or an unknown
+ * `use` never matches, an absent `use` does), and `birthDay` equals her birth date. A pair with a part empty after
+ * normalisation never matches; a profile without a birth date never matches.
  */
 export function profileMatch (identity: { name?: string; birthDay?: string } | null | undefined, profile: ProfileForMatch | null | undefined): boolean {
-  const given = profile?.name?.trim();
-  const family = profile?.surname?.trim();
   const born = profile?.dateOfBirth?.trim().slice(0, 10);
-  if (!given || !family || !born || !identity?.name || !identity.birthDay) return false;
+  if (profile == null || !born || !identity?.name || !identity.birthDay) return false;
   if (identity.birthDay !== born) return false;
   const printed = nameTokens(identity.name);
-  const mine = nameTokens(given + ' ' + family);
-  return printed.length === mine.length && printed.every((t, i) => t === mine[i]);
+  return namePairs(profile).some(([given, family]) => {
+    if (typeof given !== 'string' || typeof family !== 'string') return false;
+    if (nameTokens(given).length === 0 || nameTokens(family).length === 0) return false;
+    const mine = nameTokens(given + ' ' + family);
+    return printed.length === mine.length && printed.every((t, i) => t === mine[i]);
+  });
+}
+
+/**
+ * Her other names, for `profileMatch` (4.47.0): the non-trashed `contact/other-name-v1` events of the `other-names`
+ * root, as `{ given?, family?, use? }`. None (not an error) when the root does not exist or the connection is not
+ * granted it; an event that holds neither a given nor a family name is left out.
+ */
+export async function otherNamesOf (connection: pryv.Connection): Promise<OtherNameForMatch[]> {
+  let events: any[];
+  try {
+    events = await connection.apiOne('events.get', { streams: [OTHER_NAMES_STREAM_ID], types: [ET_OTHER_NAME], limit: 1000 } as any, 'events') as any[];
+  } catch (e) {
+    if (['unknown-referenced-resource', 'unknown-resource', 'forbidden'].includes(pryvErrorCode(e) as string)) return [];
+    throw e;
+  }
+  const out: OtherNameForMatch[] = [];
+  for (const e of events ?? []) {
+    const c = e?.content;
+    if (e?.trashed === true || e?.type !== ET_OTHER_NAME || c == null || typeof c !== 'object') continue;
+    const name: OtherNameForMatch = {};
+    if (typeof c.given === 'string') name.given = c.given;
+    if (typeof c.family === 'string') name.family = c.family;
+    if (name.given == null && name.family == null) continue;
+    if (c.use != null) name.use = String(c.use);
+    out.push(name);
+  }
+  return out;
 }
 
 // ---- 4.26.0: a document's date and kind (DOCUMENTS.md § A document waiting for its date and kind) ---- //
@@ -1529,7 +1599,8 @@ export async function answerProposedValues (
 /**
  * R3, the answer her app gives without a tap: `confirm` with `basis: profile-match` on the document's open
  * `is-this-yours` question when `profileMatch` holds, at most one automatic answer per document. Returns null when
- * nothing was answered.
+ * nothing was answered. Pass her other names in `profile.otherNames` (4.47.0, `otherNamesOf`): the answer is the same
+ * whichever name matched, and nothing of them reaches the contact.
  */
 export async function autoConfirmIdentity (
   connection: pryv.Connection,
