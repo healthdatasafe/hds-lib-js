@@ -1343,7 +1343,8 @@ export interface ValueCorrection {
 /**
  * The value event her app writes for a proposed value (§ Writing a value): the item's stream, the proposal's (or her
  * correction's) type and content, the time from the proposal or from `date` (her `which-date` answer; `unknown`:
- * no time), the proposal's clientData keys, `related`, `sourceKey`, `hdsSourceAnchor` and `hdsExtraction`.
+ * no time), the proposal's clientData keys, `related`, `sourceKey`, `hdsSourceAnchor` (with `hdsSourceGrid`, the box of
+ * a dated grid, data-model 4.51.0) and `hdsExtraction`.
  */
 export function valueEventOf (pv: ConversationItem, opts: { correction?: ValueCorrection; date?: AnsweredDate | null } = {}): Record<string, any> {
   const c = pv.content;
@@ -1368,10 +1369,30 @@ export function valueEventOf (pv: ConversationItem, opts: { correction?: ValueCo
   clientData.sourceKey = sourceKeyOf(c.extraction.engine, c.about, c.candidateId);
   // the anchor is self-contained (PROVENANCE.md, 4.25.0): it names its document even when the contact left it out;
   // one naming another document is dropped, never rewritten (R11)
-  if (c.anchor != null && (c.anchor.eventId == null || c.anchor.eventId === c.about)) clientData.hdsSourceAnchor = { ...c.anchor, eventId: c.about };
+  if (c.anchor != null && (c.anchor.eventId == null || c.anchor.eventId === c.about)) {
+    clientData.hdsSourceAnchor = { ...c.anchor, eventId: c.about };
+    // 4.51.0: the box of a dated grid it was read from, only beside its anchor
+    const grid = validGrid(c.grid);
+    if (grid != null) clientData.hdsSourceGrid = grid;
+  }
   clientData.hdsExtraction = { ...c.extraction, confirmedBy: 'person', ...(opts.correction ? { corrected: true } : {}) };
   event.clientData = clientData;
   return event;
+}
+
+/** A dated grid's box `{ row, column }` (integers from 1), or null. */
+function validGrid (g: any): { row: number; column: number } | null {
+  if (g == null || typeof g !== 'object' || !Number.isInteger(g.row) || !Number.isInteger(g.column) || g.row < 1 || g.column < 1) return null;
+  return { row: g.row, column: g.column };
+}
+
+/**
+ * The box of a dated grid a value was read from (`clientData.hdsSourceGrid`, data-model 4.51.0), or null: none on a value
+ * without `hdsSourceAnchor` (it never stands without one) or with a malformed box.
+ */
+export function sourceGridOf (event: { clientData?: Record<string, any> } | null | undefined): { row: number; column: number } | null {
+  if (event?.clientData?.hdsSourceAnchor == null) return null;
+  return validGrid(event.clientData.hdsSourceGrid);
 }
 
 /** The value already written for `sourceKey` on `streamId` (trashed included, left as it is), or null. */

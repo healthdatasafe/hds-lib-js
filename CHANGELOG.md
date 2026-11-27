@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.85.0] - 2026-11-27
+
+data-model 4.51.0 (plan 128 SUB-F): `clientData.hdsSourceGrid`, the box of a dated grid a confirmed value was read from.
+
+### Added
+
+- `cmcConversation.valueEventOf` (so `acceptProposedValues`, on `confirm` and `correct`): when it writes
+  `hdsSourceAnchor`, it also writes `hdsSourceGrid = { row, column }` from the proposed value's `grid` (integers from 1;
+  a malformed box is not copied, only `row` and `column` are). Never without the anchor (none when the anchor is missing
+  or dropped for naming another document). `sourceKey` is unchanged, and a value found by its `sourceKey` on a retry is
+  left as it is.
+- `cmcConversation.sourceGridOf(event)`: `{ row, column }`, or null when the event has no `hdsSourceAnchor` or a
+  malformed box.
+- Corrections keep it: `corrected.clientData` may not hold `hdsSourceGrid` (refused as before), and `correctionState`
+  ignores it on the live entry. hds-lib does not apply a correction to an entry itself.
+
 ## [2.84.0] - 2026-11-27
 
 data-model 4.49.0 (plan 128 SUB-F): a document dated per page, question `which-page-date` (CONVERSATION.md § A document

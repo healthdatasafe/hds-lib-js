@@ -195,6 +195,16 @@ describe('[CORR] corrections of an entry', () => {
       assert.equal(corrections.correctionState(corr, undefined), 'open', 'not readable: it cannot tell');
     });
 
+    it('[CORR-STA-5] hdsSourceGrid (4.51.0) is kept on a correction: never in corrected, and an entry keeping it with its anchor is applied', () => {
+      const codes = (fn) => { try { fn(); } catch (e) { return e.innerObject?.issues?.map((i) => i.code) ?? e.message; } return []; };
+      assert.deepEqual(codes(() => change({ corrected: { time: 1, clientData: { hdsSourceGrid: { row: 2, column: 14 } } } })), ['corrected-client-data']);
+      const kept = { hdsSourceAnchor: { eventId: 'ckdoc0001', attachmentId: 'ckdoc0001a', page: 1 }, hdsSourceGrid: { row: 2, column: 14 } };
+      const corr = c({ kind: 'change', corrected: { type: 'ratio/proportion', content: 0 } });
+      assert.equal(corrections.correctionState(corr, { ...entry(), content: 0, modified: 1773400000, clientData: { ...entry().clientData, ...kept } }), 'applied');
+      const day = c({ kind: 'change', corrected: { time: 1773403200, clientData: { hdsTimePrecision: 'day' } } });
+      assert.equal(corrections.correctionState(day, { ...entry(), time: 1773403200, clientData: { hdsTimePrecision: 'day', ...kept } }), 'applied');
+    });
+
     it('[CORR-STA-4] the comparator (absent equals absent), the basis, nothing to compare', () => {
       const lt = c({ kind: 'change', corrected: { type: 'temperature/c', content: 36.5, clientData: { hdsComparator: '<' } } });
       const exact = c({ kind: 'change', corrected: { type: 'temperature/c', content: 36.5 } });

@@ -1035,5 +1035,58 @@ describe('[CNV] cmcConversation', function () {
       assert.notDeepEqual(cv.checkAnswerFor(answer('request-item'), pv, conv), []);
       assert.deepStrictEqual(cv.checkAnswerFor(answer('skip'), pv, conv), []);
     });
+
+    it('[CNVG7] hdsSourceGrid (4.51.0): the box beside the anchor; none without a grid, without the anchor or with a malformed box; sourceKey unchanged', () => {
+      const ev = (over) => cv.valueEventOf(item('v1', 'proposed-value', value(14, over)));
+      const withGrid = ev({});
+      assert.deepStrictEqual(withGrid.clientData.hdsSourceGrid, { row: 2, column: 14 });
+      assert.deepStrictEqual(withGrid.clientData.hdsSourceAnchor, box(14).anchor);
+      assert.strictEqual(withGrid.clientData.sourceKey, 'hds-reader:document:' + DOC + ':c-14');
+      assert.deepStrictEqual(cv.sourceGridOf(withGrid), { row: 2, column: 14 });
+      const { grid: _g, ...noGrid } = value(14);
+      const plain = cv.valueEventOf(item('v1', 'proposed-value', noGrid));
+      assert.ok(!('hdsSourceGrid' in plain.clientData) && plain.clientData.hdsSourceAnchor != null);
+      assert.strictEqual(cv.sourceGridOf(plain), null);
+      // the anchor dropped (another document) or missing: no box either
+      const dropped = ev({ anchor: { ...box(14).anchor, eventId: 'other-doc' } });
+      assert.ok(!('hdsSourceAnchor' in dropped.clientData) && !('hdsSourceGrid' in dropped.clientData));
+      const { anchor: _a, ...noAnchor } = value(14);
+      assert.ok(!('hdsSourceGrid' in cv.valueEventOf(item('v1', 'proposed-value', noAnchor)).clientData));
+      for (const grid of [{ row: 0, column: 14 }, { row: 2, column: 0 }, { row: 1.5, column: 14 }, { row: '2', column: 14 }, { row: 2 }, 'r2c14', null]) {
+        assert.ok(!('hdsSourceGrid' in ev({ grid }).clientData), JSON.stringify(grid));
+      }
+      assert.deepStrictEqual(ev({ grid: { row: 2, column: 14, extra: 1 } }).clientData.hdsSourceGrid, { row: 2, column: 14 }, 'only row and column');
+      // the reader: never without the anchor, never a malformed box
+      assert.strictEqual(cv.sourceGridOf({ clientData: { hdsSourceGrid: { row: 2, column: 14 } } }), null);
+      assert.strictEqual(cv.sourceGridOf({ clientData: { hdsSourceAnchor: box(14).anchor, hdsSourceGrid: { row: -1, column: 14 } } }), null);
+      assert.strictEqual(cv.sourceGridOf(null), null);
+    });
+
+    it('[CNVG8] hdsSourceGrid on confirm and on correct; a retry finding an older value by sourceKey rewrites nothing', async () => {
+      const { person, rel: r, streams } = await setup();
+      const engines = cv.vouchedEnginesFor('hds-bridge-reader');
+      await cv.writeProposedValues(person, streams, DOC, [value(14), value(15), value(16)]);
+      const streamId = getModel().itemsDefs.forKey('fertility-cycles-peak-day').data.streamId;
+      const older = await person.apiOne('events.create', { streamIds: [streamId], type: 'activity/plain', content: null, time: DAY1, clientData: { sourceKey: 'hds-reader:document:' + DOC + ':c-16', related: { [DOC]: true } } }, 'event');
+      const res = await cv.acceptProposedValues(person, r, {
+        about: DOC,
+        shownAt: person.clock,
+        engines,
+        decisions: [
+          { candidateId: 'c-14', action: 'confirm' },
+          { candidateId: 'c-15', action: 'correct', correction: { itemKey: 'fertility-cycles-peak-day', type: 'activity/plain', content: null } },
+          { candidateId: 'c-16', action: 'confirm' }
+        ]
+      });
+      assert.deepStrictEqual(res.refused, []);
+      const written = Object.fromEntries(res.answers.flatMap(a => a.written).map(w => [w.candidateId, person.events.get(w.eventId)]));
+      assert.deepStrictEqual(written['c-14'].clientData.hdsSourceGrid, { row: 2, column: 14 });
+      assert.deepStrictEqual(written['c-15'].clientData.hdsSourceGrid, { row: 2, column: 15 });
+      assert.strictEqual(written['c-15'].clientData.hdsExtraction.corrected, true);
+      assert.strictEqual(written['c-14'].clientData.sourceKey, 'hds-reader:document:' + DOC + ':c-14');
+      assert.strictEqual(written['c-16'].id, older.id, 'found by sourceKey');
+      assert.deepStrictEqual(written['c-16'].clientData, { sourceKey: 'hds-reader:document:' + DOC + ':c-16', related: { [DOC]: true } }, 'rewrites nothing');
+      assert.ok(!person.calls.some(c => c.method === 'events.update' && c.params.id === older.id && c.params.update?.clientData?.hdsSourceGrid != null));
+    });
   });
 });
