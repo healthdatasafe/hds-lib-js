@@ -276,6 +276,10 @@ const errorIds = Object.freeze({
   HANDLER_MISSING_CAPABILITY_ID: 'cmc-handler-missing-capability-id',
   HANDLER_OFFER_MISSING_CAPABILITY_ID: 'cmc-handler-offer-missing-capability-id',
   OFFER_EMPTY_PERMISSIONS: 'cmc-offer-empty-permissions',
+  // The offer requires a verified email (`requireVerifiedEmail`) and the
+  // accepting account's primary address is not proved. The link stays open:
+  // accept again once it is.
+  VERIFIED_EMAIL_REQUIRED: 'cmc-verified-email-required',
   // Handler routing
   HANDLER_WRONG_TYPE: 'cmc-handler-wrong-type',
   HANDLER_THREW: 'cmc-handler-threw',
@@ -468,6 +472,13 @@ class CmcError extends Error {
  *   the grant) for least-privilege re-delegation with per-actor audit.
  * @param {boolean} [params.allowUserChoice=false] - true lets the accepter
  *   grant a subset of the permissions (except `mandatory` entries).
+ * @param {boolean} [params.requireVerifiedEmail=false] - true: the accept is
+ *   refused while the accepting account's primary email address is not proved
+ *   (`errorIds.VERIFIED_EMAIL_REQUIRED`). `requestedPermissions` must ask
+ *   `:system:email` at `read`, `mandatory` with `allowUserChoice`. Set it on
+ *   creation (a link carries the offer as it was then). A platform that
+ *   enforces it has `features.cmcRequireVerifiedEmail` in its service info;
+ *   an older one ignores it.
  * @param {string|null} [params.to=null]
  * @param {Object} [params.requesterMeta]
  * @returns {Promise<{inviteEventId:string, capabilityUrl:string, mode:string, expiresAt:number|null}>}
@@ -500,6 +511,7 @@ async function writeOffer (conn, params, extraRequest, fnName) {
   if (params.expiresAt !== undefined) request.expiresAt = params.expiresAt;
   if (params.accessType) request.accessType = params.accessType;
   if (typeof params.allowUserChoice === 'boolean') request.allowUserChoice = params.allowUserChoice;
+  if (typeof params.requireVerifiedEmail === 'boolean') request.requireVerifiedEmail = params.requireVerifiedEmail;
   if (extraRequest != null) Object.assign(request, extraRequest);
   const content = {
     to: params.to === undefined ? null : params.to,
@@ -1018,6 +1030,8 @@ async function readOffer (capabilityUrl, opts) {
     requestedPermissions: request.permissions || [],
     // The server treats a membership offer as allowing a subset whatever it says.
     allowUserChoice: membership || request.allowUserChoice === true,
+    // true: accepting takes a proved primary email address.
+    requireVerifiedEmail: request.requireVerifiedEmail === true,
     // 'app': the grant is delegable (the requester may create sub-accesses
     // from it); consent screens should say so.
     accessType: request.accessType === 'app' ? 'app' : 'shared',
@@ -2183,6 +2197,7 @@ function requestAcceptUrl (opts) {
   if (typeof opts.authUrl !== 'string' || opts.authUrl.length === 0) {
     throw new Error('requestAcceptUrl: opts.authUrl required');
   }
+  if (!isHttpUrl(opts.authUrl)) throw new Error('requestAcceptUrl: opts.authUrl must be an http(s) URL');
   if (typeof opts.capabilityUrl !== 'string' || opts.capabilityUrl.length === 0) {
     throw new Error('requestAcceptUrl: opts.capabilityUrl required');
   }
@@ -2208,6 +2223,15 @@ function requestAcceptUrl (opts) {
   }
   const sep = opts.authUrl.includes('?') ? '&' : '?';
   return opts.authUrl + sep + q.join('&');
+}
+
+/** A relative URL is one of the page's own origin. */
+function isHttpUrl (value) {
+  try {
+    return ['http:', 'https:'].includes(new URL(value, globalThis.location?.href).protocol);
+  } catch (e) {
+    return false;
+  }
 }
 
 /**
@@ -2334,6 +2358,7 @@ function requestScopeUpdateUrl (opts) {
   if (typeof opts.authUrl !== 'string' || opts.authUrl.length === 0) {
     throw new Error('requestScopeUpdateUrl: opts.authUrl required');
   }
+  if (!isHttpUrl(opts.authUrl)) throw new Error('requestScopeUpdateUrl: opts.authUrl must be an http(s) URL');
   if (typeof opts.scopeRequestEventId !== 'string' || opts.scopeRequestEventId.length === 0) {
     throw new Error('requestScopeUpdateUrl: opts.scopeRequestEventId required');
   }
@@ -10872,7 +10897,7 @@ const ProfileStore = __webpack_require__(/*! ./ProfileStore */ "./node_modules/p
 const handoff = __webpack_require__(/*! ../lib/handoff */ "./node_modules/pryv/src/lib/handoff.js");
 const pollUrls = __webpack_require__(/*! ../lib/pollUrls */ "./node_modules/pryv/src/lib/pollUrls.js");
 const PryvError = __webpack_require__(/*! ../lib/PryvError */ "./node_modules/pryv/src/lib/PryvError.js");
-const { refusedState, unreadableAnswerState } = __webpack_require__(/*! ./pollOutcome */ "./node_modules/pryv/src/Auth/pollOutcome.js");
+const { invalidAuthUrlError, refusedState, unreadableAnswerState } = __webpack_require__(/*! ./pollOutcome */ "./node_modules/pryv/src/Auth/pollOutcome.js");
 const { missingPermissions, permissionsFingerprint } = __webpack_require__(/*! ./permissionsCoverage */ "./node_modules/pryv/src/Auth/permissionsCoverage.js");
 
 /**
@@ -10903,6 +10928,16 @@ class AuthController {
       });
     }
     this.service = service;
+    /**
+     * The platform of this controller (see `ProfileStore.platformOf`): a stored
+     * sign-in is used, changed or forgotten only when it was made on it.
+     * @type {string}
+     */
+    this.platform = ProfileStore.platformOf(service);
+    // A sign-in stored by an earlier version names no platform: it is taken as
+    // this one's, unless the page address names a platform (a link could name
+    // any). Read once, the address may be cleaned later.
+    this._adoptUnbound = !pageNamesAPlatform();
 
     // probably remove
     this.languageCode = this.settings.authRequest.languageCode || 'en';
@@ -11075,6 +11110,9 @@ class AuthController {
     const all = options?.all === true;
     cancelAuthFlow(this);
     const store = this._readProfiles();
+    const loginButton = this.loginButton;
+    // read before the listeners of SIGNOUT; a storage may answer later
+    const stored = loginButton?.getAuthorizationData?.();
     // during a switch, the account being left
     const current = this.state?.username ?? this.state?.from;
     this._signingOut = true;
@@ -11088,11 +11126,13 @@ class AuthController {
     // clearing with `undefined` would wipe an unrelated concurrent flow.
     if (this._authFlowKey != null) handoff.cacheClear(this._authFlowKey);
     const others = current == null ? store.profiles : ProfileStore.remove(store, current).profiles;
-    const loginButton = this.loginButton;
     if (!all && others.length > 0 && loginButton != null && typeof loginButton.saveAuthorizationData === 'function') {
-      loginButton.saveAuthorizationData(ProfileStore.write(Object.assign({}, store, { active: null, profiles: others })));
+      this._saveProfiles(Object.assign({}, store, { active: null, profiles: others }));
     } else if (loginButton != null && typeof loginButton.deleteAuthorizationData === 'function') {
-      await loginButton.deleteAuthorizationData();
+      const raw = await stored;
+      // The sign-in of another platform is left alone. One that names none is
+      // the one being left, whoever stored it, when an account was signed in.
+      if (this._isOurs(raw) || (current != null && raw.platform == null)) await loginButton.deleteAuthorizationData();
     }
     await this.init();
   }
@@ -11232,20 +11272,34 @@ class AuthController {
     }
   }
 
-  /** @private */
+  /** @internal The remembered accounts of this platform. */
   _readProfiles () {
     const loginButton = this.loginButton;
     if (loginButton == null || typeof loginButton.getAuthorizationData !== 'function') return ProfileStore.read(null);
-    return ProfileStore.read(loginButton.getAuthorizationData());
+    return ProfileStore.read(this._stored(loginButton.getAuthorizationData()));
+  }
+
+  /** @private What the storage holds, when it belongs to this platform (else null). */
+  _stored (raw) {
+    return ProfileStore.forPlatform(raw, this.platform, this._adoptUnbound);
+  }
+
+  /** @private False when the storage holds (`raw`) the sign-in of another platform, or may. */
+  _isOurs (raw) {
+    if (raw == null || typeof raw !== 'object' || raw.deleted === true) return true;
+    return this._stored(raw) != null;
   }
 
   /** @private */
   _saveProfiles (store) {
     const loginButton = this.loginButton;
     if (loginButton == null || typeof loginButton.saveAuthorizationData !== 'function') return;
-    const data = ProfileStore.write(store);
+    const data = ProfileStore.write(Object.assign({}, store, { platform: this.platform }));
     if (data == null && typeof loginButton.deleteAuthorizationData === 'function') {
-      loginButton.deleteAuthorizationData();
+      /** @type {any} */
+      const raw = loginButton.getAuthorizationData();
+      // what cannot be seen yet (a storage that answers later) is not forgotten
+      if (typeof raw?.then !== 'function' && this._isOurs(raw)) loginButton.deleteAuthorizationData();
     } else if (data != null) {
       loginButton.saveAuthorizationData(data);
     }
@@ -11260,7 +11314,7 @@ class AuthController {
    */
   accountUrl () {
     let base = this.settings.accountUrl || this.serviceInfo?.account || accountUrlFromAuthUrl(this._authUrl);
-    if (typeof base !== 'string' || base === '') return null;
+    if (!utils.isHttpUrl(base)) return null;
     base = base.replace(/\/+$/, '');
     // @ts-ignore - Service keeps the URL it was created with
     const serviceInfoUrl = this.service?._serviceInfoUrl;
@@ -11367,6 +11421,11 @@ class AuthController {
           // never in the message (it echoes the request's permissions and data).
           throw PryvError.fromApiResponse(response, body);
         }
+        // The button navigates to or opens this URL: nothing but a web page.
+        const authUrl = body?.authUrl || body?.url;
+        if (authUrl != null && !utils.isHttpUrl(authUrl)) {
+          throw invalidAuthUrlError();
+        }
         return body;
       } catch (e) {
         if (this._authFlowId !== flowId) throw e; // replaced while posting
@@ -11374,7 +11433,7 @@ class AuthController {
         this._switchPrevious = null;
         this.state = previous ?? {
           status: AuthStates.ERROR,
-          message: 'Requesting access',
+          message: e.id === 'invalid-auth-url' ? e.message : 'Requesting access',
           error: e
         };
         throw e; // forward error
@@ -11562,13 +11621,26 @@ function accountUrlFromAuthUrl (authUrl) {
   return url.origin + path.slice(0, -'/auth'.length);
 }
 
+/**
+ * Whether the page address names a platform (a `pryvServiceInfoUrl` anywhere in
+ * it, escaped or not). Not which one: an app may read the address in another
+ * way than this would (escapes, `+`, letter case, repeated parameters).
+ */
+function pageNamesAPlatform () {
+  const href = globalThis.location?.href;
+  if (typeof href !== 'string') return false;
+  const unescaped = href.replace(/%([0-9a-f]{2})/gi, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+  return /pryvServiceInfoUrl/i.test(href) || /pryvServiceInfoUrl/i.test(unescaped);
+}
+
 async function checkAutoLogin (authController) {
   const loginButton = authController.loginButton;
   if (loginButton == null) {
     return;
   }
 
-  let storedCredentials = await loginButton.getAuthorizationData();
+  // only a sign-in made on this platform
+  let storedCredentials = authController._stored(await loginButton.getAuthorizationData());
   if (storedCredentials == null) return;
   // Forget the stored sign-ins that carry no token (3.13.0 saved some after a
   // redirect return): they would sign in to a session the API refuses, or
@@ -11577,7 +11649,7 @@ async function checkAutoLogin (authController) {
   const tokenless = stored.profiles.filter((p) => !ProfileStore.carriesToken(p.apiEndpoint));
   if (tokenless.length > 0) {
     authController._saveProfiles(tokenless.reduce((s, p) => ProfileStore.remove(s, p.username), stored));
-    storedCredentials = await loginButton.getAuthorizationData();
+    storedCredentials = authController._stored(await loginButton.getAuthorizationData());
     if (storedCredentials == null) return;
   }
   if (typeof storedCredentials.authUrl === 'string') authController._authUrl = storedCredentials.authUrl;
@@ -11597,6 +11669,7 @@ async function checkAutoLogin (authController) {
     // kept on the profile only: the app's listener gets the stored shape it knows
     delete state.permissionsFingerprint;
   }
+  delete state.platform;
   return await signInIfPermitted(authController, state);
 }
 
@@ -11862,6 +11935,8 @@ const Messages = {
  */
 function get (languageCode, definitions) {
   const myMessages = Object.assign({}, Messages, definitions || {});
+  // the key the assets of existing services use
+  if (definitions?.LOGOUT_CONFIRM && !definitions.SIGNOUT_CONFIRM) myMessages.SIGNOUT_CONFIRM = definitions.LOGOUT_CONFIRM;
   const res = {};
   Object.keys(myMessages).forEach((key) => {
     res[key] = myMessages[key][languageCode] || myMessages[key].en;
@@ -11886,7 +11961,7 @@ function get (languageCode, definitions) {
 /**
  * The accounts a sign-in button remembers for one app, as stored in its
  * authorization data:
- * `{ apiEndpoint, username, actingAs?, authUrl?, profiles: [...] }`.
+ * `{ apiEndpoint, username, actingAs?, authUrl?, platform?, profiles: [...] }`.
  * The top-level `apiEndpoint` / `username` are the active account (what
  * versions without profiles read); `profiles` lists every remembered
  * account, most recently used first, the active one included.
@@ -11895,6 +11970,8 @@ function get (languageCode, definitions) {
  * an account used through account delegation (`delegate` is the username of
  * the person acting), and `permissionsFingerprint` identifies the requested
  * permissions of the sign-in that stored it (see permissionsCoverage).
+ * `platform` is the platform the sign-ins were made on (see `platformOf`);
+ * absent when an earlier version stored them.
  * @memberof pryv.Auth
  */
 module.exports = {
@@ -11906,7 +11983,10 @@ module.exports = {
   markUnavailable,
   profileOf,
   fromAccepted,
-  carriesToken
+  carriesToken,
+  platformOf,
+  normalizedUrl,
+  forPlatform
 };
 
 const utils = __webpack_require__(/*! ../utils */ "./node_modules/pryv/src/utils.js");
@@ -11927,14 +12007,59 @@ function carriesToken (apiEndpoint) {
 }
 
 /**
+ * The identity of the platform of `service`: the service information URL the
+ * app gave. Nothing of the service information itself is an identity: a
+ * foreign document can claim any of it. Without a URL (inline service
+ * information, the app's own), its `access`.
+ * @param {Object} service
+ * @returns {string}
+ */
+function platformOf (service) {
+  const url = service?._serviceInfoUrl;
+  // the truthiness `Service.info()` fetches on; a URL object is one too
+  if (url) return normalizedUrl(String(url));
+  return 'inline:' + (service?.infoSync?.()?.access ?? '');
+}
+
+/**
+ * `url` in one spelling, without its fragment. Only what cannot change the
+ * resource it names: path, trailing slash and query are kept.
+ * @param {string} url
+ * @returns {string}
+ */
+function normalizedUrl (url) {
+  try {
+    const normalized = new URL(url, globalThis.document?.baseURI ?? globalThis.location?.href);
+    normalized.hash = '';
+    return normalized.href;
+  } catch (e) {
+    return url;
+  }
+}
+
+/**
+ * The stored data when it belongs to `platform`, else null. Data stored by an
+ * earlier version names no platform: it belongs to it when `adoptUnbound`.
+ * @param {Object|null|undefined} stored
+ * @param {string} platform
+ * @param {boolean} adoptUnbound
+ */
+function forPlatform (stored, platform, adoptUnbound) {
+  if (stored == null || typeof stored !== 'object') return null;
+  if (stored.platform != null) return stored.platform === platform ? stored : null;
+  return adoptUnbound ? stored : null;
+}
+
+/**
  * Parse stored authorization data (any version) into
- * `{ active, profiles, authUrl }`; `active` is `profiles[0]` or null.
+ * `{ active, profiles, authUrl, platform? }`; `active` is `profiles[0]` or null.
  * @param {Object|null|undefined} stored
  */
 function read (stored) {
   const store = { active: null, profiles: [], authUrl: undefined };
   if (stored == null || typeof stored !== 'object' || stored.deleted === true) return store;
   if (typeof stored.authUrl === 'string') store.authUrl = stored.authUrl;
+  if (typeof stored.platform === 'string') store.platform = stored.platform;
   if (Array.isArray(stored.profiles)) {
     store.profiles = stored.profiles.filter(isProfile).map(profileOf);
   }
@@ -11960,6 +12085,7 @@ function write (store) {
     if (store.active.permissionsFingerprint != null) data.permissionsFingerprint = store.active.permissionsFingerprint;
   }
   if (store.authUrl != null) data.authUrl = store.authUrl;
+  if (store.platform != null) data.platform = store.platform;
   data.profiles = store.profiles.map(profileOf);
   return data;
 }
@@ -12223,6 +12349,8 @@ const AuthStates = __webpack_require__(/*! ./AuthStates */ "./node_modules/pryv/
  * same shapes.
  */
 module.exports = {
+  invalidAuthUrlError,
+  invalidAuthUrlState,
   refusedState,
   unreadableAnswerState
 };
@@ -12247,6 +12375,16 @@ function refusedState (body, serviceInfo) {
  */
 function unreadableAnswerState (body) {
   return { status: AuthStates.ERROR, message: 'Cannot fetch result', error: body?.error ?? body };
+}
+
+/** An auth request or a poll answered with an auth page URL that is not http(s). */
+function invalidAuthUrlError () {
+  return Object.assign(new Error('Invalid auth URL'), { id: 'invalid-auth-url' });
+}
+
+function invalidAuthUrlState () {
+  const error = invalidAuthUrlError();
+  return { status: AuthStates.ERROR, message: error.message, error };
 }
 
 
@@ -12401,11 +12539,12 @@ const Cookies = __webpack_require__(/*! ./CookieUtils */ "./node_modules/pryv/sr
 const AuthStates = __webpack_require__(/*! ../Auth/AuthStates */ "./node_modules/pryv/src/Auth/AuthStates.js");
 const AuthController = __webpack_require__(/*! ../Auth/AuthController */ "./node_modules/pryv/src/Auth/AuthController.js");
 const ProfileStore = __webpack_require__(/*! ../Auth/ProfileStore */ "./node_modules/pryv/src/Auth/ProfileStore.js");
-const { refusedState, unreadableAnswerState } = __webpack_require__(/*! ../Auth/pollOutcome */ "./node_modules/pryv/src/Auth/pollOutcome.js");
+const { invalidAuthUrlState, refusedState, unreadableAnswerState } = __webpack_require__(/*! ../Auth/pollOutcome */ "./node_modules/pryv/src/Auth/pollOutcome.js");
 const Messages = __webpack_require__(/*! ../Auth/LoginMessages */ "./node_modules/pryv/src/Auth/LoginMessages.js");
 const handoff = __webpack_require__(/*! ../lib/handoff */ "./node_modules/pryv/src/lib/handoff.js");
 const pollUrls = __webpack_require__(/*! ../lib/pollUrls */ "./node_modules/pryv/src/lib/pollUrls.js");
 const utils = __webpack_require__(/*! ../utils */ "./node_modules/pryv/src/utils.js");
+const { buildButton } = __webpack_require__(/*! ./buttonHtml */ "./node_modules/pryv/src/Browser/buttonHtml.js");
 
 /* global location */
 
@@ -12465,11 +12604,17 @@ class LoginButton {
         break;
       case AuthStates.NEED_SIGNIN: {
         const loginUrl = state.authUrl || state.url; // url is deprecated
+        // Also reached with the answer of a poll (return of a sign-in by
+        // redirection): nothing but a web page is navigated to or opened.
+        if (!utils.isHttpUrl(loginUrl)) {
+          this.auth.state = invalidAuthUrlState();
+          return;
+        }
         if (this.authSettings.authRequest.returnURL) { // open on same page (no Popup)
           // Remember the request this page started: on the way back, only
           // its key is accepted and only its (server-issued) poll URL is
           // fetched (see finishAuthProcessAfterRedirection).
-          writeAuthFlow(this._cookieKey, { key: state.key, poll: state.poll, authUrl: loginUrl });
+          writeAuthFlow(this._cookieKey, { key: state.key, poll: state.poll, authUrl: loginUrl, platform: this.auth?.platform });
           location.href = loginUrl;
           return;
         } else {
@@ -12483,17 +12628,18 @@ class LoginButton {
         // Never remember a sign-in that cannot call the API (it would be
         // restored on every page load).
         if (!ProfileStore.carriesToken(profile?.apiEndpoint)) break;
-        const store = ProfileStore.read(this.getAuthorizationData());
+        // The accounts of this platform only, and stored as its own.
+        const store = this.auth != null ? this.auth._readProfiles() : ProfileStore.read(this.getAuthorizationData());
         // Kept to locate the account app after a reload (see AuthController.accountUrl).
         const authUrl = withoutQuery(state.authUrl || this.auth?._authUrl) || store.authUrl;
         this.saveAuthorizationData(ProfileStore.write(Object.assign(
           ProfileStore.activate(store, profile, this.authSettings.maxProfiles),
-          { authUrl }
+          { authUrl, platform: this.auth?.platform }
         )));
         break;
       }
       case AuthStates.SWITCHING:
-        this.text = this.messages.SWITCHING || '...';
+        this.text = messagesOf(this).SWITCHING || '...';
         break;
       case AuthStates.SIGNOUT: {
         // A confirmed logout (the menu's "Log out", or `auth.signOut()`)
@@ -12517,7 +12663,7 @@ class LoginButton {
     // @ts-ignore - loginButtonText is set by setupButton
     if (this.loginButtonText) {
       // @ts-ignore
-      this.loginButtonText.innerHTML = this.text;
+      this.loginButtonText.textContent = this.text;
     }
   }
 
@@ -12580,7 +12726,11 @@ class LoginButton {
     const active = Cookies.get(this._cookieKey);
     const remembered = Cookies.get(this._cookieKey + PROFILES_COOKIE_SUFFIX);
     if (remembered == null || !Array.isArray(remembered.profiles)) return active;
-    const data = Object.assign({}, active != null && active.deleted !== true ? active : {}, { profiles: remembered.profiles });
+    const signedIn = active != null && active.deleted !== true;
+    // An earlier version rewrote the main cookie only: the list is another platform's.
+    if (signedIn && active.platform !== remembered.platform) return active;
+    const data = Object.assign({}, signedIn ? active : {}, { profiles: remembered.profiles });
+    if (!signedIn && remembered.platform != null) data.platform = remembered.platform;
     if (data.authUrl == null && remembered.authUrl != null) data.authUrl = remembered.authUrl;
     return data;
   }
@@ -12604,7 +12754,8 @@ class LoginButton {
       Cookies.del(this._cookieKey, options);
     }
     if (Array.isArray(profiles)) {
-      const remembered = Object.assign({ profiles: profiles.slice() }, active.authUrl != null ? { authUrl: active.authUrl } : {});
+      const remembered = Object.assign({ profiles: profiles.slice() }, active.authUrl != null ? { authUrl: active.authUrl } : {},
+        active.platform != null ? { platform: active.platform } : {});
       // A browser drops a cookie over ~4 KB: forget the least recently used
       // accounts (the list is most recent first) until it fits.
       while (remembered.profiles.length > 1 &&
@@ -12645,7 +12796,10 @@ class LoginButton {
       // it: a link carrying another key or poll URL must not sign the page
       // in (to a foreign host, or to someone else's account).
       const flow = readAuthFlow(this._cookieKey);
-      if (flow == null || flow.key !== key || typeof flow.poll !== 'string') {
+      // A request started under another platform is another request: its auth
+      // page must not choose the platform its answer is stored for.
+      if (flow == null || flow.key !== key || typeof flow.poll !== 'string' ||
+          typeof flow.platform !== 'string' || flow.platform !== authController.platform) {
         console.warn('pryv: ignoring a sign-in return for a request this page did not start');
         if (!signedIn) {
           authController.state = {
@@ -12747,7 +12901,7 @@ class LoginButton {
     const key = retrieveKey(window.location.href);
     if (key == null) return false;
     const flow = readAuthFlow(this._cookieKey);
-    return flow != null && flow.key === key;
+    return flow != null && flow.key === key && typeof flow.platform === 'string' && flow.platform === this.auth?.platform;
   }
 }
 
@@ -12834,7 +12988,7 @@ const MENU_OPTIONS = ['logout', 'account', 'switch', 'info'];
 /** `kim-doe (via parent-doe)` for an account used through delegation. */
 function profileLabel (loginButton, profile) {
   if (profile?.actingAs == null) return profile?.username;
-  return profile.username + ' (' + loginButton.messages.VIA + ' ' + profile.actingAs.delegate + ')';
+  return profile.username + ' (' + messagesOf(loginButton).VIA + ' ' + profile.actingAs.delegate + ')';
 }
 
 /** The auth page URL without its query and fragment (they may carry a key). */
@@ -12932,7 +13086,7 @@ function menuElement (tag, className, text) {
 function buildMenu (loginBtn, confirmLogout) {
   ensureMenuStyle();
   const auth = loginBtn.auth;
-  const messages = Object.assign({}, loginBtn.messages, auth.messages);
+  const messages = messagesOf(loginBtn);
   const options = confirmLogout
     ? { logout: true, account: false, info: false }
     : menuOptions(loginBtn.authSettings.menu);
@@ -13127,20 +13281,116 @@ function setupButton (loginBtn) {
  */
 async function loadAssets (loginBtn) {
   const assets = await loginBtn.service.assets();
-  loginBtn.loginButtonSpan.innerHTML = await assets.loginButtonGetHTML();
-  loginBtn.loginButtonText = document.getElementById('pryv-access-btn-text');
+  const { fragment, textHolder } = buildButton(await assets.loginButtonGetHTML(), document);
+  loginBtn.loginButtonSpan.textContent = '';
+  loginBtn.loginButtonSpan.appendChild(fragment);
+  loginBtn.loginButtonText = textHolder;
+}
+
+/** The service's own messages (loaded by the controller) over the defaults. */
+function messagesOf (loginButton) {
+  return Object.assign({}, loginButton.messages, loginButton.auth?.messages);
 }
 
 function getErrorMessage (loginButton, message) {
-  return loginButton.messages.ERROR + ': ' + message;
+  return messagesOf(loginButton).ERROR + ': ' + message;
 }
 
 function getLoadingMessage (loginButton) {
-  return loginButton.messages.LOADING;
+  return messagesOf(loginButton).LOADING;
 }
 
 function getInitializedMessage (loginButton, serviceName) {
-  return loginButton.messages.LOGIN + ': ' + serviceName;
+  return messagesOf(loginButton).LOGIN + ': ' + serviceName;
+}
+
+
+/***/ },
+
+/***/ "./node_modules/pryv/src/Browser/buttonHtml.js"
+/*!*****************************************************!*\
+  !*** ./node_modules/pryv/src/Browser/buttonHtml.js ***!
+  \*****************************************************/
+(module, __unused_webpack_exports, __webpack_require__) {
+
+/**
+ * @license
+ * [BSD-3-Clause](https://github.com/pryv/lib-js/blob/master/LICENSE)
+ */
+const utils = __webpack_require__(/*! ../utils */ "./node_modules/pryv/src/utils.js");
+
+/**
+ * The sign-in button's HTML comes from the assets of the service, which the
+ * address of the page may have chosen (`serviceInfoFromUrl()`): it is parsed
+ * where nothing runs or loads, and rebuilt from an allow-list.
+ */
+module.exports = { buildButton };
+
+/** Id of the element that shows the text of the button. */
+const TEXT_ID = 'pryv-access-btn-text';
+
+const ELEMENTS = ['div', 'span', 'p', 'br', 'b', 'i', 'strong', 'em', 'small', 'img', 'a', 'button'];
+const ATTRIBUTES = ['class', 'title', 'alt', 'role', 'dir', 'lang', 'style', 'width', 'height'];
+
+const FALLBACK_HTML = '<div id="pryv-access-btn" class="pryv-access-btn-signin">' +
+  '<span class="pryv-access-btn pryv-access-btn-pryv-access-color"><span id="' + TEXT_ID + '"></span></span></div>';
+
+/**
+ * @param {string} html - the service's HTML of the button
+ * @param {Document} doc
+ * @returns {{ fragment: DocumentFragment, textHolder: Element }} what to show, and where its text goes
+ */
+function buildButton (html, doc) {
+  const dropped = new Set();
+  let fragment = rebuild(html, doc, dropped);
+  if (!canShowText(fragment.querySelector('#' + TEXT_ID))) {
+    console.warn('pryv: the sign-in button HTML of the service has no usable #' + TEXT_ID + ', using the built-in button');
+    fragment = rebuild(FALLBACK_HTML, doc, new Set());
+  }
+  if (dropped.size > 0) {
+    console.warn('pryv: removed from the sign-in button HTML of the service: ' + Array.from(dropped).join(', '));
+  }
+  return { fragment, textHolder: fragment.querySelector('#' + TEXT_ID) };
+}
+
+function canShowText (element) {
+  return element != null && !['img', 'br'].includes(element.localName);
+}
+
+function rebuild (html, doc, dropped) {
+  const template = doc.createElement('template');
+  template.innerHTML = html; // inert: no script, no handler, no request
+  const fragment = doc.createDocumentFragment();
+  copyChildren(template.content, fragment, doc, dropped);
+  return fragment;
+}
+
+function copyChildren (from, to, doc, dropped) {
+  for (const node of Array.from(from.childNodes)) {
+    if (node.nodeType === 3) { // text
+      to.appendChild(doc.createTextNode(node.nodeValue));
+    } else if (node.nodeType === 1) { // element
+      const name = node.localName;
+      if (node.namespaceURI !== 'http://www.w3.org/1999/xhtml' || !ELEMENTS.includes(name)) {
+        dropped.add('<' + name + '>');
+        continue;
+      }
+      const element = doc.createElement(name);
+      for (const attribute of Array.from(node.attributes)) {
+        if (isAllowed(name, attribute)) element.setAttribute(attribute.name, attribute.value);
+        else dropped.add(attribute.name);
+      }
+      if (name === 'button') element.setAttribute('type', 'button');
+      copyChildren(node, element, doc, dropped);
+      to.appendChild(element);
+    }
+  }
+}
+
+function isAllowed (elementName, { name, value }) {
+  if (name === 'id') return value.startsWith('pryv-access-btn'); // never an id of the page around the button
+  if (name === 'src') return elementName === 'img' && utils.isHttpUrl(value, ''); // absolute: no request to the page's own origin
+  return ATTRIBUTES.includes(name) || /^aria-[a-z]+$/.test(name);
 }
 
 
@@ -13173,13 +13423,28 @@ module.exports = {
   serviceInfoFromUrl: getServiceInfoFromURL
 };
 
+function isAbsoluteHttpUrl (value) {
+  return utils.isHttpUrl(value, '');
+}
+
 /**
- * Util to grab parameters from url query string
- * @param {*} url
+ * The service information URL named by the `pryvServiceInfoUrl` query parameter.
+ * The parameter lets whoever wrote the link choose the platform: an app serving
+ * known platforms should pass `allowedServiceInfoUrls`.
+ * @param {string} [url] - default: the URL of the page
+ * @param {Object} [options]
+ * @param {Array<string>} [options.allowedServiceInfoUrls] - accept these only
+ * @returns {string|undefined} undefined when absent, not an http(s) URL, or not allowed
  */
-function getServiceInfoFromURL (url) {
-  const queryParams = utils.getQueryParamsFromURL(url || window.location.href);
-  return queryParams.pryvServiceInfoUrl;
+function getServiceInfoFromURL (url, options) {
+  const value = utils.getQueryParamsFromURL(url || window.location.href).pryvServiceInfoUrl;
+  if (!isAbsoluteHttpUrl(value)) return undefined;
+  const allowed = options?.allowedServiceInfoUrls;
+  if (allowed != null && !allowed.some((a) => isAbsoluteHttpUrl(a) && new URL(a).href === new URL(value).href)) {
+    console.warn('pryv: the pryvServiceInfoUrl of the page address is not an allowed service');
+    return undefined;
+  }
+  return value;
 }
 
 
@@ -15086,7 +15351,8 @@ class ServiceAssets {
   }
 
   /**
-   * Get HTML for Login Button
+   * Get HTML for Login Button, as the service sends it: untrusted, never write it
+   * with `innerHTML` (the default button rebuilds it from an allow-list)
    * @returns {Promise<string>} Promise resolving to HTML string
    */
   async loginButtonGetHTML () {
@@ -16728,6 +16994,24 @@ const utils = module.exports = {
   },
 
   /**
+   * Whether a value is an http(s) URL: the only kind ever navigated to or
+   * opened, and loaded from the sign-in button HTML of a service.
+   * @memberof pryv.utils
+   * @private
+   * @param {*} value
+   * @param {string} [base] - base URL, for a relative value (default: the page)
+   * @returns {boolean}
+   */
+  isHttpUrl: function (value, base = globalThis.location?.href) {
+    if (typeof value !== 'string' || value === '') return false;
+    try {
+      return ['http:', 'https:'].includes(new URL(value, base || undefined).protocol);
+    } catch (e) {
+      return false;
+    }
+  },
+
+  /**
    * Extract query parameters from a URL
    * @memberof pryv.utils
    * @param {string} url - URL to parse
@@ -18065,10 +18349,10 @@ const packTexts_ts_1 = __webpack_require__(/*! ../converters/packTexts.js */ "./
 const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 /**
  * The newest converter version this hds-lib reads, per item key. A version above it may carry what this engine
- * does not know (cervical-fluid v1: options with `produce: false`), so it is never fetched. An item key not listed
- * reads v0.
+ * does not know (cervical-fluid v1: options with `produce: false`; v2: annotation `notFor`, read by hds-forms-js; v3:
+ * which Creighton codes are produced), so it is never fetched. An item key not listed reads v0.
  */
-exports.SUPPORTED_CONVERTER_VERSIONS = { 'cervical-fluid': 'v1', mood: 'v0' };
+exports.SUPPORTED_CONVERTER_VERSIONS = { 'cervical-fluid': 'v3', mood: 'v0' };
 const versionNumber = (v) => /^v\d+$/.test(v) ? Number(v.slice(1)) : NaN;
 /**
  * The pack version to fetch: the highest of the model's published `versions` not above what this hds-lib supports.
@@ -18535,6 +18819,7 @@ exports.HDSModelEventTypes = HDSModelEventTypes;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HDSModelItemsDefs = void 0;
 const HDSItemDef_ts_1 = __webpack_require__(/*! ./HDSItemDef.js */ "./ts/HDSModel/HDSItemDef.ts");
+const correctionIds_ts_1 = __webpack_require__(/*! ../cmc/correctionIds.js */ "./ts/cmc/correctionIds.ts");
 /**
  * ItemsDefs - Extension of HDSModel
  */
@@ -18660,7 +18945,11 @@ class HDSModelItemsDefs {
             // We need closest-ancestor-wins, so iterate leaf-to-root: walk parents
             // in reverse; `streamId` itself is already covered by the direct-match
             // pass above — so we only need ancestors here.
-            const ancestorsRootFirst = this.#model.streams.getParentsIds(streamId, false);
+            // A corrections child (`corr-…`, data-model 4.43.0) is not in the model: it resolves to its root, as data-model's
+            // `findItemForEvent` does.
+            const ancestorsRootFirst = (0, correctionIds_ts_1.isCorrectionStreamId)(streamId) && this.#model.streams.getDataById(streamId, false) == null
+                ? [...this.#model.streams.getParentsIds(correctionIds_ts_1.CORRECTIONS_ROOT_ID, false), correctionIds_ts_1.CORRECTIONS_ROOT_ID]
+                : this.#model.streams.getParentsIds(streamId, false);
             for (let i = ancestorsRootFirst.length - 1; i >= 0; i--) {
                 const ancestorId = ancestorsRootFirst[i];
                 const keyStreamIdEventType = ancestorId + ':' + event.type;
@@ -19362,6 +19651,28 @@ class HDSModelStreams {
         return [streamId, ...this.getParentsIds(streamId, false)].some((id) => marked.includes(id));
     }
     /**
+     * The item streams under `streamId`, parents first, when `streamId` is itself an item's stream; else `[]`.
+     * These are the streams `authorizations.forItemKeys` folds into `streamId` (a child item's permission is dropped when
+     * its parent is requested at the same or a higher level), so a consent that creates only the granted streams would
+     * leave them missing, and a reader naming one gets `unknown-referenced-resource` (B-2026-11-24-12). A stream that no
+     * item writes to (a grouping such as `body-blood`) returns `[]`: its subtree is not the request's to create.
+     */
+    itemStreamsUnder(streamId) {
+        const itemStreams = new Set(this.#model.itemsDefs.getAll().map((d) => d.data.streamId));
+        if (!itemStreams.has(streamId))
+            return [];
+        const out = [];
+        const walk = (node) => {
+            for (const child of node?.children ?? []) {
+                if (itemStreams.has(child.id))
+                    out.push(child.id);
+                walk(child);
+            }
+        };
+        walk(this.#modelStreamsById[streamId]);
+        return out;
+    }
+    /**
      * Get all parents id;
      */
     getParentsIds(streamId, throwErrorIfNotFound = true, initialArray = []) {
@@ -19575,6 +19886,8 @@ class HDSModel {
             (0, HDSModel_Overload_ts_1.applyOverload)(data, overload);
         }
         this.#modelData = data;
+        // the parts read on demand were built from the previous pack
+        this.laziliyLoadedMap = {};
         // add key to items before freezing;
         for (const [key, item] of Object.entries(this.#modelData.items)) {
             item.key = key;
@@ -19767,6 +20080,378 @@ function chartStampText(content) {
     if (typeof stamp !== 'string' || stamp === '')
         return null;
     return (Object.hasOwn(STAMP_LABELS, stamp) ? (0, localizeText_ts_1.localizeText)(STAMP_LABELS[stamp]) : null) || stamp;
+}
+
+
+/***/ },
+
+/***/ "./ts/HDSModel/corrections.ts"
+/*!************************************!*\
+  !*** ./ts/HDSModel/corrections.ts ***!
+  \************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CORRECTIONS_ROOT_ID = exports.TEXT_FORMAT_MARKDOWN = exports.TEXT_FORMAT_KEY = exports.PROFESSIONAL_ROLE_VOCABULARY = exports.PROFESSIONAL_ROLES = exports.CORRECTION_KINDS = exports.ENTRY_CORRECTION_ITEM = exports.ENTRY_CORRECTION = void 0;
+exports.correctionEventIds = correctionEventIds;
+exports.checkCorrection = checkCorrection;
+exports.buildCorrection = buildCorrection;
+exports.isCountedCorrection = isCountedCorrection;
+exports.currentCorrections = currentCorrections;
+exports.correctionsByEntry = correctionsByEntry;
+exports.correctionState = correctionState;
+exports.professionalRoleLabel = professionalRoleLabel;
+exports.isMarkdown = isMarkdown;
+exports.formattedText = formattedText;
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ./HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const correctionIds_ts_1 = __webpack_require__(/*! ../cmc/correctionIds.js */ "./ts/cmc/correctionIds.ts");
+Object.defineProperty(exports, "CORRECTIONS_ROOT_ID", ({ enumerable: true, get: function () { return correctionIds_ts_1.CORRECTIONS_ROOT_ID; } }));
+const conversation_ts_1 = __webpack_require__(/*! ../cmc/conversation.js */ "./ts/cmc/conversation.ts");
+/**
+ * A professional's correction of one entry (data-model 4.43.0, `documentation/CORRECTIONS.md`): `correction/entry-v1`
+ * on the contact's own `corr-` child of `entry-corrections`. The entry itself is never changed by the professional;
+ * she applies a correction with her own app. Pure helpers: build and check one, pick the current ones, and say where
+ * one stands against the live entry. Also `clientData.hdsTextFormat` (markdown text, PROVENANCE.md).
+ */
+exports.ENTRY_CORRECTION = 'correction/entry-v1';
+exports.ENTRY_CORRECTION_ITEM = 'entry-correction';
+exports.CORRECTION_KINDS = ['change', 'add', 'remove'];
+/** The `authorRole` values of data-model 4.43.0, in the vocabulary's order. A newer pack may hold more. */
+exports.PROFESSIONAL_ROLES = ['physician', 'midwife', 'nurse', 'pharmacist', 'psychologist', 'dietitian', 'physiotherapist', 'health-educator', 'other'];
+exports.PROFESSIONAL_ROLE_VOCABULARY = 'professional-role';
+exports.TEXT_FORMAT_KEY = 'hdsTextFormat';
+exports.TEXT_FORMAT_MARKDOWN = 'text/markdown';
+/** The eventTypes whose text `hdsTextFormat` formats, and where that text is. */
+const TEXT_FORMAT_FIELDS = {
+    'note/txt': (c) => c,
+    [exports.ENTRY_CORRECTION]: (c) => c?.comment
+};
+const CORRECTED_CLIENT_DATA_KEYS = ['hdsTimePrecision', 'hdsBasis', 'hdsComparator'];
+const ID_RE = /^[a-zA-Z0-9_-]+$/;
+function isPlainObject(v) {
+    return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+function hasOwn(o, k) {
+    return isPlainObject(o) && Object.prototype.hasOwnProperty.call(o, k);
+}
+/** The event ids a correction holds in its content (`entryId`, `about`, `replaces`), each to mirror in `related`. */
+function correctionEventIds(content) {
+    const out = [];
+    if (!isPlainObject(content))
+        return out;
+    for (const field of ['entryId', 'about', 'replaces']) {
+        if (typeof content[field] === 'string' && content[field] !== '')
+            out.push({ field, eventId: content[field] });
+    }
+    return out;
+}
+/** The model's item, or null when the model is not loaded or does not hold it. */
+function itemOf(itemKey, model) {
+    if (typeof itemKey !== 'string')
+        return null;
+    try {
+        return model?.itemsDefs?.forKey(itemKey, false) ?? null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * What a writer MUST include that the schema cannot say (data-model CORRECTIONS.md § What a writer MUST include), and
+ * what a reader checks before showing a correction (§ Where a correction counts). Empty when it passes.
+ * - `entry`: the corrected event, when the caller holds it (`entry-mismatch` when it is not the one named, or not on the
+ *   item's stream with one of its types);
+ * - `validateContent(type, content)`: validates `corrected.content` against its eventType's schema; hds-lib compiles no
+ *   schema at runtime (no `eval` under a Content-Security-Policy), so without it the content is not checked;
+ * - `writer: true`: the writer's checks; only then is an `authorRole` its pack does not know an issue (`unknown-role`).
+ *   A reader reads such a role as `other`;
+ * - the item checks need a loaded model; without one they are skipped.
+ */
+function checkCorrection(event, opts = {}) {
+    const issues = [];
+    if (event?.type !== exports.ENTRY_CORRECTION)
+        return [{ code: 'wrong-type' }];
+    const streamIds = Array.isArray(event.streamIds) ? event.streamIds : [];
+    if (streamIds.length !== 1 || !(0, correctionIds_ts_1.isCorrectionStreamId)(streamIds[0]))
+        issues.push({ code: 'not-on-correction-child' });
+    const c = isPlainObject(event.content) ? event.content : {};
+    const kind = c.kind;
+    if (!exports.CORRECTION_KINDS.includes(kind))
+        issues.push({ code: 'unknown-kind' });
+    if (opts.writer === true && !exports.PROFESSIONAL_ROLES.includes(c.authorRole) && !knownRole(c.authorRole, opts.model)) {
+        issues.push({ code: 'unknown-role' });
+    }
+    const withEntry = kind === 'change' || kind === 'remove';
+    const withCorrected = kind === 'change' || kind === 'add';
+    const need = (field, wanted) => {
+        if (hasOwn(c, field) !== wanted)
+            issues.push({ code: 'field-for-kind', field });
+    };
+    if (exports.CORRECTION_KINDS.includes(kind)) {
+        need('entryId', withEntry);
+        need('entryModified', withEntry);
+        need('corrected', withCorrected);
+    }
+    const corrected = isPlainObject(c.corrected) ? c.corrected : {};
+    const hasTypeContent = hasOwn(corrected, 'type') && hasOwn(corrected, 'content');
+    if (hasOwn(corrected, 'type') !== hasOwn(corrected, 'content'))
+        issues.push({ code: 'field-for-kind', field: 'corrected.type' });
+    if (kind === 'add' && !hasTypeContent)
+        issues.push({ code: 'field-for-kind', field: 'corrected.content' });
+    if (kind === 'add' && hasOwn(corrected, 'time'))
+        issues.push({ code: 'field-for-kind', field: 'corrected.time' });
+    if (kind === 'change' && hasOwn(c, 'corrected') && !hasTypeContent && !hasOwn(corrected, 'time')) {
+        issues.push({ code: 'field-for-kind', field: 'corrected' });
+    }
+    if (hasOwn(corrected, 'clientData') && !(isPlainObject(corrected.clientData) &&
+        Object.keys(corrected.clientData).length > 0 && Object.keys(corrected.clientData).every((k) => CORRECTED_CLIENT_DATA_KEYS.includes(k)))) {
+        issues.push({ code: 'corrected-client-data' });
+    }
+    const related = isPlainObject(event.clientData?.related) ? event.clientData.related : {};
+    for (const { field, eventId } of correctionEventIds(c)) {
+        if (!ID_RE.test(eventId) || eventId.length > 64)
+            issues.push({ code: 'invalid-id', field, eventId });
+        if (related[eventId] !== true)
+            issues.push({ code: 'missing-related', field, eventId });
+    }
+    const anchor = event.clientData?.hdsSourceAnchor;
+    if (anchor != null && (typeof c.about !== 'string' || anchor.eventId !== c.about))
+        issues.push({ code: 'anchor-not-about' });
+    const model = opts.model ?? ((0, HDSModelInitAndSingleton_ts_1.getModel)().isLoaded ? (0, HDSModelInitAndSingleton_ts_1.getModel)() : null);
+    const item = model ? itemOf(c.itemKey, model) : null;
+    if (model && item == null)
+        issues.push({ code: 'unknown-item' });
+    if (item != null) {
+        const streamId = item.data.streamId;
+        if (item.isSystem || item.isAttachments || model.streams.isExplicitGrantOnly(streamId))
+            issues.push({ code: 'item-not-correctable' });
+        if (hasOwn(corrected, 'type') && !item.eventTypes.includes(corrected.type))
+            issues.push({ code: 'corrected-type-not-of-item' });
+        const entry = opts.entry;
+        if (entry != null && withEntry) {
+            const onItem = (entry.streamIds ?? []).some((s) => s === streamId || safeParents(model, s).includes(streamId));
+            if (entry.id !== c.entryId || !onItem || !item.eventTypes.includes(entry.type))
+                issues.push({ code: 'entry-mismatch' });
+        }
+    }
+    if (hasTypeContent && opts.validateContent && !opts.validateContent(corrected.type, corrected.content)) {
+        issues.push({ code: 'invalid-content' });
+    }
+    return issues;
+}
+function safeParents(model, streamId) {
+    try {
+        return model.streams.getParentsIds(streamId, false);
+    }
+    catch {
+        return [];
+    }
+}
+function knownRole(role, model) {
+    if (typeof role !== 'string')
+        return false;
+    try {
+        const m = model ?? ((0, HDSModelInitAndSingleton_ts_1.getModel)().isLoaded ? (0, HDSModelInitAndSingleton_ts_1.getModel)() : null);
+        return m?.vocabularies?.forKey(exports.PROFESSIONAL_ROLE_VOCABULARY)?.values?.[role] != null;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * The event to create for a correction: `time` from the entry (or `time` for `add`), `entryModified` from the entry,
+ * every id in content mirrored in `clientData.related`. Throws an `HDSLibError` (with `issues`) when `checkCorrection`
+ * finds anything with the loaded model.
+ */
+function buildCorrection(p, opts = {}) {
+    const content = { kind: p.kind, authorRole: p.authorRole, itemKey: p.itemKey };
+    const clientData = {};
+    let time;
+    if (p.kind === 'change' || p.kind === 'remove') {
+        if (p.entry == null)
+            throw new errors_ts_1.HDSLibError(`buildCorrection: a ${p.kind} needs the entry`);
+        content.entryId = p.entry.id;
+        content.entryModified = p.entry.modified;
+        time = p.entry.time;
+        const precision = p.entry.clientData?.hdsTimePrecision;
+        if (precision != null)
+            clientData.hdsTimePrecision = precision;
+    }
+    else {
+        time = p.time;
+        if (p.timePrecision != null)
+            clientData.hdsTimePrecision = p.timePrecision;
+    }
+    if (typeof time !== 'number')
+        throw new errors_ts_1.HDSLibError('buildCorrection: no time (the entry\'s, or `time` for an add)');
+    if (p.corrected != null)
+        content.corrected = p.corrected;
+    if (p.comment != null)
+        content.comment = p.comment;
+    if (p.about != null)
+        content.about = p.about;
+    if (p.replaces != null)
+        content.replaces = p.replaces;
+    const related = {};
+    for (const { eventId } of correctionEventIds(content))
+        related[eventId] = true;
+    if (Object.keys(related).length > 0)
+        clientData.related = related;
+    if (p.anchor != null) {
+        if (p.about == null)
+            throw new errors_ts_1.HDSLibError('buildCorrection: an anchor needs `about`');
+        clientData.hdsSourceAnchor = { eventId: p.about, ...p.anchor };
+    }
+    if (p.markdown === true)
+        clientData[exports.TEXT_FORMAT_KEY] = exports.TEXT_FORMAT_MARKDOWN;
+    const event = { streamIds: [p.streamId], type: exports.ENTRY_CORRECTION, time, content, clientData };
+    const issues = checkCorrection(event, { entry: p.entry, model: opts.model, validateContent: opts.validateContent, writer: true });
+    if (issues.length > 0) {
+        throw new errors_ts_1.HDSLibError(`buildCorrection: ${issues.map((i) => i.code + (i.field ? ` (${i.field})` : '')).join(', ')}`, { issues });
+    }
+    return event;
+}
+/** Whether an event is a correction that counts where it is: `correction/entry-v1` on a `corr-` child. */
+function isCountedCorrection(event) {
+    return event?.type === exports.ENTRY_CORRECTION && Array.isArray(event.streamIds) && event.streamIds.length === 1 &&
+        (0, correctionIds_ts_1.isCorrectionStreamId)(event.streamIds[0]);
+}
+/** The key a correction supersedes within: its child, and its entry (for `add`, its item). */
+function slotOf(event) {
+    const c = event.content;
+    if (!isPlainObject(c))
+        return null;
+    const target = c.kind === 'add' ? 'add:' + c.itemKey : 'entry:' + c.entryId;
+    return event.streamIds[0] + '|' + target;
+}
+/**
+ * The current corrections among `events` (read them with `state: 'all'`, so a trashed replacement still supersedes):
+ * corrections that count (`isCountedCorrection`), not trashed, not named in `replaces` by another correction of the same
+ * child and the same entry (for `add`, the same item). Newest `created` first.
+ */
+function currentCorrections(events) {
+    const counted = (events ?? []).filter(isCountedCorrection);
+    const superseded = new Set();
+    for (const e of counted) {
+        const replaces = e.content?.replaces;
+        const slot = slotOf(e);
+        if (typeof replaces === 'string' && slot != null)
+            superseded.add(slot + '|' + replaces);
+    }
+    return counted
+        .filter((e) => e.trashed !== true && !(e.id != null && superseded.has(slotOf(e) + '|' + e.id)))
+        .sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
+}
+/** The current corrections of each entry, by `entryId` (`change` and `remove`; an `add` names no entry). */
+function correctionsByEntry(events) {
+    const out = new Map();
+    for (const e of currentCorrections(events)) {
+        const id = e.content?.entryId;
+        if (typeof id !== 'string' || e.content?.kind === 'add')
+            continue;
+        if (!out.has(id))
+            out.set(id, []);
+        out.get(id).push(e);
+    }
+    return out;
+}
+/**
+ * Where a correction stands against the live entry (data-model CORRECTIONS.md § A correction and the live entry),
+ * computed, never stored. `entry`:
+ * - for `change` and `remove`: the event `entryId` names; `null` when it is gone (deleted); `undefined` when the
+ *   reader cannot read it (a contact that reads the root but not the item): the state is then `open`, it cannot tell;
+ * - for `add`: the entry carrying `clientData.related.<correction id>` (her app writes it when she applies it), or null.
+ * States:
+ * - `applied`: the entry is as corrected, on what `corrected` holds (type and content as CONVERSATION.md § A value she
+ *   already has compares them, comparator included, absent equals absent; time and its precision; `hdsBasis` when
+ *   `corrected` holds it), a `remove` whose entry is gone or trashed, an `add` whose entry exists;
+ * - `outdated`: not applied, and the entry changed after the writer saw it (a signal, never a reason to refuse applying);
+ * - `entry-gone`: a `change` whose entry is gone or trashed;
+ * - `open`: otherwise.
+ */
+function correctionState(correction, entry) {
+    const c = correction?.content ?? {};
+    if (entry === undefined)
+        return 'open';
+    const live = entry != null && entry.trashed !== true ? entry : null;
+    if (c.kind === 'add') {
+        return live != null && correction.id != null && live.clientData?.related?.[correction.id] === true ? 'applied' : 'open';
+    }
+    if (c.kind === 'remove') {
+        if (live == null)
+            return 'applied';
+    }
+    else {
+        if (live == null)
+            return 'entry-gone';
+        if (isAsCorrected(live, isPlainObject(c.corrected) ? c.corrected : {}, c.itemKey))
+            return 'applied';
+    }
+    if (typeof c.entryModified === 'number' && typeof live?.modified === 'number' && live.modified > c.entryModified)
+        return 'outdated';
+    return 'open';
+}
+/** The live entry is as `corrected` says, on what it holds; false when it holds neither a type nor a time. */
+function isAsCorrected(live, corrected, itemKey) {
+    const hasType = hasOwn(corrected, 'type');
+    const hasTime = hasOwn(corrected, 'time');
+    if (!hasType && !hasTime)
+        return false;
+    const want = isPlainObject(corrected.clientData) ? corrected.clientData : {};
+    if (hasType) {
+        const proposal = { itemKey, type: corrected.type, content: corrected.content, clientData: want };
+        if (!(0, conversation_ts_1.holdsProposedValue)({ type: live.type, content: live.content, clientData: live.clientData }, { content: { proposal } }))
+            return false;
+        if ((live.clientData?.hdsComparator ?? null) !== (want.hdsComparator ?? null))
+            return false;
+    }
+    if (hasTime && (live.time !== corrected.time || (live.clientData?.hdsTimePrecision ?? null) !== (want.hdsTimePrecision ?? null)))
+        return false;
+    if (hasOwn(want, 'hdsBasis') && live.clientData?.hdsBasis !== want.hdsBasis)
+        return false;
+    return true;
+}
+/** Built-in labels, for a pack without the vocabulary (as data-model 4.43.0's). */
+const ROLE_LABELS = {
+    physician: { en: 'Physician', fr: 'Médecin', es: 'Médico' },
+    midwife: { en: 'Midwife', fr: 'Sage-femme', es: 'Matrona' },
+    nurse: { en: 'Nurse', fr: 'Infirmier ou infirmière', es: 'Enfermero o enfermera' },
+    pharmacist: { en: 'Pharmacist', fr: 'Pharmacien ou pharmacienne', es: 'Farmacéutico o farmacéutica' },
+    psychologist: { en: 'Psychologist', fr: 'Psychologue', es: 'Psicólogo o psicóloga' },
+    dietitian: { en: 'Dietitian', fr: 'Diététicien ou diététicienne', es: 'Dietista' },
+    physiotherapist: { en: 'Physiotherapist', fr: 'Physiothérapeute', es: 'Fisioterapeuta' },
+    'health-educator': { en: 'Health educator', fr: 'Éducateur ou éducatrice en santé', es: 'Educador o educadora en salud' },
+    other: { en: 'Other', fr: 'Autre', es: 'Otro' }
+};
+/** The label of an author's role: the pack's vocabulary, else the built-in one; a role it does not know reads as `other`. */
+function professionalRoleLabel(role, model = null) {
+    const m = model ?? ((0, HDSModelInitAndSingleton_ts_1.getModel)().isLoaded ? (0, HDSModelInitAndSingleton_ts_1.getModel)() : null);
+    for (const r of [role, 'other']) {
+        const fromPack = m?.vocabularies?.label(exports.PROFESSIONAL_ROLE_VOCABULARY, r);
+        if (fromPack)
+            return fromPack;
+        if (Object.prototype.hasOwnProperty.call(ROLE_LABELS, r))
+            return (0, localizeText_ts_1.localizeText)(ROLE_LABELS[r]);
+    }
+    return role;
+}
+/**
+ * Whether an event's text is markdown (`clientData.hdsTextFormat: 'text/markdown'`, PROVENANCE.md) on an eventType the
+ * key applies to (`note/txt`, `correction/entry-v1`). A reader that renders it renders no raw HTML, loads no remote
+ * image, links `http`, `https` and `mailto` only with the destination visible, and shows no link preview.
+ */
+function isMarkdown(event) {
+    return event?.clientData?.[exports.TEXT_FORMAT_KEY] === exports.TEXT_FORMAT_MARKDOWN && Object.prototype.hasOwnProperty.call(TEXT_FORMAT_FIELDS, event.type ?? '');
+}
+/** The text `hdsTextFormat` formats on an event (`content` of a note, the comment of a correction), or null. */
+function formattedText(event) {
+    const read = Object.prototype.hasOwnProperty.call(TEXT_FORMAT_FIELDS, event?.type ?? '') ? TEXT_FORMAT_FIELDS[event.type] : null;
+    const text = read ? read(event.content) : null;
+    return typeof text === 'string' ? text : null;
 }
 
 
@@ -20997,6 +21682,10 @@ function formatConvertible(content, itemDef, model) {
         : formatSourceLabel(source);
     const sourceMethodName = getMethodName(engine, source?.key);
     const sourceKey = typeof source?.key === 'string' ? source.key : null;
+    // What was recorded with the observation in its own method (Creighton frequency X1, X2, X3, AD:
+    // `source.annotations`, plan 131), shown after it; never after a value converted into another method.
+    const noted = annotationsText(source);
+    const recorded = sourceLabel && noted ? `${sourceLabel} · ${noted}` : sourceLabel;
     /** The origin of a value shown as recorded (no conversion), or converted into `target`. */
     const origin = (target) => ({
         sourceKey,
@@ -21017,7 +21706,7 @@ function formatConvertible(content, itemDef, model) {
             if (targetMethod && typeof targetMethod === 'string') {
                 // Skip conversion if target method equals source method
                 if (source?.key === targetMethod && sourceLabel) {
-                    return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
+                    return { text: `${recorded} (${sourceMethodName})`, origin: origin(null) };
                 }
                 if (engine) {
                     const result = engine.fromVector(targetMethod, vectors);
@@ -21037,7 +21726,7 @@ function formatConvertible(content, itemDef, model) {
     }
     // No autoConvert: show source observation + method name
     if (sourceLabel) {
-        return { text: `${sourceLabel} (${sourceMethodName})`, origin: origin(null) };
+        return { text: `${recorded} (${sourceMethodName})`, origin: origin(null) };
     }
     // No source — RAW vector input, convert via _raw virtual method
     if (vectors && typeof vectors === 'object' && engine && vectorComplete) {
@@ -21065,6 +21754,14 @@ function formatConvertible(content, itemDef, model) {
         return { text: formatVectorSummary(vectors, itemKey, model), origin: null };
     }
     return { text: formatObject(content), origin: null };
+}
+/** The annotations of a convertible's source as written ("X2"), in their stored order; null when none. */
+function annotationsText(source) {
+    const a = source?.annotations;
+    if (a == null || typeof a !== 'object' || Array.isArray(a))
+        return null;
+    const values = Object.values(a).filter((v) => typeof v === 'string' && v.trim() !== '').map(v => v.trim());
+    return values.length > 0 ? values.join(' ') : null;
 }
 /** True when the vector carries a number for every dimension the engine knows. */
 function isCompleteVector(engine, vectors) {
@@ -26327,6 +27024,7 @@ exports.offerStreamsToCreate = offerStreamsToCreate;
 exports.offerStreamsToApiCalls = offerStreamsToApiCalls;
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 const shareIds_ts_1 = __webpack_require__(/*! ../cmc/shareIds.js */ "./ts/cmc/shareIds.ts");
+const correctionIds_ts_1 = __webpack_require__(/*! ../cmc/correctionIds.js */ "./ts/cmc/correctionIds.ts");
 const APP_SUFFIX = '-app';
 /**
  * The app bases a grant names (the app-streams convention: a base `{base}` with its `{base}-app` under it): one per
@@ -26363,8 +27061,16 @@ function appBasesOf(permissions, modelStreams) {
  * the root, and is named by its id whatever `defaultName` says (data-model DOCUMENTS.md: the name carries nothing).
  * Creating it does not check that the id is free: `cmcDocuments.offeredShareIssues` does, before accepting.
  *
+ * A corrections child (`corr-…`, data-model 4.43.0 CORRECTIONS.md) goes under `entry-corrections` the same way, named by
+ * its id; `checkOfferedCorrectionStreams` checks it before accepting.
+ *
  * A stream the model knows takes the model's name; a granted one it does not know takes the permission's
  * `defaultName` when it carries one, else its id.
+ *
+ * A granted item stream also gets the item streams the model has under it (`itemStreamsUnder`): those are the
+ * permissions `forItemKeys` folds into it, which the grant covers but no longer names (B-2026-11-24-12:
+ * `body-vulva-bleeding` granted, `body-vulva-bleeding-browndark` never created, a reader naming it failed whole). Not
+ * for a `level: 'none'` mask.
  */
 function offerStreamsToCreate(permissions, modelStreams) {
     const wanted = new Map();
@@ -26395,6 +27101,12 @@ function offerStreamsToCreate(permissions, modelStreams) {
                 wanted.set(id, { id, name: id, parentId: shareIds_ts_1.DOCUMENT_SHARES_ROOT_ID });
                 return;
             }
+            const isCorrection = (0, correctionIds_ts_1.isCorrectionStreamId)(id);
+            if (isCorrection) {
+                add(correctionIds_ts_1.CORRECTIONS_ROOT_ID, { granted: true, defaultName: 'Corrections from your contacts' });
+                wanted.set(id, { id, name: id, parentId: correctionIds_ts_1.CORRECTIONS_ROOT_ID });
+                return;
+            }
             const base = appBases.find((b) => id.startsWith(b + '-'));
             if (base === undefined) {
                 wanted.set(id, { id, name });
@@ -26423,6 +27135,13 @@ function offerStreamsToCreate(permissions, modelStreams) {
             logger.warn(`offerStreams: could not resolve ancestors of "${streamId}":`, message);
         }
         add(streamId, { granted: true, defaultName: perm.defaultName });
+        if (perm.level !== 'none') {
+            for (const folded of modelStreams.itemStreamsUnder?.(streamId) ?? []) {
+                for (const ancestorId of modelStreams.getParentsIds(folded, false))
+                    add(ancestorId);
+                add(folded);
+            }
+        }
     }
     return [...wanted.values()];
 }
@@ -26451,7 +27170,8 @@ function offerStreamsToApiCalls(streams) {
  * An invitation or a sharing screen must name what a connection reads by the data model's own
  * words, never by the requester's label alone: any account can label a wide grant "Cycle
  * length". These helpers give every HDS app (patient app, account app, doctor dashboard) the
- * same names and the same warnings.
+ * same names and the same warnings. A model stream's `description` comes with its name, so a consent can say what the
+ * data covers (on a documents stream, `cmcDocuments.documentsGrantNote` says what it leaves out).
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.dataName = dataName;
@@ -26525,12 +27245,14 @@ function dataName(streamId, opts = {}) {
  * quoted and flagged when the model does not know the stream), its level, and whether it
  * deserves a warning. Works before the model is loaded (then `inModel: false`).
  */
-function permissionView(perm, opts = {}) {
+function permissionView(perm, options = {}) {
+    // one locale for the name and the description: `fr-CH` reads `fr`, an unsupported one the preferred locales
+    const opts = { ...options, locale: options.locale != null ? ((0, localizeText_ts_1.matchLocale)(options.locale) ?? options.locale) : undefined };
     // named by the canonical id; `streamId` stays as given
     const streamId = (0, shareIds_ts_1.canonicalStreamId)(perm.streamId ?? '');
     const level = perm.level ?? 'read';
     const requesterLabel = perm.defaultName ?? null;
-    const base = { streamId: perm.streamId ?? '', level, requesterLabel };
+    const base = { streamId: perm.streamId ?? '', level, requesterLabel, description: null };
     if (streamId === '*') {
         const name = pick(TEXTS.allData, opts.locale);
         return { ...base, kind: 'all-data', name, label: name, beyondRead: true, inModel: true, hasChildren: true };
@@ -26542,16 +27264,29 @@ function permissionView(perm, opts = {}) {
     const quoted = requesterLabel ? `“${requesterLabel}”` : streamId;
     let inModel = false;
     let hasChildren = false;
+    let description = null;
     try {
         const model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
         const stream = model.streams.getDataById(streamId, false);
         inModel = stream != null || model.itemsDefs.forStreamId(streamId).length > 0;
         hasChildren = (stream?.children?.length ?? 0) > 0;
+        description = descriptionOf(stream?.description, opts.locale);
     }
     catch { /* model not loaded: the requester's label, flagged */ }
     const name = inModel ? dataName(streamId, { ...opts, qualified: true }) : quoted;
     const label = hasChildren ? pick(TEXTS.under, opts.locale).replace('{name}', name) : name;
-    return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren };
+    return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren, description };
+}
+/** A model description as the name is picked (`pick`: the locale, else the preferred locales); null when there is none. */
+function descriptionOf(text, locale) {
+    if (text == null || typeof text !== 'object')
+        return null;
+    try {
+        return pick(text, locale);
+    }
+    catch {
+        return null;
+    }
 }
 
 
@@ -27054,7 +27789,12 @@ exports.CMC_APP_CODES = {
      * HDS Reader engine (plan 128): reads a document sent to its inbox, asks in its dialogue, writes confirmed values.
      * Equals `connectorCmcAppCode('bridge-reader')`. Its streams: data-model `documentation/HDS-READER.md`.
      */
-    BRIDGE_READER: 'hds-bridge-reader'
+    BRIDGE_READER: 'hds-bridge-reader',
+    /**
+     * HDS research (one `hds-research` account per platform): sends research invitations and eligibility tests to a
+     * person who opted in, and reads only the `hds-research` tree. data-model `documentation/RESEARCH.md`.
+     */
+    RESEARCH: 'hds-research'
 };
 /** Well-known CMC consent event types. */
 exports.CMC_EVENT_TYPES = {
@@ -27124,7 +27864,7 @@ function extractAppSubScopeSuffix(streamId, appCode) {
  * dispatch on `kind` and skip what they do not know.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.BASES = exports.CONVERSATION_ALERT_HDS_SCHEMA = exports.VOUCHED_ENGINES = exports.CONFIRMABLE_STATUSES = exports.ERROR_CODES = exports.NOTICE_CODES = exports.ANSWER_ACTIONS = exports.TASK_STATUSES = exports.NOTE_MAX_LENGTH = exports.PRINTED_IN_KEY = exports.DOCUMENT_VALUES_KEY = exports.DOCUMENT_PENDING_KEY = exports.SPECIMEN_CODES = exports.REASON_NOT_READ = exports.QUESTION_CODES = exports.ITEM_KINDS = exports.CONVERSATION_ALERT_KINDS = exports.ET_CONVERSATION = exports.CONVERSATION_STREAM_PREFIX = exports.CONVERSATION_ROOT_ID = void 0;
+exports.ET_OTHER_NAME = exports.OTHER_NAME_ITEM_KEY = exports.OTHER_NAMES_STREAM_ID = exports.OTHER_NAME_USES_MATCHED = exports.BASES = exports.CONVERSATION_ALERT_HDS_SCHEMA = exports.VOUCHED_ENGINES = exports.CONFIRMABLE_STATUSES = exports.ERROR_CODES = exports.NOTICE_CODES = exports.ANSWER_ACTIONS = exports.TASK_STATUSES = exports.NOTE_MAX_LENGTH = exports.PRINTED_IN_KEY = exports.DOCUMENT_VALUES_KEY = exports.DOCUMENT_PENDING_KEY = exports.SPECIMEN_CODES = exports.REASON_NOT_READ = exports.QUESTION_CODES = exports.ITEM_KINDS = exports.CONVERSATION_ALERT_KINDS = exports.ET_CONVERSATION = exports.CONVERSATION_STREAM_PREFIX = exports.CONVERSATION_ROOT_ID = void 0;
 exports.vouchedEnginesFor = vouchedEnginesFor;
 exports.checkConversationAlertHds = checkConversationAlertHds;
 exports.buildConversationAlertContent = buildConversationAlertContent;
@@ -27153,6 +27893,7 @@ exports.checkAnswerFor = checkAnswerFor;
 exports.checkValueProposal = checkValueProposal;
 exports.proposalRefusal = proposalRefusal;
 exports.profileMatch = profileMatch;
+exports.otherNamesOf = otherNamesOf;
 exports.documentKindRefusal = documentKindRefusal;
 exports.pendingFieldsOf = pendingFieldsOf;
 exports.proposedFieldsOf = proposedFieldsOf;
@@ -27163,7 +27904,10 @@ exports.documentEditOf = documentEditOf;
 exports.listDocumentValues = listDocumentValues;
 exports.sourceKeyOf = sourceKeyOf;
 exports.valueEventOf = valueEventOf;
+exports.sourceGridOf = sourceGridOf;
 exports.isDatedGrid = isDatedGrid;
+exports.isTableByColumn = isTableByColumn;
+exports.isDatedPerPage = isDatedPerPage;
 exports.answeredDateOf = answeredDateOf;
 exports.acceptProposedValues = acceptProposedValues;
 exports.answerQuestion = answerQuestion;
@@ -27216,7 +27960,11 @@ exports.QUESTION_CODES = {
     /** 4.26.0: the date of a document waiting for it, about a `proposed-document`. */
     WHICH_DOCUMENT_DATE: 'which-document-date',
     /** 4.36.0: the day of one box of a row of a dated grid (`context.grid`, `context.anchor`). */
-    WHICH_ROW_DATE: 'which-row-date'
+    WHICH_ROW_DATE: 'which-row-date',
+    /** 4.39.0: the day of one result column of a table read per column on a picture (`context.column`, `context.anchor`). */
+    WHICH_COLUMN_DATE: 'which-column-date',
+    /** 4.49.0: the day of one page of a document dated per page (`context.anchor`: attachmentId and page). */
+    WHICH_PAGE_DATE: 'which-page-date'
 };
 /** `proposed-value.reason` (4.36.0): the contact sees writing in this box of a dated grid and proposes nothing from it. */
 exports.REASON_NOT_READ = 'not-read';
@@ -27247,7 +27995,21 @@ exports.NOTICE_CODES = {
     TYPED_TEXT_NOT_READ: 'typed-text-not-read',
     SEVERAL_SAMPLING_DATES: 'several-sampling-dates',
     /** 4.26.0: the contact does not read her notes, once per document. */
-    NOTE_NOT_READ: 'note-not-read'
+    NOTE_NOT_READ: 'note-not-read',
+    /** 4.27.0: the contact is ready to read her documents, once per relationship. */
+    READY: 'ready',
+    /** 4.39.0: a column of a table read per column is not proposed. */
+    COLUMNS_NOT_READ: 'columns-not-read',
+    /** 4.45.0: several result columns and fewer than two sampling days told apart; nothing proposed, ends the work. */
+    SEVERAL_RESULT_COLUMNS: 'several-result-columns',
+    /** 4.45.0: the page of a picture prints more result lines than were read; the proposals stand. */
+    LINES_MAY_BE_MISSING: 'lines-may-be-missing',
+    /** 4.45.0: a dated grid (or a document that may be one) whose grid is not located; nothing read, ends the work. */
+    GRID_NOT_LOCATED: 'grid-not-located',
+    /** 4.45.0: the contact does not read this kind of document; ends the work. */
+    KIND_NOT_READ: 'kind-not-read',
+    /** 4.47.0: a document read page by page has at least one page not read; the other pages' values stand, the work goes on. */
+    PAGES_NOT_READ: 'pages-not-read'
 };
 exports.ERROR_CODES = { NO_ATTACHMENT: 'no-attachment', WRITE_FAILED: 'write-failed', READING_FAILED: 'reading-failed' };
 /** `proposed-value.status` values her app may offer to confirm; any other (or unknown, R8) is shown, not confirmable. */
@@ -27333,15 +28095,32 @@ function parseConversationAlerts(events) {
         const alert = { alertEventId: e.id, kind: hds.kind, hds, time: e.time ?? 0, direction, from };
         const earlier = byKey.get(key);
         if (earlier != null) {
-            // a `task-status` repeated later (a restarted contact reusing an attempt) is the newer state (R4): keep the latest
-            if (hds.kind !== 'task-status')
+            // a `task-status` repeated later (a restarted contact reusing an attempt) is the newer state (R4), and a notice
+            // repeated later is the one of a later read (4.45.0): keep the latest
+            if (hds.kind !== 'task-status' && hds.kind !== 'notice')
                 continue;
             out[earlier] = null;
         }
         byKey.set(key, out.length);
         out.push(alert);
     }
-    return out.filter((a) => a != null);
+    // 4.45.0, CONVERSATION.md "A notice speaks of one read": a notice about a document earlier than the latest
+    // `received` status about it, in the same direction, belongs to an earlier read and is dropped
+    const readStart = new Map();
+    for (const a of out) {
+        if (a == null || a.kind !== 'task-status' || a.hds.status !== 'received' || typeof a.hds.about !== 'string')
+            continue;
+        const k = a.direction + ':' + a.hds.about;
+        readStart.set(k, Math.max(readStart.get(k) ?? -Infinity, a.time));
+    }
+    return out.filter((a) => {
+        if (a == null)
+            return false;
+        if (a.kind !== 'notice' || typeof a.hds.about !== 'string')
+            return true;
+        const start = readStart.get(a.direction + ':' + a.hds.about);
+        return start == null || a.time >= start;
+    });
 }
 function alertKey(hds) {
     switch (hds.kind) {
@@ -27597,7 +28376,7 @@ const KNOWN_CODES = new Set(Object.values(exports.QUESTION_CODES));
 function questionActions(code) {
     if (CHOOSE_CODES.has(code) || code === exports.QUESTION_CODES.WHICH_DOCUMENT_KIND)
         return new Set(['choose', 'skip']);
-    if (code === exports.QUESTION_CODES.WHICH_DATE || code === exports.QUESTION_CODES.WHICH_DOCUMENT_DATE || code === exports.QUESTION_CODES.WHICH_ROW_DATE)
+    if (code === exports.QUESTION_CODES.WHICH_DATE || code === exports.QUESTION_CODES.WHICH_DOCUMENT_DATE || code === exports.QUESTION_CODES.WHICH_ROW_DATE || code === exports.QUESTION_CODES.WHICH_COLUMN_DATE || code === exports.QUESTION_CODES.WHICH_PAGE_DATE)
         return new Set(['confirm', 'skip']);
     if (code === exports.QUESTION_CODES.IS_THIS_YOURS)
         return new Set(['confirm', 'not-mine', 'skip']);
@@ -27866,7 +28645,7 @@ function checkConversationItem(content) {
         else if (code === exports.QUESTION_CODES.IS_THIS_YOURS) {
             if (has('candidateId') || has('options'))
                 issues.push('question is-this-yours: no candidateId, no options');
-            if (c.context?.dates != null || c.context?.grid != null)
+            if (c.context?.dates != null || c.context?.grid != null || c.context?.column != null)
                 issues.push('question is-this-yours: context holds identity and anchor only');
         }
         else if (code === exports.QUESTION_CODES.WHICH_DOCUMENT_KIND) {
@@ -27897,6 +28676,22 @@ function checkConversationItem(content) {
             if (c.context != null && Object.keys(c.context).some(k => k !== 'grid' && k !== 'anchor'))
                 issues.push('question which-row-date: context holds grid and anchor only');
         }
+        else if (code === exports.QUESTION_CODES.WHICH_COLUMN_DATE) {
+            if (has('candidateId') || has('options'))
+                issues.push('question which-column-date: no candidateId, no options');
+            if (c.context?.column == null || c.context?.anchor?.bbox == null)
+                issues.push('question which-column-date: context.column and context.anchor with the heading\'s bbox are required');
+            if (c.context != null && Object.keys(c.context).some(k => k !== 'column' && k !== 'anchor'))
+                issues.push('question which-column-date: context holds column and anchor only (no date a model read)');
+        }
+        else if (code === exports.QUESTION_CODES.WHICH_PAGE_DATE) {
+            if (has('candidateId') || has('options'))
+                issues.push('question which-page-date: no candidateId, no options');
+            if (c.context?.anchor?.attachmentId == null || c.context?.anchor?.page == null)
+                issues.push('question which-page-date: context.anchor with its attachmentId and page is required');
+            if (c.context != null && Object.keys(c.context).some(k => k !== 'anchor'))
+                issues.push('question which-page-date: context holds anchor only (no date)');
+        }
         else if (typeof code === 'string' && code.startsWith('x-')) {
             if (has('context'))
                 issues.push(`question ${code}: context is for is-this-yours and the date questions only`);
@@ -27904,8 +28699,25 @@ function checkConversationItem(content) {
         else {
             issues.push(`question: unknown code "${code}" (bare codes are HDS's; a third party's start with x-<vendor>-)`);
         }
+        // 4.47.0: a date not copied from a text layer carries its anchor, with its bbox and eventId = about, and no label
+        // (that it was not copied from a text layer is the writer's to know: a date with an anchor is held to it)
+        const dates = Array.isArray(c.context?.dates) ? c.context.dates : [];
+        dates.forEach((d, i) => {
+            if (d?.anchor == null)
+                return;
+            if (d.anchor.bbox == null)
+                issues.push(`question ${code}: context.dates[${i}].anchor needs its bbox`);
+            if (d.anchor.eventId !== c.about)
+                issues.push(`question ${code}: context.dates[${i}].anchor.eventId must be about`);
+            if (d.label != null)
+                issues.push(`question ${code}: context.dates[${i}] with an anchor carries no label`);
+        });
+        if (c.context?.anchor?.eventId != null && c.context.anchor.eventId !== c.about)
+            issues.push(`question ${code}: context.anchor.eventId must be about`);
     }
     else if (c.kind === 'proposed-value') {
+        if (c.anchor?.eventId != null && c.anchor.eventId !== c.about)
+            issues.push('proposed-value: anchor.eventId must be about');
         if ((c.status === 'kept-aside' || c.status === 'unmapped') && c.reason == null)
             issues.push(`proposed-value ${c.status}: reason is required`);
         if (c.reason === exports.REASON_NOT_READ) {
@@ -28001,8 +28813,13 @@ function checkAnswerFor(content, target, conv) {
             else if (c.timePrecision !== 'unknown' && c.time == null)
                 issues.push(`answer ${code}: time is required`);
         }
-        if (code === exports.QUESTION_CODES.WHICH_ROW_DATE && c.action === 'confirm' && (c.timePrecision !== 'day' || typeof c.time !== 'number' || ((c.time % DAY) + DAY) % DAY !== 12 * HOUR)) {
-            issues.push('answer which-row-date: a day at 12:00 UTC, with timePrecision day');
+        if ((code === exports.QUESTION_CODES.WHICH_ROW_DATE || code === exports.QUESTION_CODES.WHICH_COLUMN_DATE || code === exports.QUESTION_CODES.WHICH_PAGE_DATE) && c.action === 'confirm' && (c.timePrecision !== 'day' || typeof c.time !== 'number' || ((c.time % DAY) + DAY) % DAY !== 12 * HOUR)) {
+            issues.push(`answer ${code}: a day at 12:00 UTC, with timePrecision day`);
+        }
+        // 4.49.0: her app refuses a day later than today; the lib knows no zone, so it refuses a day that has begun nowhere
+        // yet (UTC+14), and her app checks her own today
+        if (code === exports.QUESTION_CODES.WHICH_PAGE_DATE && c.action === 'confirm' && typeof c.time === 'number' && utcDay(c.time) > utcDay(Date.now() / 1000 + 14 * HOUR)) {
+            issues.push(`answer ${code}: a day later than today`);
         }
         if (c.applied != null)
             issues.push('answer to a question: no applied');
@@ -28109,26 +28926,82 @@ function proposalRefusal(pv, engines) {
         return 'engine-not-vouched';
     return null;
 }
+/** `contact/other-name-v1.use` values her app matches (4.47.0); `nickname`, or a value it does not know, never matches. */
+exports.OTHER_NAME_USES_MATCHED = ['official', 'usual', 'maiden', 'old'];
+/** 4.47.0: the `explicitGrantOnly` root holding her other names, its item and eventType (PROFILE.md § Other names). */
+exports.OTHER_NAMES_STREAM_ID = 'other-names';
+exports.OTHER_NAME_ITEM_KEY = 'other-name';
+exports.ET_OTHER_NAME = 'contact/other-name-v1';
 function nameTokens(s) {
     return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(/[\s,-]+/).filter(t => t.length > 0).sort();
 }
+/** The given and family pairs she may be printed as: her profile's, then each other name matched (R3, 4.47.0). */
+function namePairs(profile) {
+    const pairs = [[profile.name, profile.surname]];
+    for (const o of profile.otherNames ?? []) {
+        if (o == null || typeof o !== 'object')
+            continue;
+        if (o.use != null && !exports.OTHER_NAME_USES_MATCHED.includes(o.use))
+            continue;
+        pairs.push([o.given ?? profile.name, o.family ?? profile.surname]);
+    }
+    return pairs;
+}
 /**
  * R3, `basis: profile-match`: true only when the printed name holds exactly her full given and family names (case,
- * accents, hyphens, commas, spaces and order aside: "DUPONT, MARIE"; an initial never matches) and `birthDay` equals
- * her birth date. A profile
- * without a given name, a family name or a birth date never matches.
+ * accents, hyphens, commas, spaces and order aside: "DUPONT, MARIE"; an initial never matches), or those of one of her
+ * `otherNames` (4.47.0: its `given` else her profile's, with its `family` else her profile's; `nickname` or an unknown
+ * `use` never matches, an absent `use` does), and `birthDay` equals her birth date. A pair with a part empty after
+ * normalisation never matches; a profile without a birth date never matches.
  */
 function profileMatch(identity, profile) {
-    const given = profile?.name?.trim();
-    const family = profile?.surname?.trim();
     const born = profile?.dateOfBirth?.trim().slice(0, 10);
-    if (!given || !family || !born || !identity?.name || !identity.birthDay)
+    if (profile == null || !born || !identity?.name || !identity.birthDay)
         return false;
     if (identity.birthDay !== born)
         return false;
     const printed = nameTokens(identity.name);
-    const mine = nameTokens(given + ' ' + family);
-    return printed.length === mine.length && printed.every((t, i) => t === mine[i]);
+    return namePairs(profile).some(([given, family]) => {
+        if (typeof given !== 'string' || typeof family !== 'string')
+            return false;
+        if (nameTokens(given).length === 0 || nameTokens(family).length === 0)
+            return false;
+        const mine = nameTokens(given + ' ' + family);
+        return printed.length === mine.length && printed.every((t, i) => t === mine[i]);
+    });
+}
+/**
+ * Her other names, for `profileMatch` (4.47.0): the non-trashed `contact/other-name-v1` events of the `other-names`
+ * root, as `{ given?, family?, use? }`. None (not an error) when the root does not exist or the connection is not
+ * granted it; an event that holds neither a given nor a family name is left out.
+ */
+async function otherNamesOf(connection) {
+    let events;
+    try {
+        events = await connection.apiOne('events.get', { streams: [exports.OTHER_NAMES_STREAM_ID], types: [exports.ET_OTHER_NAME], limit: 1000 }, 'events');
+    }
+    catch (e) {
+        if (['unknown-referenced-resource', 'unknown-resource', 'forbidden'].includes((0, appScope_ts_1.pryvErrorCode)(e)))
+            return [];
+        throw e;
+    }
+    const out = [];
+    for (const e of events ?? []) {
+        const c = e?.content;
+        if (e?.trashed === true || e?.type !== exports.ET_OTHER_NAME || c == null || typeof c !== 'object')
+            continue;
+        const name = {};
+        if (typeof c.given === 'string')
+            name.given = c.given;
+        if (typeof c.family === 'string')
+            name.family = c.family;
+        if (name.given == null && name.family == null)
+            continue;
+        if (c.use != null)
+            name.use = String(c.use);
+        out.push(name);
+    }
+    return out;
 }
 // ---- 4.26.0: a document's date and kind (DOCUMENTS.md § A document waiting for its date and kind) ---- //
 /** Why a kind key cannot be proposed: unknown to the loaded pack, or deprecated; null when it can. */
@@ -28351,7 +29224,8 @@ function knownClientDataValue(key, value) {
 /**
  * The value event her app writes for a proposed value (§ Writing a value): the item's stream, the proposal's (or her
  * correction's) type and content, the time from the proposal or from `date` (her `which-date` answer; `unknown`:
- * no time), the proposal's clientData keys, `related`, `sourceKey`, `hdsSourceAnchor` and `hdsExtraction`.
+ * no time), the proposal's clientData keys, `related`, `sourceKey`, `hdsSourceAnchor` (with `hdsSourceGrid`, the box of
+ * a dated grid, data-model 4.51.0) and `hdsExtraction`.
  */
 function valueEventOf(pv, opts = {}) {
     const c = pv.content;
@@ -28382,11 +29256,31 @@ function valueEventOf(pv, opts = {}) {
     clientData.sourceKey = sourceKeyOf(c.extraction.engine, c.about, c.candidateId);
     // the anchor is self-contained (PROVENANCE.md, 4.25.0): it names its document even when the contact left it out;
     // one naming another document is dropped, never rewritten (R11)
-    if (c.anchor != null && (c.anchor.eventId == null || c.anchor.eventId === c.about))
+    if (c.anchor != null && (c.anchor.eventId == null || c.anchor.eventId === c.about)) {
         clientData.hdsSourceAnchor = { ...c.anchor, eventId: c.about };
+        // 4.51.0: the box of a dated grid it was read from, only beside its anchor
+        const grid = validGrid(c.grid);
+        if (grid != null)
+            clientData.hdsSourceGrid = grid;
+    }
     clientData.hdsExtraction = { ...c.extraction, confirmedBy: 'person', ...(opts.correction ? { corrected: true } : {}) };
     event.clientData = clientData;
     return event;
+}
+/** A dated grid's box `{ row, column }` (integers from 1), or null. */
+function validGrid(g) {
+    if (g == null || typeof g !== 'object' || !Number.isInteger(g.row) || !Number.isInteger(g.column) || g.row < 1 || g.column < 1)
+        return null;
+    return { row: g.row, column: g.column };
+}
+/**
+ * The box of a dated grid a value was read from (`clientData.hdsSourceGrid`, data-model 4.51.0), or null: none on a value
+ * without `hdsSourceAnchor` (it never stands without one) or with a malformed box.
+ */
+function sourceGridOf(event) {
+    if (event?.clientData?.hdsSourceAnchor == null)
+        return null;
+    return validGrid(event.clientData.hdsSourceGrid);
 }
 /** The value already written for `sourceKey` on `streamId` (trashed included, left as it is), or null. */
 async function findBySourceKey(connection, streamId, sourceKey, time) {
@@ -28402,9 +29296,28 @@ async function findBySourceKey(connection, streamId, sourceKey, time) {
 function isDatedGrid(conv) {
     return conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_ROW_DATE) || conv.proposedValues.some(p => p.item.content.grid != null);
 }
-/** The `which-date` answer that dates a proposed value without `proposal.time`; never one on a dated grid. */
+/**
+ * Whether the document is a table read per column on a picture (4.39.0): a `which-column-date` was asked, or a value names its
+ * column, so a value's day is its `proposal.time` only.
+ */
+function isTableByColumn(conv) {
+    return conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_COLUMN_DATE) || conv.proposedValues.some(p => p.item.content.column != null);
+}
+/**
+ * Whether the document is dated per page (4.49.0): a `which-page-date` was asked, so a value's day is its `proposal.time`
+ * only. (Its values carry an ordinary anchor, so once the questions are deleted at `done` (R10) nothing tells; no
+ * `which-date` is asked on such a document, so none dates a value then either.)
+ */
+function isDatedPerPage(conv) {
+    return conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_PAGE_DATE);
+}
+/** The page a `which-page-date` question or a proposed value's anchor names: `attachmentId|page`. */
+function pageKeyOf(anchor) {
+    return [anchor?.attachmentId, anchor?.page].join('|');
+}
+/** The `which-date` answer that dates a proposed value without `proposal.time`; never one on a dated grid, a table read per column or a document dated per page. */
 function answeredDateOf(conv, candidateId) {
-    if (isDatedGrid(conv))
+    if (isDatedGrid(conv) || isTableByColumn(conv) || isDatedPerPage(conv))
         return null;
     return conv.candidateDates[candidateId] ?? conv.documentDate;
 }
@@ -28601,7 +29514,8 @@ async function answerProposedValues(connection, rel, params) {
 /**
  * R3, the answer her app gives without a tap: `confirm` with `basis: profile-match` on the document's open
  * `is-this-yours` question when `profileMatch` holds, at most one automatic answer per document. Returns null when
- * nothing was answered.
+ * nothing was answered. Pass her other names in `profile.otherNames` (4.47.0, `otherNamesOf`): the answer is the same
+ * whichever name matched, and nothing of them reaches the contact.
  */
 async function autoConfirmIdentity(connection, rel, params) {
     const { streams } = await personSide(connection, rel, 'autoConfirmIdentity');
@@ -29097,11 +30011,15 @@ function holdsDocumentFields(document, fields) {
  * the answer when the work is done now (`current`: the latest status, `taskStatusOf`; left out, `done` is taken as the
  * latest), when she answered `not-mine`, or when the document was unshared (`unshared`). An answer written while the work
  * is in progress again waits for the next `done`.
+ *
+ * A final `error` ends the work as a `done` does (B-2026-11-25-2): an `error` still the latest status 24 h after it was
+ * sent (a retry would have posted a later status), then each answer's own 24 h. A later status supersedes it.
  */
 function notesToRemove(conv, done, opts = {}) {
     const now = opts.now ?? Math.floor(Date.now() / 1000);
     const doneAt = done?.hds?.status === 'done' ? done.time : null;
-    const idle = opts.current === undefined ? doneAt != null : opts.current?.hds?.status === 'done';
+    const current = opts.current === undefined ? done : opts.current;
+    const idle = current?.hds?.status === 'done' || (current?.hds?.status === 'error' && now - current.time >= DAY);
     return conv.answers.filter(a => {
         if (typeof a.content.note !== 'string')
             return false;
@@ -29229,6 +30147,26 @@ async function writeQuestion(personConnection, streams, content) {
         const conv = conversationOf(items, content.about);
         if (content.code === exports.QUESTION_CODES.WHICH_DATE && isDatedGrid(conv))
             issues.push('question which-date: never on a dated grid');
+        if (content.code === exports.QUESTION_CODES.WHICH_DATE && isTableByColumn(conv))
+            issues.push('question which-date: never on a table read per column');
+        if (content.code === exports.QUESTION_CODES.WHICH_DATE && isDatedPerPage(conv))
+            issues.push('question which-date: never on a document dated per page');
+        if ((content.code === exports.QUESTION_CODES.WHICH_ROW_DATE || content.code === exports.QUESTION_CODES.WHICH_COLUMN_DATE) && isDatedPerPage(conv))
+            issues.push(`question ${content.code}: the document has a which-page-date`);
+        if (content.code === exports.QUESTION_CODES.WHICH_PAGE_DATE) {
+            const other = conv.questions.find(q => q.code === exports.QUESTION_CODES.WHICH_DATE || q.code === exports.QUESTION_CODES.WHICH_ROW_DATE || q.code === exports.QUESTION_CODES.WHICH_COLUMN_DATE);
+            if (other != null)
+                issues.push(`question which-page-date: the document has a ${other.code}`);
+            if (conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_PAGE_DATE && pageKeyOf(q.item.content.context?.anchor) === pageKeyOf(content.context?.anchor)))
+                issues.push('question which-page-date: the page was asked');
+        }
+        if (content.code === exports.QUESTION_CODES.WHICH_COLUMN_DATE) {
+            if (conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_DATE))
+                issues.push('question which-column-date: the document has a which-date');
+            const columnOf = (c) => [c.context?.anchor?.attachmentId, c.context?.anchor?.page, c.context?.column?.index].join('|');
+            if (conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_COLUMN_DATE && columnOf(q.item.content) === columnOf(content)))
+                issues.push('question which-column-date: the column was asked');
+        }
         if (content.code === exports.QUESTION_CODES.WHICH_ROW_DATE) {
             if (conv.questions.some(q => q.code === exports.QUESTION_CODES.WHICH_DATE))
                 issues.push('question which-row-date: the document has a which-date');
@@ -29290,6 +30228,34 @@ async function writeProposedValues(personConnection, streams, about, contents) {
                 own.push('grid is required on a dated grid');
             if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day'))
                 own.push('a value of a dated grid has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
+        }
+        if (own.length === 0 && (c.column != null || isTableByColumn(conv))) {
+            const p = c.proposal;
+            if (c.column == null)
+                own.push('column is required on a table read per column');
+            if (c.grid != null)
+                own.push('a value has a column or a box, never both');
+            if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day'))
+                own.push('a value of a table read per column has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
+        }
+        if (own.length === 0 && isDatedPerPage(conv)) {
+            const p = c.proposal;
+            if (c.anchor?.attachmentId == null || c.anchor?.page == null)
+                own.push('anchor (attachmentId, page) is required on a document dated per page');
+            if (c.grid != null || c.column != null)
+                own.push('a value of a document dated per page has no grid and no column');
+            if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day'))
+                own.push('a value of a document dated per page has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
+            // on an asked page: only after her confirm, with her day
+            const asked = conv.questions.find(q => q.code === exports.QUESTION_CODES.WHICH_PAGE_DATE && pageKeyOf(q.item.content.context?.anchor) === pageKeyOf(c.anchor));
+            // (her latest day, or an earlier one she gave: once a value of the page is written, a later answer changes nothing)
+            if (asked != null) {
+                const days = conv.answers.filter(a => a.content.inReplyTo === asked.item.id && a.content.action === 'confirm').map(a => a.content.time);
+                if (asked.answer?.content.action !== 'confirm')
+                    own.push('its page is asked (which-page-date) and not confirmed');
+                else if (p != null && !days.includes(p.time))
+                    own.push('a value of an asked page takes her day');
+            }
         }
         issues.push(...own.map(i => `${c?.candidateId ?? '?'}: ${i}`));
     }
@@ -29417,6 +30383,443 @@ const STREAM_LABELS = {
         contact: { en: 'Answers shared with you', fr: 'Réponses partagées avec vous', es: 'Respuestas compartidas con usted', it: 'Risposte condivise con lei', 'pt-BR': 'Respostas compartilhadas com você' }
     }
 };
+
+
+/***/ },
+
+/***/ "./ts/cmc/correctionIds.ts"
+/*!*********************************!*\
+  !*** ./ts/cmc/correctionIds.ts ***!
+  \*********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * The ids of the `entry-corrections` children (data-model 4.43.0, `documentation/CORRECTIONS.md`), apart from
+ * `HDSModel/corrections.ts` so that `appTemplates/offerStreams.ts` and `HDSModel-ItemsDefs.ts` can read them without
+ * the helpers.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CORRECTION_STREAM_PREFIX = exports.CORRECTIONS_ROOT_ID = void 0;
+exports.isCorrectionStreamId = isCorrectionStreamId;
+exports.newCorrectionStreamId = newCorrectionStreamId;
+exports.asksForCorrections = asksForCorrections;
+exports.checkOfferedCorrectionStreams = checkOfferedCorrectionStreams;
+const shareIds_ts_1 = __webpack_require__(/*! ./shareIds.js */ "./ts/cmc/shareIds.ts");
+exports.CORRECTIONS_ROOT_ID = 'entry-corrections';
+exports.CORRECTION_STREAM_PREFIX = 'corr-';
+/** A child of `entry-corrections`: `corr-` + 12 lowercase base36 characters. */
+function isCorrectionStreamId(streamId) {
+    return typeof streamId === 'string' && /^corr-[a-z0-9]{12}$/.test(streamId);
+}
+/** A new random child id, never derived from a name (`corr-` + 12 lowercase base36). */
+function newCorrectionStreamId() {
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const length = exports.CORRECTION_STREAM_PREFIX.length + 12;
+    const bytes = new Uint8Array(16);
+    let id = exports.CORRECTION_STREAM_PREFIX;
+    while (id.length < length) {
+        globalThis.crypto.getRandomValues(bytes);
+        // 252 = 7 × 36: higher bytes are dropped so every character is equally likely
+        for (const b of bytes)
+            if (b < 252 && id.length < length)
+                id += alphabet[b % 36];
+    }
+    return id;
+}
+/**
+ * Whether permissions ask for corrections the minted way (data-model CORRECTIONS.md § The child): the item
+ * `entry-correction` at `contribute`, that is `entry-corrections` at `contribute`. Her app never grants that permission:
+ * it accepts without it, then creates a child for the relationship and grants it by scope update.
+ */
+function asksForCorrections(permissions) {
+    return (permissions ?? []).some((p) => (0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? '') === exports.CORRECTIONS_ROOT_ID && p.level === 'contribute');
+}
+/**
+ * What her app refuses in an offer or a scope request before granting it (data-model CORRECTIONS.md § The child):
+ * - `root-level`: `entry-corrections` at `manage` or `create-only` (`read` is a reader's grant; `contribute` is the ask
+ *   of `asksForCorrections`, never granted as such);
+ * - `child-not-contribute`: a `corr-` child at any level but `contribute`;
+ * - `child-taken`: a `corr-` child that exists and is not this relationship's: marked for another (`existing` maps the
+ *   ids on her account to the relationship each is marked with, `null` when unmarked), unmarked and not named by this
+ *   relationship's access (`namedByThis`: an accept interrupted before the mark), or named by another access
+ *   (`namedByOthers`);
+ * - `several-children`: a second `corr-` id;
+ * - `not-single-use`: a `corr-` id that does not exist yet, from a contact whose invite was not single-use
+ *   (`singleUse: false`), on a scope request as well: an open link would give every person the same id.
+ * Pure. Empty when nothing is refused.
+ */
+function checkOfferedCorrectionStreams(permissions, context) {
+    const issues = [];
+    const existingOf = (id) => {
+        const e = context.existing;
+        if (e instanceof Map)
+            return e.has(id) ? e.get(id) : undefined;
+        return e != null && Object.prototype.hasOwnProperty.call(e, id) ? e[id] : undefined;
+    };
+    const others = new Set(context.namedByOthers ?? []);
+    const own = new Set(context.namedByThis ?? []);
+    const children = [];
+    for (const perm of permissions ?? []) {
+        const id = (0, shareIds_ts_1.canonicalStreamId)(perm?.streamId ?? '');
+        if (id === exports.CORRECTIONS_ROOT_ID && !['read', 'none', 'contribute'].includes(perm.level))
+            issues.push({ code: 'root-level', streamId: id });
+        if (!isCorrectionStreamId(id))
+            continue;
+        if (perm.level !== 'contribute')
+            issues.push({ code: 'child-not-contribute', streamId: id });
+        const marked = existingOf(id);
+        const mine = (context.relationship != null && marked === context.relationship) || (marked === null && own.has(id));
+        if ((marked !== undefined && !mine) || others.has(id))
+            issues.push({ code: 'child-taken', streamId: id });
+        if (!children.includes(id))
+            children.push(id);
+        if (!context.singleUse && marked === undefined)
+            issues.push({ code: 'not-single-use', streamId: id });
+    }
+    for (const id of children.slice(1))
+        issues.push({ code: 'several-children', streamId: id });
+    return issues;
+}
+
+
+/***/ },
+
+/***/ "./ts/cmc/correctionStreams.ts"
+/*!*************************************!*\
+  !*** ./ts/cmc/correctionStreams.ts ***!
+  \*************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+/**
+ * The person's side of the `entry-corrections` children (data-model 4.43.0 `documentation/CORRECTIONS.md` § The child):
+ * one `corr-` child per relationship, granted `contribute`, marked `clientData.hdsEntryCorrections = { relationship }`.
+ * Her app checks what an offer or a scope request asks before granting it (`checkOfferedCorrections`), accepts a
+ * minted ask without the root (`withoutCorrectionsAsk`), then creates, marks and grants the child
+ * (`ensureCorrectionStream`); a child named by a single-use offer is marked once the grant exists
+ * (`markOfferedCorrectionStreams`). The pure rules are in `correctionIds.ts`.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.CORRECTIONS_MARK_KEY = void 0;
+exports.correctionStreamsIn = correctionStreamsIn;
+exports.listCorrectionStreams = listCorrectionStreams;
+exports.correctionStreamFor = correctionStreamFor;
+exports.ensureCorrectionsRoot = ensureCorrectionsRoot;
+exports.namesCorrectionStreams = namesCorrectionStreams;
+exports.withoutCorrectionsAsk = withoutCorrectionsAsk;
+exports.correctionsAskRefusal = correctionsAskRefusal;
+exports.checkOfferedCorrections = checkOfferedCorrections;
+exports.checkGrantedCorrections = checkGrantedCorrections;
+exports.isDefiniteAcceptFailure = isDefiniteAcceptFailure;
+exports.existingCorrectionStreamIds = existingCorrectionStreamIds;
+exports.releaseUnclaimedCorrectionStreams = releaseUnclaimedCorrectionStreams;
+exports.markOfferedCorrectionStreams = markOfferedCorrectionStreams;
+exports.ensureCorrectionStream = ensureCorrectionStream;
+const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const appScope_ts_1 = __webpack_require__(/*! ./appScope.js */ "./ts/cmc/appScope.ts");
+const documents_ts_1 = __webpack_require__(/*! ./documents.js */ "./ts/cmc/documents.ts");
+const shareIds_ts_1 = __webpack_require__(/*! ./shareIds.js */ "./ts/cmc/shareIds.ts");
+const scope_ts_1 = __webpack_require__(/*! ./scope.js */ "./ts/cmc/scope.ts");
+const correctionIds_ts_1 = __webpack_require__(/*! ./correctionIds.js */ "./ts/cmc/correctionIds.ts");
+/** The mark on a child: `clientData.hdsEntryCorrections = { relationship }`. */
+exports.CORRECTIONS_MARK_KEY = 'hdsEntryCorrections';
+/** The `corr-` children of `entry-corrections` in a stream tree (`streams.get` output, any depth). */
+function correctionStreamsIn(streams) {
+    const out = [];
+    const walk = (list) => {
+        for (const s of list ?? []) {
+            if (s.parentId === correctionIds_ts_1.CORRECTIONS_ROOT_ID && (0, correctionIds_ts_1.isCorrectionStreamId)(s.id)) {
+                const relationship = s.clientData?.[exports.CORRECTIONS_MARK_KEY]?.relationship;
+                out.push({ id: s.id, relationship: typeof relationship === 'string' ? relationship : null, trashed: s.trashed === true });
+            }
+            if (Array.isArray(s.children))
+                walk(s.children);
+        }
+    };
+    walk(streams);
+    return out;
+}
+/** The children in the person's account (trashed ones with `includeTrashed`). Empty when the root does not exist yet. */
+async function listCorrectionStreams(connection, opts = {}) {
+    try {
+        const params = { parentId: correctionIds_ts_1.CORRECTIONS_ROOT_ID };
+        if (opts.includeTrashed === true)
+            params.state = 'all';
+        const streams = await connection.apiOne('streams.get', params, 'streams');
+        return correctionStreamsIn((streams ?? []).map((s) => ({ ...s, parentId: s.parentId ?? correctionIds_ts_1.CORRECTIONS_ROOT_ID })));
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) === 'unknown-referenced-resource')
+            return [];
+        throw e;
+    }
+}
+/** The relationship's child (marked for it, not trashed), or null. */
+async function correctionStreamFor(connection, relationship) {
+    const base = (0, documents_ts_1.relationshipIdOf)(relationship);
+    return (await listCorrectionStreams(connection)).find(s => s.relationship === base && !s.trashed)?.id ?? null;
+}
+/** Create the `entry-corrections` root (with its model name) if missing. Idempotent. */
+async function ensureCorrectionsRoot(connection) {
+    let name = 'Corrections from your contacts';
+    try {
+        name = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(correctionIds_ts_1.CORRECTIONS_ROOT_ID).name ?? name;
+    }
+    catch { /* model not loaded */ }
+    try {
+        await connection.apiOne('streams.create', { id: correctionIds_ts_1.CORRECTIONS_ROOT_ID, name });
+    }
+    catch (e) {
+        if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'item-already-exists')
+            throw e;
+    }
+}
+/** Whether permissions name the corrections root or a `corr-` child, in any spelling. */
+function namesCorrectionStreams(perms) {
+    return (perms ?? []).some(p => {
+        const id = (0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? '');
+        return id === correctionIds_ts_1.CORRECTIONS_ROOT_ID || (0, correctionIds_ts_1.isCorrectionStreamId)(id);
+    });
+}
+/**
+ * The permissions without the minted ask (`entry-corrections` at `contribute`, CORRECTIONS.md § Two ways to get one):
+ * what her app accepts (`cmc.acceptInvite` `grantedPermissions`) before it creates and grants the child.
+ */
+function withoutCorrectionsAsk(perms) {
+    return (perms ?? []).filter(p => !((0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? '') === correctionIds_ts_1.CORRECTIONS_ROOT_ID && p.level === 'contribute'));
+}
+/**
+ * Why an offer that asks for corrections the minted way cannot be accepted without that ask (`cmc.acceptInvite`
+ * `grantedPermissions` takes a subset only when the offer allows a choice, and never without a `mandatory` entry), or
+ * null when it can, or does not ask. Also when nothing would be left to grant.
+ */
+function correctionsAskRefusal(requested, allowUserChoice) {
+    const ask = (requested ?? []).filter(p => (0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? '') === correctionIds_ts_1.CORRECTIONS_ROOT_ID && p.level === 'contribute');
+    if (ask.length === 0)
+        return null;
+    if (ask.some(p => p.mandatory === true))
+        return 'mandatory';
+    if (!allowUserChoice)
+        return 'no-user-choice';
+    if (withoutCorrectionsAsk(requested).length === 0)
+        return 'nothing-else';
+    return null;
+}
+/**
+ * `checkOfferedCorrectionStreams` against the account, for the app about to grant an offer or a scope request.
+ * `accessId`: the relationship's grant when it exists (a scope request, or the grant just minted); `singleUse`: whether
+ * the contact's invite was single-use (false for a scope request when unknown: a new `corr-` id is then refused). No
+ * request unless a `corr-` child is named. Reading the accesses needs a personal token; throws when the account cannot
+ * be read: do not grant.
+ */
+async function checkOfferedCorrections(connection, perms, opts) {
+    const asked = (perms ?? []).map(p => ({ ...p, streamId: (0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? '') }));
+    const relationship = opts.accessId != null ? (0, documents_ts_1.relationshipIdOf)(opts.accessId) : null;
+    if (!asked.some(p => (0, correctionIds_ts_1.isCorrectionStreamId)(p.streamId))) {
+        return (0, correctionIds_ts_1.checkOfferedCorrectionStreams)(asked, { relationship, singleUse: opts.singleUse });
+    }
+    const existing = new Map();
+    for (const s of await listCorrectionStreams(connection, { includeTrashed: true }))
+        existing.set(s.id, s.relationship);
+    const info = await connection.accessInfo();
+    if (info?.type !== 'personal')
+        throw new errors_ts_1.HDSLibError('corrections: checking an offer needs a personal token', { reason: 'not-personal' });
+    const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses');
+    // member accesses the grant created count as the relationship's (`createdBy` is `<access id>[ <caller id>]`)
+    const own = (id) => relationship != null && id != null && (0, documents_ts_1.relationshipIdOf)(id.split(' ')[0]) === relationship;
+    const namedByThis = [];
+    const namedByOthers = [];
+    for (const a of accesses ?? []) {
+        for (const p of a.permissions ?? []) {
+            const id = (0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? '');
+            if (!(0, correctionIds_ts_1.isCorrectionStreamId)(id))
+                continue;
+            (own(a.id) || own(a.createdBy) ? namedByThis : namedByOthers).push(id);
+        }
+    }
+    return (0, correctionIds_ts_1.checkOfferedCorrectionStreams)(asked, { relationship, existing, namedByThis, namedByOthers, singleUse: opts.singleUse });
+}
+/**
+ * What a grant that exists must not hold (checked on what the platform applied, which may differ from what was shown):
+ * `checkOfferedCorrections` as the relationship's own (its access names its child), and the root above `read`, the
+ * minted ask included: her app never grants it. `granted` is the grant's permission list read back from the account.
+ */
+async function checkGrantedCorrections(connection, granted, opts) {
+    const rootAbove = (granted ?? []).filter(p => (0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? '') === correctionIds_ts_1.CORRECTIONS_ROOT_ID && !['read', 'none'].includes(p.level));
+    const issues = rootAbove.map(() => ({ code: 'root-level', streamId: correctionIds_ts_1.CORRECTIONS_ROOT_ID }));
+    // a child the grant names exists by now (created before or at the accept): `singleUse` only matters for a new one
+    for (const i of await checkOfferedCorrections(connection, granted, { accessId: opts.accessId, singleUse: true })) {
+        if (!issues.some(x => x.code === i.code && x.streamId === i.streamId))
+            issues.push(i);
+    }
+    return issues;
+}
+/**
+ * Whether `cmc.acceptInvite` failed for sure: a CMC error other than a timeout (the platform may still finish it) or a
+ * link already used (its grant exists). A network error or anything untyped is not sure.
+ */
+function isDefiniteAcceptFailure(e) {
+    const id = e?.id;
+    return typeof id === 'string' && id.startsWith('cmc-') &&
+        !['cmc-capability-timeout', 'cmc-capability-consumed', 'cmc-capability-already-accepted-by-you'].includes(id);
+}
+/** The ids of the `corr-` children in the account now (trashed ones included): what an accept about to run did not create. */
+async function existingCorrectionStreamIds(connection) {
+    return (await listCorrectionStreams(connection, { includeTrashed: true })).map(s => s.id);
+}
+/**
+ * After an accept that definitely failed (not a timeout: the platform may still finish it): the `corr-` children among
+ * `streamIds` that her app created for this accept (`existingBefore` lists the ones there before it) and that nobody took
+ * (no mark, no access naming them, no event on them) are deleted, so a retry of the same offer does not find them
+ * "taken". Best-effort; the ids deleted.
+ */
+async function releaseUnclaimedCorrectionStreams(connection, streamIds, existingBefore) {
+    const before = new Set(existingBefore);
+    const ids = [...new Set(streamIds.map(id => (0, shareIds_ts_1.canonicalStreamId)(id ?? '')).filter(correctionIds_ts_1.isCorrectionStreamId))].filter(id => !before.has(id));
+    if (ids.length === 0)
+        return [];
+    const released = [];
+    try {
+        const children = await listCorrectionStreams(connection, { includeTrashed: true });
+        const accesses = await connection.apiOne('accesses.get', { includeExpired: true }, 'accesses');
+        const named = new Set((accesses ?? []).flatMap(a => (a.permissions ?? []).map(p => (0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? ''))));
+        for (const id of ids) {
+            const child = children.find(s => s.id === id);
+            if (child == null || child.relationship != null || named.has(id))
+                continue;
+            const events = await connection.apiOne('events.get', { streams: [id], state: 'all', limit: 1 }, 'events');
+            if ((events ?? []).length > 0)
+                continue;
+            for (let i = 0; i < 2; i++) {
+                try {
+                    // pryv's typings know `streams.delete` by its first answer only
+                    await connection.apiOne('streams.delete', { id, mergeEventsWithParent: false });
+                }
+                catch (e) {
+                    if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'unknown-resource')
+                        throw e;
+                    break;
+                }
+            }
+            released.push(id);
+        }
+    }
+    catch (e) {
+        logger.warn('corrections: children of a failed accept not released:', e?.message ?? e);
+    }
+    return released;
+}
+/**
+ * The `corr-` children a grant names (a single-use offer's choice), created under `entry-corrections` if missing and
+ * marked with the relationship. Idempotent. Throws `correction-id-taken` when an id is trashed, at another parent, or
+ * marked for another relationship: the grant then reaches what it must not, and the caller revokes it.
+ */
+async function markOfferedCorrectionStreams(connection, rel) {
+    if (!rel?.accessId)
+        throw new errors_ts_1.HDSLibError('markOfferedCorrectionStreams: the relationship\'s accessId is required');
+    const relationship = (0, documents_ts_1.relationshipIdOf)(rel.accessId);
+    const ids = [...new Set((rel.grantedPermissions ?? []).map(p => (0, shareIds_ts_1.canonicalStreamId)(p?.streamId ?? '')).filter(correctionIds_ts_1.isCorrectionStreamId))];
+    if (ids.length === 0)
+        return [];
+    await ensureCorrectionsRoot(connection);
+    const mark = { [exports.CORRECTIONS_MARK_KEY]: { relationship } };
+    for (const id of ids) {
+        try {
+            await connection.apiOne('streams.create', { id, name: id, parentId: correctionIds_ts_1.CORRECTIONS_ROOT_ID, clientData: mark }, 'stream');
+            continue;
+        }
+        catch (e) {
+            if ((0, appScope_ts_1.pryvErrorCode)(e) !== 'item-already-exists')
+                throw e;
+        }
+        const stream = findStream(await connection.apiOne('streams.get', { state: 'all' }, 'streams'), id);
+        const marked = stream?.clientData?.[exports.CORRECTIONS_MARK_KEY]?.relationship;
+        if (stream == null || stream.trashed === true || stream.parentId !== correctionIds_ts_1.CORRECTIONS_ROOT_ID || (marked != null && marked !== relationship)) {
+            throw new errors_ts_1.HDSLibError(`markOfferedCorrectionStreams: "${id}" is not free`, { reason: 'correction-id-taken', streamId: id });
+        }
+        if (marked === relationship && stream.name === id)
+            continue;
+        await connection.apiOne('streams.update', { id, update: { name: id, clientData: { ...stream.clientData, ...mark } } }, 'stream');
+    }
+    return ids;
+}
+/**
+ * The relationship's child, created when missing (root first) and marked, and the contact granted `contribute` on it in
+ * one scope update waited for (`shareStreamsAgain`), never the root. Call it when she accepts a contact that asks for
+ * corrections (`asksForCorrections`). Pass a freshly read relationship: the scope update writes the whole permission set
+ * from `rel.grantedPermissions`.
+ */
+async function ensureCorrectionStream(connection, rel, opts = {}) {
+    if (!rel?.accessId)
+        throw new errors_ts_1.HDSLibError('ensureCorrectionStream: the relationship\'s accessId is required');
+    const relationship = (0, documents_ts_1.relationshipIdOf)(rel.accessId);
+    const granted = (rel.grantedPermissions ?? []).filter(p => (0, correctionIds_ts_1.isCorrectionStreamId)((0, shareIds_ts_1.canonicalStreamId)(p.streamId)));
+    const mine = (await listCorrectionStreams(connection)).filter(s => s.relationship === relationship && !s.trashed);
+    let streamId = mine.find(s => granted.some(p => (0, shareIds_ts_1.canonicalStreamId)(p.streamId) === s.id))?.id ?? mine[0]?.id;
+    if (streamId == null) {
+        await ensureCorrectionsRoot(connection);
+        streamId = (0, correctionIds_ts_1.newCorrectionStreamId)();
+        await connection.apiOne('streams.create', {
+            id: streamId,
+            name: streamId,
+            parentId: correctionIds_ts_1.CORRECTIONS_ROOT_ID,
+            clientData: { [exports.CORRECTIONS_MARK_KEY]: { relationship } }
+        }, 'stream');
+    }
+    const current = granted.find(p => (0, shareIds_ts_1.canonicalStreamId)(p.streamId) === streamId);
+    if (current?.level === 'contribute')
+        return { streamId, scopeUpdate: null };
+    const scopeUpdate = current != null
+        ? await (0, scope_ts_1.changeSharedLevel)(connection, rel, streamId, 'contribute', { ...opts, waitForCompletion: true })
+        : await (0, scope_ts_1.shareStreamsAgain)(connection, rel, [streamId], { ...opts, level: 'contribute', waitForCompletion: true });
+    return { streamId, scopeUpdate };
+}
+function findStream(list, id) {
+    for (const s of list ?? []) {
+        const found = s.id === id ? s : findStream(s.children, id);
+        if (found != null)
+            return found;
+    }
+    return null;
+}
 
 
 /***/ },
@@ -29618,10 +31021,19 @@ function randomId() {
  * `notification/alert-cmc` with `content.hds = { kind, eventId }` on the sender's own collectors
  * stream, as the data-export requests (`dataExport.ts`).
  *
+ * A filed document is open while it carries a contact's `received` child (an uploader at `contribute`): that contact can still
+ * change or remove it (`openRelationshipsOf`). `shareDocument` refuses to share an open document with anyone else
+ * (`open-document`): the person's app freezes it first. One document weighs at most `MAX_DOCUMENT_BYTES`, all its files.
+ *
+ * For the person's consent and the contact's choice of data set: `documentsGrantNote` says what a grant on a documents
+ * stream leaves out, from the model tree; `documentsRelationshipOf` picks the relationship documents go through.
+ *
  * Known limits: scope updates write the whole permission set from `rel.grantedPermissions`, so pass
  * a freshly read relationship (a stale one re-grants what another device removed). Two devices
  * sharing with a contact for the first time at the same moment can each create a `shared` child;
- * `stopSharingDocuments` removes and deletes the first one listed in the grant.
+ * `stopSharingDocuments` removes and deletes the first one listed in the grant. A document is found open by the marks of
+ * the share children only: an offered `contribute` child not marked yet (`ensureOfferedShareStreams` not run), or a
+ * trashed one, is not seen.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -29657,7 +31069,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.streamsCheck = exports.DOCUMENT_ALERT_KINDS = exports.ET_DOCUMENT = exports.DOCUMENTS_STREAM_ID = exports.namesShareStreams = exports.namesAliasedStreams = exports.isShareStreamId = exports.canonicalStreamId = exports.canonicalPermissions = exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = void 0;
+exports.streamsCheck = exports.DOCUMENT_ALERT_KINDS = exports.MAX_DOCUMENT_BYTES = exports.ET_DOCUMENT = exports.DOCUMENTS_STREAM_ID = exports.namesShareStreams = exports.namesAliasedStreams = exports.isShareStreamId = exports.canonicalStreamId = exports.canonicalPermissions = exports.SHARE_STREAM_PREFIX = exports.DOCUMENT_SHARES_ROOT_ID = void 0;
 exports.newShareStreamId = newShareStreamId;
 exports.relationshipIdOf = relationshipIdOf;
 exports.shareStreamsOf = shareStreamsOf;
@@ -29665,6 +31077,9 @@ exports.sharesAllDocuments = sharesAllDocuments;
 exports.readsDocument = readsDocument;
 exports.isDocumentsStream = isDocumentsStream;
 exports.filedStreamIds = filedStreamIds;
+exports.openRelationshipsOf = openRelationshipsOf;
+exports.documentsRelationshipOf = documentsRelationshipOf;
+exports.documentsGrantNote = documentsGrantNote;
 exports.newUploaderOffer = newUploaderOffer;
 exports.offeredShareIssues = offeredShareIssues;
 exports.checkOfferedShares = checkOfferedShares;
@@ -29691,6 +31106,7 @@ const patchedPryv_ts_1 = __webpack_require__(/*! ../patchedPryv.js */ "./ts/patc
 const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
 const logger = __importStar(__webpack_require__(/*! ../logger.js */ "./ts/logger.ts"));
 const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const localizeText_ts_1 = __webpack_require__(/*! ../localizeText.js */ "./ts/localizeText.ts");
 const appScope_ts_1 = __webpack_require__(/*! ./appScope.js */ "./ts/cmc/appScope.ts");
 const cmcText_ts_1 = __webpack_require__(/*! ./cmcText.js */ "./ts/cmc/cmcText.ts");
 const dataExport_ts_1 = __webpack_require__(/*! ./dataExport.js */ "./ts/cmc/dataExport.ts");
@@ -29706,6 +31122,8 @@ Object.defineProperty(exports, "namesAliasedStreams", ({ enumerable: true, get: 
 Object.defineProperty(exports, "namesShareStreams", ({ enumerable: true, get: function () { return shareIds_ts_1.namesShareStreams; } }));
 exports.DOCUMENTS_STREAM_ID = 'documents';
 exports.ET_DOCUMENT = 'file/xds-v1';
+/** The most one document weighs, all its files together (bytes): what an app accepts to import, send or receive. */
+exports.MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 exports.DOCUMENT_ALERT_KINDS = {
     SHARED: 'document-shared',
     UNSHARED: 'document-unshared',
@@ -29784,6 +31202,83 @@ function isDocumentsStream(streamId) {
 /** A document's `streamIds` once filed under `target`: `target` first, the other documents streams gone, all else kept. */
 function filedStreamIds(streamIds, target) {
     return [target, ...(streamIds ?? []).filter(id => id !== target && !isDocumentsStream(id))];
+}
+/**
+ * The relationships that can still change a document: one per `received` share child it carries, by the child's mark
+ * (`shareStreams`: `listShareStreams`), on a document filed on a documents stream. Only an uploader's child
+ * (`contribute`) stays on a received document: at `create-only` nothing is ever open. A document not received yet (no
+ * documents stream) is not hers yet, so not open either: `[]`. In the order of `streamIds`, no repeat.
+ */
+function openRelationshipsOf(streamIds, shareStreams) {
+    const out = [];
+    if (!(streamIds ?? []).some(isDocumentsStream))
+        return out;
+    for (const id of streamIds ?? []) {
+        const child = (shareStreams ?? []).find(s => s.id === id && s.direction === 'received');
+        if (child != null && !out.includes(child.relationship))
+            out.push(child.relationship);
+    }
+    return out;
+}
+/**
+ * The relationship documents go through with a contact, among the person's relationships with it (one per data set):
+ * of those with the system channel, the oldest that reads every document, else the oldest that holds a `received`
+ * share child (she allowed sending), else the oldest that holds a `shared` one (she shared a document), else the oldest
+ * that reads a documents class stream, else the newest. Oldest and newest by `createdAt`: the accept time, else the
+ * invite event's `created`; null counts as the newest. Null when none has the channel. Both sides pick the same one
+ * from the same grants and accept times.
+ */
+function documentsRelationshipOf(rels) {
+    const at = (r) => r.createdAt instanceof Date ? r.createdAt.getTime() : typeof r.createdAt === 'number' ? r.createdAt : Infinity;
+    const withChannel = (rels ?? []).filter(r => r.hasChannel === true).sort((a, b) => at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0);
+    const readsClass = (r) => (0, shareIds_ts_1.canonicalPermissions)(r.grantedPermissions)
+        .some(p => p.streamId !== exports.DOCUMENTS_STREAM_ID && isDocumentsStream(p.streamId) && READ_LEVELS.has(p.level ?? 'read'));
+    return withChannel.find(r => sharesAllDocuments(r.grantedPermissions)) ??
+        withChannel.find(r => shareStreamsOf(r.grantedPermissions).received != null) ??
+        withChannel.find(r => shareStreamsOf(r.grantedPermissions).shared != null) ??
+        withChannel.find(readsClass) ??
+        withChannel.at(-1) ?? null;
+}
+/**
+ * What a grant on a class stream under `documents` leaves out, for her consent, from the model tree: the documents not
+ * filed yet, the other streams, and those filed on a stream above it but not under it. Null on `documents` itself (its
+ * model description already says it covers every document, filed or not) and on any other stream. en, fr, es; any
+ * other locale reads English (no reviewed it / pt-BR wording yet). One language for the whole note: when a label it
+ * uses has none in that language, the note and its labels are English.
+ */
+function documentsGrantNote(streamId, locale = 'en') {
+    const id = (0, shareIds_ts_1.canonicalStreamId)(streamId ?? '');
+    if (id === exports.DOCUMENTS_STREAM_ID)
+        return null;
+    let streams;
+    try {
+        streams = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams;
+    }
+    catch {
+        return null;
+    }
+    if (streams.getDataById(id, false) == null || !isDocumentsStream(id))
+        return null;
+    // from `documents` down to the stream: at each step, the siblings, then what is filed on the step itself
+    const path = [...streams.getParentsIds(id, false), id];
+    const parts = [];
+    for (let i = 1; i < path.length; i++) {
+        const children = streams.getDataById(path[i - 1]).children ?? [];
+        for (const c of children)
+            if (c.id !== path[i])
+                parts.push({ sid: c.id, other: false });
+        if (i > 1)
+            parts.push({ sid: path[i - 1], other: true });
+    }
+    const asked = (0, localizeText_ts_1.matchLocale)(locale);
+    const labelIn = (sid, l) => streams.getDataById(sid).label?.[l];
+    const lang = asked != null && GRANT_NOTE[asked] != null && parts.every(p => labelIn(p.sid, asked) != null) ? asked : 'en';
+    const text = GRANT_NOTE[lang];
+    const label = (sid) => {
+        const value = labelIn(sid, lang) ?? streams.getDataById(sid).name ?? sid;
+        return value.charAt(0).toLocaleLowerCase(lang) + value.slice(1);
+    };
+    return text.notIncluded.replace('{list}', parts.map(p => p.other ? text.other.replace('{parent}', label(p.sid)) : label(p.sid)).join(', '));
 }
 /**
  * What an uploader puts in its invite: a `received` child it contributes to, and a `shared` one it reads, the latter
@@ -30059,12 +31554,27 @@ async function ensureOfferedShareStreams(connection, rel) {
  * Share one document with a contact. In order: the share child (created if needed), the
  * contact's `read` on it (scope update, waited for), the share id added to the document, then
  * the `document-shared` alert. When the grant already reads every document, only the alert.
+ * Refused, with nothing written, while another contact can still change the document (`open-document`, with the
+ * `relationships` that can: `openRelationshipsOf`): the person's app freezes it for each of them first
+ * (`freezeDocument`), so what this contact reads is what she shared. A document not received yet (no documents stream)
+ * is refused first (`not-received`): `receiveDocument` files it.
  */
 async function shareDocument(connection, rel, eventId, opts = {}) {
     const collectorStreamId = requireCollectorStream(rel, 'shareDocument');
     if (sharesAllDocuments(rel.grantedPermissions)) {
         const { alertEventId } = await postDocumentAlert(connection, collectorStreamId, exports.DOCUMENT_ALERT_KINDS.SHARED, eventId, opts.locale);
         return { mode: 'all', shareStreamId: null, scopeUpdate: null, alertEventId };
+    }
+    const streamIds = (await getEvent(connection, eventId)).streamIds ?? [];
+    if (!streamIds.some(isDocumentsStream)) {
+        throw new errors_ts_1.HDSLibError('shareDocument: not received yet (receiveDocument)', { reason: 'not-received', eventId });
+    }
+    if (streamIds.some(shareIds_ts_1.isShareStreamId)) {
+        const own = relationshipIdOf(requireAccessId(rel, 'shareDocument'));
+        const relationships = openRelationshipsOf(streamIds, await listShareStreams(connection)).filter(r => r !== own);
+        if (relationships.length > 0) {
+            throw new errors_ts_1.HDSLibError('shareDocument: another contact can still change this document, freeze it first', { reason: 'open-document', eventId, relationships });
+        }
     }
     let shareStreamId = shareStreamsOf(rel.grantedPermissions).shared;
     let scopeUpdate = null;
@@ -30499,6 +32009,12 @@ const TEXT = {
         es: { title: 'Documento recibido', body: 'Ha recibido un documento en esta conversación.' }
     }
 };
+/** `documentsGrantNote`: `{list}` the parts left out; `other`: what is filed on `{parent}`, a stream above the granted one, itself. */
+const GRANT_NOTE = {
+    en: { notIncluded: 'Not included: documents not filed yet, {list}.', other: 'other {parent}' },
+    fr: { notIncluded: 'Non inclus : documents pas encore classés, {list}.', other: 'autres {parent}' },
+    es: { notIncluded: 'No incluidos: documentos aún sin archivar, {list}.', other: 'otros {parent}' }
+};
 
 
 /***/ },
@@ -30846,6 +32362,8 @@ async function createInviteWithFormSpec(connection, params) {
         request.expiresAt = params.expiresAt;
     if (params.accessType)
         request.accessType = params.accessType;
+    if (params.requireVerifiedEmail === true)
+        request.requireVerifiedEmail = true;
     const content = {
         to: params.to === undefined ? null : params.to,
         capabilityRequested: true,
@@ -32236,8 +33754,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.contentEventIds = exports.DOCUMENT_UNIQUE_ID_KEY = exports.IDENTIFIER_SYSTEM_URI = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.researchEligibility = exports.appDescription = exports.cmcText = exports.cmcConversation = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = void 0;
+exports.DOCUMENT_UNIQUE_ID_KEY = exports.IDENTIFIER_SYSTEM_URI = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.corrections = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.researchRelationship = exports.researchEligibility = exports.appDescription = exports.cmcText = exports.cmcConversation = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -32366,16 +33884,25 @@ const cmcItemReminders = __importStar(__webpack_require__(/*! ./cmc/itemReminder
 exports.cmcItemReminders = cmcItemReminders;
 const cmcConversation = __importStar(__webpack_require__(/*! ./cmc/conversation.js */ "./ts/cmc/conversation.ts"));
 exports.cmcConversation = cmcConversation;
+const correctionsHelpers = __importStar(__webpack_require__(/*! ./HDSModel/corrections.js */ "./ts/HDSModel/corrections.ts"));
+const correctionIds = __importStar(__webpack_require__(/*! ./cmc/correctionIds.js */ "./ts/cmc/correctionIds.ts"));
+const correctionStreams = __importStar(__webpack_require__(/*! ./cmc/correctionStreams.js */ "./ts/cmc/correctionStreams.ts"));
 const appDescription = __importStar(__webpack_require__(/*! ./appDescription.js */ "./ts/appDescription.ts"));
 exports.appDescription = appDescription;
 const researchEligibility = __importStar(__webpack_require__(/*! ./research/eligibility.js */ "./ts/research/eligibility.ts"));
 exports.researchEligibility = researchEligibility;
+const researchRelationship = __importStar(__webpack_require__(/*! ./research/relationship.js */ "./ts/research/relationship.ts"));
+exports.researchRelationship = researchRelationship;
 exports.getHDSModel = HDSModelInitAndSingleton.getModel;
 exports.initHDSModel = HDSModelInitAndSingleton.initHDSModel;
+/** A professional's correction of one entry (data-model 4.43.0 CORRECTIONS.md), and `hdsTextFormat` (markdown text). */
+const corrections = { ...correctionsHelpers, ...correctionIds, ...correctionStreams };
+exports.corrections = corrections;
 // also exporting default for typescript to capture HDSLib.. there is surely a nicer way to do
 const HDSLib = {
     getHDSModel: exports.getHDSModel,
     initHDSModel: exports.initHDSModel,
+    corrections,
     pryv: patchedPryv_ts_1.pryv,
     cmc: patchedPryv_ts_1.cmc,
     encryption: patchedPryv_ts_1.encryption,
@@ -32465,7 +33992,8 @@ const HDSLib = {
     cmcConversation,
     cmcText: cmcText_ts_1.cmcText,
     appDescription,
-    researchEligibility
+    researchEligibility,
+    researchRelationship
 };
 exports["default"] = HDSLib;
 
@@ -33239,6 +34767,240 @@ function isWeight(v) { return isPositiveInteger(v) && v <= 100; }
 
 /***/ },
 
+/***/ "./ts/research/relationship.ts"
+/*!*************************************!*\
+  !*** ./ts/research/relationship.ts ***!
+  \*************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RESEARCH_ALERT_HDS_SCHEMA = exports.RESEARCH_EMAIL_STREAM_ID = exports.RESEARCH_ALERT_KINDS = exports.RESEARCH_TOPIC_VOCABULARY = exports.RESEARCH_TOPICS_TYPE = exports.RESEARCH_TOPICS_STREAM_ID = exports.RESEARCH_ELIGIBILITY_STREAM_ID = exports.RESEARCH_ROOT_STREAM_ID = void 0;
+exports.researchInvitePermissions = researchInvitePermissions;
+exports.ensureResearchStreams = ensureResearchStreams;
+exports.researchTopicKeys = researchTopicKeys;
+exports.readResearchTopics = readResearchTopics;
+exports.saveResearchTopics = saveResearchTopics;
+exports.deleteEligibilityBands = deleteEligibilityBands;
+exports.checkResearchAlertHds = checkResearchAlertHds;
+exports.buildResearchAlertContent = buildResearchAlertContent;
+exports.readResearchAlert = readResearchAlert;
+exports.researchAlertKey = researchAlertKey;
+const HDSModelInitAndSingleton_ts_1 = __webpack_require__(/*! ../HDSModel/HDSModelInitAndSingleton.js */ "./ts/HDSModel/HDSModelInitAndSingleton.ts");
+const schemaCheck_ts_1 = __webpack_require__(/*! ../utils/schemaCheck.js */ "./ts/utils/schemaCheck.ts");
+const errors_ts_1 = __webpack_require__(/*! ../errors.js */ "./ts/errors.ts");
+const eligibility_ts_1 = __webpack_require__(/*! ./eligibility.js */ "./ts/research/eligibility.ts");
+exports.RESEARCH_ROOT_STREAM_ID = 'hds-research';
+exports.RESEARCH_ELIGIBILITY_STREAM_ID = 'hds-research-eligibility';
+exports.RESEARCH_TOPICS_STREAM_ID = 'hds-research-topics';
+exports.RESEARCH_TOPICS_TYPE = 'research/topics-v1';
+exports.RESEARCH_TOPIC_VOCABULARY = 'research-topic';
+exports.RESEARCH_ALERT_KINDS = ['research-invitation', 'research-eligibility-request'];
+/** Names the streams are created with when the model is not loaded (the model's `name` wins). */
+const STREAM_NAMES = {
+    [exports.RESEARCH_ROOT_STREAM_ID]: 'Health Data Safe research',
+    [exports.RESEARCH_ELIGIBILITY_STREAM_ID]: 'Eligibility test results sent',
+    [exports.RESEARCH_TOPICS_STREAM_ID]: 'Research topics'
+};
+const PAGE = 200;
+// ---------------------------------------------------------------- the invite and the streams
+/** The account email stream the research invite also reads (the invite requires it verified at accept). */
+exports.RESEARCH_EMAIL_STREAM_ID = ':system:email';
+/**
+ * The permissions the research invite requests: `read` on the root, which reaches its two children only, and `read`
+ * on the person's email (`:system:email`), which the invite requires verified (`requireVerifiedEmail`).
+ */
+function researchInvitePermissions() {
+    return [{ streamId: exports.RESEARCH_ROOT_STREAM_ID, level: 'read' }, { streamId: exports.RESEARCH_EMAIL_STREAM_ID, level: 'read' }];
+}
+function modelStreamName(id, model) {
+    try {
+        const name = model?.streams.getDataById(id, false)?.name;
+        if (typeof name === 'string' && name)
+            return name;
+    }
+    catch { /* model not loaded */ }
+    return STREAM_NAMES[id];
+}
+/**
+ * Creates the root and its two children on the person's account, before the invite is accepted (as for any offered
+ * stream). Needs a personal or app access able to create them; `item-already-exists` is the normal outcome after the
+ * first time.
+ */
+async function ensureResearchStreams(connection, opts = {}) {
+    const model = opts.model ?? safeModel();
+    const calls = [exports.RESEARCH_ROOT_STREAM_ID, exports.RESEARCH_ELIGIBILITY_STREAM_ID, exports.RESEARCH_TOPICS_STREAM_ID].map((id) => ({
+        method: 'streams.create',
+        params: { id, name: modelStreamName(id, model), ...(id === exports.RESEARCH_ROOT_STREAM_ID ? {} : { parentId: exports.RESEARCH_ROOT_STREAM_ID }) }
+    }));
+    const results = await connection.api(calls);
+    for (const r of results) {
+        if (r?.error && r.error.id !== 'item-already-exists') {
+            throw new errors_ts_1.HDSLibError('ensureResearchStreams: ' + (r.error.message || r.error.id), { reason: r.error.id });
+        }
+    }
+}
+function safeModel() {
+    try {
+        return (0, HDSModelInitAndSingleton_ts_1.getModel)();
+    }
+    catch {
+        return null;
+    }
+}
+// ---------------------------------------------------------------- topics
+/** The topic keys the model knows (the `research-topic` vocabulary), in order. Throws when the model has none. */
+function researchTopicKeys(model = (0, HDSModelInitAndSingleton_ts_1.getModel)()) {
+    const vocabulary = model.vocabularies.forKey(exports.RESEARCH_TOPIC_VOCABULARY);
+    if (vocabulary?.values == null)
+        throw new errors_ts_1.HDSLibError('The data model has no research-topic vocabulary', { reason: 'model-too-old' });
+    return Object.keys(vocabulary.values);
+}
+/**
+ * The topics the person chose: the latest `research/topics-v1` event by `modified`, keys the model does not know
+ * dropped (a newer model). `null` when there is no event or no stream: none chosen, so every study may be offered.
+ * A choice made only of keys this model does not know is returned as written, never as an empty list: an empty list
+ * means "none chosen", which would offer every study to a person who narrowed them.
+ */
+async function readResearchTopics(connection, opts = {}) {
+    const latest = await latestTopicsEvent(connection);
+    if (latest == null)
+        return null;
+    const known = new Set(opts.topicKeys ?? researchTopicKeys(opts.model));
+    const written = (Array.isArray(latest.content?.topics) ? latest.content.topics : []).filter((t) => typeof t === 'string');
+    const kept = written.filter((t) => known.has(t));
+    return kept.length > 0 || written.length === 0 ? kept : written;
+}
+/**
+ * Saves the chosen topics: updates the latest event, or creates it. Each topic must be a key of the vocabulary;
+ * duplicates are dropped and the vocabulary's order kept. An empty list is "none chosen". Returns the event id.
+ */
+async function saveResearchTopics(connection, topics, opts = {}) {
+    const keys = opts.topicKeys ?? researchTopicKeys(opts.model);
+    const unknown = topics.filter((t) => !keys.includes(t));
+    if (unknown.length > 0)
+        throw new errors_ts_1.HDSLibError('Unknown research topic: ' + unknown.join(', '), { reason: 'unknown-topic', unknown });
+    const content = { topics: keys.filter((k) => topics.includes(k)) };
+    const time = opts.now ?? Date.now() / 1000;
+    const latest = await latestTopicsEvent(connection);
+    if (latest != null) {
+        const updated = await connection.apiOne('events.update', { id: latest.id, update: { content, time } }, 'event');
+        return updated.id;
+    }
+    const created = await connection.apiOne('events.create', { streamIds: [exports.RESEARCH_TOPICS_STREAM_ID], type: exports.RESEARCH_TOPICS_TYPE, content, time }, 'event');
+    return created.id;
+}
+async function latestTopicsEvent(connection) {
+    const events = await allEvents(connection, exports.RESEARCH_TOPICS_STREAM_ID, exports.RESEARCH_TOPICS_TYPE);
+    let latest = null;
+    for (const e of events)
+        if (latest == null || (e.modified ?? e.time) > (latest.modified ?? latest.time))
+            latest = e;
+    return latest;
+}
+// ---------------------------------------------------------------- bands: retention
+/**
+ * Deletes band events: those of the given request ids (expired requests), or all of them on opt-out. Trashes then
+ * deletes, so nothing stays for HDS to re-read. Returns how many were removed.
+ */
+async function deleteEligibilityBands(connection, opts = {}) {
+    const events = await allEvents(connection, exports.RESEARCH_ELIGIBILITY_STREAM_ID, eligibility_ts_1.ELIGIBILITY_BAND_TYPE);
+    const targets = opts.requestIds == null ? events : events.filter((e) => opts.requestIds.includes(e.content?.requestId));
+    for (const e of targets) {
+        const results = await connection.api([
+            { method: 'events.delete', params: { id: e.id } },
+            { method: 'events.delete', params: { id: e.id } }
+        ]);
+        const failed = results.find((r) => r?.error);
+        if (failed)
+            throw new errors_ts_1.HDSLibError('deleteEligibilityBands: ' + (failed.error.message || failed.error.id), { reason: failed.error.id });
+    }
+    return targets.length;
+}
+async function allEvents(connection, streamId, type) {
+    const out = [];
+    for (let skip = 0;; skip += PAGE) {
+        let page;
+        try {
+            page = await connection.apiOne('events.get', { streams: [streamId], types: [type], limit: PAGE, skip }, 'events');
+        }
+        catch (err) {
+            if (err?.innerObject?.id === 'unknown-referenced-resource')
+                return out;
+            throw err;
+        }
+        out.push(...page);
+        if (page.length < PAGE)
+            return out;
+    }
+}
+// ---------------------------------------------------------------- alerts
+const ID = { type: 'string', maxLength: 64, pattern: '^[a-zA-Z0-9_-]+$' };
+function alertBranch(kind, required, properties) {
+    return { type: 'object', additionalProperties: false, required: ['kind', ...required], properties: { kind: { type: 'string', enum: [kind] }, ...properties } };
+}
+/**
+ * `json-schemas/hds-research-alert.json` of data-model (descriptions left out). `tests/researchRelationship.test.js`
+ * compares this copy with the published one once it is published.
+ */
+exports.RESEARCH_ALERT_HDS_SCHEMA = {
+    type: 'object',
+    required: ['kind'],
+    oneOf: [
+        alertBranch('research-invitation', ['studyId'], { studyId: ID }),
+        alertBranch('research-eligibility-request', ['requestId'], { requestId: ID })
+    ]
+};
+/** The issues of a research alert's `hds` block against the published schema; empty when valid. */
+function checkResearchAlertHds(hds) {
+    return (0, schemaCheck_ts_1.schemaIssues)(exports.RESEARCH_ALERT_HDS_SCHEMA, hds, 'hds');
+}
+const ALERT_TEXTS = {
+    'research-invitation': {
+        title: { en: 'Research invitation', fr: 'Invitation à la recherche' },
+        body: { en: 'Health Data Safe invites you to a study. Open to read about it.', fr: 'Health Data Safe vous invite à une étude. Ouvrez pour en savoir plus.' }
+    },
+    'research-eligibility-request': {
+        title: { en: 'Eligibility test', fr: 'Test d\'éligibilité' },
+        body: { en: 'A study asks whether you may be eligible. Open to read the conditions.', fr: 'Une étude vous demande si vous pourriez être éligible. Ouvrez pour lire les conditions.' }
+    }
+};
+/**
+ * Alert content for one research kind (the research service writes it): the kind's fixed `title` and `body`,
+ * `code: hds-<kind>`, `level: info`, and the checked `hds` block. Never a name, a date or a criterion.
+ */
+function buildResearchAlertContent(hds) {
+    const issues = checkResearchAlertHds(hds);
+    if (issues.length > 0)
+        throw new errors_ts_1.HDSLibError('buildResearchAlertContent: invalid hds block: ' + issues.join('; '), { reason: 'invalid-alert', issues });
+    const texts = ALERT_TEXTS[hds.kind];
+    return { level: 'info', title: { ...texts.title }, body: { ...texts.body }, code: 'hds-' + hds.kind, hds: { ...hds } };
+}
+/**
+ * Reads a delivered alert's content: the research kind and its id, or null when it is not a research alert, is not
+ * valid, or carries no `from` (the writer's own copy; only delivered alerts are shown).
+ */
+function readResearchAlert(content) {
+    const c = content;
+    if (c == null || typeof c !== 'object' || c.from == null)
+        return null;
+    if (!exports.RESEARCH_ALERT_KINDS.includes(c.hds?.kind))
+        return null;
+    if (checkResearchAlertHds(c.hds).length > 0)
+        return null;
+    return c.hds.kind === 'research-invitation'
+        ? { kind: 'research-invitation', studyId: c.hds.studyId }
+        : { kind: 'research-eligibility-request', requestId: c.hds.requestId };
+}
+/** The key a reader de-duplicates research alerts by (two devices, a re-delivery): `(kind, id)`. */
+function researchAlertKey(alert) {
+    return alert.kind === 'research-invitation' ? `${alert.kind}:${alert.studyId}` : `${alert.kind}:${alert.requestId}`;
+}
+
+
+/***/ },
+
 /***/ "./ts/settings.ts"
 /*!************************!*\
   !*** ./ts/settings.ts ***!
@@ -33999,7 +35761,8 @@ const HDSSettings = {
     },
     /**
      * Set a dynamic setting value — persists to HDS server.
-     * Key must match a known prefix (e.g. 'preferred-display-wellbeing-mood').
+     * Key must match a known prefix (e.g. 'preferred-display-wellbeing-mood') and have something after it:
+     * an unknown prefix or an empty suffix throws, before any write.
      * Pass null to delete the setting.
      * When not hooked (no Pryv connection), accepts the value into the
      * in-memory map only (memory-only mode — useful for standalone demos).
@@ -34008,6 +35771,9 @@ const HDSSettings = {
         const dp = findDynamicPrefix(key);
         if (!dp)
             throw new Error(`Unknown dynamic setting prefix for key: "${key}"`);
+        // load() skips an event with an empty itemKey, so each such write would leave one more orphan event
+        if (dp.suffix === '')
+            throw new Error(`Dynamic setting key "${key}" has nothing after its prefix "${dp.prefix}"`);
         if (!_connection || !_streamId) {
             if (value === null || value === undefined) {
                 delete _dynamicValues[key];
@@ -48660,6 +50426,21 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
     );
   });
 
+  it('[HDSD9b] setDynamic throws on an empty suffix, for set and delete, before any write', async () => {
+    const conn = createMockConnection();
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.hookToConnection(conn, 'test-stream');
+    const before = conn.apiCalls.length;
+    for (const prefix of ['preferred-display-', 'preferred-input-']) {
+      for (const value of ['billings', null]) {
+        await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic(prefix, value), /nothing after its prefix/);
+      }
+    }
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.apiCalls.length, before);
+    _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.unhook();
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-input-', 'x'), /nothing after its prefix/);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.get('preferred-input-'), undefined);
+  });
+
   it('[HDSD10] setDynamic without hook is memory-only (no Pryv write, value cached)', async () => {
     // Memory-only mode: no connection, no error, get() reads back the value.
     await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings');
@@ -50733,7 +52514,9 @@ describe('[BAU] Bridge access update — missing permission streams', function (
     const model = HDSLib.getHDSModel().streams;
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(model.getDataById('body-weight', false) != null, 'body-weight is a model stream');
     const ids = conn.streamsCreated.map((s) => s.id);
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(ids, ['body-temperature', 'body-temperature-basal'], 'only the missing part of the model chain, root-first');
+    // the item stream the model has under the granted one comes too (B-2026-11-24-12: forItemKeys folds it into its parent)
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(ids, ['body-temperature', 'body-temperature-basal', ...model.itemStreamsUnder('body-temperature-basal')], 'only the missing part of the model chain, root-first');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ids.includes('body-temperature-basal-disturbance'));
     for (const s of conn.streamsCreated) {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(s.parentId, model.getDataById(s.id).parentId, `${s.id} keeps its model parent`);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(s.name, s.id, `${s.id} gets the model name, not the defaultName`);
@@ -51184,6 +52967,35 @@ describe('[CNV] cmcConversation', function () {
       ]);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.taskStatusOf(restarted, DOC).hds.status, 'reading');
     });
+
+    it('[CNV13] parse: a notice speaks of one read (4.45.0): a later read drops the earlier read\'s notices, a repeated one is the latest', () => {
+      const a = (id, time, hds, from = true) => ({ id, time, type: 'notification/alert-cmc', content: { hds, ...(from ? { from: { username: 'reader', host: 'x' } } : {}) } });
+      const N = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.NOTICE_CODES;
+      const parsed = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationAlerts([
+        a('ready', 0, { kind: 'notice', code: N.READY }),
+        a('r1', 1, { kind: 'task-status', about: DOC, status: 'received', attempt: 1 }),
+        a('n1', 2, { kind: 'notice', code: N.LINES_MAY_BE_MISSING, about: DOC }),
+        a('n2', 2, { kind: 'notice', code: N.COLUMNS_NOT_READ, about: DOC }),
+        a('o1', 2, { kind: 'notice', code: N.KIND_NOT_READ, about: 'other' }),
+        a('r2', 5, { kind: 'task-status', about: DOC, status: 'received', attempt: 1 }),
+        a('n3', 6, { kind: 'notice', code: N.LINES_MAY_BE_MISSING, about: DOC }),
+        a('n4', 6, { kind: 'notice', code: N.LINES_MAY_BE_MISSING, about: DOC }) // second device
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(parsed.filter(p => p.kind === 'notice').map(p => p.alertEventId), ['ready', 'o1', 'n4']);
+      // the same notice sent by her app (direction sent) is not dropped by the contact's `received`
+      const sent = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationAlerts([
+        a('s1', 1, { kind: 'notice', code: N.GRID_NOT_LOCATED, about: DOC }, false),
+        a('r3', 2, { kind: 'task-status', about: DOC, status: 'received', attempt: 1 })
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(sent.map(p => p.alertEventId), ['s1', 'r3']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.values(N).filter(c => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(c)), []);
+    });
+
+    it('[CNV13b] pages-not-read (4.47.0): a notice a contact may post about a document', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.NOTICE_CODES.PAGES_NOT_READ, 'pages-not-read');
+      const hds = { kind: 'notice', code: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.NOTICE_CODES.PAGES_NOT_READ, about: DOC };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.buildConversationAlertContent(hds).hds, hds);
+    });
   });
 
   describe('[CNV-R] writer rules', () => {
@@ -51206,6 +53018,30 @@ describe('[CNV] cmcConversation', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'answer', inReplyTo: 'q', about: DOC, action: 'choose' }).join(), /option is required/);
     });
 
+    it('[CNV20b] a date\'s anchor (4.47.0): with its bbox and eventId = about, and no label; the other anchors name their document', () => {
+      const anchor = { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [60.2, 9.1, 18.5, 2.4] };
+      const whichDate = (date, code = 'which-date', extra = {}) => ({ kind: 'question', about: DOC, code, context: { dates: [date] }, ...extra });
+      const read = { day: '2026-03-12', text: '12.03.2026', role: 'sampling', anchor };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(whichDate(read)), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(whichDate(read, 'which-document-date', { candidateId: 'd1' })), []);
+      // a date copied from a text layer: a label, and an anchor or none
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(whichDate({ day: '2026-03-12', text: '12.03.2026', label: 'Prélevé le', role: 'sampling' })), []);
+      const { bbox: _b, ...noBox } = anchor;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(whichDate({ ...read, anchor: noBox })).join(), /dates\[0\]\.anchor needs its bbox/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(whichDate({ ...read, anchor: { ...anchor, eventId: 'other' } })).join(), /dates\[0\]\.anchor\.eventId must be about/);
+      const { eventId: _e, ...noEventId } = anchor;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(whichDate({ ...read, anchor: noEventId })).join(), /dates\[0\]\.anchor\.eventId must be about/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(whichDate({ ...read, label: 'Prélevé le' })).join(), /carries no label/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(whichDate({ ...read, anchor: { ...anchor, text: '12.03.2026' } })).join(), /not allowed/, 'the anchor shape is closed');
+      // the second date of two is checked too
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ ...whichDate(read), context: { dates: [read, { ...read, day: '2026-03-13', anchor: noBox }] } }).join(), /dates\[1\]/);
+      // is-this-yours on a picture: the identity block's box, no identity; its anchor names its document
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'question', about: DOC, code: 'is-this-yours', context: { anchor } }), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem({ kind: 'question', about: DOC, code: 'is-this-yours', context: { anchor: { ...anchor, eventId: 'other' } } }).join(), /context\.anchor\.eventId must be about/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(pv('c1', { anchor: { ...anchor, eventId: 'other' } })).join(), /anchor\.eventId must be about/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(pv('c1', { anchor })), []);
+    });
+
     it('[CNV21] R9: the value alone', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48 }), null);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkValueProposal({ itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: '48' }), 'invalid-content');
@@ -51226,6 +53062,59 @@ describe('[CNV] cmcConversation', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch({ name: 'DUPONT Marie-Claire' }, PROFILE), false);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch(id, { ...PROFILE, dateOfBirth: null }), false);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch(id, { ...PROFILE, dateOfBirth: '1985-03-15' }), false);
+    });
+
+    it('[CNV22b] profile match with her other names (4.47.0): a missing part is her profile\'s; nickname, an unknown use or a blank part never matches', () => {
+      const born = '1985-03-14';
+      const maiden = { name: 'MARTIN Marie-Claire', birthDay: born };
+      const match = (identity, otherNames, profile = PROFILE) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.profileMatch(identity, { ...profile, otherNames });
+      // family only: her profile's given name with it; absent use matches
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, [{ family: 'Martin', use: 'maiden' }]), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, [{ family: 'Martin' }]), true, 'absent use matches');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, [{ family: 'Martin', use: null }]), true, 'null use is absent');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, []), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, null), false);
+      // given only: with her profile's family name
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'DUPONT Claire', birthDay: born }, [{ given: 'Claire', use: 'usual' }]), true);
+      // both parts, the profile's names not needed
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'Martin, Anne', birthDay: born }, [{ given: 'Anne', family: 'MARTIN', use: 'old' }], { dateOfBirth: born }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'Martin, Anne', birthDay: born }, [{ given: 'Anne', use: 'old' }], { dateOfBirth: born }), false, 'a part missing on both sides never matches');
+      // nickname, an unknown use
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, [{ family: 'Martin', use: 'nickname' }]), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, [{ family: 'Martin', use: 'anonymous' }]), false);
+      // a blank part after normalisation never matches, nor falls back to the profile's
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'MARTIN', birthDay: born }, [{ given: ' - ', family: 'Martin', use: 'official' }]), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'Marie Claire', birthDay: born }, [{ family: '', given: 'Marie Claire' }]), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'Marie Claire', birthDay: born }, [{ family: ' ', given: 'Marie Claire' }]), false);
+      // whole token-set equality, as for the profile: an initial, a missing or an extra token never matches
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'MARTIN M.', birthDay: born }, [{ family: 'Martin' }]), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'MARTIN Marie-Claire Anne', birthDay: born }, [{ family: 'Martin' }]), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'Märtin marie claire', birthDay: born }, [{ family: 'MARTIN' }]), true);
+      // the birth date condition is unchanged; the profile's own names still match beside other names
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ ...maiden, birthDay: '1985-03-15' }, [{ family: 'Martin' }]), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, [{ family: 'Martin' }], { ...PROFILE, dateOfBirth: null }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match({ name: 'DUPONT Marie-Claire', birthDay: born }, [{ family: 'Martin', use: 'nickname' }]), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(match(maiden, [{ family: 'Durand' }, { family: 'Martin', use: 'nickname' }, { family: 'Martin', use: 'maiden' }]), true, 'any one of them');
+    });
+
+    it('[CNV22c] otherNamesOf: her non-trashed other names; none when the root is absent or not granted', async () => {
+      const person = account({
+        streams: [{ id: 'other-names', name: 'Other names', parentId: null }],
+        events: [
+          { id: 'o1', streamIds: ['other-names'], type: 'contact/other-name-v1', time: 1, content: { family: 'Martin', use: 'maiden' } },
+          { id: 'o2', streamIds: ['other-names'], type: 'contact/other-name-v1', time: 2, content: { given: 'Claire' } },
+          { id: 'o3', streamIds: ['other-names'], type: 'contact/other-name-v1', time: 3, content: { family: 'Durand' }, trashed: true },
+          { id: 'o4', streamIds: ['other-names'], type: 'note/txt', time: 4, content: 'Martin' }
+        ]
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.otherNamesOf(person), [{ family: 'Martin', use: 'maiden' }, { given: 'Claire' }]);
+      const call = person.calls.find(c => c.method === 'events.get');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([call.params.streams, call.params.types], [['other-names'], ['contact/other-name-v1']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.otherNamesOf(account()), []);
+      for (const id of ['unknown-referenced-resource', 'forbidden', 'unknown-resource']) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.otherNamesOf({ apiOne: async () => { throw apiError(id); } }), [], id);
+      }
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.otherNamesOf({ apiOne: async () => { throw apiError('invalid-access-token'); } }));
     });
 
     it('[CNV23] labels from direction and viewer, never the name; ids conv- and 12 base36', () => {
@@ -51376,6 +53265,19 @@ describe('[CNV] cmcConversation', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(again.skipped, [{ candidateId: 'c1', reason: 'written' }]);
       const twice = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, { about: DOC, decisions: [{ candidateId: 'c1', action: 'confirm' }], shownAt: person.clock, engines: ENGINES });
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(twice.refused, [{ candidateId: 'c1', reason: 'answered' }]);
+    });
+
+    it('[CNV40b] autoConfirmIdentity on her other name (4.47.0): the same profile-match confirm; never on a nickname', async () => {
+      const { person, rel: r, streams } = await setup();
+      const maidenQuestion = { ...identityQuestion, context: { identity: { ...identityQuestion.context.identity, name: 'MARTIN Marie-Claire' } } };
+      const qId = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, maidenQuestion);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoConfirmIdentity(person, r, { about: DOC, profile: PROFILE }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoConfirmIdentity(person, r, { about: DOC, profile: { ...PROFILE, otherNames: [{ family: 'Martin', use: 'nickname' }] } }), null);
+      const auto = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.autoConfirmIdentity(person, r, { about: DOC, profile: { ...PROFILE, otherNames: [{ family: 'Martin', use: 'maiden' }] } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(auto?.answerEventId);
+      const answer = person.events.get(auto.answerEventId).content;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([answer.inReplyTo, answer.action, answer.basis], [qId, 'confirm', 'profile-match']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!JSON.stringify(answer).includes('aiden') && !JSON.stringify(alertsOf(person)).toLowerCase().includes('martin'), 'nothing of her other names reaches the contact');
     });
 
     it('[CNV41] a write that failed half-way is retried without writing a value twice (sourceKey)', async () => {
@@ -51713,6 +53615,109 @@ describe('[CNV] cmcConversation', function () {
     });
   });
 
+  describe('[CNV-T] a table read per column on a picture (4.39.0)', () => {
+    const X = { engine: 'hds-reader', engineVersion: '0.11.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
+    const DAY1 = Date.parse('2026-03-12T12:00:00Z') / 1000;
+    const heading = (index) => ({ column: { index }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [30 + index * 10, 18.3, 9, 4.2] } });
+    const columnDate = (index = 2) => ({ kind: 'question', about: DOC, code: 'which-column-date', context: heading(index) });
+    const value = (index, over = {}) => ({ kind: 'proposed-value', about: DOC, candidateId: 'c-t' + index, printed: { label: 'Ferritine', value: '48', unit: 'ng/mL' }, column: { index }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1 }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48, time: DAY1, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction: X, ...over });
+    const item = (id, kind, content, created = 10) => ({ id, kind, about: DOC, direction: kind === 'answer' ? 'sent' : 'received', content, created, modified: created, time: created });
+
+    it('[CNVT1] a column question: its column and heading box, no candidate, no date; answered with a day at 12:00 UTC', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(columnDate()), []);
+      for (const b of [{ ...columnDate(), candidateId: 'c-1' }, { ...columnDate(), context: { column: { index: 2 } } }, { ...columnDate(), context: { anchor: heading(2).anchor } },
+        { ...columnDate(), context: { ...heading(2), anchor: { attachmentId: 'att1', page: 1 } } }, { ...columnDate(), context: { ...heading(2), dates: [{ day: '2026-03-12', text: '12.03.26' }] } }]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(JSON.parse(JSON.stringify(b))), [], JSON.stringify(b));
+      }
+      const q = item('q1', 'question', columnDate());
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([q], DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conv.questions[0].answerable, true);
+      const answer = (over) => ({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day', ...over });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer({}), q, conv), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'skip' }, q, conv), []);
+      for (const over of [{ time: DAY1 + 3600 }, { timePrecision: 'month' }, { time: undefined, timePrecision: undefined }]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(JSON.parse(JSON.stringify(answer(over))), q, conv), [], JSON.stringify(over));
+      }
+    });
+
+    it('[CNVT2] a value names its column; a which-date answer never dates a value of such a table', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(value(2)), []);
+      const undated = { ...value(2), proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48 } };
+      const whole = [item('q0', 'question', { kind: 'question', about: DOC, code: 'which-date' }), item('a0', 'answer', { kind: 'answer', inReplyTo: 'q0', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day' }, 20)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answeredDateOf(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([...whole, item('v1', 'proposed-value', undated)], DOC), 'c-t2'), null);
+      const { column: _c, ...plain } = undated;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answeredDateOf(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([...whole, item('q1', 'question', columnDate()), item('v1', 'proposed-value', plain)], DOC), 'c-t2'), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answeredDateOf(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([...whole, item('v1', 'proposed-value', plain)], DOC), 'c-t2'), { time: DAY1, timePrecision: 'day' });
+    });
+  });
+
+  describe('[CNV-PG] a document dated per page (4.49.0)', () => {
+    const X = { engine: 'hds-reader', engineVersion: '0.12.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
+    const DAY1 = Date.parse('2026-03-12T12:00:00Z') / 1000;
+    const DAY2 = Date.parse('2026-03-19T12:00:00Z') / 1000;
+    const pageAnchor = (page, bbox) => ({ eventId: DOC, attachmentId: 'att1', page, ...(bbox ? { bbox } : {}) });
+    const pageDate = (page = 2, bbox) => ({ kind: 'question', about: DOC, code: 'which-page-date', context: { anchor: pageAnchor(page, bbox) } });
+    const value = (page, over = {}) => ({ kind: 'proposed-value', about: DOC, candidateId: 'c-p' + page, printed: { label: 'Ferritine', value: '48', unit: 'ng/mL' }, anchor: { ...pageAnchor(page), bbox: [8.5, 41.2, 83, 2.1] }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48, time: DAY1, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction: X, ...over });
+    const item = (id, kind, content, created = 10) => ({ id, kind, about: DOC, direction: kind === 'answer' ? 'sent' : 'received', content, created, modified: created, time: created });
+
+    it('[CNVPG1] a page question: its page anchor (bbox optional), no candidate, no date; answered with a day at 12:00 UTC, never a day to come', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.QUESTION_CODES.WHICH_PAGE_DATE, 'which-page-date');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(pageDate()), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(pageDate(2, [0, 0, 100, 12])), []);
+      for (const b of [{ ...pageDate(), candidateId: 'c-1' }, { ...pageDate(), options: ['yes', 'no'] }, { ...pageDate(), context: undefined },
+        { ...pageDate(), context: { anchor: { ...pageAnchor(2), eventId: 'other' } } },
+        { ...pageDate(), context: { ...pageDate().context, dates: [{ day: '2026-03-12', text: '12.03.26' }] } },
+        { ...pageDate(), context: { ...pageDate().context, column: { index: 1 } } }]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkConversationItem(JSON.parse(JSON.stringify(b))), [], JSON.stringify(b));
+      }
+      const q = item('q1', 'question', pageDate());
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([q], DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conv.questions[0].answerable, true);
+      const answer = (over) => ({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day', ...over });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer({}), q, conv), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'skip' }, q, conv), []);
+      const today = Math.floor(Date.now() / 86400000) * 86400 + 43200;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer({ time: today }), q, conv), [], 'today');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.match(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer({ time: today + 2 * 86400 }), q, conv).join(), /later than today/);
+      for (const over of [{ time: DAY1 + 3600 }, { timePrecision: 'month' }, { timePrecision: 'unknown', time: undefined }, { time: undefined, timePrecision: undefined }, { action: 'not-mine', time: undefined, timePrecision: undefined }]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(JSON.parse(JSON.stringify(answer(over))), q, conv), [], JSON.stringify(over));
+      }
+    });
+
+    it('[CNVPG2] a which-date answer never dates a value of a document dated per page', () => {
+      const undated = { ...value(2), proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48 } };
+      const whole = [item('q0', 'question', { kind: 'question', about: DOC, code: 'which-date' }), item('a0', 'answer', { kind: 'answer', inReplyTo: 'q0', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day' }, 20)];
+      const perPage = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([...whole, item('q1', 'question', pageDate()), item('v1', 'proposed-value', undated)], DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.isDatedPerPage(perPage), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answeredDateOf(perPage, 'c-p2'), null);
+      const plain = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf([...whole, item('v1', 'proposed-value', undated)], DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.isDatedPerPage(plain), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answeredDateOf(plain, 'c-p2'), { time: DAY1, timePrecision: 'day' });
+    });
+
+    it('[CNVPG3] the contact asks one question per page, never beside which-date, row or column questions; proposes an asked page only after her confirm, with her day; R10 deletes it answered or skipped', async () => {
+      const { person, rel: r, streams } = await setup();
+      const q2 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, pageDate(2));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, pageDate(2, [0, 0, 100, 10])), /the page was asked/);
+      const q3 = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, pageDate(3));
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-date' }), /never on a document dated per page/);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-column-date', context: { column: { index: 1 }, anchor: { ...pageAnchor(1), bbox: [1, 1, 1, 1] } } }), /has a which-page-date/);
+      // a page whose day the contact holds: proposed with it at once; an asked page: not before her answer
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value(1)])).created.map(c => c.candidateId), ['c-p1']);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value(2)]), /not confirmed/);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value(1, { candidateId: 'c-x', column: { index: 1 } })]), /no grid and no column/);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value(1, { candidateId: 'c-y', proposal: { ...value(1).proposal, time: DAY1 + 3600 } })]), /has its day/);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: q2, action: 'confirm', time: DAY2, timePrecision: 'day', shownAt: person.clock });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.answerQuestion(person, r, { questionId: q3, action: 'skip', shownAt: person.clock });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value(2)]), /takes her day/);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value(3, { proposal: { ...value(3).proposal, time: DAY2 } })]), /not confirmed/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value(2, { proposal: { ...value(2).proposal, time: DAY2 } })])).created.map(c => c.candidateId), ['c-p2']);
+      const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.listConversationItems(person, streams, { about: DOC }), DOC);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conv.questions.map(q => [q.item.id, q.state]), [[q2, 'answered'], [q3, 'skipped']]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.itemsToDeleteAtDone(conv).sort(), [q2, q3].sort());
+    });
+  });
+
   describe('[CNV-G] a dated grid (4.36.0)', () => {
     const X = { engine: 'hds-reader', engineVersion: '0.9.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
     const box = (column, row = 2) => ({ grid: { row, column }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [column * 2.5, 22.4, 2.5, 12.9] } });
@@ -51775,6 +53780,59 @@ describe('[CNV] cmcConversation', function () {
       const answer = (action) => ({ kind: 'answer', inReplyTo: 'v2', about: DOC, action, candidateIds: ['n-15'] });
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notDeepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer('request-item'), pv, conv), []);
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.checkAnswerFor(answer('skip'), pv, conv), []);
+    });
+
+    it('[CNVG7] hdsSourceGrid (4.51.0): the box beside the anchor; none without a grid, without the anchor or with a malformed box; sourceKey unchanged', () => {
+      const ev = (over) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.valueEventOf(item('v1', 'proposed-value', value(14, over)));
+      const withGrid = ev({});
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(withGrid.clientData.hdsSourceGrid, { row: 2, column: 14 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(withGrid.clientData.hdsSourceAnchor, box(14).anchor);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(withGrid.clientData.sourceKey, 'hds-reader:document:' + DOC + ':c-14');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.sourceGridOf(withGrid), { row: 2, column: 14 });
+      const { grid: _g, ...noGrid } = value(14);
+      const plain = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.valueEventOf(item('v1', 'proposed-value', noGrid));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('hdsSourceGrid' in plain.clientData) && plain.clientData.hdsSourceAnchor != null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.sourceGridOf(plain), null);
+      // the anchor dropped (another document) or missing: no box either
+      const dropped = ev({ anchor: { ...box(14).anchor, eventId: 'other-doc' } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('hdsSourceAnchor' in dropped.clientData) && !('hdsSourceGrid' in dropped.clientData));
+      const { anchor: _a, ...noAnchor } = value(14);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('hdsSourceGrid' in _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.valueEventOf(item('v1', 'proposed-value', noAnchor)).clientData));
+      for (const grid of [{ row: 0, column: 14 }, { row: 2, column: 0 }, { row: 1.5, column: 14 }, { row: '2', column: 14 }, { row: 2 }, 'r2c14', null]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('hdsSourceGrid' in ev({ grid }).clientData), JSON.stringify(grid));
+      }
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(ev({ grid: { row: 2, column: 14, extra: 1 } }).clientData.hdsSourceGrid, { row: 2, column: 14 }, 'only row and column');
+      // the reader: never without the anchor, never a malformed box
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.sourceGridOf({ clientData: { hdsSourceGrid: { row: 2, column: 14 } } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.sourceGridOf({ clientData: { hdsSourceAnchor: box(14).anchor, hdsSourceGrid: { row: -1, column: 14 } } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.sourceGridOf(null), null);
+    });
+
+    it('[CNVG8] hdsSourceGrid on confirm and on correct; a retry finding an older value by sourceKey rewrites nothing', async () => {
+      const { person, rel: r, streams } = await setup();
+      const engines = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.vouchedEnginesFor('hds-bridge-reader');
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.writeProposedValues(person, streams, DOC, [value(14), value(15), value(16)]);
+      const streamId = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().itemsDefs.forKey('fertility-cycles-peak-day').data.streamId;
+      const older = await person.apiOne('events.create', { streamIds: [streamId], type: 'activity/plain', content: null, time: DAY1, clientData: { sourceKey: 'hds-reader:document:' + DOC + ':c-16', related: { [DOC]: true } } }, 'event');
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.acceptProposedValues(person, r, {
+        about: DOC,
+        shownAt: person.clock,
+        engines,
+        decisions: [
+          { candidateId: 'c-14', action: 'confirm' },
+          { candidateId: 'c-15', action: 'correct', correction: { itemKey: 'fertility-cycles-peak-day', type: 'activity/plain', content: null } },
+          { candidateId: 'c-16', action: 'confirm' }
+        ]
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(res.refused, []);
+      const written = Object.fromEntries(res.answers.flatMap(a => a.written).map(w => [w.candidateId, person.events.get(w.eventId)]));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(written['c-14'].clientData.hdsSourceGrid, { row: 2, column: 14 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(written['c-15'].clientData.hdsSourceGrid, { row: 2, column: 15 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(written['c-15'].clientData.hdsExtraction.corrected, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(written['c-14'].clientData.sourceKey, 'hds-reader:document:' + DOC + ':c-14');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(written['c-16'].id, older.id, 'found by sourceKey');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(written['c-16'].clientData, { sourceKey: 'hds-reader:document:' + DOC + ':c-16', related: { [DOC]: true } }, 'rewrites nothing');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!person.calls.some(c => c.method === 'events.update' && c.params.id === older.id && c.params.update?.clientData?.hdsSourceGrid != null));
     });
   });
 });
@@ -52081,6 +54139,25 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(500 + 86400, alerts.slice(0, 2)), ['a1', 'a2'], 'the work is done now: 24 h');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(600, [...alerts, on('done', 550, 2)]), ['a1', 'a2'], 'the second round done');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.latestDoneOf([on('reading', 100, 1)], 'doc1'), null);
+  });
+
+  it('[CNVD7b] her note: an error still the latest status 24 h after it was sent ends the work, as a done does', () => {
+    const items = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.parseConversationItems([
+      { id: 'p1', type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ET_CONVERSATION, streamIds: ['r'], time: 1, created: 1, modified: 1, content: { kind: 'proposed-value', about: 'doc1', candidateId: 'c1', printed: { label: 'X', value: '1' }, status: 'clear', extraction } },
+      { id: 'a1', type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ET_CONVERSATION, streamIds: ['s'], time: 100, created: 100, modified: 100, content: { kind: 'answer', inReplyTo: 'p1', about: 'doc1', action: 'skip', candidateIds: ['c1'], note: 'after lunch' } },
+      { id: 'a2', type: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.ET_CONVERSATION, streamIds: ['s'], time: 500, created: 500, modified: 500, content: { kind: 'answer', inReplyTo: 'p1', about: 'doc1', action: 'skip', candidateIds: ['c1'], note: 'later' } }
+    ], { received: 'r', sent: 's' });
+    const conv = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.conversationOf(items, 'doc1');
+    const DAY = 86400;
+    const on = (status, time, attempt = 1) => ({ alertEventId: 'x' + time, kind: 'task-status', hds: { kind: 'task-status', about: 'doc1', status, attempt, ...(status === 'error' ? { errorCode: 'no-attachment' } : {}) }, time, direction: 'received', from: null });
+    const due = (now, list) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.latestDoneOf(list, 'doc1'), { now, current: _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.taskStatusOf(list, 'doc1') }).map(a => a.id);
+    const failed = [on('reading', 50), on('error', 300)];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(300 + DAY - 1, failed), [], 'an error less than 24 h old: a retry may follow, the notes stay');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(300 + DAY, failed), ['a1'], 'the error 24 h old: the work is over, each answer after its own 24 h');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(500 + DAY, failed), ['a1', 'a2']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(500 + DAY, [...failed, on('reading', 400, 2)]), [], 'a later status supersedes the error');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(due(400 + 2 * DAY, [...failed, on('reading', 400, 2), on('error', 400 + DAY, 2)]), ['a1', 'a2'], 'the retry failed too, 24 h ago');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConversation.notesToRemove(conv, on('error', 300), { now: 500 + DAY }).map(a => a.id), ['a1', 'a2'], 'without current, the given status is the latest');
   });
 
   it('[CNVD9] a tapped skip on a proposed document (and a comment alone): settles nothing, she confirms later', async () => {
@@ -52937,7 +55014,7 @@ describe('[CDOC] cmcDocuments', function () {
       let reads = 0;
       conn.apiOne = async (method, params, key) => {
         const r = await apiOne(method, params, key);
-        if (method === 'events.getOne' && params.id === 'd1' && ++reads === 2) r.streamIds = ['documents', 'share-zzzzzzzzzzzz'];
+        if (method === 'events.getOne' && params.id === 'd1' && ++reads === 3) r.streamIds = ['documents', 'share-zzzzzzzzzzzz'];
         return r;
       };
       await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), 'd1'),
@@ -53480,6 +55557,142 @@ describe('[CDOC] cmcDocuments', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.cleanupOrphanDocumentShares(account({ streams: unmarked(), events: [doc('up', [R])] }), ['acc-1']), [], 'a list of relationships says nothing of unmarked ones');
     });
   });
+
+  describe('[CDOC-O] open documents, the documents relationship, the grant note (plan 144)', () => {
+    const Q = 'share-qqqqqqqqqqqq';
+    const openTree = () => [...tree(), { id: Q, parentId: 'document-shares', name: Q, clientData: { hdsDocumentShare: { relationship: 'acc-2', direction: 'received' } } }];
+    const writes = (conn) => conn.calls.filter(c => !['events.getOne', 'streams.get', 'accesses.get', 'accessInfo'].includes(c.method));
+
+    it('[CDOC70] MAX_DOCUMENT_BYTES: 50 MB, all files of one document', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.MAX_DOCUMENT_BYTES, 50 * 1024 * 1024);
+    });
+
+    it('[CDOC71] openRelationshipsOf: one per received child the document carries, by its mark, in order, no repeat', () => {
+      const marks = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareStreamsIn(openTree());
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.openRelationshipsOf(['documents', 'share-rrrrrrrrrrrr', 'share-ssssssssssss', Q, 'share-rrrrrrrrrrrr'], marks), ['acc-1', 'acc-2']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.openRelationshipsOf(['documents-clinical', 'share-ssssssssssss', 'share-oooooooooooo'], marks), [], 'shared children close nothing');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.openRelationshipsOf(['documents', 'share-unmarked0000'], marks), [], 'an unmarked id says nothing');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.openRelationshipsOf(null, marks), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.openRelationshipsOf([Q], marks), [], 'not received yet: not hers, not open');
+    });
+
+    it('[CDOC72b] shareDocument refuses a document not received yet (not-received), before anything is written', async () => {
+      const conn = account({ streams: openTree(), events: [doc('d1', [Q])] });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1'),
+        (e) => e.innerObject?.reason === 'not-received' && e.innerObject.eventId === 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(writes(conn), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, [Q]);
+    });
+
+    it('[CDOC72] shareDocument refuses a document open to another contact, and writes nothing', async () => {
+      const conn = account({ streams: openTree(), events: [doc('d1', ['documents', Q])] });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1'),
+        (e) => e.innerObject?.reason === 'open-document' && JSON.stringify(e.innerObject.relationships) === '["acc-2"]' && e.innerObject.eventId === 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(writes(conn), [], 'no stream, no scope update, no event change, no alert');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', Q]);
+      const granted = account({ streams: openTree(), events: [doc('d2', ['documents-clinical', 'share-ssssssssssss', Q])] });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(granted, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), 'd2'),
+        (e) => e.innerObject?.reason === 'open-document');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(writes(granted), []);
+    });
+
+    it('[CDOC73] shareDocument: open to the same contact it is shared with, allowed; already frozen, allowed', async () => {
+      const conn = account({ streams: openTree(), events: [doc('d1', ['documents', 'share-rrrrrrrrrrrr']), doc('d2', ['documents', 'share-oooooooooooo'])] });
+      const rel = relWith([{ streamId: 'share-ssssssssssss', level: 'read' }, { streamId: 'share-rrrrrrrrrrrr', level: 'contribute' }]);
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, rel, 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(res.mode, 'shared');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', 'share-rrrrrrrrrrrr', 'share-ssssssssssss']);
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, rel, 'd2');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d2').streamIds, ['documents', 'share-oooooooooooo', 'share-ssssssssssss'], 'another contact\'s shared child: not open');
+    });
+
+    it('[CDOC74] shareDocument in mode all is unchanged: only the alert, even for an open document', async () => {
+      const conn = account({ streams: openTree(), events: [doc('d1', ['documents', Q])] });
+      const res = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.shareDocument(conn, relWith([{ streamId: 'documents', level: 'read' }]), 'd1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([res.mode, res.shareStreamId, res.scopeUpdate], ['all', null, null]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', Q]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(writes(conn).map(c => c.method + ' ' + c.params.type), ['events.create notification/alert-cmc']);
+    });
+
+    it('[CDOC75] documentsRelationshipOf: reads every document, else holds a share child, else reads a class, else the newest', () => {
+      const r = (name, perms, createdAt, hasChannel = true) => ({ name, grantedPermissions: perms, hasChannel, createdAt });
+      const pick = (rels) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.documentsRelationshipOf(rels)?.name ?? null;
+      const weight = [{ streamId: 'body-weight', level: 'read' }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([]), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('a', [{ streamId: 'documents', level: 'read' }], 1, false)]), null, 'no channel, no documents');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('a', weight, 1), r('b', [{ streamId: 'documents', level: 'read' }], 3), r('c', [{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }], 2)]), 'b');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('a', [{ streamId: '*', level: 'read' }], 5), r('b', [{ streamId: 'documents', level: 'read' }], 3)]), 'b', 'the oldest that reads every document');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('a', [{ streamId: 'documents-clinical', level: 'read' }], 1), r('b', [{ streamId: 'share-aaaaaaaaaaaa', level: 'create-only' }], 2), r('c', weight, 3)]), 'b');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('c', weight, 3), r('a', [{ streamId: 'documents-admin-insurance', level: 'read' }], 1), r('b', weight, 2)]), 'a', 'a class grant over the newest');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('a', [{ streamId: 'documents-clinical', level: 'create-only' }], 1), r('b', weight, 2)]), 'b', 'a class it cannot read does not count');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('n', weight, 5), r('o', weight, 1)]), 'n', 'the newest, whatever the order given');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('n', weight, new Date(5000)), r('o', weight, new Date(1000))]), 'n', 'dates too');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('x', [{ streamId: 'documents', level: 'read' }], 9, false), r('y', weight, 1)]), 'y', 'one without the channel is never picked');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('a', [{ streamId: ':local:documents-clinical', level: 'read' }], 1), r('b', weight, 2)]), 'a', 'canonical ids');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('u', weight, null), r('k', weight, 5)]), 'u', 'an unknown accept time counts as the newest');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('u', weight, undefined), r('v', weight, null), r('k', weight, 5)]), 'v', 'unknown ones keep the order given, after the known ones');
+      const all = [{ streamId: 'documents', level: 'read' }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('u', all, null), r('k', all, 5)]), 'k', 'an unknown accept time is never taken for the oldest');
+      const shares = [{ streamId: 'share-ssssssssssss', level: 'read' }];
+      const sends = [{ streamId: 'share-rrrrrrrrrrrr', level: 'create-only' }];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('old', shares, 1), r('new', sends, 2)]), 'new', 'a contact allowed to send stays on that data set, not an older one that only shares');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('old', shares, 1), r('new', [{ streamId: 'share-rrrrrrrrrrrr', level: 'contribute' }, ...shares], 2)]), 'new', 'an uploader too');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('a', sends, 1), r('b', sends, 2)]), 'a', 'the oldest of those that receive');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(pick([r('a', [{ streamId: 'documents-clinical', level: 'read' }], 1), r('b', shares, 2)]), 'b', 'only shared: still before a class grant');
+    });
+
+    it('[CDOC76] documentsGrantNote: what a documents grant leaves out, from the model tree, in en, fr, es', () => {
+      const note = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.documentsGrantNote;
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents', l)), [null, null, null], 'the model description already says it covers every document');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents-clinical', l)), [
+        'Not included: documents not filed yet, administrative documents.',
+        'Non inclus : documents pas encore classés, documents administratifs.',
+        'No incluidos: documentos aún sin archivar, documentos administrativos.'
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents-admin', l)), [
+        'Not included: documents not filed yet, clinical documents.',
+        'Non inclus : documents pas encore classés, documents cliniques.',
+        'No incluidos: documentos aún sin archivar, documentos clínicos.'
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents-admin-insurance', l)), [
+        'Not included: documents not filed yet, clinical documents, other administrative documents.',
+        'Non inclus : documents pas encore classés, documents cliniques, autres documents administratifs.',
+        'No incluidos: documentos aún sin archivar, documentos clínicos, otros documentos administrativos.'
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-clinical', 'de'), note('documents-clinical', 'en'), 'another locale reads English');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-clinical', 'it'), note('documents-clinical', 'en'), 'no reviewed it / pt-BR wording yet');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-clinical', 'fr-CH'), note('documents-clinical', 'fr'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note(':local:documents-admin', 'en'), note('documents-admin', 'en'));
+      for (const other of ['body-weight', 'document-shares', 'share-aaaaaaaaaaaa', 'documents-unknown', '*']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note(other, 'en'), null, other);
+    });
+
+    it('[CDOC77] documentsGrantNote: one language for the whole note; a label missing in it makes it all English', () => {
+      const note = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcDocuments.documentsGrantNote;
+      // the loaded model is frozen: the stream is read through a stub that leaves out one language of its label
+      const without = (sid, lang, check) => {
+        const streams = (0,_ts_HDSModel_HDSModelInitAndSingleton_ts__WEBPACK_IMPORTED_MODULE_2__.getModel)().streams;
+        const read = streams.getDataById.bind(streams);
+        streams.getDataById = (id, ...rest) => {
+          const data = read(id, ...rest);
+          if (id !== sid || data == null) return data;
+          const { [lang]: _gone, ...label } = data.label;
+          return { ...data, label };
+        };
+        try { check(); } finally { delete streams.getDataById; }
+      };
+      without('documents-admin', 'es', () => {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-clinical', 'es'), 'Not included: documents not filed yet, administrative documents.');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-admin-insurance', 'es'), 'Not included: documents not filed yet, clinical documents, other administrative documents.');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-admin', 'es'), 'No incluidos: documentos aún sin archivar, documentos clínicos.', 'only the labels it uses count');
+      });
+      without('documents-clinical', 'fr', () => {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-admin', 'fr'), 'Not included: documents not filed yet, clinical documents.');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-admin-insurance', 'fr'), 'Not included: documents not filed yet, clinical documents, other administrative documents.');
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-clinical', 'fr'), 'Non inclus : documents pas encore classés, documents administratifs.');
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(note('documents-admin', 'fr'), 'Non inclus : documents pas encore classés, documents cliniques.', 'labels restored');
+    });
+  });
 });
 
 
@@ -53736,6 +55949,20 @@ describe('[CFSP] cmcFormSpec helpers', function () {
       const calls = [];
       await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.createInviteWithFormSpec(captureConn(calls), inviteParams());
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('accessType' in calls[0].params.content.request));
+    });
+
+    it('[CFS63] forwards requireVerifiedEmail: true to the CMC request (@pryv/cmc 3.24)', async () => {
+      const calls = [];
+      await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.createInviteWithFormSpec(captureConn(calls), inviteParams({ requireVerifiedEmail: true }));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(calls[0].params.content.request.requireVerifiedEmail, true);
+    });
+
+    it('[CFS64] omits requireVerifiedEmail from the request when not given or false', async () => {
+      for (const extra of [{}, { requireVerifiedEmail: false }]) {
+        const calls = [];
+        await _ts_cmc_formSpec_ts__WEBPACK_IMPORTED_MODULE_1__.createInviteWithFormSpec(captureConn(calls), inviteParams(extra));
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!('requireVerifiedEmail' in calls[0].params.content.request));
+      }
     });
 
     it('[CFS62] the snapshot sent to the patient carries no openLink (its capability URL)', async () => {
@@ -56359,10 +58586,10 @@ describe('[CPKV] converter pack version', () => {
   });
 
   it('[CPKV2] a version above what it supports is never fetched', async () => {
-    served = { [url('pack-v1.json')]: packOf('v1', 'v1'), [url('pack-v2.json')]: packOf('v2', 'v2') };
-    const engine = await convertersFor({ latestVersion: 'v2', versions: ['v0', 'v1', 'v2'] }).ensureEngine(ITEM);
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(engine.converterVersion, 'v1');
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, [url('pack-v1.json')]);
+    served = { [url('pack-v3.json')]: packOf('v3', 'v3'), [url('pack-v4.json')]: packOf('v4', 'v4') };
+    const engine = await convertersFor({ latestVersion: 'v4', versions: ['v0', 'v1', 'v2', 'v3', 'v4'] }).ensureEngine(ITEM);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(engine.converterVersion, 'v3');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, [url('pack-v3.json')]);
   });
 
   it('[CPKV3] an index without versions (data-model before the versioned packs) reads pack-latest.json', async () => {
@@ -56405,9 +58632,10 @@ describe('[CPKV] converter pack version', () => {
   });
 
   it('[CPKV8] packVersionFor: numeric order, bad names ignored, unknown item keys read v0', () => {
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.SUPPORTED_CONVERTER_VERSIONS['cervical-fluid'], 'v1');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.SUPPORTED_CONVERTER_VERSIONS['cervical-fluid'], 'v3');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', ['v1', 'v0']), 'v1');
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', ['v0', 'v10', 'v2']), 'v0');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', ['v0', 'v10', 'v3']), 'v3');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', ['v0', 'v10', 'v4']), 'v0');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('cervical-fluid', ['v0', 'v1-draft', 3]), 'v0');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('mood', ['v0', 'v1']), 'v0');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual((0,_ts_HDSModel_HDSModel_Converters_ts__WEBPACK_IMPORTED_MODULE_2__.packVersionFor)('new-item', ['v0', 'v1']), 'v0');
@@ -56572,6 +58800,528 @@ describe('[CVTX] converter texts in the other languages', () => {
     (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__.setPreferredLocales)(['it']);
     await convertersFor().loadTexts();
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(requested, []);
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/correctionStreams.test.js"
+/*!*****************************************!*\
+  !*** ./tests/correctionStreams.test.js ***!
+  \*****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+const COLLECTORS = ':_cmc:apps:hds-patient:collectors:monitor--api-x';
+const CHANNEL = [
+  { streamId: ':_cmc:inbox', level: 'create-only' },
+  { streamId: COLLECTORS, level: 'contribute' }
+];
+
+function apiError (id) {
+  const e = new Error(id);
+  e.innerObject = { id };
+  return e;
+}
+
+/** An account as the platform keeps it: a stream tree, accesses, and scope updates applied on read. */
+function account ({ streams = [], accesses = [], tokenType = 'personal' } = {}) {
+  const state = { streams: structuredClone(streams), accesses, events: new Map(), calls: [], grant: null, n: 0 };
+  const tree = (parentId, all) => state.streams
+    .filter(s => (s.parentId ?? null) === parentId && (all || !s.trashed))
+    .map(s => ({ ...s, children: tree(s.id, all) }));
+  state.accessInfo = async () => ({ type: tokenType });
+  state.apiOne = async function (method, params, key) {
+    state.calls.push({ method, params });
+    const out = (k, v) => key ? v : { [k]: v };
+    switch (method) {
+      case 'streams.get':
+        if (params.parentId && !state.streams.find(s => s.id === params.parentId)) throw apiError('unknown-referenced-resource');
+        return out('streams', tree(params.parentId ?? null, params.state === 'all'));
+      case 'streams.create': {
+        if (state.streams.find(s => s.id === params.id)) throw apiError('item-already-exists');
+        const s = { parentId: null, ...structuredClone(params) };
+        state.streams.push(s);
+        return out('stream', s);
+      }
+      case 'streams.update': {
+        const s = state.streams.find(x => x.id === params.id);
+        if (!s) throw apiError('unknown-resource');
+        Object.assign(s, structuredClone(params.update));
+        return out('stream', s);
+      }
+      case 'streams.delete': {
+        const s = state.streams.find(x => x.id === params.id);
+        if (!s) throw apiError('unknown-resource');
+        if (!s.trashed) { s.trashed = true; return out('stream', s); }
+        state.streams = state.streams.filter(x => x.id !== params.id);
+        return out('streamDeletion', { id: params.id });
+      }
+      case 'accesses.get':
+        return out('accesses', state.accesses);
+      case 'events.create': {
+        const e = { id: 'ev-' + (++state.n), ...structuredClone(params) };
+        state.events.set(e.id, e);
+        return out('event', structuredClone(e));
+      }
+      case 'events.get':
+        return out('events', [...state.events.values()].filter(e => (e.streamIds ?? []).some(s => params.streams.includes(s))).slice(0, params.limit ?? Infinity));
+      case 'events.getOne': {
+        const e = state.events.get(params.id);
+        if (!e) throw apiError('unknown-resource');
+        if (e.type === 'consent/scope-update-cmc' && e.content.applied == null) {
+          e.content = { ...e.content, applied: true, status: 'completed' };
+          state.grant = e.content.newPermissions;
+        }
+        return out('event', structuredClone(e));
+      }
+      default:
+        throw new Error('unexpected ' + method);
+    }
+  };
+  return state;
+}
+
+const ROOT = { id: 'entry-corrections', name: 'Corrections from your contacts', parentId: null };
+const child = (id, relationship, over = {}) => ({ id, name: id, parentId: 'entry-corrections', clientData: relationship ? { hdsEntryCorrections: { relationship } } : {}, ...over });
+const rel = (grant = [{ streamId: 'body-vulva-mucus-inspect', level: 'read' }], accessId = 'acc-1') =>
+  ({ accessId, localCollectorStreamId: COLLECTORS, grantedPermissions: [...grant, ...CHANNEL] });
+const ID_A = 'corr-aaaaaaaaaaaa';
+const ID_B = 'corr-bbbbbbbbbbbb';
+
+describe('[CORS] corrections: the person\'s children', function () {
+  it('[CORS1] withoutCorrectionsAsk drops the minted ask only, in any spelling', () => {
+    const perms = [
+      { streamId: 'body-vulva-mucus-inspect', level: 'read' },
+      { streamId: ':local:entry-corrections', level: 'contribute' },
+      { streamId: 'entry-corrections', level: 'read' }
+    ];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.withoutCorrectionsAsk(perms).map(p => p.level), ['read', 'read']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.asksForCorrections(perms), true);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.namesCorrectionStreams([{ streamId: 'body-weight' }]), false);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.namesCorrectionStreams([{ streamId: ID_A }]), true);
+  });
+
+  it('[CORS2] ensureCorrectionStream mints the root, a marked child, and grants it contribute by scope update', async () => {
+    const person = account();
+    const r = rel();
+    const { streamId, scopeUpdate } = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.ensureCorrectionStream(person, r);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isCorrectionStreamId(streamId));
+    const root = person.streams.find(s => s.id === 'entry-corrections');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(root.parentId, null);
+    const made = person.streams.find(s => s.id === streamId);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([made.parentId, made.name, made.clientData], ['entry-corrections', streamId, { hdsEntryCorrections: { relationship: 'acc-1' } }]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(scopeUpdate != null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(person.grant.some(p => p.streamId === streamId && p.level === 'contribute'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!person.grant.some(p => p.streamId === 'entry-corrections'), 'never the root');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionStreamFor(person, 'acc-1'), streamId);
+  });
+
+  it('[CORS3] ensureCorrectionStream is idempotent, and raises a child granted at another level', async () => {
+    const person = account({ streams: [ROOT, child(ID_A, 'acc-1')] });
+    const done = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.ensureCorrectionStream(person, rel([{ streamId: ID_A, level: 'contribute' }]));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual([done.streamId, done.scopeUpdate], [ID_A, null]);
+    const raised = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.ensureCorrectionStream(person, rel([{ streamId: ID_A, level: 'read' }]));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(raised.streamId, ID_A);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(person.grant.some(p => p.streamId === ID_A && p.level === 'contribute'));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(person.streams.filter(s => s.parentId === 'entry-corrections').length, 1, 'no second child');
+  });
+
+  it('[CORS4] another relationship\'s child is never reused', async () => {
+    const person = account({ streams: [ROOT, child(ID_A, 'acc-9')] });
+    const { streamId } = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.ensureCorrectionStream(person, rel());
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(streamId, ID_A);
+  });
+
+  it('[CORS5] checkOfferedCorrections: a free new id from a single-use invite passes; from an open link it is refused', async () => {
+    const person = account();
+    const asked = [{ streamId: ID_A, level: 'contribute' }];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkOfferedCorrections(person, asked, { singleUse: true }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkOfferedCorrections(person, asked, { singleUse: false })).map(i => i.code), ['not-single-use']);
+  });
+
+  it('[CORS6] checkOfferedCorrections refuses another contact\'s child, one named by another access, the root at manage', async () => {
+    const person = account({
+      streams: [ROOT, child(ID_A, 'acc-9'), child(ID_B, null)],
+      accesses: [{ id: 'acc-9', permissions: [{ streamId: ID_B, level: 'contribute' }] }]
+    });
+    const codes = async (perms, opts = { singleUse: true }) => (await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkOfferedCorrections(person, perms, opts)).map(i => i.code);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: ID_A, level: 'contribute' }]), ['child-taken']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: ID_B, level: 'contribute' }]), ['child-taken']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: 'entry-corrections', level: 'manage' }]), ['root-level']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: ID_A, level: 'read' }], { accessId: 'acc-9', singleUse: false }), ['child-not-contribute']);
+    // its own, marked or named by its access (an interrupted accept), on a scope request
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: ID_A, level: 'contribute' }], { accessId: 'acc-9', singleUse: false }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: ID_B, level: 'contribute' }], { accessId: 'acc-9', singleUse: false }), []);
+  });
+
+  it('[CORS7] checkOfferedCorrections reads nothing when no corr- child is named', async () => {
+    const person = account();
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkOfferedCorrections(person, [{ streamId: 'entry-corrections', level: 'contribute' }], { singleUse: false }), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(person.calls.length, 0);
+  });
+
+  it('[CORS8] markOfferedCorrectionStreams creates or marks the named child; refuses one that is not free', async () => {
+    const person = account({ streams: [ROOT, child(ID_B, null)] });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.markOfferedCorrectionStreams(person, { accessId: 'acc-1', grantedPermissions: [{ streamId: ID_A, level: 'contribute' }] }), [ID_A]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(person.streams.find(s => s.id === ID_A).clientData, { hdsEntryCorrections: { relationship: 'acc-1' } });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.markOfferedCorrectionStreams(person, { accessId: 'acc-2', grantedPermissions: [{ streamId: ID_B, level: 'contribute' }] });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(person.streams.find(s => s.id === ID_B).clientData, { hdsEntryCorrections: { relationship: 'acc-2' } });
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+      () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.markOfferedCorrectionStreams(person, { accessId: 'acc-3', grantedPermissions: [{ streamId: ID_A, level: 'contribute' }] }),
+      (e) => e.innerObject?.reason === 'correction-id-taken'
+    );
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.markOfferedCorrectionStreams(person, { accessId: 'acc-1', grantedPermissions: [{ streamId: 'body-weight' }] }), []);
+  });
+
+  it('[CORS10] checkGrantedCorrections: the root above read (the minted ask too) and another\'s child; its own child passes', async () => {
+    const person = account({ streams: [ROOT, child(ID_A, 'acc-9'), child(ID_B, null)], accesses: [{ id: 'acc-1', permissions: [{ streamId: ID_B, level: 'contribute' }] }] });
+    const codes = async (perms) => (await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkGrantedCorrections(person, perms, { accessId: 'acc-1' })).map(i => i.code);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: 'entry-corrections', level: 'contribute' }]), ['root-level']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: ':local:entry-corrections', level: 'manage' }]), ['root-level']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: 'entry-corrections', level: 'read' }]), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: ID_A, level: 'contribute' }]), ['child-taken']);
+    // unmarked, named by this relationship's own access: an interrupted accept, its own
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await codes([{ streamId: ID_B, level: 'contribute' }]), []);
+  });
+
+  it('[CORS11] releaseUnclaimedCorrectionStreams deletes only a child this accept created and nobody took', async () => {
+    const ID_C = 'corr-cccccccccccc';
+    const ID_D = 'corr-dddddddddddd';
+    const ID_E = 'corr-eeeeeeeeeeee';
+    const person = account({
+      streams: [ROOT, child(ID_A, null), child(ID_B, 'acc-1'), child(ID_C, null), child(ID_D, null), child(ID_E, null)],
+      accesses: [{ id: 'acc-2', permissions: [{ streamId: ID_C, level: 'contribute' }] }]
+    });
+    person.events.set('ev-x', { id: 'ev-x', streamIds: [ID_E] });
+    // ID_D was there before the accept; ID_E holds an event; ID_B is marked; ID_C is named by an access
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.releaseUnclaimedCorrectionStreams(person, [ID_A, ID_B, ID_C, ID_D, ID_E, 'body-weight'], [ID_D]), [ID_A]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(person.streams.map(s => s.id), ['entry-corrections', ID_B, ID_C, ID_D, ID_E]);
+  });
+
+  it('[CORS14] isDefiniteAcceptFailure: a typed CMC refusal only, never a timeout, a used link or a network error', () => {
+    const err = (id) => Object.assign(new Error(id), { id });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isDefiniteAcceptFailure(err('cmc-granted-permissions-not-subset')), true);
+    for (const id of ['cmc-capability-timeout', 'cmc-capability-consumed', 'cmc-capability-already-accepted-by-you']) {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isDefiniteAcceptFailure(err(id)), false, id);
+    }
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isDefiniteAcceptFailure(new TypeError('fetch failed')), false);
+  });
+
+  it('[CORS12] correctionsAskRefusal: a minted ask is narrowable only with a choice, not mandatory, and something else', () => {
+    const other = { streamId: 'easy-monitor', level: 'manage' };
+    const ask = { streamId: 'entry-corrections', level: 'contribute' };
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionsAskRefusal([other, ask], true), null);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionsAskRefusal([other, ask], false), 'no-user-choice');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionsAskRefusal([other, { ...ask, mandatory: true }], true), 'mandatory');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionsAskRefusal([ask], true), 'nothing-else');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionsAskRefusal([other], false), null);
+  });
+
+  it('[CORS13] a child granted under another spelling is raised by its id', async () => {
+    const person = account({ streams: [ROOT, child(ID_A, 'acc-1')] });
+    await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.ensureCorrectionStream(person, rel([{ streamId: ':local:' + ID_A, level: 'read' }]));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(person.grant.some(p => p.streamId === ID_A && p.level === 'contribute'));
+  });
+
+  it('[CORS9] a trashed child is listed with includeTrashed only, and is never a relationship\'s live child', async () => {
+    const person = account({ streams: [ROOT, child(ID_A, 'acc-1', { trashed: true })] });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.listCorrectionStreams(person), []);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.listCorrectionStreams(person, { includeTrashed: true })).map(s => [s.id, s.trashed]), [[ID_A, true]]);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionStreamFor(person, 'acc-1'), null);
+    await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(
+      () => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.markOfferedCorrectionStreams(person, { accessId: 'acc-1', grantedPermissions: [{ streamId: ID_A, level: 'contribute' }] }),
+      (e) => e.innerObject?.reason === 'correction-id-taken'
+    );
+  });
+});
+
+
+/***/ },
+
+/***/ "./tests/corrections.test.js"
+/*!***********************************!*\
+  !*** ./tests/corrections.test.js ***!
+  \***********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/appTemplates/offerStreams.ts */ "./ts/appTemplates/offerStreams.ts");
+/* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+
+
+
+
+
+/**
+ * A professional's correction of one entry, data-model 4.43.0 (plan 143, CORRECTIONS.md). Until that pack is published,
+ * the published pack is patched with the root, the item, the eventType and the vocabulary.
+ */
+describe('[CORR] corrections of an entry', () => {
+  const { ENTRY_CORRECTION, CORRECTIONS_ROOT_ID } = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections;
+  const CHILD = 'corr-4k2m9x0q7a1b';
+  let published;
+  let model;
+
+  before(async () => {
+    model = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel)();
+    if (!model.isLoaded) await model.load('https://model.datasafe.dev/pack.json');
+    published = structuredClone(model.modelData);
+    const pack = structuredClone(published);
+    if (!pack.streams.some((s) => s.id === CORRECTIONS_ROOT_ID)) {
+      pack.streams.push({ id: CORRECTIONS_ROOT_ID, name: 'Corrections from your contacts', parentId: null });
+    }
+    pack.items['entry-correction'] = {
+      version: 'v1', type: 'system', label: { en: 'Correction of an entry' }, description: { en: 'd' }, streamId: CORRECTIONS_ROOT_ID, eventType: ENTRY_CORRECTION, repeatable: 'unlimited'
+    };
+    pack.eventTypes.types[ENTRY_CORRECTION] ??= { type: 'object' };
+    pack.vocabularies ??= {};
+    pack.vocabularies['professional-role'] ??= {
+      binds: [{ eventType: ENTRY_CORRECTION, path: 'authorRole' }],
+      values: { physician: { label: { en: 'Physician', fr: 'Médecin' } }, 'health-educator': { label: { en: 'Health educator', fr: 'Éducateur ou éducatrice en santé' } }, other: { label: { en: 'Other', fr: 'Autre' } } }
+    };
+    model.loadFromObject(pack);
+  });
+  after(() => { (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel)().loadFromObject(published); });
+  afterEach(() => { (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.resetPreferredLocales)(); });
+
+  const entry = () => ({
+    id: 'ckentry0001',
+    streamIds: ['body-vulva-bleeding'],
+    type: 'ratio/proportion',
+    time: 1773316800,
+    modified: 1773320000.5,
+    content: 0.5,
+    clientData: { hdsTimePrecision: 'day' }
+  });
+  const change = (over = {}) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.buildCorrection({
+    streamId: CHILD,
+    kind: 'change',
+    authorRole: 'health-educator',
+    itemKey: 'body-vulva-bleeding',
+    entry: entry(),
+    corrected: { type: 'ratio/proportion', content: 0 },
+    comment: 'No bleeding on this day: the **stamp** is green.',
+    markdown: true,
+    about: 'ckdoc0001',
+    anchor: { attachmentId: 'ckdoc0001a', page: 1 },
+    ...over
+  });
+
+  describe('[CORR-IDS] the children', () => {
+    it('[CORR-IDS-1] corr- + 12 lowercase base36, random', () => {
+      const a = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.newCorrectionStreamId();
+      const b = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.newCorrectionStreamId();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isCorrectionStreamId(a), a);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.notEqual(a, b);
+      for (const id of ['corr-4K2M9X0Q7A1B', 'corr-4k2m9x0q7a1', 'share-4k2m9x0q7a1b', 'entry-corrections', null]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isCorrectionStreamId(id), false, String(id));
+      }
+    });
+
+    it('[CORR-IDS-2] forEvent resolves a child to the item; an unknown stream still throws', () => {
+      const item = model.itemsDefs.forEvent({ streamIds: [CHILD], type: ENTRY_CORRECTION });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(item.key, 'entry-correction');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(model.itemsDefs.forEvent({ streamIds: ['corr-zz'], type: ENTRY_CORRECTION }, false), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => model.itemsDefs.forEvent({ streamIds: ['my-app-corrections'], type: ENTRY_CORRECTION }));
+    });
+
+    it('[CORR-IDS-3] offerStreamsToCreate puts a child under the root, named by its id', () => {
+      const out = (0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_2__.offerStreamsToCreate)([{ streamId: CHILD, level: 'contribute', defaultName: 'Corrections by Anna' }], model.streams);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(out, [
+        { id: CORRECTIONS_ROOT_ID, name: 'Corrections from your contacts', parentId: undefined },
+        { id: CHILD, name: CHILD, parentId: CORRECTIONS_ROOT_ID }
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.appTemplates);
+    });
+
+    it('[CORR-IDS-4] checkOfferedCorrectionStreams refuses what CORRECTIONS.md lists', () => {
+      const check = (perms, ctx) => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkOfferedCorrectionStreams(perms, { singleUse: true, ...ctx }).map((i) => i.code);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }, { streamId: CORRECTIONS_ROOT_ID, level: 'read' }]), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CORRECTIONS_ROOT_ID, level: 'contribute' }]), [], 'the minted ask, never granted as such');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.asksForCorrections([{ streamId: CORRECTIONS_ROOT_ID, level: 'contribute' }]), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.asksForCorrections([{ streamId: CORRECTIONS_ROOT_ID, level: 'read' }, { streamId: CHILD, level: 'contribute' }]), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CORRECTIONS_ROOT_ID, level: 'manage' }]), ['root-level']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CORRECTIONS_ROOT_ID, level: 'create-only' }]), ['root-level']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'read' }]), ['child-not-contribute']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }], { relationship: 'r1', existing: { [CHILD]: 'r2' } }), ['child-taken']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }], { relationship: 'r1', existing: new Map([[CHILD, 'r1']]) }), [], 'its own, on a scope update');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }], { namedByOthers: [CHILD] }), ['child-taken']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }, { streamId: 'corr-000000000001', level: 'contribute' }]), ['several-children']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }], { singleUse: false }), ['not-single-use']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }], { singleUse: false, relationship: 'r1', existing: { [CHILD]: 'r1' } }), [], 'an existing child of its own, on a reusable invite');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }], { relationship: 'r1', existing: { [CHILD]: null } }), ['child-taken'], 'unmarked, not named by its access');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(check([{ streamId: CHILD, level: 'contribute' }], { relationship: 'r1', existing: { [CHILD]: null }, namedByThis: [CHILD] }), [], 'an interrupted accept');
+    });
+  });
+
+  describe('[CORR-BLD] building and checking', () => {
+    it('[CORR-BLD-1] a change: time and entryModified from the entry, ids mirrored, anchor and markdown', () => {
+      const e = change();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(e.streamIds, [CHILD]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.type, ENTRY_CORRECTION);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.time, 1773316800);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.content.entryId, 'ckentry0001');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.content.entryModified, 1773320000.5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(e.clientData.related, { ckentry0001: true, ckdoc0001: true });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(e.clientData.hdsSourceAnchor, { eventId: 'ckdoc0001', attachmentId: 'ckdoc0001a', page: 1 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(e.clientData.hdsTimePrecision, 'day');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isMarkdown(e), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.formattedText(e), 'No bleeding on this day: the **stamp** is green.');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkCorrection(e, { entry: entry() }), []);
+    });
+
+    it('[CORR-BLD-2] an add and a remove', () => {
+      const add = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.buildCorrection({
+        streamId: CHILD, kind: 'add', authorRole: 'physician', itemKey: 'body-vulva-bleeding', corrected: { type: 'ratio/proportion', content: 0.25 }, time: 1773403200, timePrecision: 'day'
+      });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(add.time, 1773403200);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(add.content.entryId, undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(add.clientData.related, undefined);
+      const remove = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.buildCorrection({ streamId: CHILD, kind: 'remove', authorRole: 'other', itemKey: 'body-vulva-bleeding', entry: entry() });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(remove.content.corrected, undefined);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(remove.clientData.related, { ckentry0001: true });
+    });
+
+    it('[CORR-BLD-3] refuses what a writer MUST NOT write', () => {
+      const codes = (fn) => { try { fn(); } catch (e) { return e.innerObject?.issues?.map((i) => i.code + (i.field ? ':' + i.field : '')) ?? e.message; } return []; };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(() => change({ streamId: 'my-app-corrections' })), ['not-on-correction-child']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(() => change({ itemKey: 'no-such-item' })), ['unknown-item']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(() => change({ corrected: { type: 'temperature/c', content: 36.5 } })), ['corrected-type-not-of-item']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(() => change({ itemKey: 'entry-correction', corrected: { type: ENTRY_CORRECTION, content: {} } })), ['item-not-correctable', 'entry-mismatch']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.buildCorrection({ streamId: CHILD, kind: 'add', authorRole: 'physician', itemKey: 'body-vulva-bleeding', corrected: { time: 1 }, time: 1 })), ['field-for-kind:corrected.content', 'field-for-kind:corrected.time']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(() => change({ corrected: { time: 1, clientData: { hdsRefRange: {} } } })), ['corrected-client-data']);
+      const invalid = codes(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.buildCorrection({ streamId: CHILD, kind: 'change', authorRole: 'physician', itemKey: 'body-vulva-bleeding', entry: entry(), corrected: { type: 'ratio/proportion', content: 'x' } }, { validateContent: (t, c) => typeof c === 'number' }));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(invalid, ['invalid-content']);
+    });
+
+    it('[CORR-BLD-4] a reader checks where it counts and the mirror', () => {
+      const e = change();
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkCorrection({ ...e, streamIds: ['body-vulva-bleeding'] }).map((i) => i.code), ['not-on-correction-child']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkCorrection({ ...e, clientData: { ...e.clientData, related: {} } }).map((i) => i.code), ['missing-related', 'missing-related']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkCorrection({ ...e, clientData: { ...e.clientData, hdsSourceAnchor: { eventId: 'other', attachmentId: 'a', page: 1 } } }).map((i) => i.code), ['anchor-not-about']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkCorrection(e, { entry: { ...entry(), id: 'another' } }).map((i) => i.code), ['entry-mismatch']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkCorrection({ ...e, content: { ...e.content, authorRole: 'astrologer' } }), [], 'a reader reads an unknown role as other');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkCorrection({ ...e, content: { ...e.content, authorRole: 'astrologer' } }, { writer: true }).map((i) => i.code), ['unknown-role']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => change({ authorRole: 'astrologer' }), /unknown-role/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.checkCorrection({ type: 'note/txt' }).map((i) => i.code), ['wrong-type']);
+    });
+  });
+
+  describe('[CORR-CUR] current corrections', () => {
+    const ev = (id, created, over = {}) => ({ id, streamIds: [CHILD], type: ENTRY_CORRECTION, created, content: { kind: 'change', entryId: 'e1', itemKey: 'body-vulva-bleeding' }, ...over });
+
+    it('[CORR-CUR-1] a replaced one is not current, even when the replacement is trashed', () => {
+      const a = ev('a', 1);
+      const b = ev('b', 2, { content: { kind: 'change', entryId: 'e1', itemKey: 'body-vulva-bleeding', replaces: 'a' } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.currentCorrections([a, b]).map((e) => e.id), ['b']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.currentCorrections([a, { ...b, trashed: true }]).map((e) => e.id), [], 'withdrawing b never brings a back');
+    });
+
+    it('[CORR-CUR-2] replaces counts only on the same child and entry; newest first; not counted elsewhere', () => {
+      const a = ev('a', 1);
+      const other = ev('x', 3, { streamIds: ['corr-000000000001'], content: { kind: 'change', entryId: 'e1', itemKey: 'body-vulva-bleeding', replaces: 'a' } });
+      const otherEntry = ev('y', 2, { content: { kind: 'change', entryId: 'e2', itemKey: 'body-vulva-bleeding', replaces: 'a' } });
+      const elsewhere = ev('z', 4, { streamIds: ['body-vulva-bleeding'] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.currentCorrections([a, other, otherEntry, elsewhere]).map((e) => e.id), ['x', 'y', 'a']);
+      const byEntry = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionsByEntry([a, other, otherEntry]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(byEntry.get('e1').map((e) => e.id), ['x', 'a']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(byEntry.get('e2').map((e) => e.id), ['y']);
+    });
+  });
+
+  describe('[CORR-STA] state against the live entry', () => {
+    const c = (content, id = 'c1') => ({ id, content: { entryModified: 1773320000.5, ...content } });
+
+    it('[CORR-STA-1] change', () => {
+      const corr = c({ kind: 'change', corrected: { type: 'ratio/proportion', content: 0 } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, entry()), 'open');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, { ...entry(), content: 0, modified: 1773400000 }), 'applied');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, { ...entry(), content: 0.25, modified: 1773400000 }), 'outdated');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, null), 'entry-gone');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, { ...entry(), trashed: true }), 'entry-gone');
+      const n = c({ kind: 'change', corrected: { type: 'temperature/c', content: 36.5 } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(n, { ...entry(), type: 'temperature/c', content: 36.500000000001 }), 'applied', '12 significant digits');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, undefined), 'open', 'not readable: it cannot tell');
+    });
+
+    it('[CORR-STA-5] hdsSourceGrid (4.51.0) is kept on a correction: never in corrected, and an entry keeping it with its anchor is applied', () => {
+      const codes = (fn) => { try { fn(); } catch (e) { return e.innerObject?.issues?.map((i) => i.code) ?? e.message; } return []; };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(() => change({ corrected: { time: 1, clientData: { hdsSourceGrid: { row: 2, column: 14 } } } })), ['corrected-client-data']);
+      const kept = { hdsSourceAnchor: { eventId: 'ckdoc0001', attachmentId: 'ckdoc0001a', page: 1 }, hdsSourceGrid: { row: 2, column: 14 } };
+      const corr = c({ kind: 'change', corrected: { type: 'ratio/proportion', content: 0 } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, { ...entry(), content: 0, modified: 1773400000, clientData: { ...entry().clientData, ...kept } }), 'applied');
+      const day = c({ kind: 'change', corrected: { time: 1773403200, clientData: { hdsTimePrecision: 'day' } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(day, { ...entry(), time: 1773403200, clientData: { hdsTimePrecision: 'day', ...kept } }), 'applied');
+    });
+
+    it('[CORR-STA-4] the comparator (absent equals absent), the basis, nothing to compare', () => {
+      const lt = c({ kind: 'change', corrected: { type: 'temperature/c', content: 36.5, clientData: { hdsComparator: '<' } } });
+      const exact = c({ kind: 'change', corrected: { type: 'temperature/c', content: 36.5 } });
+      const t = { ...entry(), type: 'temperature/c', content: 36.5 };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(lt, t), 'open');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(lt, { ...t, clientData: { hdsComparator: '<' } }), 'applied');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(exact, { ...t, clientData: { hdsComparator: '<' } }), 'open', 'an entry with < is not the exact value');
+      const basis = c({ kind: 'change', corrected: { type: 'temperature/c', content: 36.5, clientData: { hdsBasis: 'manual' } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(basis, t), 'open');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(basis, { ...t, clientData: { hdsBasis: 'manual' } }), 'applied');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(c({ kind: 'change', corrected: { clientData: { hdsBasis: 'manual' } } }), entry()), 'open');
+    });
+
+    it('[CORR-STA-2] a change of day only compares time and precision', () => {
+      const corr = c({ kind: 'change', corrected: { time: 1773403200, clientData: { hdsTimePrecision: 'day' } } });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, entry()), 'open');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, { ...entry(), time: 1773403200 }), 'applied');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(corr, { ...entry(), time: 1773403200, clientData: {} }), 'open');
+    });
+
+    it('[CORR-STA-3] remove and add', () => {
+      const remove = c({ kind: 'remove' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(remove, entry()), 'open');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(remove, null), 'applied');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(remove, { ...entry(), trashed: true }), 'applied');
+      const add = c({ kind: 'add', corrected: { type: 'ratio/proportion', content: 0 } }, 'c9');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(add, null), 'open');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.correctionState(add, { ...entry(), clientData: { related: { c9: true } } }), 'applied');
+    });
+  });
+
+  describe('[CORR-TXT] labels and markdown', () => {
+    it('[CORR-TXT-1] role labels: the pack, else built in; an unknown role reads as other', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.professionalRoleLabel('health-educator'), 'Health educator');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.professionalRoleLabel('midwife'), 'Midwife', 'built in when the pack lacks it');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.professionalRoleLabel('astrologer'), 'Other');
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.professionalRoleLabel('physician'), 'Médecin');
+    });
+
+    it('[CORR-TXT-3] the built-in roles are the published vocabulary\'s, once it is published', () => {
+      const voc = published.vocabularies?.['professional-role'];
+      if (voc == null) return; // data-model 4.43.0 not published yet
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(Object.keys(voc.values), [..._ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.PROFESSIONAL_ROLES]);
+      (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+      for (const role of _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.PROFESSIONAL_ROLES) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.professionalRoleLabel(role, { vocabularies: { label: () => null } }), _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.professionalRoleLabel(role), role);
+    });
+
+    it('[CORR-TXT-2] hdsTextFormat applies to note/txt and the correction comment only', () => {
+      const md = { hdsTextFormat: 'text/markdown' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isMarkdown({ type: 'note/txt', clientData: md }), true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isMarkdown({ type: 'message/chat-cmc', clientData: md }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isMarkdown({ type: 'note/txt', clientData: { hdsTextFormat: 'text/html' } }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.isMarkdown({ type: 'note/txt' }), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.formattedText({ type: 'note/txt', content: '# hi' }), '# hi');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.corrections.formattedText({ type: 'message/chat-cmc', content: 'x' }), null);
+    });
   });
 });
 
@@ -58982,6 +61732,17 @@ describe('[ESTX] eventToShortText', () => {
       event.content.source.sourceData = { mucus: '10kl' };
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), expected);
     });
+
+    it('[EST21f] the Creighton frequency recorded with the code is shown after it (B-2026-11-21-3)', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'creighton', '6C');
+      event.time = Date.now() / 1000;
+      const bare = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      event.content.source.annotations = { frequency: 'X2' };
+      const result = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(result, bare.replace(' (Creighton)', ' · X2 (Creighton)'));
+      event.content.source.annotations = {};
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), bare);
+    });
   });
 
   // ─── Convertible: autoConvert via eventToShortText ──
@@ -59805,6 +62566,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
 /* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
 /* harmony import */ var _ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/localizeText.ts */ "./ts/localizeText.ts");
+/* harmony import */ var _ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../ts/appTemplates/offerStreams.ts */ "./ts/appTemplates/offerStreams.ts");
+
 
 
 
@@ -59842,6 +62605,17 @@ describe('[MODX] Model', () => {
     for (const itemDef of itemDefs) {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(itemDef.key);
     }
+  });
+
+  it('[MODR] a second load answers from the new pack, not the parts read from the first', async () => {
+    const pack = await (await fetch(modelURL)).json();
+    const modelLoad = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel(modelURL);
+    modelLoad.loadFromObject(structuredClone(pack));
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(modelLoad.itemsDefs.forKey('body-weight'));
+    const smaller = structuredClone(pack);
+    delete smaller.items['body-weight'];
+    modelLoad.loadFromObject(smaller);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(modelLoad.itemsDefs.forKey('body-weight', false), null);
   });
 
   // ---------- deprecated --------- //
@@ -60235,6 +63009,22 @@ describe('[MODX] Model', () => {
         }
       ];
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAF] a child item folded into its parent item is still created at consent (B-2026-11-24-12)', async () => {
+      const parent = model.itemsDefs.forStreamId('body-vulva-bleeding')[0].key;
+      const child = model.itemsDefs.forStreamId('body-vulva-bleeding-browndark')[0].key;
+      const permissions = model.authorizations.forItemKeys([parent, child]);
+      // the minimal set: the child's permission is folded into its parent's
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(permissions.map(p => p.streamId), ['body-vulva-bleeding']);
+      const ids = (0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToCreate)(permissions, model.streams).map(s => s.id);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ids.includes('body-vulva-bleeding-browndark'), ids.join(', '));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(ids.indexOf('body-vulva-bleeding') < ids.indexOf('body-vulva-bleeding-browndark'));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(model.streams.itemStreamsUnder('body-vulva-bleeding'), ids.slice(ids.indexOf('body-vulva-bleeding') + 1));
+      // a mask creates nothing under it; a stream no item writes to (a grouping) brings no subtree
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual((0,_ts_appTemplates_offerStreams_ts__WEBPACK_IMPORTED_MODULE_3__.offerStreamsToCreate)([{ streamId: 'body-vulva-bleeding', level: 'none' }], model.streams).map(s => s.id), ['body', 'body-vulva', 'body-vulva-bleeding']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(model.streams.itemStreamsUnder('body-blood'), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(model.streams.itemStreamsUnder('unknown-stream'), []);
     });
 
     it('[MOAL] Get Authorizations from items override correctly authorized level', async () => {
@@ -62122,6 +64912,23 @@ describe('[PLBL] permission labels', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('symptom-general', { locale: 'fr' }), 'Généraux');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('symptom-general', { locale: 'en', qualified: true }), 'Symptoms › General');
   });
+
+  it('[PLBL10] description: the model stream\'s, in the same language as the name; null when it has none', () => {
+    const desc = model.streams.getDataById('documents-admin').description;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin', level: 'read' }, { locale: 'fr' }).description, desc.fr);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: ':local:documents-admin' }, { locale: 'en' }).description, desc.en);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin' }, { locale: 'de' }).description, desc.en, 'English fallback');
+    const frName = permissionView({ streamId: 'documents-admin' }, { locale: 'fr' }).name;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(frName.includes('Documents administratifs'), frName);
+    const chFr = permissionView({ streamId: 'documents-admin' }, { locale: 'fr-CH' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([chFr.name, chFr.description], [frName, desc.fr], 'fr-CH reads fr, name and description');
+    (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin' }).description, desc.fr, 'no locale: the preferred ones');
+    const de = permissionView({ streamId: 'documents-admin' }, { locale: 'de' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([de.name, de.description], [frName, desc.fr], 'an unsupported locale: name and description both from the preferred ones');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(permissionView({ streamId: 'documents' }, { locale: 'fr' }).description.startsWith('Tous les documents médicaux'));
+    for (const streamId of ['*', ':system:email', 'custom-x', 'share-aaaaaaaaaaaa']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId }).description, null, streamId);
+  });
 });
 
 
@@ -63545,6 +66352,231 @@ describe('[ELIG] eligibility test of a study', function () {
 
 /***/ },
 
+/***/ "./tests/researchRelationship.test.js"
+/*!********************************************!*\
+  !*** ./tests/researchRelationship.test.js ***!
+  \********************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+
+
+
+/** The HDS research relationship (data-model documentation/RESEARCH.md). */
+
+const MODEL_BASE = 'https://model.datasafe.dev';
+const NOW = Date.UTC(2026, 10, 25, 12) / 1000;
+const t = (en) => ({ en, fr: 'fr ' + en });
+const TOPICS = ['cardiovascular', 'metabolic', 'sleep', 'nutrition'];
+
+function makeModel () {
+  const model = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('');
+  model.loadFromObject({
+    items: {},
+    streams: [
+      { id: 'body', name: 'Body', parentId: null },
+      {
+        id: 'hds-research',
+        name: 'Health Data Safe research',
+        parentId: null,
+        explicitGrantOnly: true,
+        children: [
+          { id: 'hds-research-eligibility', name: 'Eligibility test results sent', parentId: 'hds-research' },
+          { id: 'hds-research-topics', name: 'Research topics', parentId: 'hds-research' }
+        ]
+      }
+    ],
+    eventTypes: { types: { 'research/topics-v1': { type: 'object' }, 'research/eligibility-band-v1': { type: 'object' } }, extras: {} },
+    vocabularies: {
+      'research-topic': {
+        binds: [{ eventType: 'research/topics-v1', path: 'topics' }],
+        values: Object.fromEntries(TOPICS.map((k) => [k, { label: t(k) }]))
+      }
+    },
+    conversions: {},
+    datasources: [],
+    authorizations: {}
+  });
+  return model;
+}
+const model = makeModel();
+
+/** A connection that records every call and only knows the given events and streams. */
+function fakeConnection (events = [], { streamsExist = true, streamErrors = {} } = {}) {
+  const calls = [];
+  return {
+    calls,
+    events,
+    async api (batch) {
+      calls.push(...batch);
+      return batch.map((c) => {
+        if (c.method === 'events.delete') { const e = events.find((x) => x.id === c.params.id); if (e.trashed) e.deleted = true; else e.trashed = true; return { event: e }; }
+        return streamErrors[c.params.id] ? { error: { id: streamErrors[c.params.id] } } : { stream: c.params };
+      });
+    },
+    async apiOne (method, params, key) {
+      calls.push({ method, params });
+      if (method === 'events.get') {
+        if (!streamsExist) { const e = new Error('unknown'); e.innerObject = { id: 'unknown-referenced-resource' }; throw e; }
+        const found = events.filter((e) => !e.deleted && params.types.includes(e.type) && e.streamIds.includes(params.streams[0]));
+        return found.slice(params.skip, params.skip + params.limit);
+      }
+      if (method === 'events.create') { const e = { id: 'new' + events.length, ...params }; events.push(e); return e; }
+      if (method === 'events.update') { const e = events.find((x) => x.id === params.id); Object.assign(e, params.update); return e; }
+      if (method === 'events.delete') { const e = events.find((x) => x.id === params.id); if (e.trashed) e.deleted = true; else e.trashed = true; return e; }
+      throw new Error('unexpected ' + method);
+    }
+  };
+}
+const topicsEvent = (id, topics, modified) => ({ id, streamIds: ['hds-research-topics'], type: 'research/topics-v1', content: { topics }, time: modified, modified });
+const band = (id, requestId) => ({ id, streamIds: ['hds-research-eligibility'], type: 'research/eligibility-band-v1', content: { requestId, band: '50-100' }, time: NOW });
+
+describe('[RESR] research relationship', function () {
+  describe('[RESR-S] streams, invite, marker', function () {
+    it('[RESR-S1] the CMC app code and the invite: read on the root and on the person\'s email', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cmcConstants.CMC_APP_CODES.RESEARCH, 'hds-research');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.researchInvitePermissions(), [{ streamId: 'hds-research', level: 'read' }, { streamId: ':system:email', level: 'read' }]);
+    });
+
+    it('[RESR-S2] the root and both children are explicit-grant-only: `*` never reaches them', () => {
+      for (const id of ['hds-research', 'hds-research-eligibility', 'hds-research-topics']) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(model.streams.isExplicitGrantOnly(id), true, id);
+      }
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(model.streams.isExplicitGrantOnly('body'), false);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(model.streams.explicitGrantOnlyRootIds().includes('hds-research'));
+    });
+
+    it('[RESR-S3] ensureResearchStreams creates the tree with the model names; item-already-exists is fine', async () => {
+      const conn = fakeConnection([], { streamErrors: { 'hds-research': 'item-already-exists' } });
+      await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.ensureResearchStreams(conn, { model });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.calls.map((c) => [c.method, c.params.id, c.params.parentId]), [
+        ['streams.create', 'hds-research', undefined],
+        ['streams.create', 'hds-research-eligibility', 'hds-research'],
+        ['streams.create', 'hds-research-topics', 'hds-research']
+      ]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.calls[1].params.name, 'Eligibility test results sent');
+    });
+
+    it('[RESR-S4] any other stream error throws', async () => {
+      const conn = fakeConnection([], { streamErrors: { 'hds-research-topics': 'forbidden' } });
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.ensureResearchStreams(conn, { model }), /forbidden/);
+    });
+  });
+
+  describe('[RESR-T] topics', function () {
+    it('[RESR-T1] the keys come from the model vocabulary, in order', () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.researchTopicKeys(model), TOPICS);
+      const bare = new _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.HDSModel('');
+      bare.loadFromObject({ items: {}, streams: [], eventTypes: { types: {}, extras: {} }, conversions: {}, datasources: [], authorizations: {} });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.researchTopicKeys(bare), /no research-topic vocabulary/);
+    });
+
+    it('[RESR-T2] no event or no stream: null (none chosen, every study may be offered)', async () => {
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchTopics(fakeConnection([]), { model }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchTopics(fakeConnection([], { streamsExist: false }), { model }), null);
+    });
+
+    it('[RESR-T3] the latest event by modified wins; unknown keys are dropped', async () => {
+      const conn = fakeConnection([topicsEvent('a', ['sleep'], NOW - 10), topicsEvent('b', ['metabolic', 'astrology'], NOW)]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchTopics(conn, { model }), ['metabolic']);
+    });
+
+    it('[RESR-T3b] a choice made only of unknown keys is kept as written, never read as "none chosen"', async () => {
+      const conn = fakeConnection([topicsEvent('a', ['astrology', 'gardening'], NOW)]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchTopics(conn, { model }), ['astrology', 'gardening']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchTopics(fakeConnection([topicsEvent('b', [], NOW)]), { model }), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchTopics(fakeConnection([topicsEvent('c', 'sleep', NOW)]), { model }), [], 'not a list: none');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchTopics(fakeConnection([topicsEvent('d', [3, 'sleep', null], NOW)]), { model }), ['sleep'], 'non-strings dropped');
+    });
+
+    it('[RESR-T4] save creates one event, then updates it; vocabulary order, no duplicate', async () => {
+      const conn = fakeConnection([]);
+      const id = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.saveResearchTopics(conn, ['sleep', 'cardiovascular', 'sleep'], { model, now: NOW });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events[0].content, { topics: ['cardiovascular', 'sleep'] });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events[0].streamIds, ['hds-research-topics']);
+      const again = await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.saveResearchTopics(conn, [], { model, now: NOW + 1 });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(again, id);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.events.length, 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(conn.events[0].content, { topics: [] });
+    });
+
+    it('[RESR-T5] an unknown topic is refused before any write', async () => {
+      const conn = fakeConnection([]);
+      await _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.rejects(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.saveResearchTopics(conn, ['astrology'], { model }), /Unknown research topic: astrology/);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.calls.length, 0);
+    });
+  });
+
+  describe('[RESR-B] band retention', function () {
+    it('[RESR-B1] deletes the bands of the given requests only, trash then delete', async () => {
+      const conn = fakeConnection([band('x', 'req-1'), band('y', 'req-2')]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.deleteEligibilityBands(conn, { requestIds: ['req-1'] }), 1);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(conn.events.find((e) => e.id === 'x').deleted, true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!conn.events.find((e) => e.id === 'y').trashed);
+    });
+
+    it('[RESR-B2] on opt-out deletes them all; no stream is not an error', async () => {
+      const conn = fakeConnection([band('x', 'req-1'), band('y', 'req-2')]);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.deleteEligibilityBands(conn), 2);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(conn.events.every((e) => e.deleted));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(await _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.deleteEligibilityBands(fakeConnection([], { streamsExist: false })), 0);
+    });
+  });
+
+  describe('[RESR-A] alerts', function () {
+    it('[RESR-A1] builds each kind: fixed texts, code, ids only', () => {
+      const c = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.buildResearchAlertContent({ kind: 'research-eligibility-request', requestId: 'req-2026-001' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(Object.keys(c).sort(), ['body', 'code', 'hds', 'level', 'title']);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.code, 'hds-research-eligibility-request');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(c.level, 'info');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(c.title.en && c.title.fr && c.body.en && c.body.fr);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(c.hds, { kind: 'research-eligibility-request', requestId: 'req-2026-001' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.buildResearchAlertContent({ kind: 'research-invitation', studyId: 's-1' }).code, 'hds-research-invitation');
+    });
+
+    it('[RESR-A2] refuses a wrong id, an extra field or a foreign kind', () => {
+      for (const hds of [
+        { kind: 'research-invitation' },
+        { kind: 'research-invitation', studyId: 'a b' },
+        { kind: 'research-invitation', studyId: 's', expiresAt: 1 },
+        { kind: 'research-eligibility-request', studyId: 's' },
+        { kind: 'eligibility-request', requestId: 'r' }
+      ]) {
+        _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.throws(() => _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.buildResearchAlertContent(hds), /invalid hds block/, JSON.stringify(hds));
+      }
+    });
+
+    it('[RESR-A3] reads only delivered, valid research alerts; dedup key is (kind, id)', () => {
+      const delivered = { ..._ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.buildResearchAlertContent({ kind: 'research-invitation', studyId: 's-1' }), from: { username: 'hds-research' } };
+      const alert = _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchAlert(delivered);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(alert, { kind: 'research-invitation', studyId: 's-1' });
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.researchAlertKey(alert), 'research-invitation:s-1');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchAlert({ ...delivered, from: undefined }), null, 'the writer\'s own copy');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchAlert({ ...delivered, hds: { kind: 'document-shared', eventId: 'x' } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchAlert({ ...delivered, hds: { kind: 'research-invitation', studyId: 's', title: 'XYZ' } }), null);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.readResearchAlert(null), null);
+    });
+
+    it('[RESR-A4] the mirrored schema equals the published one (skipped until data-model publishes it)', async function () {
+      this.timeout(20000);
+      let published;
+      try {
+        const r = await fetch(`${MODEL_BASE}/json-schemas/hds-research-alert.json`);
+        if (!r.ok) return this.skip();
+        published = await r.json();
+      } catch { return this.skip(); }
+      const strip = (s) => JSON.parse(JSON.stringify(s, (k, v) => (['description', 'title', '$id'].includes(k) ? undefined : v)));
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual(strip(published), strip(_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.researchRelationship.RESEARCH_ALERT_HDS_SCHEMA));
+    });
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/resolveStream.test.js"
 /*!*************************************!*\
   !*** ./tests/resolveStream.test.js ***!
@@ -64858,7 +67890,7 @@ const validate = validate10;/* harmony default export */ const __WEBPACK_DEFAULT
 (module) {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.19.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"pryv","version":"3.20.0","description":"Pryv JavaScript library","keywords":["Pryv","Pryv.io"],"homepage":"https://github.com/pryv/lib-js","bugs":{"url":"https://github.com/pryv/lib-js/issues"},"repository":{"type":"git","url":"git://github.com/pryv/lib-js.git"},"license":"BSD-3-Clause","author":"Pryv <info@pryv.com> (https://pryv.com)","main":"src/index.js","types":"src/index.d.ts","dependencies":{"oauth4webapi":"^3.8.6"},"engines":{"node":">=20.19.0"}}');
 
 /***/ }
 
@@ -65000,53 +68032,59 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _converterEngineFlags_test_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./converterEngineFlags.test.js */ "./tests/converterEngineFlags.test.js");
 /* harmony import */ var _converterPackVersion_test_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./converterPackVersion.test.js */ "./tests/converterPackVersion.test.js");
 /* harmony import */ var _converterTexts_test_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./converterTexts.test.js */ "./tests/converterTexts.test.js");
-/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
-/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
-/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
-/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
-/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
-/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
-/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
-/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
-/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
-/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _researchEligibility_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./researchEligibility.test.js */ "./tests/researchEligibility.test.js");
-/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
-/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_64__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_65__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
-/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_66__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
+/* harmony import */ var _corrections_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./corrections.test.js */ "./tests/corrections.test.js");
+/* harmony import */ var _correctionStreams_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./correctionStreams.test.js */ "./tests/correctionStreams.test.js");
+/* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
+/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
+/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
+/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
+/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
+/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
+/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
+/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
+/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
+/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _researchEligibility_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./researchEligibility.test.js */ "./tests/researchEligibility.test.js");
+/* harmony import */ var _researchRelationship_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./researchRelationship.test.js */ "./tests/researchRelationship.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_64__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_65__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_66__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_67__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_68__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_69__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Every `*.test.js` file is listed here, except the node-only ones:
  * - validatorDrift.test.js (reads the file system and runs the validator build)
  * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
+
+
 
 
 
