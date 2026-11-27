@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.85.1] - 2026-11-27
+
+### Fixed
+
+- `HDSSettings.setDynamic` throws on a key with nothing after its prefix (`preferred-display-`, `preferred-input-`),
+  for a value and for null, before any write. Such a call wrote an event with `itemKey: ''`, which `load()` skips, so
+  every call left one more orphan event.
+
 ## [2.85.0] - 2026-11-27
 
 data-model 4.51.0 (plan 128 SUB-F): `clientData.hdsSourceGrid`, the box of a dated grid a confirmed value was read from.
