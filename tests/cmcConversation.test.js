@@ -905,6 +905,73 @@ describe('[CNV] cmcConversation', function () {
     });
   });
 
+  describe('[CNV-PG] a document dated per page (4.49.0)', () => {
+    const X = { engine: 'hds-reader', engineVersion: '0.12.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
+    const DAY1 = Date.parse('2026-03-12T12:00:00Z') / 1000;
+    const DAY2 = Date.parse('2026-03-19T12:00:00Z') / 1000;
+    const pageAnchor = (page, bbox) => ({ eventId: DOC, attachmentId: 'att1', page, ...(bbox ? { bbox } : {}) });
+    const pageDate = (page = 2, bbox) => ({ kind: 'question', about: DOC, code: 'which-page-date', context: { anchor: pageAnchor(page, bbox) } });
+    const value = (page, over = {}) => ({ kind: 'proposed-value', about: DOC, candidateId: 'c-p' + page, printed: { label: 'Ferritine', value: '48', unit: 'ng/mL' }, anchor: { ...pageAnchor(page), bbox: [8.5, 41.2, 83, 2.1] }, proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48, time: DAY1, clientData: { hdsTimePrecision: 'day' } }, status: 'clear', extraction: X, ...over });
+    const item = (id, kind, content, created = 10) => ({ id, kind, about: DOC, direction: kind === 'answer' ? 'sent' : 'received', content, created, modified: created, time: created });
+
+    it('[CNVPG1] a page question: its page anchor (bbox optional), no candidate, no date; answered with a day at 12:00 UTC, never a day to come', () => {
+      assert.strictEqual(cv.QUESTION_CODES.WHICH_PAGE_DATE, 'which-page-date');
+      assert.deepStrictEqual(cv.checkConversationItem(pageDate()), []);
+      assert.deepStrictEqual(cv.checkConversationItem(pageDate(2, [0, 0, 100, 12])), []);
+      for (const b of [{ ...pageDate(), candidateId: 'c-1' }, { ...pageDate(), options: ['yes', 'no'] }, { ...pageDate(), context: undefined },
+        { ...pageDate(), context: { anchor: { ...pageAnchor(2), eventId: 'other' } } },
+        { ...pageDate(), context: { ...pageDate().context, dates: [{ day: '2026-03-12', text: '12.03.26' }] } },
+        { ...pageDate(), context: { ...pageDate().context, column: { index: 1 } } }]) {
+        assert.notDeepEqual(cv.checkConversationItem(JSON.parse(JSON.stringify(b))), [], JSON.stringify(b));
+      }
+      const q = item('q1', 'question', pageDate());
+      const conv = cv.conversationOf([q], DOC);
+      assert.strictEqual(conv.questions[0].answerable, true);
+      const answer = (over) => ({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day', ...over });
+      assert.deepStrictEqual(cv.checkAnswerFor(answer({}), q, conv), []);
+      assert.deepStrictEqual(cv.checkAnswerFor({ kind: 'answer', inReplyTo: 'q1', about: DOC, action: 'skip' }, q, conv), []);
+      const today = Math.floor(Date.now() / 86400000) * 86400 + 43200;
+      assert.deepStrictEqual(cv.checkAnswerFor(answer({ time: today }), q, conv), [], 'today');
+      assert.match(cv.checkAnswerFor(answer({ time: today + 2 * 86400 }), q, conv).join(), /later than today/);
+      for (const over of [{ time: DAY1 + 3600 }, { timePrecision: 'month' }, { timePrecision: 'unknown', time: undefined }, { time: undefined, timePrecision: undefined }, { action: 'not-mine', time: undefined, timePrecision: undefined }]) {
+        assert.notDeepEqual(cv.checkAnswerFor(JSON.parse(JSON.stringify(answer(over))), q, conv), [], JSON.stringify(over));
+      }
+    });
+
+    it('[CNVPG2] a which-date answer never dates a value of a document dated per page', () => {
+      const undated = { ...value(2), proposal: { itemKey: 'body-blood-serum-ferritin', type: 'concentration/ug-l', content: 48 } };
+      const whole = [item('q0', 'question', { kind: 'question', about: DOC, code: 'which-date' }), item('a0', 'answer', { kind: 'answer', inReplyTo: 'q0', about: DOC, action: 'confirm', time: DAY1, timePrecision: 'day' }, 20)];
+      const perPage = cv.conversationOf([...whole, item('q1', 'question', pageDate()), item('v1', 'proposed-value', undated)], DOC);
+      assert.strictEqual(cv.isDatedPerPage(perPage), true);
+      assert.strictEqual(cv.answeredDateOf(perPage, 'c-p2'), null);
+      const plain = cv.conversationOf([...whole, item('v1', 'proposed-value', undated)], DOC);
+      assert.strictEqual(cv.isDatedPerPage(plain), false);
+      assert.deepStrictEqual(cv.answeredDateOf(plain, 'c-p2'), { time: DAY1, timePrecision: 'day' });
+    });
+
+    it('[CNVPG3] the contact asks one question per page, never beside which-date, row or column questions; proposes an asked page only after her confirm, with her day; R10 deletes it answered or skipped', async () => {
+      const { person, rel: r, streams } = await setup();
+      const q2 = await cv.writeQuestion(person, streams, pageDate(2));
+      await assert.rejects(cv.writeQuestion(person, streams, pageDate(2, [0, 0, 100, 10])), /the page was asked/);
+      const q3 = await cv.writeQuestion(person, streams, pageDate(3));
+      await assert.rejects(cv.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-date' }), /never on a document dated per page/);
+      await assert.rejects(cv.writeQuestion(person, streams, { kind: 'question', about: DOC, code: 'which-column-date', context: { column: { index: 1 }, anchor: { ...pageAnchor(1), bbox: [1, 1, 1, 1] } } }), /has a which-page-date/);
+      // a page whose day the contact holds: proposed with it at once; an asked page: not before her answer
+      assert.deepStrictEqual((await cv.writeProposedValues(person, streams, DOC, [value(1)])).created.map(c => c.candidateId), ['c-p1']);
+      await assert.rejects(cv.writeProposedValues(person, streams, DOC, [value(2)]), /not confirmed/);
+      await assert.rejects(cv.writeProposedValues(person, streams, DOC, [value(1, { candidateId: 'c-x', column: { index: 1 } })]), /no grid and no column/);
+      await assert.rejects(cv.writeProposedValues(person, streams, DOC, [value(1, { candidateId: 'c-y', proposal: { ...value(1).proposal, time: DAY1 + 3600 } })]), /has its day/);
+      await cv.answerQuestion(person, r, { questionId: q2, action: 'confirm', time: DAY2, timePrecision: 'day', shownAt: person.clock });
+      await cv.answerQuestion(person, r, { questionId: q3, action: 'skip', shownAt: person.clock });
+      await assert.rejects(cv.writeProposedValues(person, streams, DOC, [value(2)]), /takes her day/);
+      await assert.rejects(cv.writeProposedValues(person, streams, DOC, [value(3, { proposal: { ...value(3).proposal, time: DAY2 } })]), /not confirmed/);
+      assert.deepStrictEqual((await cv.writeProposedValues(person, streams, DOC, [value(2, { proposal: { ...value(2).proposal, time: DAY2 } })])).created.map(c => c.candidateId), ['c-p2']);
+      const conv = cv.conversationOf(await cv.listConversationItems(person, streams, { about: DOC }), DOC);
+      assert.deepStrictEqual(conv.questions.map(q => [q.item.id, q.state]), [[q2, 'answered'], [q3, 'skipped']]);
+      assert.deepStrictEqual(cv.itemsToDeleteAtDone(conv).sort(), [q2, q3].sort());
+    });
+  });
+
   describe('[CNV-G] a dated grid (4.36.0)', () => {
     const X = { engine: 'hds-reader', engineVersion: '0.9.0', kbVersion: '0.4.0', backend: 'bedrock:sonnet' };
     const box = (column, row = 2) => ({ grid: { row, column }, anchor: { eventId: DOC, attachmentId: 'att1', page: 1, bbox: [column * 2.5, 22.4, 2.5, 12.9] } });

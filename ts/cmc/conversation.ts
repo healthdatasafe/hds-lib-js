@@ -68,7 +68,9 @@ export const QUESTION_CODES = {
   /** 4.36.0: the day of one box of a row of a dated grid (`context.grid`, `context.anchor`). */
   WHICH_ROW_DATE: 'which-row-date',
   /** 4.39.0: the day of one result column of a table read per column on a picture (`context.column`, `context.anchor`). */
-  WHICH_COLUMN_DATE: 'which-column-date'
+  WHICH_COLUMN_DATE: 'which-column-date',
+  /** 4.49.0: the day of one page of a document dated per page (`context.anchor`: attachmentId and page). */
+  WHICH_PAGE_DATE: 'which-page-date'
 } as const;
 
 /** `proposed-value.reason` (4.36.0): the contact sees writing in this box of a dated grid and proposes nothing from it. */
@@ -612,7 +614,7 @@ const KNOWN_CODES = new Set<string>(Object.values(QUESTION_CODES));
 /** The actions an answer to a question with `code` may carry (§ Answers, by what they answer). */
 function questionActions (code: string): Set<string> {
   if (CHOOSE_CODES.has(code) || code === QUESTION_CODES.WHICH_DOCUMENT_KIND) return new Set(['choose', 'skip']);
-  if (code === QUESTION_CODES.WHICH_DATE || code === QUESTION_CODES.WHICH_DOCUMENT_DATE || code === QUESTION_CODES.WHICH_ROW_DATE || code === QUESTION_CODES.WHICH_COLUMN_DATE) return new Set(['confirm', 'skip']);
+  if (code === QUESTION_CODES.WHICH_DATE || code === QUESTION_CODES.WHICH_DOCUMENT_DATE || code === QUESTION_CODES.WHICH_ROW_DATE || code === QUESTION_CODES.WHICH_COLUMN_DATE || code === QUESTION_CODES.WHICH_PAGE_DATE) return new Set(['confirm', 'skip']);
   if (code === QUESTION_CODES.IS_THIS_YOURS) return new Set(['confirm', 'not-mine', 'skip']);
   return new Set(['skip']);
 }
@@ -862,6 +864,10 @@ export function checkConversationItem (content: Record<string, any>): string[] {
       if (has('candidateId') || has('options')) issues.push('question which-column-date: no candidateId, no options');
       if (c.context?.column == null || c.context?.anchor?.bbox == null) issues.push('question which-column-date: context.column and context.anchor with the heading\'s bbox are required');
       if (c.context != null && Object.keys(c.context).some(k => k !== 'column' && k !== 'anchor')) issues.push('question which-column-date: context holds column and anchor only (no date a model read)');
+    } else if (code === QUESTION_CODES.WHICH_PAGE_DATE) {
+      if (has('candidateId') || has('options')) issues.push('question which-page-date: no candidateId, no options');
+      if (c.context?.anchor?.attachmentId == null || c.context?.anchor?.page == null) issues.push('question which-page-date: context.anchor with its attachmentId and page is required');
+      if (c.context != null && Object.keys(c.context).some(k => k !== 'anchor')) issues.push('question which-page-date: context holds anchor only (no date)');
     } else if (typeof code === 'string' && code.startsWith('x-')) {
       if (has('context')) issues.push(`question ${code}: context is for is-this-yours and the date questions only`);
     } else {
@@ -939,8 +945,13 @@ export function checkAnswerFor (content: Record<string, any>, target: Conversati
       if (c.timePrecision == null) issues.push(`answer ${code}: timePrecision is required`);
       else if (c.timePrecision !== 'unknown' && c.time == null) issues.push(`answer ${code}: time is required`);
     }
-    if ((code === QUESTION_CODES.WHICH_ROW_DATE || code === QUESTION_CODES.WHICH_COLUMN_DATE) && c.action === 'confirm' && (c.timePrecision !== 'day' || typeof c.time !== 'number' || ((c.time % DAY) + DAY) % DAY !== 12 * HOUR)) {
+    if ((code === QUESTION_CODES.WHICH_ROW_DATE || code === QUESTION_CODES.WHICH_COLUMN_DATE || code === QUESTION_CODES.WHICH_PAGE_DATE) && c.action === 'confirm' && (c.timePrecision !== 'day' || typeof c.time !== 'number' || ((c.time % DAY) + DAY) % DAY !== 12 * HOUR)) {
       issues.push(`answer ${code}: a day at 12:00 UTC, with timePrecision day`);
+    }
+    // 4.49.0: her app refuses a day later than today; the lib knows no zone, so it refuses a day that has begun nowhere
+    // yet (UTC+14), and her app checks her own today
+    if (code === QUESTION_CODES.WHICH_PAGE_DATE && c.action === 'confirm' && typeof c.time === 'number' && utcDay(c.time) > utcDay(Date.now() / 1000 + 14 * HOUR)) {
+      issues.push(`answer ${code}: a day later than today`);
     }
     if (c.applied != null) issues.push('answer to a question: no applied');
     if (c.basis != null && (c.basis !== BASES.PROFILE_MATCH || code !== QUESTION_CODES.IS_THIS_YOURS)) issues.push('answer: on a question, basis is profile-match on is-this-yours only');
@@ -1384,9 +1395,23 @@ export function isTableByColumn (conv: DocumentConversation): boolean {
   return conv.questions.some(q => q.code === QUESTION_CODES.WHICH_COLUMN_DATE) || conv.proposedValues.some(p => p.item.content.column != null);
 }
 
-/** The `which-date` answer that dates a proposed value without `proposal.time`; never one on a dated grid or a table read per column. */
+/**
+ * Whether the document is dated per page (4.49.0): a `which-page-date` was asked, so a value's day is its `proposal.time`
+ * only. (Its values carry an ordinary anchor, so once the questions are deleted at `done` (R10) nothing tells; no
+ * `which-date` is asked on such a document, so none dates a value then either.)
+ */
+export function isDatedPerPage (conv: DocumentConversation): boolean {
+  return conv.questions.some(q => q.code === QUESTION_CODES.WHICH_PAGE_DATE);
+}
+
+/** The page a `which-page-date` question or a proposed value's anchor names: `attachmentId|page`. */
+function pageKeyOf (anchor: any): string {
+  return [anchor?.attachmentId, anchor?.page].join('|');
+}
+
+/** The `which-date` answer that dates a proposed value without `proposal.time`; never one on a dated grid, a table read per column or a document dated per page. */
 export function answeredDateOf (conv: DocumentConversation, candidateId: string): AnsweredDate | null {
-  if (isDatedGrid(conv) || isTableByColumn(conv)) return null;
+  if (isDatedGrid(conv) || isTableByColumn(conv) || isDatedPerPage(conv)) return null;
   return conv.candidateDates[candidateId] ?? conv.documentDate;
 }
 
@@ -2220,6 +2245,13 @@ export async function writeQuestion (personConnection: pryv.Connection, streams:
     const conv = conversationOf(items, content.about);
     if (content.code === QUESTION_CODES.WHICH_DATE && isDatedGrid(conv)) issues.push('question which-date: never on a dated grid');
     if (content.code === QUESTION_CODES.WHICH_DATE && isTableByColumn(conv)) issues.push('question which-date: never on a table read per column');
+    if (content.code === QUESTION_CODES.WHICH_DATE && isDatedPerPage(conv)) issues.push('question which-date: never on a document dated per page');
+    if ((content.code === QUESTION_CODES.WHICH_ROW_DATE || content.code === QUESTION_CODES.WHICH_COLUMN_DATE) && isDatedPerPage(conv)) issues.push(`question ${content.code}: the document has a which-page-date`);
+    if (content.code === QUESTION_CODES.WHICH_PAGE_DATE) {
+      const other = conv.questions.find(q => q.code === QUESTION_CODES.WHICH_DATE || q.code === QUESTION_CODES.WHICH_ROW_DATE || q.code === QUESTION_CODES.WHICH_COLUMN_DATE);
+      if (other != null) issues.push(`question which-page-date: the document has a ${other.code}`);
+      if (conv.questions.some(q => q.code === QUESTION_CODES.WHICH_PAGE_DATE && pageKeyOf(q.item.content.context?.anchor) === pageKeyOf(content.context?.anchor))) issues.push('question which-page-date: the page was asked');
+    }
     if (content.code === QUESTION_CODES.WHICH_COLUMN_DATE) {
       if (conv.questions.some(q => q.code === QUESTION_CODES.WHICH_DATE)) issues.push('question which-column-date: the document has a which-date');
       const columnOf = (c: any): string => [c.context?.anchor?.attachmentId, c.context?.anchor?.page, c.context?.column?.index].join('|');
@@ -2290,6 +2322,20 @@ export async function writeProposedValues (personConnection: pryv.Connection, st
       if (c.column == null) own.push('column is required on a table read per column');
       if (c.grid != null) own.push('a value has a column or a box, never both');
       if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day')) own.push('a value of a table read per column has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
+    }
+    if (own.length === 0 && isDatedPerPage(conv)) {
+      const p = c.proposal;
+      if (c.anchor?.attachmentId == null || c.anchor?.page == null) own.push('anchor (attachmentId, page) is required on a document dated per page');
+      if (c.grid != null || c.column != null) own.push('a value of a document dated per page has no grid and no column');
+      if (p != null && (typeof p.time !== 'number' || ((p.time % DAY) + DAY) % DAY !== 12 * HOUR || p.clientData?.hdsTimePrecision !== 'day')) own.push('a value of a document dated per page has its day: proposal.time at 12:00 UTC, hdsTimePrecision day');
+      // on an asked page: only after her confirm, with her day
+      const asked = conv.questions.find(q => q.code === QUESTION_CODES.WHICH_PAGE_DATE && pageKeyOf(q.item.content.context?.anchor) === pageKeyOf(c.anchor));
+      // (her latest day, or an earlier one she gave: once a value of the page is written, a later answer changes nothing)
+      if (asked != null) {
+        const days = conv.answers.filter(a => a.content.inReplyTo === asked.item.id && a.content.action === 'confirm').map(a => a.content.time);
+        if (asked.answer?.content.action !== 'confirm') own.push('its page is asked (which-page-date) and not confirmed');
+        else if (p != null && !days.includes(p.time)) own.push('a value of an asked page takes her day');
+      }
     }
     issues.push(...own.map(i => `${c?.candidateId ?? '?'}: ${i}`));
   }
