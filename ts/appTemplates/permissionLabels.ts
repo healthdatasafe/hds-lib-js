@@ -4,7 +4,8 @@
  * An invitation or a sharing screen must name what a connection reads by the data model's own
  * words, never by the requester's label alone: any account can label a wide grant "Cycle
  * length". These helpers give every HDS app (patient app, account app, doctor dashboard) the
- * same names and the same warnings.
+ * same names and the same warnings. A model stream's `description` comes with its name, so a consent can say what the
+ * data covers (on a documents stream, `cmcDocuments.documentsGrantNote` says what it leaves out).
  */
 
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
@@ -35,6 +36,8 @@ export interface PermissionView {
   hasChildren: boolean;
   /** The requester's own label (`defaultName`), if any: show it quoted, never as the name. */
   requesterLabel: string | null;
+  /** What the data covers, from the model stream's `description`, in the locale (else English); null when it has none. */
+  description: string | null;
 }
 
 const TEXTS: Record<'allData' | 'email' | 'under', localizableText> = {
@@ -103,7 +106,7 @@ export function permissionView (perm: { streamId?: string; level?: string; defau
   const streamId = canonicalStreamId(perm.streamId ?? '');
   const level = perm.level ?? 'read';
   const requesterLabel = perm.defaultName ?? null;
-  const base = { streamId: perm.streamId ?? '', level, requesterLabel };
+  const base = { streamId: perm.streamId ?? '', level, requesterLabel, description: null };
   if (streamId === '*') {
     const name = pick(TEXTS.allData, opts.locale) as string;
     return { ...base, kind: 'all-data', name, label: name, beyondRead: true, inModel: true, hasChildren: true };
@@ -115,13 +118,23 @@ export function permissionView (perm: { streamId?: string; level?: string; defau
   const quoted = requesterLabel ? `“${requesterLabel}”` : streamId;
   let inModel = false;
   let hasChildren = false;
+  let description: string | null = null;
   try {
     const model = getModel();
-    const stream = model.streams.getDataById(streamId, false) as { children?: unknown[] } | null | undefined;
+    const stream = model.streams.getDataById(streamId, false) as { children?: unknown[]; description?: unknown } | null | undefined;
     inModel = stream != null || model.itemsDefs.forStreamId(streamId).length > 0;
     hasChildren = (stream?.children?.length ?? 0) > 0;
+    description = localeOrEnglish(stream?.description, opts.locale);
   } catch { /* model not loaded: the requester's label, flagged */ }
   const name = inModel ? dataName(streamId, { ...opts, qualified: true }) : quoted;
   const label = hasChildren ? (pick(TEXTS.under, opts.locale) as string).replace('{name}', name) : name;
-  return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren };
+  return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren, description };
+}
+
+/** A model text in `locale`, else the preferred locales when none is given, else English; null when there is none. */
+function localeOrEnglish (text: unknown, locale?: string): string | null {
+  if (text == null || typeof text !== 'object') return null;
+  const map = text as Record<string, string | undefined>;
+  if (locale != null) return map[locale] ?? map.en ?? null;
+  try { return localizeText(map as Localizable); } catch { return map.en ?? null; }
 }

@@ -2002,6 +2002,9 @@ function holdsDocumentFields (document: { time?: number; content?: any; clientDa
  * the answer when the work is done now (`current`: the latest status, `taskStatusOf`; left out, `done` is taken as the
  * latest), when she answered `not-mine`, or when the document was unshared (`unshared`). An answer written while the work
  * is in progress again waits for the next `done`.
+ *
+ * A final `error` ends the work as a `done` does (B-2026-11-25-2): an `error` still the latest status 24 h after it was
+ * sent (a retry would have posted a later status), then each answer's own 24 h. A later status supersedes it.
  */
 export function notesToRemove (
   conv: DocumentConversation,
@@ -2010,7 +2013,8 @@ export function notesToRemove (
 ): ConversationItem[] {
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const doneAt = done?.hds?.status === 'done' ? done.time : null;
-  const idle = opts.current === undefined ? doneAt != null : opts.current?.hds?.status === 'done';
+  const current = opts.current === undefined ? done : opts.current;
+  const idle = current?.hds?.status === 'done' || (current?.hds?.status === 'error' && now - current.time >= DAY);
   return conv.answers.filter(a => {
     if (typeof a.content.note !== 'string') return false;
     if (doneAt != null && doneAt > a.created) return true;

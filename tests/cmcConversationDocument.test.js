@@ -288,6 +288,25 @@ describe('[CNVD] a document\'s date and kind, her note, the document\'s values (
     assert.strictEqual(cv.latestDoneOf([on('reading', 100, 1)], 'doc1'), null);
   });
 
+  it('[CNVD7b] her note: an error still the latest status 24 h after it was sent ends the work, as a done does', () => {
+    const items = cv.parseConversationItems([
+      { id: 'p1', type: cv.ET_CONVERSATION, streamIds: ['r'], time: 1, created: 1, modified: 1, content: { kind: 'proposed-value', about: 'doc1', candidateId: 'c1', printed: { label: 'X', value: '1' }, status: 'clear', extraction } },
+      { id: 'a1', type: cv.ET_CONVERSATION, streamIds: ['s'], time: 100, created: 100, modified: 100, content: { kind: 'answer', inReplyTo: 'p1', about: 'doc1', action: 'skip', candidateIds: ['c1'], note: 'after lunch' } },
+      { id: 'a2', type: cv.ET_CONVERSATION, streamIds: ['s'], time: 500, created: 500, modified: 500, content: { kind: 'answer', inReplyTo: 'p1', about: 'doc1', action: 'skip', candidateIds: ['c1'], note: 'later' } }
+    ], { received: 'r', sent: 's' });
+    const conv = cv.conversationOf(items, 'doc1');
+    const DAY = 86400;
+    const on = (status, time, attempt = 1) => ({ alertEventId: 'x' + time, kind: 'task-status', hds: { kind: 'task-status', about: 'doc1', status, attempt, ...(status === 'error' ? { errorCode: 'no-attachment' } : {}) }, time, direction: 'received', from: null });
+    const due = (now, list) => cv.notesToRemove(conv, cv.latestDoneOf(list, 'doc1'), { now, current: cv.taskStatusOf(list, 'doc1') }).map(a => a.id);
+    const failed = [on('reading', 50), on('error', 300)];
+    assert.deepStrictEqual(due(300 + DAY - 1, failed), [], 'an error less than 24 h old: a retry may follow, the notes stay');
+    assert.deepStrictEqual(due(300 + DAY, failed), ['a1'], 'the error 24 h old: the work is over, each answer after its own 24 h');
+    assert.deepStrictEqual(due(500 + DAY, failed), ['a1', 'a2']);
+    assert.deepStrictEqual(due(500 + DAY, [...failed, on('reading', 400, 2)]), [], 'a later status supersedes the error');
+    assert.deepStrictEqual(due(400 + 2 * DAY, [...failed, on('reading', 400, 2), on('error', 400 + DAY, 2)]), ['a1', 'a2'], 'the retry failed too, 24 h ago');
+    assert.deepStrictEqual(cv.notesToRemove(conv, on('error', 300), { now: 500 + DAY }).map(a => a.id), ['a1', 'a2'], 'without current, the given status is the latest');
+  });
+
   it('[CNVD9] a tapped skip on a proposed document (and a comment alone): settles nothing, she confirms later', async () => {
     const { person, rel, streams, DOC, conv, proposed } = await setup();
     await cv.writeProposedDocument(person, streams, proposed('d1', { documentKind: 'laboratory-report', time: D, timePrecision: 'day' }));

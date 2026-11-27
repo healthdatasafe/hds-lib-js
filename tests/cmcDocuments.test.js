@@ -255,7 +255,7 @@ describe('[CDOC] cmcDocuments', function () {
       let reads = 0;
       conn.apiOne = async (method, params, key) => {
         const r = await apiOne(method, params, key);
-        if (method === 'events.getOne' && params.id === 'd1' && ++reads === 2) r.streamIds = ['documents', 'share-zzzzzzzzzzzz'];
+        if (method === 'events.getOne' && params.id === 'd1' && ++reads === 3) r.streamIds = ['documents', 'share-zzzzzzzzzzzz'];
         return r;
       };
       await assert.rejects(cmcDocuments.shareDocument(conn, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), 'd1'),
@@ -796,6 +796,99 @@ describe('[CDOC] cmcDocuments', function () {
       assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(gone), [R], 'the empty one may be an offer being accepted');
       assert.deepStrictEqual(gone.events.get('up').streamIds, ['documents']);
       assert.deepStrictEqual(await cmcDocuments.cleanupOrphanDocumentShares(account({ streams: unmarked(), events: [doc('up', [R])] }), ['acc-1']), [], 'a list of relationships says nothing of unmarked ones');
+    });
+  });
+
+  describe('[CDOC-O] open documents, the documents relationship, the grant note (plan 144)', () => {
+    const Q = 'share-qqqqqqqqqqqq';
+    const openTree = () => [...tree(), { id: Q, parentId: 'document-shares', name: Q, clientData: { hdsDocumentShare: { relationship: 'acc-2', direction: 'received' } } }];
+    const writes = (conn) => conn.calls.filter(c => !['events.getOne', 'streams.get', 'accesses.get', 'accessInfo'].includes(c.method));
+
+    it('[CDOC70] MAX_DOCUMENT_BYTES: 50 MB, all files of one document', () => {
+      assert.strictEqual(cmcDocuments.MAX_DOCUMENT_BYTES, 50 * 1024 * 1024);
+    });
+
+    it('[CDOC71] openRelationshipsOf: one per received child the document carries, by its mark, in order, no repeat', () => {
+      const marks = cmcDocuments.shareStreamsIn(openTree());
+      assert.deepStrictEqual(cmcDocuments.openRelationshipsOf(['documents', 'share-rrrrrrrrrrrr', 'share-ssssssssssss', Q, 'share-rrrrrrrrrrrr'], marks), ['acc-1', 'acc-2']);
+      assert.deepStrictEqual(cmcDocuments.openRelationshipsOf(['documents-clinical', 'share-ssssssssssss', 'share-oooooooooooo'], marks), [], 'shared children close nothing');
+      assert.deepStrictEqual(cmcDocuments.openRelationshipsOf(['documents', 'share-unmarked0000'], marks), [], 'an unmarked id says nothing');
+      assert.deepStrictEqual(cmcDocuments.openRelationshipsOf(null, marks), []);
+    });
+
+    it('[CDOC72] shareDocument refuses a document open to another contact, and writes nothing', async () => {
+      const conn = account({ streams: openTree(), events: [doc('d1', ['documents', Q])] });
+      await assert.rejects(cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1'),
+        (e) => e.innerObject?.reason === 'open-document' && JSON.stringify(e.innerObject.relationships) === '["acc-2"]' && e.innerObject.eventId === 'd1');
+      assert.deepStrictEqual(writes(conn), [], 'no stream, no scope update, no event change, no alert');
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', Q]);
+      const granted = account({ streams: openTree(), events: [doc('d2', ['documents-clinical', 'share-ssssssssssss', Q])] });
+      await assert.rejects(cmcDocuments.shareDocument(granted, relWith([{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }]), 'd2'),
+        (e) => e.innerObject?.reason === 'open-document');
+      assert.deepStrictEqual(writes(granted), []);
+    });
+
+    it('[CDOC73] shareDocument: open to the same contact it is shared with, allowed; already frozen, allowed', async () => {
+      const conn = account({ streams: openTree(), events: [doc('d1', ['documents', 'share-rrrrrrrrrrrr']), doc('d2', ['documents', 'share-oooooooooooo'])] });
+      const rel = relWith([{ streamId: 'share-ssssssssssss', level: 'read' }, { streamId: 'share-rrrrrrrrrrrr', level: 'contribute' }]);
+      const res = await cmcDocuments.shareDocument(conn, rel, 'd1');
+      assert.strictEqual(res.mode, 'shared');
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', 'share-rrrrrrrrrrrr', 'share-ssssssssssss']);
+      await cmcDocuments.shareDocument(conn, rel, 'd2');
+      assert.deepStrictEqual(conn.events.get('d2').streamIds, ['documents', 'share-oooooooooooo', 'share-ssssssssssss'], 'another contact\'s shared child: not open');
+    });
+
+    it('[CDOC74] shareDocument in mode all is unchanged: only the alert, even for an open document', async () => {
+      const conn = account({ streams: openTree(), events: [doc('d1', ['documents', Q])] });
+      const res = await cmcDocuments.shareDocument(conn, relWith([{ streamId: 'documents', level: 'read' }]), 'd1');
+      assert.deepStrictEqual([res.mode, res.shareStreamId, res.scopeUpdate], ['all', null, null]);
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, ['documents', Q]);
+      assert.deepStrictEqual(writes(conn).map(c => c.method + ' ' + c.params.type), ['events.create notification/alert-cmc']);
+    });
+
+    it('[CDOC75] documentsRelationshipOf: reads every document, else holds a share child, else reads a class, else the newest', () => {
+      const r = (name, perms, createdAt, hasChannel = true) => ({ name, grantedPermissions: perms, hasChannel, createdAt });
+      const pick = (rels) => cmcDocuments.documentsRelationshipOf(rels)?.name ?? null;
+      const weight = [{ streamId: 'body-weight', level: 'read' }];
+      assert.strictEqual(pick([]), null);
+      assert.strictEqual(pick([r('a', [{ streamId: 'documents', level: 'read' }], 1, false)]), null, 'no channel, no documents');
+      assert.strictEqual(pick([r('a', weight, 1), r('b', [{ streamId: 'documents', level: 'read' }], 3), r('c', [{ streamId: 'share-aaaaaaaaaaaa', level: 'read' }], 2)]), 'b');
+      assert.strictEqual(pick([r('a', [{ streamId: '*', level: 'read' }], 5), r('b', [{ streamId: 'documents', level: 'read' }], 3)]), 'b', 'the oldest that reads every document');
+      assert.strictEqual(pick([r('a', [{ streamId: 'documents-clinical', level: 'read' }], 1), r('b', [{ streamId: 'share-aaaaaaaaaaaa', level: 'create-only' }], 2), r('c', weight, 3)]), 'b');
+      assert.strictEqual(pick([r('c', weight, 3), r('a', [{ streamId: 'documents-admin-insurance', level: 'read' }], 1), r('b', weight, 2)]), 'a', 'a class grant over the newest');
+      assert.strictEqual(pick([r('a', [{ streamId: 'documents-clinical', level: 'create-only' }], 1), r('b', weight, 2)]), 'b', 'a class it cannot read does not count');
+      assert.strictEqual(pick([r('n', weight, 5), r('o', weight, 1)]), 'n', 'the newest, whatever the order given');
+      assert.strictEqual(pick([r('n', weight, new Date(5000)), r('o', weight, new Date(1000))]), 'n', 'dates too');
+      assert.strictEqual(pick([r('x', [{ streamId: 'documents', level: 'read' }], 9, false), r('y', weight, 1)]), 'y', 'one without the channel is never picked');
+      assert.strictEqual(pick([r('a', [{ streamId: ':local:documents-clinical', level: 'read' }], 1), r('b', weight, 2)]), 'a', 'canonical ids');
+    });
+
+    it('[CDOC76] documentsGrantNote: what a documents grant leaves out, from the model tree, in en, fr, es', () => {
+      const note = cmcDocuments.documentsGrantNote;
+      assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents', l)), [
+        'Every document, filed or not.',
+        'Tous les documents, classés ou non.',
+        'Todos los documentos, archivados o no.'
+      ]);
+      assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents-clinical', l)), [
+        'Not included: documents not filed yet, administrative documents.',
+        'Non inclus : documents pas encore classés, documents administratifs.',
+        'No incluidos: documentos aún sin archivar, documentos administrativos.'
+      ]);
+      assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents-admin', l)), [
+        'Not included: documents not filed yet, clinical documents.',
+        'Non inclus : documents pas encore classés, documents cliniques.',
+        'No incluidos: documentos aún sin archivar, documentos clínicos.'
+      ]);
+      assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents-admin-insurance', l)), [
+        'Not included: documents not filed yet, clinical documents, administrative documents other than insurance documents.',
+        'Non inclus : documents pas encore classés, documents cliniques, documents administratifs hors documents d\'assurance.',
+        'No incluidos: documentos aún sin archivar, documentos clínicos, documentos administrativos salvo documentos del seguro.'
+      ]);
+      assert.strictEqual(note('documents-clinical', 'de'), note('documents-clinical', 'en'), 'another locale reads English');
+      assert.strictEqual(note('documents-clinical', 'fr-CH'), note('documents-clinical', 'fr'));
+      assert.strictEqual(note(':local:documents-admin', 'en'), note('documents-admin', 'en'));
+      for (const other of ['body-weight', 'document-shares', 'share-aaaaaaaaaaaa', 'documents-unknown', '*']) assert.strictEqual(note(other, 'en'), null, other);
     });
   });
 });

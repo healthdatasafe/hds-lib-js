@@ -30,6 +30,13 @@
  * `notification/alert-cmc` with `content.hds = { kind, eventId }` on the sender's own collectors
  * stream, as the data-export requests (`dataExport.ts`).
  *
+ * A document is open while it carries a contact's `received` child (an uploader at `contribute`): that contact can still
+ * change or remove it (`openRelationshipsOf`). `shareDocument` refuses to share an open document with anyone else
+ * (`open-document`): the person's app freezes it first. One document weighs at most `MAX_DOCUMENT_BYTES`, all its files.
+ *
+ * For the person's consent and the contact's choice of data set: `documentsGrantNote` says what a grant on a documents
+ * stream leaves out, from the model tree; `documentsRelationshipOf` picks the relationship documents go through.
+ *
  * Known limits: scope updates write the whole permission set from `rel.grantedPermissions`, so pass
  * a freshly read relationship (a stale one re-grants what another device removed). Two devices
  * sharing with a contact for the first time at the same moment can each create a `shared` child;
@@ -40,6 +47,7 @@ import { pryv } from '../patchedPryv.ts';
 import { HDSLibError } from '../errors.ts';
 import * as logger from '../logger.ts';
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
+import { matchLocale } from '../localizeText.ts';
 import { pryvErrorCode } from './appScope.ts';
 import { cmcText } from './cmcText.ts';
 import { ET_ALERT } from './dataExport.ts';
@@ -52,6 +60,8 @@ import { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, canonicalPermissions, can
 export { DOCUMENT_SHARES_ROOT_ID, SHARE_STREAM_PREFIX, canonicalPermissions, canonicalStreamId, isShareStreamId, namesAliasedStreams, namesShareStreams };
 export const DOCUMENTS_STREAM_ID = 'documents';
 export const ET_DOCUMENT = 'file/xds-v1';
+/** The most one document weighs, all its files together (bytes): what an app accepts to import, send or receive. */
+export const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 
 export const DOCUMENT_ALERT_KINDS = {
   SHARED: 'document-shared',
@@ -162,6 +172,78 @@ export function isDocumentsStream (streamId: string): boolean {
 /** A document's `streamIds` once filed under `target`: `target` first, the other documents streams gone, all else kept. */
 export function filedStreamIds (streamIds: string[], target: string): string[] {
   return [target, ...(streamIds ?? []).filter(id => id !== target && !isDocumentsStream(id))];
+}
+
+/**
+ * The relationships that can still change a document: one per `received` share child it carries, by the child's mark
+ * (`shareStreams`: `listShareStreams`). Only an uploader's child (`contribute`) stays on a received document; a
+ * document still on a `create-only` child only, not received yet, counts too. In the order of `streamIds`, no repeat.
+ */
+export function openRelationshipsOf (streamIds: string[] | null | undefined, shareStreams: ShareStream[]): string[] {
+  const out: string[] = [];
+  for (const id of streamIds ?? []) {
+    const child = (shareStreams ?? []).find(s => s.id === id && s.direction === 'received');
+    if (child != null && !out.includes(child.relationship)) out.push(child.relationship);
+  }
+  return out;
+}
+
+/** A relationship as `documentsRelationshipOf` reads it. */
+export interface DocumentsRelationshipCandidate {
+  grantedPermissions: ScopePermission[];
+  /** It has the system channel (a collectors stream both sides read): no documents go through one without. */
+  hasChannel: boolean;
+  /** When it was created: seconds, milliseconds or a Date, the same unit for all; unknown sorts first. */
+  createdAt?: number | Date | null;
+}
+
+/**
+ * The relationship documents go through with a contact, among the person's relationships with it (one per data set):
+ * of those with the system channel, the oldest that reads every document, else the oldest that holds a share child
+ * (she shared a document, or allowed sending), else the oldest that reads a documents class stream, else the newest.
+ * Null when none has the channel. Both sides pick the same one from the same grants.
+ */
+export function documentsRelationshipOf<R extends DocumentsRelationshipCandidate> (rels: R[]): R | null {
+  const at = (r: R): number => r.createdAt instanceof Date ? r.createdAt.getTime() : typeof r.createdAt === 'number' ? r.createdAt : -Infinity;
+  const withChannel = (rels ?? []).filter(r => r.hasChannel === true).sort((a, b) => at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0);
+  const holdsShare = (r: R): boolean => { const s = shareStreamsOf(r.grantedPermissions); return s.shared != null || s.received != null; };
+  const readsClass = (r: R): boolean => canonicalPermissions(r.grantedPermissions)
+    .some(p => p.streamId !== DOCUMENTS_STREAM_ID && isDocumentsStream(p.streamId) && READ_LEVELS.has(p.level ?? 'read'));
+  return withChannel.find(r => sharesAllDocuments(r.grantedPermissions)) ??
+    withChannel.find(holdsShare) ??
+    withChannel.find(readsClass) ??
+    withChannel.at(-1) ?? null;
+}
+
+/**
+ * What a person reads under a permission on a documents stream, for her consent: on `documents`, that it covers every
+ * document; on a stream under it, what the grant leaves out, from the model tree (the documents not filed yet, the
+ * other streams, and those filed on a stream above it but not under it). Null for any other stream. en, fr, es; any
+ * other locale reads English.
+ */
+export function documentsGrantNote (streamId: string, locale: string = 'en'): string | null {
+  const id = canonicalStreamId(streamId ?? '');
+  const asked = matchLocale(locale);
+  const lang = asked != null && GRANT_NOTE[asked] != null ? asked : 'en';
+  const text = GRANT_NOTE[lang];
+  if (id === DOCUMENTS_STREAM_ID) return text.all;
+  let streams;
+  try { streams = getModel().streams; } catch { return null; }
+  if (streams.getDataById(id, false) == null || !isDocumentsStream(id)) return null;
+  const label = (sid: string): string => {
+    const s = streams.getDataById(sid);
+    const value: string = s.label?.[lang] ?? s.label?.en ?? s.name ?? sid;
+    return value.charAt(0).toLocaleLowerCase(lang) + value.slice(1);
+  };
+  // from `documents` down to the stream: at each step, the siblings, then what is filed on the step itself
+  const path = [...streams.getParentsIds(id, false), id];
+  const out: string[] = [];
+  for (let i = 1; i < path.length; i++) {
+    const children: Array<{ id: string }> = streams.getDataById(path[i - 1]).children ?? [];
+    for (const c of children) if (c.id !== path[i]) out.push(label(c.id));
+    if (i > 1) out.push(text.otherThan.replace('{parent}', label(path[i - 1])).replace('{child}', label(path[i])));
+  }
+  return text.notIncluded.replace('{list}', out.join(', '));
 }
 
 /**
@@ -446,6 +528,9 @@ export interface ShareDocumentResult {
  * Share one document with a contact. In order: the share child (created if needed), the
  * contact's `read` on it (scope update, waited for), the share id added to the document, then
  * the `document-shared` alert. When the grant already reads every document, only the alert.
+ * Refused, with nothing written, while another contact can still change the document (`open-document`, with the
+ * `relationships` that can: `openRelationshipsOf`): the person's app freezes it for each of them first
+ * (`freezeDocument`), so what this contact reads is what she shared.
  */
 export async function shareDocument (
   connection: pryv.Connection,
@@ -457,6 +542,14 @@ export async function shareDocument (
   if (sharesAllDocuments(rel.grantedPermissions)) {
     const { alertEventId } = await postDocumentAlert(connection, collectorStreamId, DOCUMENT_ALERT_KINDS.SHARED, eventId, opts.locale);
     return { mode: 'all', shareStreamId: null, scopeUpdate: null, alertEventId };
+  }
+  const streamIds: string[] = (await getEvent(connection, eventId)).streamIds ?? [];
+  if (streamIds.some(isShareStreamId)) {
+    const own = relationshipIdOf(rel.accessId);
+    const relationships = openRelationshipsOf(streamIds, await listShareStreams(connection)).filter(r => r !== own);
+    if (relationships.length > 0) {
+      throw new HDSLibError('shareDocument: another contact can still change this document, freeze it first', { reason: 'open-document', eventId, relationships });
+    }
   }
   let shareStreamId = shareStreamsOf(rel.grantedPermissions).shared;
   let scopeUpdate: ScopeChangeResult | null = null;
@@ -915,4 +1008,11 @@ const TEXT: Record<DocumentAlertKind, Record<string, { title: string; body: stri
     fr: { title: 'Document reçu', body: 'Vous avez reçu un document dans cette conversation.' },
     es: { title: 'Documento recibido', body: 'Ha recibido un documento en esta conversación.' }
   }
+};
+
+/** `documentsGrantNote`: `{list}` the parts left out, `{parent}` a stream above the granted one, `{child}` the next one down. */
+const GRANT_NOTE: Record<string, { all: string; notIncluded: string; otherThan: string }> = {
+  en: { all: 'Every document, filed or not.', notIncluded: 'Not included: documents not filed yet, {list}.', otherThan: '{parent} other than {child}' },
+  fr: { all: 'Tous les documents, classés ou non.', notIncluded: 'Non inclus : documents pas encore classés, {list}.', otherThan: '{parent} hors {child}' },
+  es: { all: 'Todos los documentos, archivados o no.', notIncluded: 'No incluidos: documentos aún sin archivar, {list}.', otherThan: '{parent} salvo {child}' }
 };
