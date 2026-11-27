@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.78.0] - 2026-11-27
+
+### Added
+
+- The person's side of the corrections children (data-model 4.43.0 CORRECTIONS.md § The child), in `corrections`:
+  `checkOfferedCorrections` (before an accept or a scope request, against the account),
+  `withoutCorrectionsAsk` and `correctionsAskRefusal` (the minted ask is never granted: accepted without it, refused
+  when the offer allows no choice, makes it mandatory, or asks nothing else), `ensureCorrectionStream` (the
+  relationship's child created, marked and granted `contribute` by scope update, never the root),
+  `markOfferedCorrectionStreams` (a child a single-use offer names), `checkGrantedCorrections` (what the platform
+  applied, the root above `read` included), `releaseUnclaimedCorrectionStreams` with `existingCorrectionStreamIds` and
+  `isDefiniteAcceptFailure` (a child created for an accept that definitely failed, taken by nobody, is deleted),
+  `listCorrectionStreams`, `correctionStreamFor`, `ensureCorrectionsRoot`, `namesCorrectionStreams`.
+
 ## [2.77.0] - 2026-11-27
 
 ### Changed
