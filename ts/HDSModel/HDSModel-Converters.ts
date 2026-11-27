@@ -7,10 +7,10 @@ import type { ConverterPack, ObservationVector, ConversionResult, SourceBlock } 
 
 /**
  * The newest converter version this hds-lib reads, per item key. A version above it may carry what this engine
- * does not know (cervical-fluid v1: options with `produce: false`; v2: annotation `notFor`, read by hds-forms-js), so
- * it is never fetched. An item key not listed reads v0.
+ * does not know (cervical-fluid v1: options with `produce: false`; v2: annotation `notFor`, read by hds-forms-js; v3:
+ * which Creighton codes are produced), so it is never fetched. An item key not listed reads v0.
  */
-export const SUPPORTED_CONVERTER_VERSIONS: Record<string, string> = { 'cervical-fluid': 'v2', mood: 'v0' };
+export const SUPPORTED_CONVERTER_VERSIONS: Record<string, string> = { 'cervical-fluid': 'v3', mood: 'v0' };
 
 const versionNumber = (v: string): number => /^v\d+$/.test(v) ? Number(v.slice(1)) : NaN;
 
