@@ -38,6 +38,8 @@ import * as cmcScope from './cmc/scope.ts';
 import * as cmcDocuments from './cmc/documents.ts';
 import * as cmcItemReminders from './cmc/itemReminders.ts';
 import * as cmcConversation from './cmc/conversation.ts';
+import * as correctionsHelpers from './HDSModel/corrections.ts';
+import * as correctionIds from './cmc/correctionIds.ts';
 import * as appDescription from './appDescription.ts';
 import * as researchEligibility from './research/eligibility.ts';
 import * as researchRelationship from './research/relationship.ts';
@@ -62,9 +64,14 @@ export type { AppStreamDef } from './HDSModel/HDSModel-AppStreams.ts';
 export type { HDSModelOverload } from './HDSModel/HDSModel-Overload.ts';
 export type { InitHDSModelOptions } from './HDSModel/HDSModelInitAndSingleton.ts';
 
+export type { CorrectionKind, ProfessionalRole, EntryLike as CorrectionEntryLike, CorrectionLike, Corrected, CorrectionIssue, BuildCorrectionParams, CorrectionState } from './HDSModel/corrections.ts';
+export type { CorrectionOfferIssue } from './cmc/correctionIds.ts';
+
 export const getHDSModel = HDSModelInitAndSingleton.getModel;
 export const initHDSModel = HDSModelInitAndSingleton.initHDSModel;
-export { pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, formatDuration, cycleDayAt, cyclePhaseAt, shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, compositeParts, LAB_RESULT_CODED, LAB_COMPARATORS, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labResultCodedText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, IDENTIFIER_SYSTEM_URI, DOCUMENT_UNIQUE_ID_KEY, contentEventIds, withRelatedMirror, checkRelatedMirror, normalizeDocumentUniqueId, documentUniqueIdKey, GENETIC_VARIANT_CODED, geneticVariantText, MEDICATION_INTAKE_TYPES, MEDICATION_PRESCRIPTION_TYPES, medicationIntakeKind, isSkipped, isCodedDrug, ENTERABLE_ITEM_TYPES, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope, cmcDocuments, cmcItemReminders, cmcConversation, cmcText, appDescription, researchEligibility, researchRelationship };
+/** A professional's correction of one entry (data-model 4.43.0 CORRECTIONS.md), and `hdsTextFormat` (markdown text). */
+const corrections = { ...correctionsHelpers, ...correctionIds };
+export { corrections, pryv, cmc, encryption, delegation, settings, HDSService, HDSModel, appTemplates, localizeText, localizeText as l, toolkit, logger, durationToSeconds, durationToLabel, formatDuration, cycleDayAt, cyclePhaseAt, shiftOf, shiftInCycle, coverlinesOf, temperatureRuleOf, isManualTemperatureRule, TEMPERATURE_RULES, computeReminders, eventToShortText, eventToShortTextWithOrigin, formatEventDate, compositeParts, LAB_RESULT_CODED, LAB_COMPARATORS, labComparatorOf, isExactLabValue, labNumberOf, labUnitText, labResultCodedText, labValueToFhir, labLoincOf, labSeriesKey, isValidLoincCode, checkLabResultCoded, ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, IDENTIFIER_SYSTEM_GLN, IDENTIFIER_SYSTEM_ZSR, IDENTIFIER_SYSTEM_URI, DOCUMENT_UNIQUE_ID_KEY, contentEventIds, withRelatedMirror, checkRelatedMirror, normalizeDocumentUniqueId, documentUniqueIdKey, GENETIC_VARIANT_CODED, geneticVariantText, MEDICATION_INTAKE_TYPES, MEDICATION_PRESCRIPTION_TYPES, medicationIntakeKind, isSkipped, isCodedDrug, ENTERABLE_ITEM_TYPES, MonitorScope, HDSSettings, SETTING_TYPES, HDSProfile, PROFILE_FIELDS, resolveAccountPreference, hasAccountPreference, saveLanguage, HDSModelConversions, HDSModelConverters, HDSModelPreferred, getPreferredInput, getPreferredDisplay, CERVICAL_FLUID_METHOD_KEY, CERVICAL_FLUID_METHOD_LEGACY_KEY, HDSModelAppStreams, EuclidianDistanceEngine, HDSLibError, extractOverloadAsDefinitions, cmcFormSpec, cmcAppScope, cmcConstants, cmcDataExport, cmcScope, cmcDocuments, cmcItemReminders, cmcConversation, cmcText, appDescription, researchEligibility, researchRelationship };
 export type { AppManifest, AppOpenLinks, CatalogueEntryLike, OAuthClientLike, AppTrust, AppDescription, DescribeAppInput, LocalizedMap } from './appDescription.ts';
 export type { EligibilityRequest, EligibilityCriterion, EligibilityRule, EligibilityQuestion, EligibilityAnswerDef, EligibilityAnswers, EligibilityOutcome, EligibilityOutcomes, EligibilityResult, EligibilityBand, EligibilityIssue } from './research/eligibility.ts';
 export type { ResearchAlert, ResearchAlertKind } from './research/relationship.ts';
@@ -113,6 +120,7 @@ export type {
 const HDSLib = {
   getHDSModel,
   initHDSModel,
+  corrections,
   pryv,
   cmc,
   encryption,

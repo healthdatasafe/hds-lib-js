@@ -1,5 +1,6 @@
 import { HDSItemDef } from './HDSItemDef.ts';
 import { HDSModel } from './HDSModel.ts';
+import { CORRECTIONS_ROOT_ID, isCorrectionStreamId } from '../cmc/correctionIds.ts';
 
 /**
  * ItemsDefs - Extension of HDSModel
@@ -129,7 +130,11 @@ export class HDSModelItemsDefs {
       // We need closest-ancestor-wins, so iterate leaf-to-root: walk parents
       // in reverse; `streamId` itself is already covered by the direct-match
       // pass above — so we only need ancestors here.
-      const ancestorsRootFirst = this.#model.streams.getParentsIds(streamId, false);
+      // A corrections child (`corr-…`, data-model 4.43.0) is not in the model: it resolves to its root, as data-model's
+      // `findItemForEvent` does.
+      const ancestorsRootFirst = isCorrectionStreamId(streamId) && this.#model.streams.getDataById(streamId, false) == null
+        ? [...this.#model.streams.getParentsIds(CORRECTIONS_ROOT_ID, false), CORRECTIONS_ROOT_ID]
+        : this.#model.streams.getParentsIds(streamId, false);
       for (let i = ancestorsRootFirst.length - 1; i >= 0; i--) {
         const ancestorId = ancestorsRootFirst[i];
         const keyStreamIdEventType = ancestorId + ':' + event.type;
