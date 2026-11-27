@@ -3,7 +3,8 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assert } from './test-utils/deps-node.js';
 
-const NODE_ONLY = new Set(['validatorDrift.test.js', 'browserSuiteCoverage.test.js']);
+// fetchTestRetry: the wrapper it tests is loaded by .mocharc.json for node runs only
+const NODE_ONLY = new Set(['validatorDrift.test.js', 'browserSuiteCoverage.test.js', 'fetchTestRetry.test.js']);
 
 describe('[BSC] browser test suite coverage', function () {
   it('[BSC1] browser-tests.js imports every test file but the node-only ones', () => {
