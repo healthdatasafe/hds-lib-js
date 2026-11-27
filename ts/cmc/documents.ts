@@ -207,51 +207,54 @@ export interface DocumentsRelationshipCandidate {
 
 /**
  * The relationship documents go through with a contact, among the person's relationships with it (one per data set):
- * of those with the system channel, the oldest that reads every document, else the oldest that holds a share child
- * (she shared a document, or allowed sending), else the oldest that reads a documents class stream, else the newest.
- * Null when none has the channel. Both sides pick the same one from the same grants and accept times.
+ * of those with the system channel, the oldest that reads every document, else the oldest that holds a `received`
+ * share child (she allowed sending), else the oldest that holds a `shared` one (she shared a document), else the oldest
+ * that reads a documents class stream, else the newest. Oldest and newest by `createdAt`: the accept time, else the
+ * invite event's `created`; null counts as the newest. Null when none has the channel. Both sides pick the same one
+ * from the same grants and accept times.
  */
 export function documentsRelationshipOf<R extends DocumentsRelationshipCandidate> (rels: R[]): R | null {
   const at = (r: R): number => r.createdAt instanceof Date ? r.createdAt.getTime() : typeof r.createdAt === 'number' ? r.createdAt : Infinity;
   const withChannel = (rels ?? []).filter(r => r.hasChannel === true).sort((a, b) => at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0);
-  const holdsShare = (r: R): boolean => { const s = shareStreamsOf(r.grantedPermissions); return s.shared != null || s.received != null; };
   const readsClass = (r: R): boolean => canonicalPermissions(r.grantedPermissions)
     .some(p => p.streamId !== DOCUMENTS_STREAM_ID && isDocumentsStream(p.streamId) && READ_LEVELS.has(p.level ?? 'read'));
   return withChannel.find(r => sharesAllDocuments(r.grantedPermissions)) ??
-    withChannel.find(holdsShare) ??
+    withChannel.find(r => shareStreamsOf(r.grantedPermissions).received != null) ??
+    withChannel.find(r => shareStreamsOf(r.grantedPermissions).shared != null) ??
     withChannel.find(readsClass) ??
     withChannel.at(-1) ?? null;
 }
 
 /**
- * What a person reads under a permission on a documents stream, for her consent: on `documents`, that it covers every
- * document; on a stream under it, what the grant leaves out, from the model tree (the documents not filed yet, the
- * other streams, and those filed on a stream above it but not under it). Null for any other stream. en, fr, es; any
- * other locale reads English (no reviewed it / pt-BR wording yet).
+ * What a grant on a class stream under `documents` leaves out, for her consent, from the model tree: the documents not
+ * filed yet, the other streams, and those filed on a stream above it but not under it. Null on `documents` itself (its
+ * model description already says it covers every document, filed or not) and on any other stream. en, fr, es; any
+ * other locale reads English (no reviewed it / pt-BR wording yet). One language for the whole note: when a label it
+ * uses has none in that language, the note and its labels are English.
  */
 export function documentsGrantNote (streamId: string, locale: string = 'en'): string | null {
   const id = canonicalStreamId(streamId ?? '');
-  const asked = matchLocale(locale);
-  const lang = asked != null && GRANT_NOTE[asked] != null ? asked : 'en';
-  const text = GRANT_NOTE[lang];
-  if (id === DOCUMENTS_STREAM_ID) return text.all;
+  if (id === DOCUMENTS_STREAM_ID) return null;
   let streams;
   try { streams = getModel().streams; } catch { return null; }
   if (streams.getDataById(id, false) == null || !isDocumentsStream(id)) return null;
-  const label = (sid: string): string => {
-    const s = streams.getDataById(sid);
-    const value: string = s.label?.[lang] ?? s.label?.en ?? s.name ?? sid;
-    return value.charAt(0).toLocaleLowerCase(lang) + value.slice(1);
-  };
   // from `documents` down to the stream: at each step, the siblings, then what is filed on the step itself
   const path = [...streams.getParentsIds(id, false), id];
-  const out: string[] = [];
+  const parts: Array<{ sid: string; other: boolean }> = [];
   for (let i = 1; i < path.length; i++) {
     const children: Array<{ id: string }> = streams.getDataById(path[i - 1]).children ?? [];
-    for (const c of children) if (c.id !== path[i]) out.push(label(c.id));
-    if (i > 1) out.push(text.other.replace('{parent}', label(path[i - 1])));
+    for (const c of children) if (c.id !== path[i]) parts.push({ sid: c.id, other: false });
+    if (i > 1) parts.push({ sid: path[i - 1], other: true });
   }
-  return text.notIncluded.replace('{list}', out.join(', '));
+  const asked = matchLocale(locale);
+  const labelIn = (sid: string, l: string): string | undefined => streams.getDataById(sid).label?.[l];
+  const lang = asked != null && GRANT_NOTE[asked] != null && parts.every(p => labelIn(p.sid, asked) != null) ? asked : 'en';
+  const text = GRANT_NOTE[lang];
+  const label = (sid: string): string => {
+    const value: string = labelIn(sid, lang) ?? streams.getDataById(sid).name ?? sid;
+    return value.charAt(0).toLocaleLowerCase(lang) + value.slice(1);
+  };
+  return text.notIncluded.replace('{list}', parts.map(p => p.other ? text.other.replace('{parent}', label(p.sid)) : label(p.sid)).join(', '));
 }
 
 /**
@@ -1023,8 +1026,8 @@ const TEXT: Record<DocumentAlertKind, Record<string, { title: string; body: stri
 };
 
 /** `documentsGrantNote`: `{list}` the parts left out; `other`: what is filed on `{parent}`, a stream above the granted one, itself. */
-const GRANT_NOTE: Record<string, { all: string; notIncluded: string; other: string }> = {
-  en: { all: 'Every document, filed or not.', notIncluded: 'Not included: documents not filed yet, {list}.', other: 'other {parent}' },
-  fr: { all: 'Tous les documents, classés ou non.', notIncluded: 'Non inclus : documents pas encore classés, {list}.', other: 'autres {parent}' },
-  es: { all: 'Todos los documentos, archivados o no.', notIncluded: 'No incluidos: documentos aún sin archivar, {list}.', other: 'otros {parent}' }
+const GRANT_NOTE: Record<string, { notIncluded: string; other: string }> = {
+  en: { notIncluded: 'Not included: documents not filed yet, {list}.', other: 'other {parent}' },
+  fr: { notIncluded: 'Non inclus : documents pas encore classés, {list}.', other: 'autres {parent}' },
+  es: { notIncluded: 'No incluidos: documentos aún sin archivar, {list}.', other: 'otros {parent}' }
 };

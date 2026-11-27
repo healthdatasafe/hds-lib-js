@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.83.1] - 2026-11-27
+
+### Changed
+
+- `cmcDocuments.documentsGrantNote('documents', …)` returns null: the model description of `documents` already says it
+  covers every medical document, filed or not, so the note only repeated it.
+- `cmcDocuments.documentsGrantNote` writes the whole note in one language: when a class stream label it uses has none
+  in the requested language, the note and its labels are English, never a sentence mixing two languages.
+- `cmcDocuments.documentsRelationshipOf`: among those that hold a share child, one holding a `received` child (she
+  allowed sending) comes before one holding only a `shared` child, so a contact allowed to send on a newer data set is
+  not moved to an older one that only shares. `createdAt` is the accept time, else the invite event's `created`; null
+  counts as the newest.
+
 ## [2.83.0] - 2026-11-27
 
 data-model 4.47.0 (plan 128 SUB-F, L6): her other names in the profile match, a date's anchor, `pages-not-read`.

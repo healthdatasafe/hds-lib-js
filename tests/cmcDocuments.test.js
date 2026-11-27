@@ -874,15 +874,17 @@ describe('[CDOC] cmcDocuments', function () {
       assert.strictEqual(pick([r('u', weight, undefined), r('v', weight, null), r('k', weight, 5)]), 'v', 'unknown ones keep the order given, after the known ones');
       const all = [{ streamId: 'documents', level: 'read' }];
       assert.strictEqual(pick([r('u', all, null), r('k', all, 5)]), 'k', 'an unknown accept time is never taken for the oldest');
+      const shares = [{ streamId: 'share-ssssssssssss', level: 'read' }];
+      const sends = [{ streamId: 'share-rrrrrrrrrrrr', level: 'create-only' }];
+      assert.strictEqual(pick([r('old', shares, 1), r('new', sends, 2)]), 'new', 'a contact allowed to send stays on that data set, not an older one that only shares');
+      assert.strictEqual(pick([r('old', shares, 1), r('new', [{ streamId: 'share-rrrrrrrrrrrr', level: 'contribute' }, ...shares], 2)]), 'new', 'an uploader too');
+      assert.strictEqual(pick([r('a', sends, 1), r('b', sends, 2)]), 'a', 'the oldest of those that receive');
+      assert.strictEqual(pick([r('a', [{ streamId: 'documents-clinical', level: 'read' }], 1), r('b', shares, 2)]), 'b', 'only shared: still before a class grant');
     });
 
     it('[CDOC76] documentsGrantNote: what a documents grant leaves out, from the model tree, in en, fr, es', () => {
       const note = cmcDocuments.documentsGrantNote;
-      assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents', l)), [
-        'Every document, filed or not.',
-        'Tous les documents, classés ou non.',
-        'Todos los documentos, archivados o no.'
-      ]);
+      assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents', l)), [null, null, null], 'the model description already says it covers every document');
       assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents-clinical', l)), [
         'Not included: documents not filed yet, administrative documents.',
         'Non inclus : documents pas encore classés, documents administratifs.',
@@ -903,6 +905,33 @@ describe('[CDOC] cmcDocuments', function () {
       assert.strictEqual(note('documents-clinical', 'fr-CH'), note('documents-clinical', 'fr'));
       assert.strictEqual(note(':local:documents-admin', 'en'), note('documents-admin', 'en'));
       for (const other of ['body-weight', 'document-shares', 'share-aaaaaaaaaaaa', 'documents-unknown', '*']) assert.strictEqual(note(other, 'en'), null, other);
+    });
+
+    it('[CDOC77] documentsGrantNote: one language for the whole note; a label missing in it makes it all English', () => {
+      const note = cmcDocuments.documentsGrantNote;
+      // the loaded model is frozen: the stream is read through a stub that leaves out one language of its label
+      const without = (sid, lang, check) => {
+        const streams = getModel().streams;
+        const read = streams.getDataById.bind(streams);
+        streams.getDataById = (id, ...rest) => {
+          const data = read(id, ...rest);
+          if (id !== sid || data == null) return data;
+          const { [lang]: _gone, ...label } = data.label;
+          return { ...data, label };
+        };
+        try { check(); } finally { delete streams.getDataById; }
+      };
+      without('documents-admin', 'es', () => {
+        assert.strictEqual(note('documents-clinical', 'es'), 'Not included: documents not filed yet, administrative documents.');
+        assert.strictEqual(note('documents-admin-insurance', 'es'), 'Not included: documents not filed yet, clinical documents, other administrative documents.');
+        assert.strictEqual(note('documents-admin', 'es'), 'No incluidos: documentos aún sin archivar, documentos clínicos.', 'only the labels it uses count');
+      });
+      without('documents-clinical', 'fr', () => {
+        assert.strictEqual(note('documents-admin', 'fr'), 'Not included: documents not filed yet, clinical documents.');
+        assert.strictEqual(note('documents-admin-insurance', 'fr'), 'Not included: documents not filed yet, clinical documents, other administrative documents.');
+        assert.strictEqual(note('documents-clinical', 'fr'), 'Non inclus : documents pas encore classés, documents administratifs.');
+      });
+      assert.strictEqual(note('documents-admin', 'fr'), 'Non inclus : documents pas encore classés, documents cliniques.', 'labels restored');
     });
   });
 });
