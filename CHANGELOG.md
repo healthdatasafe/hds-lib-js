@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.81.0] - 2026-11-27
+
+### Added
+
+- `cmcDocuments.MAX_DOCUMENT_BYTES`: 50 MB, all files of one document (B-2026-11-25-6), one limit for every app.
+- `cmcDocuments.documentsGrantNote(streamId, locale)`: for a consent, what a grant on a documents stream covers or
+  leaves out, built from the model tree. `documents`: "Every document, filed or not."; a stream under it: "Not included:
+  documents not filed yet, …" with the other documents streams. en, fr, es; it and pt-BR read English (no reviewed
+  wording yet, though the pack has the labels); null for any other stream.
+- `appTemplates.permissionView(…).description`: the model stream's `description`, in the same language as `name`
+  (`fr-CH` reads `fr`; an unsupported locale, the preferred ones), null when it has none. `permissionView` now reads a
+  regional locale as its language for the name too.
+- `cmcDocuments.documentsRelationshipOf(rels)`: the relationship documents go through with a contact, one rule for the
+  person's app and the contact's (they picked differently): of those with the system channel, the oldest that reads
+  every document, else one that holds a share child, else one that reads a documents class stream, else the newest.
+  `createdAt` is the accept time (`acceptedAt`; a contact without one takes the invite event's `created`); unknown
+  counts as the newest.
+- `cmcDocuments.openRelationshipsOf(streamIds, shareStreams)`: the relationships that can still change a filed document
+  (a `received` share child it carries, by its mark; a document not received yet is not open).
+
+### Changed
+
+- `cmcDocuments.shareDocument` refuses a document another contact can still change (an uploader's `received` child on
+  it): `HDSLibError` with `{ reason: 'open-document', eventId, relationships }`, nothing written. The person's app
+  freezes it first (`freezeDocument`). Open to the contact it is shared with: allowed. A document not received yet (no
+  documents stream) is refused first with `not-received`. Mode `all` is unchanged.
+- `cmcConversation.notesToRemove` (B-2026-11-25-2): a `task-status` `error` still the contact's latest status 24 h after
+  it was sent ends the work for her notes, as a `done` does (each answer's own 24 h still applies); a later status
+  supersedes it.
+
 ## [2.80.0] - 2026-11-27
 
 ### Added

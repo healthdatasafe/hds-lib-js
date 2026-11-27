@@ -97,4 +97,21 @@ describe('[PLBL] permission labels', function () {
     assert.strictEqual(dataName('symptom-general', { locale: 'fr' }), 'Généraux');
     assert.strictEqual(dataName('symptom-general', { locale: 'en', qualified: true }), 'Symptoms › General');
   });
+
+  it('[PLBL10] description: the model stream\'s, in the same language as the name; null when it has none', () => {
+    const desc = model.streams.getDataById('documents-admin').description;
+    assert.strictEqual(permissionView({ streamId: 'documents-admin', level: 'read' }, { locale: 'fr' }).description, desc.fr);
+    assert.strictEqual(permissionView({ streamId: ':local:documents-admin' }, { locale: 'en' }).description, desc.en);
+    assert.strictEqual(permissionView({ streamId: 'documents-admin' }, { locale: 'de' }).description, desc.en, 'English fallback');
+    const frName = permissionView({ streamId: 'documents-admin' }, { locale: 'fr' }).name;
+    assert.ok(frName.includes('Documents administratifs'), frName);
+    const chFr = permissionView({ streamId: 'documents-admin' }, { locale: 'fr-CH' });
+    assert.deepStrictEqual([chFr.name, chFr.description], [frName, desc.fr], 'fr-CH reads fr, name and description');
+    setPreferredLocales(['fr']);
+    assert.strictEqual(permissionView({ streamId: 'documents-admin' }).description, desc.fr, 'no locale: the preferred ones');
+    const de = permissionView({ streamId: 'documents-admin' }, { locale: 'de' });
+    assert.deepStrictEqual([de.name, de.description], [frName, desc.fr], 'an unsupported locale: name and description both from the preferred ones');
+    assert.ok(permissionView({ streamId: 'documents' }, { locale: 'fr' }).description.startsWith('Tous les documents médicaux'));
+    for (const streamId of ['*', ':system:email', 'custom-x', 'share-aaaaaaaaaaaa']) assert.strictEqual(permissionView({ streamId }).description, null, streamId);
+  });
 });

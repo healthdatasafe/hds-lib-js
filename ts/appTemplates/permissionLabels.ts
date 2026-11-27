@@ -4,11 +4,12 @@
  * An invitation or a sharing screen must name what a connection reads by the data model's own
  * words, never by the requester's label alone: any account can label a wide grant "Cycle
  * length". These helpers give every HDS app (patient app, account app, doctor dashboard) the
- * same names and the same warnings.
+ * same names and the same warnings. A model stream's `description` comes with its name, so a consent can say what the
+ * data covers (on a documents stream, `cmcDocuments.documentsGrantNote` says what it leaves out).
  */
 
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
-import { localizeText, type Localizable, type localizableText } from '../localizeText.ts';
+import { localizeText, matchLocale, type Localizable, type localizableText } from '../localizeText.ts';
 import { canonicalStreamId } from '../cmc/shareIds.ts';
 
 export interface PermissionLabelOptions {
@@ -35,6 +36,8 @@ export interface PermissionView {
   hasChildren: boolean;
   /** The requester's own label (`defaultName`), if any: show it quoted, never as the name. */
   requesterLabel: string | null;
+  /** What the data covers, from the model stream's `description`, in the same language as `name`; null when it has none. */
+  description: string | null;
 }
 
 const TEXTS: Record<'allData' | 'email' | 'under', localizableText> = {
@@ -98,12 +101,14 @@ export function dataName (streamId: string, opts: PermissionLabelOptions & { fal
  * quoted and flagged when the model does not know the stream), its level, and whether it
  * deserves a warning. Works before the model is loaded (then `inModel: false`).
  */
-export function permissionView (perm: { streamId?: string; level?: string; defaultName?: string }, opts: PermissionLabelOptions = {}): PermissionView {
+export function permissionView (perm: { streamId?: string; level?: string; defaultName?: string }, options: PermissionLabelOptions = {}): PermissionView {
+  // one locale for the name and the description: `fr-CH` reads `fr`, an unsupported one the preferred locales
+  const opts = { ...options, locale: options.locale != null ? (matchLocale(options.locale) ?? options.locale) : undefined };
   // named by the canonical id; `streamId` stays as given
   const streamId = canonicalStreamId(perm.streamId ?? '');
   const level = perm.level ?? 'read';
   const requesterLabel = perm.defaultName ?? null;
-  const base = { streamId: perm.streamId ?? '', level, requesterLabel };
+  const base = { streamId: perm.streamId ?? '', level, requesterLabel, description: null };
   if (streamId === '*') {
     const name = pick(TEXTS.allData, opts.locale) as string;
     return { ...base, kind: 'all-data', name, label: name, beyondRead: true, inModel: true, hasChildren: true };
@@ -115,13 +120,21 @@ export function permissionView (perm: { streamId?: string; level?: string; defau
   const quoted = requesterLabel ? `“${requesterLabel}”` : streamId;
   let inModel = false;
   let hasChildren = false;
+  let description: string | null = null;
   try {
     const model = getModel();
-    const stream = model.streams.getDataById(streamId, false) as { children?: unknown[] } | null | undefined;
+    const stream = model.streams.getDataById(streamId, false) as { children?: unknown[]; description?: unknown } | null | undefined;
     inModel = stream != null || model.itemsDefs.forStreamId(streamId).length > 0;
     hasChildren = (stream?.children?.length ?? 0) > 0;
+    description = descriptionOf(stream?.description, opts.locale);
   } catch { /* model not loaded: the requester's label, flagged */ }
   const name = inModel ? dataName(streamId, { ...opts, qualified: true }) : quoted;
   const label = hasChildren ? (pick(TEXTS.under, opts.locale) as string).replace('{name}', name) : name;
-  return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren };
+  return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren, description };
+}
+
+/** A model description as the name is picked (`pick`: the locale, else the preferred locales); null when there is none. */
+function descriptionOf (text: unknown, locale?: string): string | null {
+  if (text == null || typeof text !== 'object') return null;
+  try { return pick(text as Localizable, locale); } catch { return null; }
 }
