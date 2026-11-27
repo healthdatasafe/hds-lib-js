@@ -108,7 +108,19 @@ export const NOTICE_CODES = {
   TYPED_TEXT_NOT_READ: 'typed-text-not-read',
   SEVERAL_SAMPLING_DATES: 'several-sampling-dates',
   /** 4.26.0: the contact does not read her notes, once per document. */
-  NOTE_NOT_READ: 'note-not-read'
+  NOTE_NOT_READ: 'note-not-read',
+  /** 4.27.0: the contact is ready to read her documents, once per relationship. */
+  READY: 'ready',
+  /** 4.39.0: a column of a table read per column is not proposed. */
+  COLUMNS_NOT_READ: 'columns-not-read',
+  /** 4.45.0: several result columns and fewer than two sampling days told apart; nothing proposed, ends the work. */
+  SEVERAL_RESULT_COLUMNS: 'several-result-columns',
+  /** 4.45.0: the page of a picture prints more result lines than were read; the proposals stand. */
+  LINES_MAY_BE_MISSING: 'lines-may-be-missing',
+  /** 4.45.0: a dated grid (or a document that may be one) whose grid is not located; nothing read, ends the work. */
+  GRID_NOT_LOCATED: 'grid-not-located',
+  /** 4.45.0: the contact does not read this kind of document; ends the work. */
+  KIND_NOT_READ: 'kind-not-read'
 } as const;
 export const ERROR_CODES = { NO_ATTACHMENT: 'no-attachment', WRITE_FAILED: 'write-failed', READING_FAILED: 'reading-failed' } as const;
 
@@ -242,14 +254,28 @@ export function parseConversationAlerts (events: Array<{ id: string; type: strin
     const alert: ConversationAlert = { alertEventId: e.id, kind: hds.kind, hds, time: e.time ?? 0, direction, from };
     const earlier = byKey.get(key);
     if (earlier != null) {
-      // a `task-status` repeated later (a restarted contact reusing an attempt) is the newer state (R4): keep the latest
-      if (hds.kind !== 'task-status') continue;
+      // a `task-status` repeated later (a restarted contact reusing an attempt) is the newer state (R4), and a notice
+      // repeated later is the one of a later read (4.45.0): keep the latest
+      if (hds.kind !== 'task-status' && hds.kind !== 'notice') continue;
       out[earlier] = null;
     }
     byKey.set(key, out.length);
     out.push(alert);
   }
-  return out.filter((a): a is ConversationAlert => a != null);
+  // 4.45.0, CONVERSATION.md "A notice speaks of one read": a notice about a document earlier than the latest
+  // `received` status about it, in the same direction, belongs to an earlier read and is dropped
+  const readStart = new Map<string, number>();
+  for (const a of out) {
+    if (a == null || a.kind !== 'task-status' || a.hds.status !== 'received' || typeof a.hds.about !== 'string') continue;
+    const k = a.direction + ':' + a.hds.about;
+    readStart.set(k, Math.max(readStart.get(k) ?? -Infinity, a.time));
+  }
+  return out.filter((a): a is ConversationAlert => {
+    if (a == null) return false;
+    if (a.kind !== 'notice' || typeof a.hds.about !== 'string') return true;
+    const start = readStart.get(a.direction + ':' + a.hds.about);
+    return start == null || a.time >= start;
+  });
 }
 
 function alertKey (hds: Record<string, any>): string {

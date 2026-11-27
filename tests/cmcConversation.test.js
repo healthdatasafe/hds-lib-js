@@ -221,6 +221,29 @@ describe('[CNV] cmcConversation', function () {
       ]);
       assert.strictEqual(cv.taskStatusOf(restarted, DOC).hds.status, 'reading');
     });
+
+    it('[CNV13] parse: a notice speaks of one read (4.45.0): a later read drops the earlier read\'s notices, a repeated one is the latest', () => {
+      const a = (id, time, hds, from = true) => ({ id, time, type: 'notification/alert-cmc', content: { hds, ...(from ? { from: { username: 'reader', host: 'x' } } : {}) } });
+      const N = cv.NOTICE_CODES;
+      const parsed = cv.parseConversationAlerts([
+        a('ready', 0, { kind: 'notice', code: N.READY }),
+        a('r1', 1, { kind: 'task-status', about: DOC, status: 'received', attempt: 1 }),
+        a('n1', 2, { kind: 'notice', code: N.LINES_MAY_BE_MISSING, about: DOC }),
+        a('n2', 2, { kind: 'notice', code: N.COLUMNS_NOT_READ, about: DOC }),
+        a('o1', 2, { kind: 'notice', code: N.KIND_NOT_READ, about: 'other' }),
+        a('r2', 5, { kind: 'task-status', about: DOC, status: 'received', attempt: 1 }),
+        a('n3', 6, { kind: 'notice', code: N.LINES_MAY_BE_MISSING, about: DOC }),
+        a('n4', 6, { kind: 'notice', code: N.LINES_MAY_BE_MISSING, about: DOC }) // second device
+      ]);
+      assert.deepStrictEqual(parsed.filter(p => p.kind === 'notice').map(p => p.alertEventId), ['ready', 'o1', 'n4']);
+      // the same notice sent by her app (direction sent) is not dropped by the contact's `received`
+      const sent = cv.parseConversationAlerts([
+        a('s1', 1, { kind: 'notice', code: N.GRID_NOT_LOCATED, about: DOC }, false),
+        a('r3', 2, { kind: 'task-status', about: DOC, status: 'received', attempt: 1 })
+      ]);
+      assert.deepStrictEqual(sent.map(p => p.alertEventId), ['s1', 'r3']);
+      assert.deepStrictEqual(Object.values(N).filter(c => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(c)), []);
+    });
   });
 
   describe('[CNV-R] writer rules', () => {
