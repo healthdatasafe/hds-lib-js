@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.80.0] - 2026-11-27
+
+### Added
+
+- Notice codes of data-model 4.45.0 (CONVERSATION.md § Notice and error codes, plan 128 SUB-F) in `NOTICE_CODES`:
+  `SEVERAL_RESULT_COLUMNS`, `LINES_MAY_BE_MISSING`, `GRID_NOT_LOCATED`, `KIND_NOT_READ`; and the two that were missing,
+  `READY` (4.27.0) and `COLUMNS_NOT_READ` (4.39.0).
+
+### Fixed
+
+- A notice speaks of one read (data-model 4.45.0): `parseConversationAlerts` keeps the latest of a repeated notice
+  (it kept the earliest, so a document shared again showed the first read's notice and dropped the new one), and drops
+  a notice about a document that is earlier than the contact's latest `received` about it, in the same direction.
+
 ## [2.79.0] - 2026-11-27
 
 ### Changed
