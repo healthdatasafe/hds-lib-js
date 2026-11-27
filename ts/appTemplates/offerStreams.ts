@@ -22,6 +22,8 @@ import type { APICall } from 'pryv';
 export interface ModelStreams {
   getDataById (streamId: string, throwErrorIfNotFound?: boolean): { name?: string; parentId?: string | null } | null;
   getParentsIds (streamId: string, throwErrorIfNotFound?: boolean): string[];
+  /** hds-lib's `HDSModelStreams` has it; a slice without it creates no folded item streams (as before 2.75.0). */
+  itemStreamsUnder? (streamId: string): string[];
 }
 
 export interface StreamToCreate {
@@ -68,9 +70,14 @@ function appBasesOf (permissions: Array<{ streamId?: string }>, modelStreams: Mo
  *
  * A stream the model knows takes the model's name; a granted one it does not know takes the permission's
  * `defaultName` when it carries one, else its id.
+ *
+ * A granted item stream also gets the item streams the model has under it (`itemStreamsUnder`): those are the
+ * permissions `forItemKeys` folds into it, which the grant covers but no longer names (B-2026-11-24-12:
+ * `body-vulva-bleeding` granted, `body-vulva-bleeding-browndark` never created, a reader naming it failed whole). Not
+ * for a `level: 'none'` mask.
  */
 export function offerStreamsToCreate (
-  permissions: Array<{ streamId?: string; defaultName?: string }>,
+  permissions: Array<{ streamId?: string; defaultName?: string; level?: string }>,
   modelStreams: ModelStreams
 ): StreamToCreate[] {
   const wanted = new Map<string, StreamToCreate>();
@@ -125,6 +132,12 @@ export function offerStreamsToCreate (
       logger.warn(`offerStreams: could not resolve ancestors of "${streamId}":`, message);
     }
     add(streamId, { granted: true, defaultName: perm.defaultName });
+    if (perm.level !== 'none') {
+      for (const folded of modelStreams.itemStreamsUnder?.(streamId) ?? []) {
+        for (const ancestorId of modelStreams.getParentsIds(folded, false)) add(ancestorId);
+        add(folded);
+      }
+    }
   }
 
   return [...wanted.values()];

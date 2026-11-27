@@ -230,7 +230,9 @@ describe('[BAU] Bridge access update — missing permission streams', function (
     const model = HDSLib.getHDSModel().streams;
     assert.ok(model.getDataById('body-weight', false) != null, 'body-weight is a model stream');
     const ids = conn.streamsCreated.map((s) => s.id);
-    assert.deepEqual(ids, ['body-temperature', 'body-temperature-basal'], 'only the missing part of the model chain, root-first');
+    // the item stream the model has under the granted one comes too (B-2026-11-24-12: forItemKeys folds it into its parent)
+    assert.deepEqual(ids, ['body-temperature', 'body-temperature-basal', ...model.itemStreamsUnder('body-temperature-basal')], 'only the missing part of the model chain, root-first');
+    assert.ok(ids.includes('body-temperature-basal-disturbance'));
     for (const s of conn.streamsCreated) {
       assert.equal(s.parentId, model.getDataById(s.id).parentId, `${s.id} keeps its model parent`);
       assert.notEqual(s.name, s.id, `${s.id} gets the model name, not the defaultName`);
