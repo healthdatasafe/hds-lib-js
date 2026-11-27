@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.75.0] - 2026-11-27
+
+### Fixed
+
+- A child item folded into its parent item is created at consent (B-2026-11-24-12). `authorizations.forItemKeys` keeps
+  the minimal set, so a request for `body-vulva-bleeding` and `body-vulva-bleeding-browndark` names only the parent; a
+  consent then created the parent alone, and a reader naming the child got `unknown-referenced-resource`.
+  `offerStreamsToCreate` now also creates, for each granted item stream, the item streams the model has under it (never
+  for a `level: 'none'` mask). New `HDSModelStreams.itemStreamsUnder(streamId)`; `ModelStreams.itemStreamsUnder` is
+  optional, so a slice without it behaves as before. A stream no item writes to (`body-blood`) brings no subtree, so a
+  `preRequest` on such a grouping still folds its items without creating them.
+
+### Changed
+
+- Tests: a JSON GET answered with an HTML page is retried, and the last try names URL, status and body (B-2026-11-26-9).
+
 ## [2.74.0] - 2026-11-26
 
 ### Added

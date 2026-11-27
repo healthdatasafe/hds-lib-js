@@ -114,6 +114,27 @@ export class HDSModelStreams {
   }
 
   /**
+   * The item streams under `streamId`, parents first, when `streamId` is itself an item's stream; else `[]`.
+   * These are the streams `authorizations.forItemKeys` folds into `streamId` (a child item's permission is dropped when
+   * its parent is requested at the same or a higher level), so a consent that creates only the granted streams would
+   * leave them missing, and a reader naming one gets `unknown-referenced-resource` (B-2026-11-24-12). A stream that no
+   * item writes to (a grouping such as `body-blood`) returns `[]`: its subtree is not the request's to create.
+   */
+  itemStreamsUnder (streamId: string): string[] {
+    const itemStreams = new Set(this.#model.itemsDefs.getAll().map((d) => d.data.streamId));
+    if (!itemStreams.has(streamId)) return [];
+    const out: string[] = [];
+    const walk = (node: any): void => {
+      for (const child of node?.children ?? []) {
+        if (itemStreams.has(child.id)) out.push(child.id);
+        walk(child);
+      }
+    };
+    walk(this.#modelStreamsById[streamId]);
+    return out;
+  }
+
+  /**
    * Get all parents id;
    */
   getParentsIds (streamId: string, throwErrorIfNotFound: boolean = true, initialArray: string[] = []): string[] {

@@ -1,6 +1,7 @@
 import { assert } from './test-utils/deps-node.js';
 import { HDSModel, initHDSModel } from '../ts/index.ts';
 import { resetPreferredLocales, setPreferredLocales } from '../ts/localizeText.ts';
+import { offerStreamsToCreate } from '../ts/appTemplates/offerStreams.ts';
 
 const modelURL = 'https://model.datasafe.dev/pack.json';
 
@@ -439,6 +440,22 @@ describe('[MODX] Model', () => {
         }
       ];
       assert.deepEqual(authorizationSet, expected);
+    });
+
+    it('[MOAF] a child item folded into its parent item is still created at consent (B-2026-11-24-12)', async () => {
+      const parent = model.itemsDefs.forStreamId('body-vulva-bleeding')[0].key;
+      const child = model.itemsDefs.forStreamId('body-vulva-bleeding-browndark')[0].key;
+      const permissions = model.authorizations.forItemKeys([parent, child]);
+      // the minimal set: the child's permission is folded into its parent's
+      assert.deepEqual(permissions.map(p => p.streamId), ['body-vulva-bleeding']);
+      const ids = offerStreamsToCreate(permissions, model.streams).map(s => s.id);
+      assert.ok(ids.includes('body-vulva-bleeding-browndark'), ids.join(', '));
+      assert.ok(ids.indexOf('body-vulva-bleeding') < ids.indexOf('body-vulva-bleeding-browndark'));
+      assert.deepEqual(model.streams.itemStreamsUnder('body-vulva-bleeding'), ids.slice(ids.indexOf('body-vulva-bleeding') + 1));
+      // a mask creates nothing under it; a stream no item writes to (a grouping) brings no subtree
+      assert.deepEqual(offerStreamsToCreate([{ streamId: 'body-vulva-bleeding', level: 'none' }], model.streams).map(s => s.id), ['body', 'body-vulva', 'body-vulva-bleeding']);
+      assert.deepEqual(model.streams.itemStreamsUnder('body-blood'), []);
+      assert.deepEqual(model.streams.itemStreamsUnder('unknown-stream'), []);
     });
 
     it('[MOAL] Get Authorizations from items override correctly authorized level', async () => {
