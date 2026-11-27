@@ -66,9 +66,10 @@ function makeBaseModel () {
 }
 
 /**
- * `fertility-monitor-lh-marquette` as data-model ships it once it is canonical (definitions/items/fertility.yaml).
- * Cycle Intelligence wrote it first as an overlay item; its overlay restates the same key, streamId, eventType,
- * type and options.
+ * A fixture for an overlay item that becomes canonical: Cycle Intelligence's overlay item
+ * `fertility-monitor-lh-marquette`, as if data-model shipped it under the same key, and an overlay that restates the
+ * same key, streamId, eventType, type and options. data-model did not: its monitor reading is the separate item
+ * `fertility-monitor-reading` (`fertility/monitor-reading-v1`), so this item stays the overlay's own.
  */
 function marquetteItem () {
   return {

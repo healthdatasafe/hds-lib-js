@@ -60,10 +60,10 @@ describe('[CPKV] converter pack version', () => {
   });
 
   it('[CPKV2] a version above what it supports is never fetched', async () => {
-    served = { [url('pack-v3.json')]: packOf('v3', 'v3'), [url('pack-v4.json')]: packOf('v4', 'v4') };
-    const engine = await convertersFor({ latestVersion: 'v4', versions: ['v0', 'v1', 'v2', 'v3', 'v4'] }).ensureEngine(ITEM);
-    assert.strictEqual(engine.converterVersion, 'v3');
-    assert.deepStrictEqual(requested, [url('pack-v3.json')]);
+    served = { [url('pack-v4.json')]: packOf('v4', 'v4'), [url('pack-v5.json')]: packOf('v5', 'v5') };
+    const engine = await convertersFor({ latestVersion: 'v5', versions: ['v0', 'v1', 'v2', 'v3', 'v4', 'v5'] }).ensureEngine(ITEM);
+    assert.strictEqual(engine.converterVersion, 'v4');
+    assert.deepStrictEqual(requested, [url('pack-v4.json')]);
   });
 
   it('[CPKV3] an index without versions (data-model before the versioned packs) reads pack-latest.json', async () => {
@@ -105,11 +105,32 @@ describe('[CPKV] converter pack version', () => {
     assert.deepStrictEqual([event.content.source.engineVersion, event.content.source.modelVersion], ['v1', 'v0']);
   });
 
+  it('[CPKV9] a model that publishes v0 to v3 only (before cervical-fluid v4) still reads pack-v3', async () => {
+    served = { [url('pack-v3.json')]: packOf('v3', 'v3') };
+    const engine = await convertersFor({ latestVersion: 'v3', versions: ['v0', 'v1', 'v2', 'v3'] }).ensureEngine(ITEM);
+    assert.strictEqual(engine.converterVersion, 'v3');
+    assert.deepStrictEqual(requested, [url('pack-v3.json')]);
+  });
+
+  it('[CPKV10] v4-shaped options (Marquette L / H / P: produce and offer false) are read, never produced', async () => {
+    const pack = packOf('v4', 'v4');
+    pack.methods[0].components[0].options.push({ value: 'P', label: { en: 'Peak' }, vector: { a: 0.5 }, produce: false, offer: false });
+    served = { [url('pack-v4.json')]: pack };
+    const converters = convertersFor({ latestVersion: 'v4', versions: ['v0', 'v1', 'v2', 'v3', 'v4'] });
+    const event = await converters.convertMethodToEvent(ITEM, 'm', 'P');
+    assert.deepStrictEqual(event.content.vectors, { a: 0.5 });
+    assert.deepStrictEqual([event.content.source.engineVersion, event.content.source.modelVersion], ['v4', 'v4']);
+    const back = await converters.convertMethodToMethod(ITEM, 'm', 'm', 'P');
+    assert.strictEqual(back.data, 'x');
+  });
+
   it('[CPKV8] packVersionFor: numeric order, bad names ignored, unknown item keys read v0', () => {
-    assert.strictEqual(SUPPORTED_CONVERTER_VERSIONS['cervical-fluid'], 'v3');
+    assert.strictEqual(SUPPORTED_CONVERTER_VERSIONS['cervical-fluid'], 'v4');
     assert.strictEqual(packVersionFor('cervical-fluid', ['v1', 'v0']), 'v1');
     assert.strictEqual(packVersionFor('cervical-fluid', ['v0', 'v10', 'v3']), 'v3');
-    assert.strictEqual(packVersionFor('cervical-fluid', ['v0', 'v10', 'v4']), 'v0');
+    assert.strictEqual(packVersionFor('cervical-fluid', ['v0', 'v10', 'v4']), 'v4');
+    assert.strictEqual(packVersionFor('cervical-fluid', ['v0', 'v10', 'v5']), 'v0');
+    assert.strictEqual(packVersionFor('cervical-fluid', ['v0', 'v1', 'v2', 'v3']), 'v3');
     assert.strictEqual(packVersionFor('cervical-fluid', ['v0', 'v1-draft', 3]), 'v0');
     assert.strictEqual(packVersionFor('mood', ['v0', 'v1']), 'v0');
     assert.strictEqual(packVersionFor('new-item', ['v0', 'v1']), 'v0');

@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Reads cervical-fluid converter **v4** (`SUPPORTED_CONVERTER_VERSIONS['cervical-fluid']` `v3` → `v4`): data-model's
+  `pack-v4.json` adds Marquette `L` / `H` / `P` (Low / High / Peak) as read-only options (`produce: false`,
+  `offer: false`), so a stored or imported `L` / `H` / `P` converts to a vector. A model that publishes up to v3 only
+  is still read from `pack-v3.json`. Release after the data-model release that publishes `pack-v4.json`.
+
 ## [2.85.1] - 2026-11-27
 
 ### Fixed
