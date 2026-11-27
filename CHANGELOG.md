@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.84.0] - 2026-11-27
+
+data-model 4.49.0 (plan 128 SUB-F): a document dated per page, question `which-page-date` (CONVERSATION.md § A document
+dated per page).
+
+### Added
+
+- `QUESTION_CODES.WHICH_PAGE_DATE` (`which-page-date`): answered `confirm` (a day at 12:00 UTC, `timePrecision: day`) or
+  `skip`.
+- `cmcConversation.isDatedPerPage(conv)`: a `which-page-date` was asked, so a value's day is its `proposal.time` only
+  (`answeredDateOf` gives none, as on a dated grid or a table read per column).
+
+### Changed
+
+- `checkConversationItem`: `which-page-date` carries no `candidateId`, no `options`, and a context of `anchor` only, with
+  `attachmentId` and `page` (`bbox` optional; `eventId`, when present, = `about`).
+- `checkAnswerFor`: a `which-page-date` `confirm` is a day at 12:00 UTC with `timePrecision: day`, and not a day later
+  than today. The lib knows no zone, so it refuses only a day that has begun nowhere yet (UTC+14); her app checks her
+  own today.
+- `writeQuestion`: one `which-page-date` per attachment and page; none on a document with a `which-date`,
+  `which-row-date` or `which-column-date`, and none of those three on a document with a `which-page-date`.
+- `writeProposedValues`, on a document dated per page: each value carries `anchor` (`attachmentId`, `page`), never
+  `grid` or `column`, and a proposal's `time` at 12:00 UTC with `hdsTimePrecision: day`; on an asked page, only once
+  she has confirmed it, with a day she gave.
+- R10 needs no change: `itemsToDeleteAtDone` already deletes every question answered or skipped.
+
 ## [2.83.1] - 2026-11-27
 
 ### Changed
