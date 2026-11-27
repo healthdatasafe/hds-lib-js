@@ -411,6 +411,21 @@ describe('[HDSD] HDSSettings dynamic settings', function () {
     );
   });
 
+  it('[HDSD9b] setDynamic throws on an empty suffix, for set and delete, before any write', async () => {
+    const conn = createMockConnection();
+    await HDSSettings.hookToConnection(conn, 'test-stream');
+    const before = conn.apiCalls.length;
+    for (const prefix of ['preferred-display-', 'preferred-input-']) {
+      for (const value of ['billings', null]) {
+        await assert.rejects(() => HDSSettings.setDynamic(prefix, value), /nothing after its prefix/);
+      }
+    }
+    assert.strictEqual(conn.apiCalls.length, before);
+    HDSSettings.unhook();
+    await assert.rejects(() => HDSSettings.setDynamic('preferred-input-', 'x'), /nothing after its prefix/);
+    assert.strictEqual(HDSSettings.get('preferred-input-'), undefined);
+  });
+
   it('[HDSD10] setDynamic without hook is memory-only (no Pryv write, value cached)', async () => {
     // Memory-only mode: no connection, no error, get() reads back the value.
     await HDSSettings.setDynamic('preferred-display-wellbeing-mood', 'billings');

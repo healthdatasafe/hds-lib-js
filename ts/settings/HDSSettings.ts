@@ -287,7 +287,8 @@ const HDSSettings = {
 
   /**
    * Set a dynamic setting value — persists to HDS server.
-   * Key must match a known prefix (e.g. 'preferred-display-wellbeing-mood').
+   * Key must match a known prefix (e.g. 'preferred-display-wellbeing-mood') and have something after it:
+   * an unknown prefix or an empty suffix throws, before any write.
    * Pass null to delete the setting.
    * When not hooked (no Pryv connection), accepts the value into the
    * in-memory map only (memory-only mode — useful for standalone demos).
@@ -295,6 +296,8 @@ const HDSSettings = {
   async setDynamic (key: string, value: any): Promise<void> {
     const dp = findDynamicPrefix(key);
     if (!dp) throw new Error(`Unknown dynamic setting prefix for key: "${key}"`);
+    // load() skips an event with an empty itemKey, so each such write would leave one more orphan event
+    if (dp.suffix === '') throw new Error(`Dynamic setting key "${key}" has nothing after its prefix "${dp.prefix}"`);
 
     if (!_connection || !_streamId) {
       if (value === null || value === undefined) {
