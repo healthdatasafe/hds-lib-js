@@ -141,7 +141,7 @@ async function createUserPermissions (user, permissions, initialStreams = [], ap
     params: {
       type: 'app',
       name: appName,
-      permissions
+      permissions: await maskExplicitGrantOnly(permissions)
     }
   };
   const apiCalls = [...createStreams, accessRequest];
@@ -156,6 +156,23 @@ async function createUserPermissions (user, permissions, initialStreams = [], ap
   };
 
   return result;
+}
+
+/**
+ * A `*` grant gets a `{ <root>, none }` mask for every `explicitGrantOnly` root of the model it does not name
+ * (itself or through a child), as app-web-user-account does at consent: test accesses stay as narrow as real ones.
+ * A test that needs a marked root names it. No `defaultName`, so the core does not create the stream.
+ * @param {Array<Object>} permissions
+ * @returns {Promise<Array<Object>>}
+ */
+async function maskExplicitGrantOnly (permissions) {
+  if (!permissions.some(p => p.streamId === '*' && p.level !== 'none')) return permissions;
+  await init();
+  const model = await HDSLib.initHDSModel();
+  const above = (id) => [id, ...(model.streams.getParentsIds(id, false) ?? [])];
+  const named = new Set(permissions.filter(p => p.streamId !== '*').flatMap(p => above(p.streamId)));
+  const masks = model.streams.explicitGrantOnlyRootIds().filter(id => !named.has(id)).map(streamId => ({ streamId, level: 'none' }));
+  return [...permissions, ...masks];
 }
 
 /**

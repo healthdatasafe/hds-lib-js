@@ -103,6 +103,16 @@ describe('[TKSX] toolKit Stream Auto Create', function () {
     assert.deepEqual(calls, [], 'the created streams are known: no API call');
   });
 
+  it('[TKSM] a test `*` access carries the mask of every explicitGrantOnly root (B-2026-11-27-23)', async () => {
+    const user = await createUserAndPermissions(null, [{ streamId: '*', level: 'manage' }], [], 'tk-test TKSM');
+    const info = await new HDSLib.pryv.Connection(user.appApiEndpoint).accessInfo();
+    const marked = HDSLib.getHDSModel().streams.explicitGrantOnlyRootIds();
+    assert.ok(marked.length > 0);
+    for (const streamId of marked) {
+      assert.ok(info.permissions.some((p) => p.streamId === streamId && p.level === 'none'), streamId);
+    }
+  });
+
   it('[TKSF] ensureExistsForItems with item-already-exists error continues normally', async () => {
     const permissionsManager = [{ streamId: '*', level: 'manage' }];
     const user = await createUserAndPermissions(null, permissionsManager, [], 'tk-test TKSF');
