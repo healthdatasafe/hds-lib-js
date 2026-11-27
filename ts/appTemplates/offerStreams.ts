@@ -1,5 +1,6 @@
 import * as logger from '../logger.ts';
 import { DOCUMENT_SHARES_ROOT_ID, isShareStreamId } from '../cmc/shareIds.ts';
+import { CORRECTIONS_ROOT_ID, isCorrectionStreamId } from '../cmc/correctionIds.ts';
 import type { APICall } from 'pryv';
 
 /**
@@ -68,6 +69,9 @@ function appBasesOf (permissions: Array<{ streamId?: string }>, modelStreams: Mo
  * the root, and is named by its id whatever `defaultName` says (data-model DOCUMENTS.md: the name carries nothing).
  * Creating it does not check that the id is free: `cmcDocuments.offeredShareIssues` does, before accepting.
  *
+ * A corrections child (`corr-…`, data-model 4.43.0 CORRECTIONS.md) goes under `entry-corrections` the same way, named by
+ * its id; `checkOfferedCorrectionStreams` checks it before accepting.
+ *
  * A stream the model knows takes the model's name; a granted one it does not know takes the permission's
  * `defaultName` when it carries one, else its id.
  *
@@ -105,6 +109,12 @@ export function offerStreamsToCreate (
       if (isShare) {
         add(DOCUMENT_SHARES_ROOT_ID, { granted: true, defaultName: 'Shared documents' });
         wanted.set(id, { id, name: id, parentId: DOCUMENT_SHARES_ROOT_ID });
+        return;
+      }
+      const isCorrection: boolean = isCorrectionStreamId(id);
+      if (isCorrection) {
+        add(CORRECTIONS_ROOT_ID, { granted: true, defaultName: 'Corrections from your contacts' });
+        wanted.set(id, { id, name: id, parentId: CORRECTIONS_ROOT_ID });
         return;
       }
       const base = appBases.find((b) => id.startsWith(b + '-'));

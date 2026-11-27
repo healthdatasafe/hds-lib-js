@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.76.0] - 2026-11-27
+
+### Added
+
+- **`corrections`**: a professional's correction of one entry (data-model 4.43.0, CORRECTIONS.md). `buildCorrection`
+  (time and `entryModified` from the entry, ids mirrored in `related`, anchor, markdown; throws with `issues`),
+  `checkCorrection` (the writer's MUSTs and the reader's checks; `writer: true` adds the role check; content validated
+  only through a `validateContent` callback, hds-lib compiles no schema at runtime), `currentCorrections` (a trashed
+  replacement still supersedes), `correctionsByEntry`, `correctionState` (`applied`, `outdated`, `entry-gone`, `open`;
+  values compared as the conversation's `holdsProposedValue`), `professionalRoleLabel`, `isMarkdown` and
+  `formattedText` (`clientData.hdsTextFormat`), and for the `corr-` children `isCorrectionStreamId`,
+  `newCorrectionStreamId`, `asksForCorrections`, `checkOfferedCorrectionStreams`.
+- `itemsDefs.forEvent` resolves a `corr-` child, which the model does not hold, to `entry-corrections`; a pack without
+  that root resolves nothing, as before.
+- `offerStreamsToCreate` creates a granted `corr-` child under `entry-corrections`, named by its id.
+
 ## [2.75.0] - 2026-11-27
 
 ### Fixed
