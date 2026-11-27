@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.77.0] - 2026-11-27
+
+### Changed
+
+- Reads cervical-fluid converter v2 (data-model 4.44.0, plan 136): `SUPPORTED_CONVERTER_VERSIONS['cervical-fluid']` is
+  `v2`, so `pack-v2.json` is fetched (Creighton model v2: the frequency annotation has `notFor: ['0']`). Conversions
+  are unchanged (v2 = v1 plus that entry rule). The rule is applied by hds-forms-js 0.57.0; an older forms keeps
+  asking a frequency with `0`.
+
 ## [2.76.0] - 2026-11-27
 
 ### Added
