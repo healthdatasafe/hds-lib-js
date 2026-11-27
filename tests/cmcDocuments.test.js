@@ -814,6 +814,15 @@ describe('[CDOC] cmcDocuments', function () {
       assert.deepStrictEqual(cmcDocuments.openRelationshipsOf(['documents-clinical', 'share-ssssssssssss', 'share-oooooooooooo'], marks), [], 'shared children close nothing');
       assert.deepStrictEqual(cmcDocuments.openRelationshipsOf(['documents', 'share-unmarked0000'], marks), [], 'an unmarked id says nothing');
       assert.deepStrictEqual(cmcDocuments.openRelationshipsOf(null, marks), []);
+      assert.deepStrictEqual(cmcDocuments.openRelationshipsOf([Q], marks), [], 'not received yet: not hers, not open');
+    });
+
+    it('[CDOC72b] shareDocument refuses a document not received yet (not-received), before anything is written', async () => {
+      const conn = account({ streams: openTree(), events: [doc('d1', [Q])] });
+      await assert.rejects(cmcDocuments.shareDocument(conn, relWith([{ streamId: 'body-weight', level: 'read' }]), 'd1'),
+        (e) => e.innerObject?.reason === 'not-received' && e.innerObject.eventId === 'd1');
+      assert.deepStrictEqual(writes(conn), []);
+      assert.deepStrictEqual(conn.events.get('d1').streamIds, [Q]);
     });
 
     it('[CDOC72] shareDocument refuses a document open to another contact, and writes nothing', async () => {
@@ -861,6 +870,10 @@ describe('[CDOC] cmcDocuments', function () {
       assert.strictEqual(pick([r('n', weight, new Date(5000)), r('o', weight, new Date(1000))]), 'n', 'dates too');
       assert.strictEqual(pick([r('x', [{ streamId: 'documents', level: 'read' }], 9, false), r('y', weight, 1)]), 'y', 'one without the channel is never picked');
       assert.strictEqual(pick([r('a', [{ streamId: ':local:documents-clinical', level: 'read' }], 1), r('b', weight, 2)]), 'a', 'canonical ids');
+      assert.strictEqual(pick([r('u', weight, null), r('k', weight, 5)]), 'u', 'an unknown accept time counts as the newest');
+      assert.strictEqual(pick([r('u', weight, undefined), r('v', weight, null), r('k', weight, 5)]), 'v', 'unknown ones keep the order given, after the known ones');
+      const all = [{ streamId: 'documents', level: 'read' }];
+      assert.strictEqual(pick([r('u', all, null), r('k', all, 5)]), 'k', 'an unknown accept time is never taken for the oldest');
     });
 
     it('[CDOC76] documentsGrantNote: what a documents grant leaves out, from the model tree, in en, fr, es', () => {
@@ -881,11 +894,12 @@ describe('[CDOC] cmcDocuments', function () {
         'No incluidos: documentos aún sin archivar, documentos clínicos.'
       ]);
       assert.deepStrictEqual(['en', 'fr', 'es'].map(l => note('documents-admin-insurance', l)), [
-        'Not included: documents not filed yet, clinical documents, administrative documents other than insurance documents.',
-        'Non inclus : documents pas encore classés, documents cliniques, documents administratifs hors documents d\'assurance.',
-        'No incluidos: documentos aún sin archivar, documentos clínicos, documentos administrativos salvo documentos del seguro.'
+        'Not included: documents not filed yet, clinical documents, other administrative documents.',
+        'Non inclus : documents pas encore classés, documents cliniques, autres documents administratifs.',
+        'No incluidos: documentos aún sin archivar, documentos clínicos, otros documentos administrativos.'
       ]);
       assert.strictEqual(note('documents-clinical', 'de'), note('documents-clinical', 'en'), 'another locale reads English');
+      assert.strictEqual(note('documents-clinical', 'it'), note('documents-clinical', 'en'), 'no reviewed it / pt-BR wording yet');
       assert.strictEqual(note('documents-clinical', 'fr-CH'), note('documents-clinical', 'fr'));
       assert.strictEqual(note(':local:documents-admin', 'en'), note('documents-admin', 'en'));
       for (const other of ['body-weight', 'document-shares', 'share-aaaaaaaaaaaa', 'documents-unknown', '*']) assert.strictEqual(note(other, 'en'), null, other);

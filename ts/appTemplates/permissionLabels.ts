@@ -9,7 +9,7 @@
  */
 
 import { getModel } from '../HDSModel/HDSModelInitAndSingleton.ts';
-import { localizeText, type Localizable, type localizableText } from '../localizeText.ts';
+import { localizeText, matchLocale, type Localizable, type localizableText } from '../localizeText.ts';
 import { canonicalStreamId } from '../cmc/shareIds.ts';
 
 export interface PermissionLabelOptions {
@@ -36,7 +36,7 @@ export interface PermissionView {
   hasChildren: boolean;
   /** The requester's own label (`defaultName`), if any: show it quoted, never as the name. */
   requesterLabel: string | null;
-  /** What the data covers, from the model stream's `description`, in the locale (else English); null when it has none. */
+  /** What the data covers, from the model stream's `description`, in the same language as `name`; null when it has none. */
   description: string | null;
 }
 
@@ -101,7 +101,9 @@ export function dataName (streamId: string, opts: PermissionLabelOptions & { fal
  * quoted and flagged when the model does not know the stream), its level, and whether it
  * deserves a warning. Works before the model is loaded (then `inModel: false`).
  */
-export function permissionView (perm: { streamId?: string; level?: string; defaultName?: string }, opts: PermissionLabelOptions = {}): PermissionView {
+export function permissionView (perm: { streamId?: string; level?: string; defaultName?: string }, options: PermissionLabelOptions = {}): PermissionView {
+  // one locale for the name and the description: `fr-CH` reads `fr`, an unsupported one the preferred locales
+  const opts = { ...options, locale: options.locale != null ? (matchLocale(options.locale) ?? options.locale) : undefined };
   // named by the canonical id; `streamId` stays as given
   const streamId = canonicalStreamId(perm.streamId ?? '');
   const level = perm.level ?? 'read';
@@ -124,17 +126,15 @@ export function permissionView (perm: { streamId?: string; level?: string; defau
     const stream = model.streams.getDataById(streamId, false) as { children?: unknown[]; description?: unknown } | null | undefined;
     inModel = stream != null || model.itemsDefs.forStreamId(streamId).length > 0;
     hasChildren = (stream?.children?.length ?? 0) > 0;
-    description = localeOrEnglish(stream?.description, opts.locale);
+    description = descriptionOf(stream?.description, opts.locale);
   } catch { /* model not loaded: the requester's label, flagged */ }
   const name = inModel ? dataName(streamId, { ...opts, qualified: true }) : quoted;
   const label = hasChildren ? (pick(TEXTS.under, opts.locale) as string).replace('{name}', name) : name;
   return { ...base, kind: 'data', name, label, beyondRead: level !== 'read', inModel, hasChildren, description };
 }
 
-/** A model text in `locale`, else the preferred locales when none is given, else English; null when there is none. */
-function localeOrEnglish (text: unknown, locale?: string): string | null {
+/** A model description as the name is picked (`pick`: the locale, else the preferred locales); null when there is none. */
+function descriptionOf (text: unknown, locale?: string): string | null {
   if (text == null || typeof text !== 'object') return null;
-  const map = text as Record<string, string | undefined>;
-  if (locale != null) return map[locale] ?? map.en ?? null;
-  try { return localizeText(map as Localizable); } catch { return map.en ?? null; }
+  try { return pick(text as Localizable, locale); } catch { return null; }
 }
