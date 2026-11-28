@@ -21477,12 +21477,16 @@ function formatSelect(event, content, itemDef, model) {
     }
     return prefix + String(valueForSelect);
 }
-/** The option whose numeric value is closest to `value` (first one on a tie), or null when none is numeric. */
+/**
+ * The option whose numeric value is closest to `value` (first one on a tie), or null when none is numeric.
+ * An option marked `unspecified: true` (data-model 4.58.0, bleeding 0.5 "amount not stated") is not a grade on the
+ * scale: it is left out, so a value between hooks reads as the nearest grade. An exact match still finds it.
+ */
 function nearestNumericOption(options, value) {
     let nearest = null;
     let bestDist = Infinity;
     for (const o of options) {
-        if (typeof o.value !== 'number')
+        if (typeof o.value !== 'number' || o.unspecified === true)
             continue;
         const d = Math.abs(o.value - value);
         if (d < bestDist) {
@@ -59600,6 +59604,15 @@ describe('[CPHX] cyclePhaseAt', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(options.filter(o => o.value > 0.08 && o.value < 0.2).length, 0);
     });
 
+    it('[CPHP12] bleeding of unstated amount (the option marked unspecified, 0.5) is a period day', async () => {
+      const model = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.getHDSModel)();
+      await model.load('https://model.datasafe.dev/pack.json');
+      const marked = model.itemsDefs.forKey('body-vulva-bleeding').data.options.filter(o => o.unspecified === true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(marked.map(o => o.value), [0.5]);
+      const events = [start(1), bleeding(1, 0.5), bleeding(2, 0.5), window(10, 6)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(1, 3, events), ['menstrual', 'menstrual', 'follicular']);
+    });
+
     it('[CPHP10] spotting after the last real bleeding day does not extend the period', () => {
       const events = [start(1), bleeding(1, 0.75), bleeding(2, 0.35), bleeding(3, 0.08), bleeding(4, 0.08), window(10, 6)];
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(phases(1, 5, events), ['menstrual', 'menstrual', 'follicular', 'follicular', 'follicular']);
@@ -61559,10 +61572,20 @@ describe('[ESTX] eventToShortText', () => {
     };
 
     it('[EST25a] a bare select value between hooks reads as the nearest hook label (bleeding)', () => {
-      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.5)), 'Moderate');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.48)), 'Moderate');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.62)), 'Moderate');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.7)), 'Heavy');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.1)), 'Spotting');
+    });
+
+    it('[EST25e] an option marked unspecified matches exactly, never as the nearest hook (bleeding 0.5)', () => {
+      const marked = model.itemsDefs.forKey('body-vulva-bleeding').data.options.find(o => o.unspecified === true);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(marked?.value, 0.5);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.5)), 'Bleeding (amount not stated)');
+      // 0.45 to 0.52 would snap to the marked 0.5: they read as the nearest grade instead
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.46)), 'Moderate');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.51)), 'Moderate');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(bleeding(0.44)), 'Light');
     });
 
     it('[EST25b] an exact hook is unchanged, and test-result/scale keeps its percentage', () => {
@@ -63056,12 +63079,12 @@ describe('[MODX] Model', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(streamsToBeCreated, [
         {
           id: 'body-vulva-mucus',
-          name: 'Vulva Mucus',
+          name: 'Cervical fluid',
           parentId: 'body-vulva'
         },
         {
           id: 'body-vulva-mucus-inspect',
-          name: 'Vulva Mucus Inspect',
+          name: 'Cervical fluid observations',
           parentId: 'body-vulva-mucus'
         },
         { id: 'profile-name', name: 'Name', parentId: 'profile' },
@@ -63116,7 +63139,7 @@ describe('[MODX] Model', () => {
       const expected = [
         {
           streamId: 'body-vulva-mucus-inspect',
-          defaultName: 'Vulva Mucus Inspect',
+          defaultName: 'Cervical fluid observations',
           level: 'read'
         },
         { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
@@ -63209,7 +63232,7 @@ describe('[MODX] Model', () => {
         { streamId: 'app-test', defaultName: 'App test', level: 'write' },
         {
           streamId: 'body-vulva-mucus-inspect',
-          defaultName: 'Vulva Mucus Inspect',
+          defaultName: 'Cervical fluid observations',
           level: 'read'
         },
         {
@@ -66110,6 +66133,7 @@ function makeModel () {
       },
       headache: item('headache', 'activity/plain', 'checkbox'),
       smoker: { ...item('smoker', 'lifestyle/use-status-v1', 'select'), options: ['never', 'former', 'current'].map((value) => ({ value, label: t(value) })) },
+      'profile-sex': { ...item('profile-sex', 'attributes/biological-sex', 'select'), options: ['male', 'female', 'other'].map((value) => ({ value, label: t(value) })) },
       birth: item('birth', 'date/iso-8601', 'date'),
       variant: item('genetics-variant', 'genetic-variant/coded-v1', 'imported'),
       sync: item('sync', 'sync-status/connector-v1', 'system'),
@@ -66126,7 +66150,7 @@ function makeModel () {
       }
     },
     streams: [
-      ...['weight', 'headache', 'smoker', 'birth', 'sync', 'other', 'lipid'].map((id) => ({ id, name: id, parentId: null })),
+      ...['weight', 'headache', 'smoker', 'profile-sex', 'birth', 'sync', 'other', 'lipid'].map((id) => ({ id, name: id, parentId: null })),
       { id: 'headache-child', name: 'child', parentId: 'headache' },
       { id: 'genetics', name: 'Genetics', parentId: null, explicitGrantOnly: true },
       { id: 'genetics-variant', name: 'Variant', parentId: 'genetics' }
@@ -66140,6 +66164,7 @@ function makeModel () {
         'concentration/iu-l': { type: 'number' },
         'activity/plain': { type: 'null' },
         'lifestyle/use-status-v1': { type: 'string' },
+        'attributes/biological-sex': { type: 'string' },
         'date/iso-8601': { type: 'string' },
         'genetic-variant/coded-v1': { type: 'object' },
         'sync-status/connector-v1': { type: 'object' }
@@ -66344,6 +66369,16 @@ describe('[ELIG] eligibility test of a study', function () {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ ...rule, withinDays: 30 }, [at('never', 90)]), 'not-met');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, [at('notSet', 1)]), 'no-data');
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(rule, []), 'no-data');
+    });
+
+    it('[ELIG-R12] in on profile-sex: other is an option like the others (data-model 4.57.0)', async () => {
+      const at = (content) => [ev('profile-sex', 'attributes/biological-sex', content)];
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'in', itemKey: 'profile-sex', values: ['female'] }, at('other')), 'not-met');
+      const other = { op: 'in', itemKey: 'profile-sex', values: ['other'] };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(codes(three(other)), []);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(other, at('other')), 'met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf(other, at('female')), 'not-met');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(await outcomeOf({ op: 'in', itemKey: 'profile-sex', values: ['female'] }, at('notSet')), 'no-data');
     });
 
     it('[ELIG-R7] age, around the birthday', async () => {
