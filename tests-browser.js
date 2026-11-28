@@ -27202,7 +27202,8 @@ function pick(text, locale) {
  * model stream's name, else the stream id.
  *
  * `opts.qualified`: a child stream named by its own label is a bare word out of context
- * ("Généraux", "Fertilité"), so it is prefixed with its parent's name: "Symptômes › Généraux".
+ * ("Généraux", "Fertilité"), so it is prefixed with its parent's name: "Symptômes › Généraux". The parent is named
+ * by its own stream label when it has one, before the item filed there ("Documents médicaux › Documents cliniques").
  * Names from an item label, and root streams, are left as they are.
  */
 function dataName(streamId, opts = {}) {
@@ -27224,7 +27225,7 @@ function dataName(streamId, opts = {}) {
         const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel, opts.locale) : null;
         if (label) {
             if (opts.qualified && typeof stream?.parentId === 'string' && stream.parentId !== '') {
-                return `${dataName(stream.parentId, { locale: opts.locale })} › ${label}`;
+                return `${parentName(stream.parentId, opts.locale)} › ${label}`;
             }
             return label;
         }
@@ -27239,6 +27240,21 @@ function dataName(streamId, opts = {}) {
     }
     catch { /* model not loaded */ }
     return streamId;
+}
+/**
+ * A parent in a "Parent › Child" name: by its own stream label first, since the item filed on a parent names one
+ * entry, not the stream ("Medical documents › Clinical documents", never the item's "Medical document › …"); else as
+ * `dataName` names it.
+ */
+function parentName(parentId, locale) {
+    try {
+        const streamLabel = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(parentId, false)?.label;
+        const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel, locale) : null;
+        if (label)
+            return label;
+    }
+    catch { /* model not loaded */ }
+    return dataName(parentId, { locale });
 }
 /**
  * A permission as a person reads it: named from the data model (the requester's label only
@@ -64911,6 +64927,18 @@ describe('[PLBL] permission labels', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'body-weight' }, { locale: 'en' }).name, model.itemsDefs.forKey('body-weight').data.label.en);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('symptom-general', { locale: 'fr' }), 'Généraux');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('symptom-general', { locale: 'en', qualified: true }), 'Symptoms › General');
+  });
+
+  it('[PLBL11] a parent with an item is named by its own stream label in a child\'s name; alone, by its item (data-model 4.55.1)', () => {
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-clinical' }, { locale: 'fr' }).name, 'Documents médicaux › Documents cliniques');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-clinical' }, { locale: 'en' }).name, 'Medical documents › Clinical documents');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin-insurance' }, { locale: 'en' }).name, 'Administrative documents › Insurance documents');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents' }, { locale: 'en' }).name, model.itemsDefs.forKey('document').data.label.en);
+    // a parent with an item and no label of its own: the item's name, as before
+    const syncStatus = model.streams.getDataById('sync-status');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(syncStatus.label, undefined);
+    const leaf = syncStatus.children[0];
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName(leaf.id, { locale: 'en', qualified: true }), `${model.itemsDefs.forKey('sync-status').data.label.en} › ${leaf.label.en}`);
   });
 
   it('[PLBL10] description: the model stream\'s, in the same language as the name; null when it has none', () => {
