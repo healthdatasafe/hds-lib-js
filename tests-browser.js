@@ -27208,10 +27208,20 @@ function pick(text, locale) {
  * `opts.qualified`: a child stream named by its own label is a bare word out of context
  * ("Généraux", "Fertilité"), so it is prefixed with its parent's name: "Symptômes › Généraux". The parent is named
  * by its own stream label when it has one, before the item filed there ("Documents médicaux › Documents cliniques").
- * Names from an item label, and root streams, are left as they are.
+ * A root is named by its own stream label first too, since a grant on it covers the stream, not one entry
+ * ("Documents médicaux", never the item's "Document médical"). Other names from an item label are left as they are.
  */
 function dataName(streamId, opts = {}) {
     let model;
+    if (opts.qualified) {
+        try {
+            const parentId = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(streamId, false)?.parentId;
+            const own = parentId == null || parentId === '' ? ownLabel(streamId, opts.locale) : null;
+            if (own)
+                return own;
+        }
+        catch { /* model not loaded */ }
+    }
     try {
         model = (0, HDSModelInitAndSingleton_ts_1.getModel)();
         const defs = model.itemsDefs.forStreamId(streamId);
@@ -27251,14 +27261,17 @@ function dataName(streamId, opts = {}) {
  * `dataName` names it.
  */
 function parentName(parentId, locale) {
+    return ownLabel(parentId, locale) ?? dataName(parentId, { locale });
+}
+/** A model stream's own localised `label`; null when it has none or the model is not loaded. */
+function ownLabel(streamId, locale) {
     try {
-        const streamLabel = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(parentId, false)?.label;
-        const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel, locale) : null;
-        if (label)
-            return label;
+        const streamLabel = (0, HDSModelInitAndSingleton_ts_1.getModel)().streams.getDataById(streamId, false)?.label;
+        return streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel, locale) : null;
     }
-    catch { /* model not loaded */ }
-    return dataName(parentId, { locale });
+    catch {
+        return null;
+    }
 }
 /**
  * A permission as a person reads it: named from the data model (the requester's label only
@@ -65023,11 +65036,16 @@ describe('[PLBL] permission labels', function () {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('symptom-general', { locale: 'en', qualified: true }), 'Symptoms › General');
   });
 
-  it('[PLBL11] a parent with an item is named by its own stream label in a child\'s name; alone, by its item (data-model 4.55.1)', () => {
+  it('[PLBL11] a parent with an item is named by its own stream label in a child\'s name, and a root alone too (data-model 4.55.1)', () => {
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-clinical' }, { locale: 'fr' }).name, 'Documents médicaux › Documents cliniques');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-clinical' }, { locale: 'en' }).name, 'Medical documents › Clinical documents');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin-insurance' }, { locale: 'en' }).name, 'Administrative documents › Insurance documents');
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents' }, { locale: 'en' }).name, model.itemsDefs.forKey('document').data.label.en);
+    // a root on its own: its stream label too (plan 144); unqualified, `dataName` still reads the item
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents' }, { locale: 'en' }).label, 'Medical documents and everything under it');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents' }, { locale: 'fr' }).name, 'Documents médicaux');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(dataName('documents', { locale: 'en' }), model.itemsDefs.forKey('document').data.label.en);
+    // a root with an item and no label of its own keeps the item's name
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'sync-status' }, { locale: 'en' }).name, model.itemsDefs.forKey('sync-status').data.label.en);
     // a parent with an item and no label of its own: the item's name, as before
     const syncStatus = model.streams.getDataById('sync-status');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(syncStatus.label, undefined);
