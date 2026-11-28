@@ -22,6 +22,7 @@ function makeModel () {
       },
       headache: item('headache', 'activity/plain', 'checkbox'),
       smoker: { ...item('smoker', 'lifestyle/use-status-v1', 'select'), options: ['never', 'former', 'current'].map((value) => ({ value, label: t(value) })) },
+      'profile-sex': { ...item('profile-sex', 'attributes/biological-sex', 'select'), options: ['male', 'female', 'other'].map((value) => ({ value, label: t(value) })) },
       birth: item('birth', 'date/iso-8601', 'date'),
       variant: item('genetics-variant', 'genetic-variant/coded-v1', 'imported'),
       sync: item('sync', 'sync-status/connector-v1', 'system'),
@@ -38,7 +39,7 @@ function makeModel () {
       }
     },
     streams: [
-      ...['weight', 'headache', 'smoker', 'birth', 'sync', 'other', 'lipid'].map((id) => ({ id, name: id, parentId: null })),
+      ...['weight', 'headache', 'smoker', 'profile-sex', 'birth', 'sync', 'other', 'lipid'].map((id) => ({ id, name: id, parentId: null })),
       { id: 'headache-child', name: 'child', parentId: 'headache' },
       { id: 'genetics', name: 'Genetics', parentId: null, explicitGrantOnly: true },
       { id: 'genetics-variant', name: 'Variant', parentId: 'genetics' }
@@ -52,6 +53,7 @@ function makeModel () {
         'concentration/iu-l': { type: 'number' },
         'activity/plain': { type: 'null' },
         'lifestyle/use-status-v1': { type: 'string' },
+        'attributes/biological-sex': { type: 'string' },
         'date/iso-8601': { type: 'string' },
         'genetic-variant/coded-v1': { type: 'object' },
         'sync-status/connector-v1': { type: 'object' }
@@ -256,6 +258,16 @@ describe('[ELIG] eligibility test of a study', function () {
       assert.equal(await outcomeOf({ ...rule, withinDays: 30 }, [at('never', 90)]), 'not-met');
       assert.equal(await outcomeOf(rule, [at('notSet', 1)]), 'no-data');
       assert.equal(await outcomeOf(rule, []), 'no-data');
+    });
+
+    it('[ELIG-R12] in on profile-sex: other is an option like the others (data-model 4.57.0)', async () => {
+      const at = (content) => [ev('profile-sex', 'attributes/biological-sex', content)];
+      assert.equal(await outcomeOf({ op: 'in', itemKey: 'profile-sex', values: ['female'] }, at('other')), 'not-met');
+      const other = { op: 'in', itemKey: 'profile-sex', values: ['other'] };
+      assert.deepEqual(codes(three(other)), []);
+      assert.equal(await outcomeOf(other, at('other')), 'met');
+      assert.equal(await outcomeOf(other, at('female')), 'not-met');
+      assert.equal(await outcomeOf({ op: 'in', itemKey: 'profile-sex', values: ['female'] }, at('notSet')), 'no-data');
     });
 
     it('[ELIG-R7] age, around the birthday', async () => {
