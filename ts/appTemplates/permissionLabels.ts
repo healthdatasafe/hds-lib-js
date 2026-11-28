@@ -63,7 +63,8 @@ function pick (text: Localizable | null | undefined, locale?: string): string | 
  * model stream's name, else the stream id.
  *
  * `opts.qualified`: a child stream named by its own label is a bare word out of context
- * ("Généraux", "Fertilité"), so it is prefixed with its parent's name: "Symptômes › Généraux".
+ * ("Généraux", "Fertilité"), so it is prefixed with its parent's name: "Symptômes › Généraux". The parent is named
+ * by its own stream label when it has one, before the item filed there ("Documents médicaux › Documents cliniques").
  * Names from an item label, and root streams, are left as they are.
  */
 export function dataName (streamId: string, opts: PermissionLabelOptions & { fallback?: string; qualified?: boolean } = {}): string {
@@ -83,7 +84,7 @@ export function dataName (streamId: string, opts: PermissionLabelOptions & { fal
     const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel as Localizable, opts.locale) : null;
     if (label) {
       if (opts.qualified && typeof stream?.parentId === 'string' && stream.parentId !== '') {
-        return `${dataName(stream.parentId, { locale: opts.locale })} › ${label}`;
+        return `${parentName(stream.parentId, opts.locale)} › ${label}`;
       }
       return label;
     }
@@ -94,6 +95,20 @@ export function dataName (streamId: string, opts: PermissionLabelOptions & { fal
     if (stream?.name) return stream.name;
   } catch { /* model not loaded */ }
   return streamId;
+}
+
+/**
+ * A parent in a "Parent › Child" name: by its own stream label first, since the item filed on a parent names one
+ * entry, not the stream ("Medical documents › Clinical documents", never the item's "Medical document › …"); else as
+ * `dataName` names it.
+ */
+function parentName (parentId: string, locale?: string): string {
+  try {
+    const streamLabel = getModel().streams.getDataById(parentId, false)?.label;
+    const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel as Localizable, locale) : null;
+    if (label) return label;
+  } catch { /* model not loaded */ }
+  return dataName(parentId, { locale });
 }
 
 /**
