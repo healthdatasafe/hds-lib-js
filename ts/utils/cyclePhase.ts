@@ -5,7 +5,7 @@
  * days of `timeZone` (the patient's), and a day the recorded boundaries do not decide has no phase: this never
  * guesses. The boundaries decide: whether anything was logged on the day itself does not matter.
  */
-import { localDayNumber, startOfLocalDay } from './calendarDay.ts';
+import { eventDayNumber, localDayNumber, startOfLocalDay } from './calendarDay.ts';
 
 export type CyclePhase = 'menstrual' | 'follicular' | 'fertile' | 'luteal';
 /** Whether the boundaries a phase rests on are confirmed, predicted (any of them), or not stated. */
@@ -79,7 +79,7 @@ function inStream (e: CycleEventLike, stream: string): boolean {
 function byDay (events: CycleEventLike[], timeZone?: string): Dated[] {
   const days = new Map<number, CycleEventLike>();
   for (const event of events) {
-    const day = localDayNumber(event.time, timeZone);
+    const day = eventDayNumber(event, timeZone);
     const kept = days.get(day);
     if (kept == null ||
       (event.duration ?? 0) > (kept.duration ?? 0) ||
@@ -112,7 +112,7 @@ function bleedingDays (events: CycleEventLike[], timeZone?: string): Set<number>
   const days = new Set<number>();
   for (const e of events) {
     if (e == null || e.trashed || e.type !== BLEEDING.type || !inStream(e, BLEEDING.stream)) continue;
-    if (typeof e.content === 'number' && e.content > PERIOD_FLOW_ABOVE) days.add(localDayNumber(e.time, timeZone));
+    if (typeof e.content === 'number' && e.content > PERIOD_FLOW_ABOVE) days.add(eventDayNumber(e, timeZone));
   }
   return days;
 }
@@ -182,7 +182,7 @@ export function cyclePhaseAt (time: number, events: CycleEventLike[], timeZone?:
   // day, B-2026-11-13-7) rather than one with a duration. Each covers its first to its last day, clipped to the cycle.
   const windows = allInCycle(STREAM.fertileWindow).map(w => ({
     ...w,
-    end: Math.min(localDayNumber(w.event.time + (w.event.duration ?? 0), timeZone), lastDay)
+    end: Math.min(eventDayNumber(w.event, timeZone, w.event.time + (w.event.duration ?? 0)), lastDay)
   }));
   const window = windows[0];
   const ovulation = inCycle(STREAM.ovulation);

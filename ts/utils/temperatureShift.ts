@@ -9,7 +9,7 @@
  * method specification of model-cervical-fluid, `references/rules/coverline-rules.json` (version 2026-10-28), copied
  * in `TEMPERATURE_RULES` below. Days are calendar days of the patient's time zone, as in `cyclePhaseAt`.
  */
-import { localDayNumber, startOfLocalDay } from './calendarDay.ts';
+import { eventDayNumber, localDayNumber, startOfLocalDay } from './calendarDay.ts';
 import type { CycleEventLike } from './cyclePhase.ts';
 import type { MethodDef } from '../converters/types.ts';
 
@@ -176,7 +176,7 @@ function inStream (e: CycleEventLike, stream: string): boolean {
 function disturbedDays (events: CycleEventLike[] | undefined, timeZone?: string): Set<number> {
   const days = new Set<number>();
   for (const e of events ?? []) {
-    if (e != null && !e.trashed && inStream(e, STREAM.disturbance)) days.add(localDayNumber(e.time, timeZone));
+    if (e != null && !e.trashed && inStream(e, STREAM.disturbance)) days.add(eventDayNumber(e, timeZone));
   }
   return days;
 }
@@ -266,7 +266,7 @@ function coverlineValue (e: CycleEventLike): number | null {
 export function coverlinesOf (series: TemperatureSeries[], events: CycleEventLike[], rule: TemperatureRule | null, timeZone?: string): Coverline[] {
   if (rule == null) return [];
   const live = events.filter(e => e != null && !e.trashed);
-  const startDays = [...new Set(live.filter(e => e.type === 'activity/plain' && inStream(e, STREAM.start)).map(e => localDayNumber(e.time, timeZone)))]
+  const startDays = [...new Set(live.filter(e => e.type === 'activity/plain' && inStream(e, STREAM.start)).map(e => eventDayNumber(e, timeZone)))]
     .sort((a, b) => a - b);
   const manual = isManualTemperatureRule(rule);
   const lines = live.filter(e => e.type === 'temperature/c' && inStream(e, STREAM.coverline) && coverlineValue(e) != null &&
@@ -281,7 +281,7 @@ export function coverlinesOf (series: TemperatureSeries[], events: CycleEventLik
     const main = mainSeries(series, from, to, disturbed, timeZone);
     const shift = main == null ? null : inTimes(main, rule);
     const event = lines
-      .filter(e => { const d = localDayNumber(e.time, timeZone); return d >= startDay && d <= lastDay; })
+      .filter(e => { const d = eventDayNumber(e, timeZone); return d >= startDay && d <= lastDay; })
       .reduce<CycleEventLike | null>((a, b) => (a == null || (b.modified ?? 0) > (a.modified ?? 0) ? b : a), null);
     const base = { cycleStart: from, cycleEnd: nextDay != null ? to : null, computed: shift?.line ?? null, shift };
     if (event != null) out.push({ ...base, value: coverlineValue(event) as number, origin: 'event', event });
