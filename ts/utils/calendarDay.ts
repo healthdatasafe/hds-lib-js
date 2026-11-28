@@ -42,6 +42,25 @@ export function localDayNumber (time: number, timeZone?: string): number {
   return Math.floor(wallClockAsUtc(time, timeZone) / SECONDS_PER_DAY);
 }
 
+/** `hdsTimePrecision` values whose `time` is 12:00 UTC of a calendar date (data-model PARTIAL-DATES.md). */
+const DATE_ONLY_PRECISIONS = new Set(['day', 'month', 'year', 'approx']);
+
+/**
+ * The calendar day of an event, as a day number. An event known only to the day (`hdsTimePrecision` `day`,
+ * `month`, `year` or `approx`) is read in UTC, as PARTIAL-DATES.md requires: its `time` is 12:00 UTC of that
+ * date, which a zone at UTC+12 or beyond would otherwise put on the next day. Any other event is read in
+ * `timeZone`. `at` is the instant to read (default `event.time`; a span's end passes `time + duration`).
+ */
+export function eventDayNumber (
+  event: { time: number, clientData?: { [key: string]: unknown } | null },
+  timeZone?: string,
+  at: number = event.time
+): number {
+  const precision = event.clientData?.hdsTimePrecision;
+  if (typeof precision === 'string' && DATE_ONLY_PRECISIONS.has(precision)) return Math.floor(at / SECONDS_PER_DAY);
+  return localDayNumber(at, timeZone);
+}
+
 /** Unix time of the first second of calendar day `dayNumber` in `timeZone`. */
 export function startOfLocalDay (dayNumber: number, timeZone?: string): number {
   const midnightUtc = dayNumber * SECONDS_PER_DAY;

@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.86.0] - 2026-11-28
+
+### Fixed
+
+- Cycle helpers (`cyclePhaseAt`, the bleeding days, `coverlinesOf`, the disturbed days of the temperature shift) read a
+  date-only event (`clientData.hdsTimePrecision` `day`, `month`, `year` or `approx`) on its UTC date, as data-model
+  PARTIAL-DATES.md requires, and any other event in the patient's zone as before (B-2026-11-27-56). A date-only event
+  is written at 12:00 UTC, which a zone at UTC+12 or beyond (New Zealand, Fiji) put on the next day. Needed before the
+  importers write their date-only fertility days at 12:00 UTC.
+
+### Added
+
+- `eventDayNumber(event, timeZone?, at?)`: the calendar day of an event, honouring `hdsTimePrecision`.
+
 ## [2.85.3] - 2026-11-28
 
 ### Fixed
