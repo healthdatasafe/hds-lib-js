@@ -20821,6 +20821,7 @@ const encounters_ts_1 = __webpack_require__(/*! ./encounters.js */ "./ts/HDSMode
 const genetics_ts_1 = __webpack_require__(/*! ./genetics.js */ "./ts/HDSModel/genetics.ts");
 const chartStamp_ts_1 = __webpack_require__(/*! ./chartStamp.js */ "./ts/HDSModel/chartStamp.ts");
 const medication_ts_1 = __webpack_require__(/*! ./medication.js */ "./ts/HDSModel/medication.ts");
+const EuclidianDistanceEngine_ts_1 = __webpack_require__(/*! ../converters/EuclidianDistanceEngine.js */ "./ts/converters/EuclidianDistanceEngine.ts");
 const DATE_SEPARATORS = {
     'DD.MM.YYYY': (p, year) => pad(p.d) + '.' + pad(p.m) + '.' + (year ? p.y : ''),
     'DD/MM/YYYY': (p, year) => pad(p.d) + '/' + pad(p.m) + (year ? '/' + p.y : ''),
@@ -21790,6 +21791,9 @@ function resolveObservationLabel(engine, methodId, data) {
     const def = engine?.getMethodDef(methodId);
     if (!def?.components)
         return typeof data === 'string' ? data : JSON.stringify(data);
+    // a single-component reading stored as `{ <field>: value }`, or under another key (B-2026-11-23-2)
+    if (def.components.length === 1)
+        data = (0, EuclidianDistanceEngine_ts_1.singleComponentValue)(data, def.components[0].field);
     // A case-insensitive method (Creighton) converts '6ck' as '6CK': label it the same way.
     const matches = (o, val) => o.value === val ||
         (!!def.caseInsensitive && typeof o.value === 'string' && typeof val === 'string' && o.value.toUpperCase() === val.toUpperCase());
@@ -33318,6 +33322,7 @@ function isShareStreamId(streamId) {
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.EuclidianDistanceEngine = void 0;
+exports.singleComponentValue = singleComponentValue;
 // ─── Vector math ────────────────────────────────────────────────────────────
 function zeroVector(dims) {
     const v = {};
@@ -33390,9 +33395,7 @@ function buildLookupConverter(def, dims, w) {
         toVector(observation) {
             let entry;
             if (single) {
-                // Bridges store a single-component observation as `{ <field>: value }` (e.g. `{ mucus: '10KL' }`).
-                const field = comps[0].field;
-                const value = observation !== null && typeof observation === 'object' && field in observation ? observation[field] : observation;
+                const value = singleComponentValue(observation, comps[0].field);
                 entry = vocabulary.find(e => valuesEqual(e.observation, value, ci));
             }
             else {
@@ -33414,6 +33417,19 @@ function buildLookupConverter(def, dims, w) {
         },
     };
 }
+/**
+ * The value of a single-component observation. Bridges store it as `{ <field>: value }` (e.g. `{ mucus: '10KL' }`);
+ * an object with one key under another name is unwrapped too: older Cyclefeminin imports wrote sympto-thermal days as
+ * `{ mucus: 'creamy' }` though the method's field is `observation` (B-2026-11-23-2).
+ */
+function singleComponentValue(observation, field) {
+    if (observation === null || typeof observation !== 'object')
+        return observation;
+    if (field in observation)
+        return observation[field];
+    const keys = Object.keys(observation);
+    return keys.length === 1 ? observation[keys[0]] : observation;
+}
 function buildAssemblyConverter(def, dims, w) {
     const comps = def.components;
     const single = comps.length === 1;
@@ -33429,7 +33445,7 @@ function buildAssemblyConverter(def, dims, w) {
     function toVector(observation) {
         const result = zeroVector(dims);
         for (const comp of comps) {
-            const obsValue = single ? observation : observation[comp.field];
+            const obsValue = single ? singleComponentValue(observation, comp.field) : observation[comp.field];
             const value = obsValue !== undefined ? obsValue : (comp.options[0].value ?? null);
             const opt = findOption(comp, value);
             if (!opt && value !== null && value !== undefined) {
@@ -61816,6 +61832,17 @@ describe('[ESTX] eventToShortText', () => {
       _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), expected);
     });
 
+    it('[EST21g] older Cyclefeminin sympto-thermal { mucus } reads as its label, converts (B-2026-11-23-2)', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'sympto-thermal', 'creamy');
+      event.time = Date.now() / 1000;
+      const expected = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event);
+      event.content.source.sourceData = { mucus: 'creamy' };
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.eventToShortText)(event), expected);
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(!expected.includes('{'), `no raw JSON: ${expected}`);
+      const engine = model.converters.getEngine('cervical-fluid');
+      _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepEqual(engine.toVector('sympto-thermal', { mucus: 'creamy' }), engine.toVector('sympto-thermal', 'creamy'));
+    });
+
     it('[EST21f] the Creighton frequency recorded with the code is shown after it (B-2026-11-21-3)', async () => {
       const event = await model.converters.convertMethodToEvent('cervical-fluid', 'creighton', '6C');
       event.time = Date.now() / 1000;
@@ -65012,15 +65039,15 @@ describe('[PLBL] permission labels', function () {
     const desc = model.streams.getDataById('documents-admin').description;
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin', level: 'read' }, { locale: 'fr' }).description, desc.fr);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: ':local:documents-admin' }, { locale: 'en' }).description, desc.en);
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin' }, { locale: 'de' }).description, desc.en, 'English fallback');
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin' }, { locale: 'ja' }).description, desc.en, 'English fallback');
     const frName = permissionView({ streamId: 'documents-admin' }, { locale: 'fr' }).name;
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(frName.includes('Documents administratifs'), frName);
     const chFr = permissionView({ streamId: 'documents-admin' }, { locale: 'fr-CH' });
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([chFr.name, chFr.description], [frName, desc.fr], 'fr-CH reads fr, name and description');
     (0,_ts_localizeText_ts__WEBPACK_IMPORTED_MODULE_3__.setPreferredLocales)(['fr']);
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId: 'documents-admin' }).description, desc.fr, 'no locale: the preferred ones');
-    const de = permissionView({ streamId: 'documents-admin' }, { locale: 'de' });
-    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([de.name, de.description], [frName, desc.fr], 'an unsupported locale: name and description both from the preferred ones');
+    const ja = permissionView({ streamId: 'documents-admin' }, { locale: 'ja' });
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.deepStrictEqual([ja.name, ja.description], [frName, desc.fr], 'an unsupported locale: name and description both from the preferred ones');
     _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.ok(permissionView({ streamId: 'documents' }, { locale: 'fr' }).description.startsWith('Tous les documents médicaux'));
     for (const streamId of ['*', ':system:email', 'custom-x', 'share-aaaaaaaaaaaa']) _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.strictEqual(permissionView({ streamId }).description, null, streamId);
   });
