@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.86.2] - 2026-11-28
+
+### Fixed
+
+- `permissionView` (`dataName` with `qualified`) names a root by its own stream label first, then by the item filed
+  there: a grant on a root covers the stream, not one entry. The documents root alone read "Medical document and
+  everything under it", now "Medical documents and everything under it". The other roots carrying both an item and a
+  label change the same way: `condition` "Condition", `finding` "Finding", `entry-corrections` "Corrections from your
+  contacts", `other-names` "Other names" (were "Condition (coded)", "Finding (coded)", "Correction of an entry",
+  "Other name"). Without `qualified`, `dataName` is unchanged (plan 144).
+
 ## [2.86.1] - 2026-11-28
 
 ### Fixed

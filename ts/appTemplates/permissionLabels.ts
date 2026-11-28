@@ -65,10 +65,18 @@ function pick (text: Localizable | null | undefined, locale?: string): string | 
  * `opts.qualified`: a child stream named by its own label is a bare word out of context
  * ("Généraux", "Fertilité"), so it is prefixed with its parent's name: "Symptômes › Généraux". The parent is named
  * by its own stream label when it has one, before the item filed there ("Documents médicaux › Documents cliniques").
- * Names from an item label, and root streams, are left as they are.
+ * A root is named by its own stream label first too, since a grant on it covers the stream, not one entry
+ * ("Documents médicaux", never the item's "Document médical"). Other names from an item label are left as they are.
  */
 export function dataName (streamId: string, opts: PermissionLabelOptions & { fallback?: string; qualified?: boolean } = {}): string {
   let model;
+  if (opts.qualified) {
+    try {
+      const parentId = getModel().streams.getDataById(streamId, false)?.parentId;
+      const own = parentId == null || parentId === '' ? ownLabel(streamId, opts.locale) : null;
+      if (own) return own;
+    } catch { /* model not loaded */ }
+  }
   try {
     model = getModel();
     const defs = model.itemsDefs.forStreamId(streamId);
@@ -103,12 +111,15 @@ export function dataName (streamId: string, opts: PermissionLabelOptions & { fal
  * `dataName` names it.
  */
 function parentName (parentId: string, locale?: string): string {
+  return ownLabel(parentId, locale) ?? dataName(parentId, { locale });
+}
+
+/** A model stream's own localised `label`; null when it has none or the model is not loaded. */
+function ownLabel (streamId: string, locale?: string): string | null {
   try {
-    const streamLabel = getModel().streams.getDataById(parentId, false)?.label;
-    const label = streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel as Localizable, locale) : null;
-    if (label) return label;
-  } catch { /* model not loaded */ }
-  return dataName(parentId, { locale });
+    const streamLabel = getModel().streams.getDataById(streamId, false)?.label;
+    return streamLabel != null && typeof streamLabel === 'object' ? pick(streamLabel as Localizable, locale) : null;
+  } catch { return null; }
 }
 
 /**
