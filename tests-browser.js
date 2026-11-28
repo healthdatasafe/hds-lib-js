@@ -33770,8 +33770,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DOCUMENT_UNIQUE_ID_KEY = exports.IDENTIFIER_SYSTEM_URI = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.corrections = exports.initHDSModel = exports.getHDSModel = void 0;
-exports.researchRelationship = exports.researchEligibility = exports.appDescription = exports.cmcText = exports.cmcConversation = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = void 0;
+exports.IDENTIFIER_SYSTEM_URI = exports.IDENTIFIER_SYSTEM_ZSR = exports.IDENTIFIER_SYSTEM_GLN = exports.PROVIDER_ORGANIZATION = exports.PROVIDER_PRACTITIONER = exports.ENCOUNTER_VISIT = exports.checkLabResultCoded = exports.isValidLoincCode = exports.labSeriesKey = exports.labLoincOf = exports.labValueToFhir = exports.labResultCodedText = exports.labUnitText = exports.labNumberOf = exports.isExactLabValue = exports.labComparatorOf = exports.LAB_COMPARATORS = exports.LAB_RESULT_CODED = exports.compositeParts = exports.formatEventDate = exports.eventToShortTextWithOrigin = exports.eventToShortText = exports.computeReminders = exports.TEMPERATURE_RULES = exports.isManualTemperatureRule = exports.temperatureRuleOf = exports.coverlinesOf = exports.shiftInCycle = exports.shiftOf = exports.cyclePhaseAt = exports.eventDayNumber = exports.cycleDayAt = exports.formatDuration = exports.durationToLabel = exports.durationToSeconds = exports.logger = exports.toolkit = exports.l = exports.localizeText = exports.appTemplates = exports.HDSModel = exports.HDSService = exports.settings = exports.delegation = exports.encryption = exports.cmc = exports.pryv = exports.corrections = exports.initHDSModel = exports.getHDSModel = void 0;
+exports.researchRelationship = exports.researchEligibility = exports.appDescription = exports.cmcText = exports.cmcConversation = exports.cmcItemReminders = exports.cmcDocuments = exports.cmcScope = exports.cmcDataExport = exports.cmcConstants = exports.cmcAppScope = exports.cmcFormSpec = exports.extractOverloadAsDefinitions = exports.HDSLibError = exports.EuclidianDistanceEngine = exports.HDSModelAppStreams = exports.CERVICAL_FLUID_METHOD_LEGACY_KEY = exports.CERVICAL_FLUID_METHOD_KEY = exports.getPreferredDisplay = exports.getPreferredInput = exports.HDSModelPreferred = exports.HDSModelConverters = exports.HDSModelConversions = exports.saveLanguage = exports.hasAccountPreference = exports.resolveAccountPreference = exports.PROFILE_FIELDS = exports.HDSProfile = exports.SETTING_TYPES = exports.HDSSettings = exports.MonitorScope = exports.ENTERABLE_ITEM_TYPES = exports.isCodedDrug = exports.isSkipped = exports.medicationIntakeKind = exports.MEDICATION_PRESCRIPTION_TYPES = exports.MEDICATION_INTAKE_TYPES = exports.geneticVariantText = exports.GENETIC_VARIANT_CODED = exports.documentUniqueIdKey = exports.normalizeDocumentUniqueId = exports.checkRelatedMirror = exports.withRelatedMirror = exports.contentEventIds = exports.DOCUMENT_UNIQUE_ID_KEY = void 0;
 const localizeText_ts_1 = __webpack_require__(/*! ./localizeText.js */ "./ts/localizeText.ts");
 Object.defineProperty(exports, "localizeText", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
 Object.defineProperty(exports, "l", ({ enumerable: true, get: function () { return localizeText_ts_1.localizeText; } }));
@@ -33801,6 +33801,7 @@ Object.defineProperty(exports, "durationToLabel", ({ enumerable: true, get: func
 Object.defineProperty(exports, "formatDuration", ({ enumerable: true, get: function () { return duration_ts_1.formatDuration; } }));
 const calendarDay_ts_1 = __webpack_require__(/*! ./utils/calendarDay.js */ "./ts/utils/calendarDay.ts");
 Object.defineProperty(exports, "cycleDayAt", ({ enumerable: true, get: function () { return calendarDay_ts_1.cycleDayAt; } }));
+Object.defineProperty(exports, "eventDayNumber", ({ enumerable: true, get: function () { return calendarDay_ts_1.eventDayNumber; } }));
 const cyclePhase_ts_1 = __webpack_require__(/*! ./utils/cyclePhase.js */ "./ts/utils/cyclePhase.ts");
 Object.defineProperty(exports, "cyclePhaseAt", ({ enumerable: true, get: function () { return cyclePhase_ts_1.cyclePhaseAt; } }));
 const temperatureShift_ts_1 = __webpack_require__(/*! ./utils/temperatureShift.js */ "./ts/utils/temperatureShift.ts");
@@ -33935,6 +33936,7 @@ const HDSLib = {
     durationToLabel: duration_ts_1.durationToLabel,
     formatDuration: duration_ts_1.formatDuration,
     cycleDayAt: calendarDay_ts_1.cycleDayAt,
+    eventDayNumber: calendarDay_ts_1.eventDayNumber,
     cyclePhaseAt: cyclePhase_ts_1.cyclePhaseAt,
     shiftOf: temperatureShift_ts_1.shiftOf,
     shiftInCycle: temperatureShift_ts_1.shiftInCycle,
@@ -36317,6 +36319,7 @@ function deepFreeze(object) {
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.localDayNumber = localDayNumber;
+exports.eventDayNumber = eventDayNumber;
 exports.startOfLocalDay = startOfLocalDay;
 exports.cycleDayAt = cycleDayAt;
 const SECONDS_PER_DAY = 86400;
@@ -36348,6 +36351,20 @@ function wallClockAsUtc(time, timeZone) {
 /** The calendar date of `time` in `timeZone`, as a day number (days since 1970-01-01). */
 function localDayNumber(time, timeZone) {
     return Math.floor(wallClockAsUtc(time, timeZone) / SECONDS_PER_DAY);
+}
+/** `hdsTimePrecision` values whose `time` is 12:00 UTC of a calendar date (data-model PARTIAL-DATES.md). */
+const DATE_ONLY_PRECISIONS = new Set(['day', 'month', 'year', 'approx']);
+/**
+ * The calendar day of an event, as a day number. An event known only to the day (`hdsTimePrecision` `day`,
+ * `month`, `year` or `approx`) is read in UTC, as PARTIAL-DATES.md requires: its `time` is 12:00 UTC of that
+ * date, which a zone at UTC+12 or beyond would otherwise put on the next day. Any other event is read in
+ * `timeZone`. `at` is the instant to read (default `event.time`; a span's end passes `time + duration`).
+ */
+function eventDayNumber(event, timeZone, at = event.time) {
+    const precision = event.clientData?.hdsTimePrecision;
+    if (typeof precision === 'string' && DATE_ONLY_PRECISIONS.has(precision))
+        return Math.floor(at / SECONDS_PER_DAY);
+    return localDayNumber(at, timeZone);
 }
 /** Unix time of the first second of calendar day `dayNumber` in `timeZone`. */
 function startOfLocalDay(dayNumber, timeZone) {
@@ -36417,7 +36434,7 @@ function inStream(e, stream) {
 function byDay(events, timeZone) {
     const days = new Map();
     for (const event of events) {
-        const day = (0, calendarDay_ts_1.localDayNumber)(event.time, timeZone);
+        const day = (0, calendarDay_ts_1.eventDayNumber)(event, timeZone);
         const kept = days.get(day);
         if (kept == null ||
             (event.duration ?? 0) > (kept.duration ?? 0) ||
@@ -36453,7 +36470,7 @@ function bleedingDays(events, timeZone) {
         if (e == null || e.trashed || e.type !== BLEEDING.type || !inStream(e, BLEEDING.stream))
             continue;
         if (typeof e.content === 'number' && e.content > PERIOD_FLOW_ABOVE)
-            days.add((0, calendarDay_ts_1.localDayNumber)(e.time, timeZone));
+            days.add((0, calendarDay_ts_1.eventDayNumber)(e, timeZone));
     }
     return days;
 }
@@ -36522,7 +36539,7 @@ function cyclePhaseAt(time, events, timeZone) {
     // day, B-2026-11-13-7) rather than one with a duration. Each covers its first to its last day, clipped to the cycle.
     const windows = allInCycle(STREAM.fertileWindow).map(w => ({
         ...w,
-        end: Math.min((0, calendarDay_ts_1.localDayNumber)(w.event.time + (w.event.duration ?? 0), timeZone), lastDay)
+        end: Math.min((0, calendarDay_ts_1.eventDayNumber)(w.event, timeZone, w.event.time + (w.event.duration ?? 0)), lastDay)
     }));
     const window = windows[0];
     const ovulation = inCycle(STREAM.ovulation);
@@ -36954,7 +36971,7 @@ function disturbedDays(events, timeZone) {
     const days = new Set();
     for (const e of events ?? []) {
         if (e != null && !e.trashed && inStream(e, STREAM.disturbance))
-            days.add((0, calendarDay_ts_1.localDayNumber)(e.time, timeZone));
+            days.add((0, calendarDay_ts_1.eventDayNumber)(e, timeZone));
     }
     return days;
 }
@@ -37022,7 +37039,7 @@ function coverlinesOf(series, events, rule, timeZone) {
     if (rule == null)
         return [];
     const live = events.filter(e => e != null && !e.trashed);
-    const startDays = [...new Set(live.filter(e => e.type === 'activity/plain' && inStream(e, STREAM.start)).map(e => (0, calendarDay_ts_1.localDayNumber)(e.time, timeZone)))]
+    const startDays = [...new Set(live.filter(e => e.type === 'activity/plain' && inStream(e, STREAM.start)).map(e => (0, calendarDay_ts_1.eventDayNumber)(e, timeZone)))]
         .sort((a, b) => a - b);
     const manual = isManualTemperatureRule(rule);
     const lines = live.filter(e => e.type === 'temperature/c' && inStream(e, STREAM.coverline) && coverlineValue(e) != null &&
@@ -37037,7 +37054,7 @@ function coverlinesOf(series, events, rule, timeZone) {
         const main = mainSeries(series, from, to, disturbed, timeZone);
         const shift = main == null ? null : inTimes(main, rule);
         const event = lines
-            .filter(e => { const d = (0, calendarDay_ts_1.localDayNumber)(e.time, timeZone); return d >= startDay && d <= lastDay; })
+            .filter(e => { const d = (0, calendarDay_ts_1.eventDayNumber)(e, timeZone); return d >= startDay && d <= lastDay; })
             .reduce((a, b) => (a == null || (b.modified ?? 0) > (a.modified ?? 0) ? b : a), null);
         const base = { cycleStart: from, cycleEnd: nextDay != null ? to : null, computed: shift?.line ?? null, shift };
         if (event != null)
@@ -59344,6 +59361,56 @@ describe('[CORR] corrections of an entry', () => {
 
 /***/ },
 
+/***/ "./tests/cycleDayPrecision.test.js"
+/*!*****************************************!*\
+  !*** ./tests/cycleDayPrecision.test.js ***!
+  \*****************************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./test-utils/deps-node.js */ "./tests/test-utils/deps-browser.js");
+/* harmony import */ var _ts_index_ts__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../ts/index.ts */ "./ts/index.ts");
+/* harmony import */ var _ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../ts/utils/calendarDay.ts */ "./ts/utils/calendarDay.ts");
+
+
+
+
+// A date-only event (hdsTimePrecision 'day', time 12:00 UTC) is read on its UTC date, in any zone
+// (data-model PARTIAL-DATES.md; B-2026-11-27-56)
+describe('[CPDP] date-only cycle events in a zone at UTC+12 or beyond', () => {
+  const AKL = 'Pacific/Auckland'; // UTC+13 in January
+  const DAY = 86400;
+  const noonUtc = (iso) => Date.parse(`${iso}T12:00:00Z`) / 1000;
+  const dayOnly = { hdsTimePrecision: 'day' };
+
+  it('[CPDP1] eventDayNumber reads a day-precision event in UTC, a timed one in the zone', () => {
+    const t = noonUtc('2026-01-05'); // 2026-01-06 01:00 in Auckland
+    const jan5 = Date.parse('2026-01-05T00:00:00Z') / 1000 / DAY;
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.eventDayNumber)({ time: t, clientData: dayOnly }, AKL), jan5);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.eventDayNumber)({ time: t }, AKL), jan5 + 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal((0,_ts_utils_calendarDay_ts__WEBPACK_IMPORTED_MODULE_2__.eventDayNumber)({ time: t, clientData: { hdsTimePrecision: 'minute' } }, AKL), jan5 + 1);
+  });
+
+  it('[CPDP2] cycle day 1 is the date the importer wrote, not the next one', () => {
+    const events = [
+      { streamId: 'fertility-cycles-start', type: 'activity/plain', time: noonUtc('2026-01-05'), clientData: dayOnly },
+      { streamId: 'fertility-cycles-period', type: 'activity/plain', time: noonUtc('2026-01-09'), clientData: dayOnly }
+    ];
+    // 2026-01-05 15:00 in Auckland
+    const r = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cyclePhaseAt)(Date.parse('2026-01-05T02:00:00Z') / 1000, events, AKL);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.cycleDay, 1);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(r.phase, 'menstrual');
+    // 2026-01-09 15:00 in Auckland: the period end's date, still menstrual
+    const end = (0,_ts_index_ts__WEBPACK_IMPORTED_MODULE_1__.cyclePhaseAt)(Date.parse('2026-01-09T02:00:00Z') / 1000, events, AKL);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(end.cycleDay, 5);
+    _test_utils_deps_node_js__WEBPACK_IMPORTED_MODULE_0__.assert.equal(end.phase, 'menstrual');
+  });
+});
+
+
+/***/ },
+
 /***/ "./tests/cyclePhase.test.js"
 /*!**********************************!*\
   !*** ./tests/cyclePhase.test.js ***!
@@ -68090,53 +68157,55 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _corrections_test_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./corrections.test.js */ "./tests/corrections.test.js");
 /* harmony import */ var _correctionStreams_test_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./correctionStreams.test.js */ "./tests/correctionStreams.test.js");
 /* harmony import */ var _cyclePhase_test_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./cyclePhase.test.js */ "./tests/cyclePhase.test.js");
-/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
-/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
-/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
-/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
-/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
-/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
-/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
-/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
-/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
-/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
-/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
-/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
-/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
-/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
-/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
-/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
-/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
-/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
-/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
-/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
-/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
-/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
-/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
-/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
-/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
-/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
-/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
-/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
-/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
-/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
-/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
-/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
-/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
-/* harmony import */ var _researchEligibility_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./researchEligibility.test.js */ "./tests/researchEligibility.test.js");
-/* harmony import */ var _researchRelationship_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./researchRelationship.test.js */ "./tests/researchRelationship.test.js");
-/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_64__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
-/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_65__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
-/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_66__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
-/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_67__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
-/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_68__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
-/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_69__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
+/* harmony import */ var _cycleDayPrecision_test_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./cycleDayPrecision.test.js */ "./tests/cycleDayPrecision.test.js");
+/* harmony import */ var _datasetTemplate_test_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./datasetTemplate.test.js */ "./tests/datasetTemplate.test.js");
+/* harmony import */ var _delegation_test_js__WEBPACK_IMPORTED_MODULE_31__ = __webpack_require__(/*! ./delegation.test.js */ "./tests/delegation.test.js");
+/* harmony import */ var _documentKinds_test_js__WEBPACK_IMPORTED_MODULE_32__ = __webpack_require__(/*! ./documentKinds.test.js */ "./tests/documentKinds.test.js");
+/* harmony import */ var _encounters_test_js__WEBPACK_IMPORTED_MODULE_33__ = __webpack_require__(/*! ./encounters.test.js */ "./tests/encounters.test.js");
+/* harmony import */ var _errors_test_js__WEBPACK_IMPORTED_MODULE_34__ = __webpack_require__(/*! ./errors.test.js */ "./tests/errors.test.js");
+/* harmony import */ var _eventDetails_test_js__WEBPACK_IMPORTED_MODULE_35__ = __webpack_require__(/*! ./eventDetails.test.js */ "./tests/eventDetails.test.js");
+/* harmony import */ var _eventToShortText_test_js__WEBPACK_IMPORTED_MODULE_36__ = __webpack_require__(/*! ./eventToShortText.test.js */ "./tests/eventToShortText.test.js");
+/* harmony import */ var _formatEventDate_test_js__WEBPACK_IMPORTED_MODULE_37__ = __webpack_require__(/*! ./formatEventDate.test.js */ "./tests/formatEventDate.test.js");
+/* harmony import */ var _genetics_test_js__WEBPACK_IMPORTED_MODULE_38__ = __webpack_require__(/*! ./genetics.test.js */ "./tests/genetics.test.js");
+/* harmony import */ var _getAttachmentUrl_test_js__WEBPACK_IMPORTED_MODULE_39__ = __webpack_require__(/*! ./getAttachmentUrl.test.js */ "./tests/getAttachmentUrl.test.js");
+/* harmony import */ var _hdsLib_test_js__WEBPACK_IMPORTED_MODULE_40__ = __webpack_require__(/*! ./hdsLib.test.js */ "./tests/hdsLib.test.js");
+/* harmony import */ var _hdsModel_test_js__WEBPACK_IMPORTED_MODULE_41__ = __webpack_require__(/*! ./hdsModel.test.js */ "./tests/hdsModel.test.js");
+/* harmony import */ var _HDSModel_Overload_test_js__WEBPACK_IMPORTED_MODULE_42__ = __webpack_require__(/*! ./HDSModel-Overload.test.js */ "./tests/HDSModel-Overload.test.js");
+/* harmony import */ var _HDSProfile_test_js__WEBPACK_IMPORTED_MODULE_43__ = __webpack_require__(/*! ./HDSProfile.test.js */ "./tests/HDSProfile.test.js");
+/* harmony import */ var _HDSProfileLocale_test_js__WEBPACK_IMPORTED_MODULE_44__ = __webpack_require__(/*! ./HDSProfileLocale.test.js */ "./tests/HDSProfileLocale.test.js");
+/* harmony import */ var _HDSSettings_test_js__WEBPACK_IMPORTED_MODULE_45__ = __webpack_require__(/*! ./HDSSettings.test.js */ "./tests/HDSSettings.test.js");
+/* harmony import */ var _initHDSModel_test_js__WEBPACK_IMPORTED_MODULE_46__ = __webpack_require__(/*! ./initHDSModel.test.js */ "./tests/initHDSModel.test.js");
+/* harmony import */ var _itemLabels_test_js__WEBPACK_IMPORTED_MODULE_47__ = __webpack_require__(/*! ./itemLabels.test.js */ "./tests/itemLabels.test.js");
+/* harmony import */ var _itemsDefsAliases_test_js__WEBPACK_IMPORTED_MODULE_48__ = __webpack_require__(/*! ./itemsDefsAliases.test.js */ "./tests/itemsDefsAliases.test.js");
+/* harmony import */ var _labResults_test_js__WEBPACK_IMPORTED_MODULE_49__ = __webpack_require__(/*! ./labResults.test.js */ "./tests/labResults.test.js");
+/* harmony import */ var _legacyChat_test_js__WEBPACK_IMPORTED_MODULE_50__ = __webpack_require__(/*! ./legacyChat.test.js */ "./tests/legacyChat.test.js");
+/* harmony import */ var _libSettings_test_js__WEBPACK_IMPORTED_MODULE_51__ = __webpack_require__(/*! ./libSettings.test.js */ "./tests/libSettings.test.js");
+/* harmony import */ var _loader_test_js__WEBPACK_IMPORTED_MODULE_52__ = __webpack_require__(/*! ./loader.test.js */ "./tests/loader.test.js");
+/* harmony import */ var _cmcText_test_js__WEBPACK_IMPORTED_MODULE_53__ = __webpack_require__(/*! ./cmcText.test.js */ "./tests/cmcText.test.js");
+/* harmony import */ var _localizeText_test_js__WEBPACK_IMPORTED_MODULE_54__ = __webpack_require__(/*! ./localizeText.test.js */ "./tests/localizeText.test.js");
+/* harmony import */ var _logger_test_js__WEBPACK_IMPORTED_MODULE_55__ = __webpack_require__(/*! ./logger.test.js */ "./tests/logger.test.js");
+/* harmony import */ var _medication_test_js__WEBPACK_IMPORTED_MODULE_56__ = __webpack_require__(/*! ./medication.test.js */ "./tests/medication.test.js");
+/* harmony import */ var _modelLoadRetry_test_js__WEBPACK_IMPORTED_MODULE_57__ = __webpack_require__(/*! ./modelLoadRetry.test.js */ "./tests/modelLoadRetry.test.js");
+/* harmony import */ var _MonitorScope_test_js__WEBPACK_IMPORTED_MODULE_58__ = __webpack_require__(/*! ./MonitorScope.test.js */ "./tests/MonitorScope.test.js");
+/* harmony import */ var _permissionLabels_test_js__WEBPACK_IMPORTED_MODULE_59__ = __webpack_require__(/*! ./permissionLabels.test.js */ "./tests/permissionLabels.test.js");
+/* harmony import */ var _preferred_test_js__WEBPACK_IMPORTED_MODULE_60__ = __webpack_require__(/*! ./preferred.test.js */ "./tests/preferred.test.js");
+/* harmony import */ var _questionnaire_test_js__WEBPACK_IMPORTED_MODULE_61__ = __webpack_require__(/*! ./questionnaire.test.js */ "./tests/questionnaire.test.js");
+/* harmony import */ var _reminders_test_js__WEBPACK_IMPORTED_MODULE_62__ = __webpack_require__(/*! ./reminders.test.js */ "./tests/reminders.test.js");
+/* harmony import */ var _researchEligibility_test_js__WEBPACK_IMPORTED_MODULE_63__ = __webpack_require__(/*! ./researchEligibility.test.js */ "./tests/researchEligibility.test.js");
+/* harmony import */ var _researchRelationship_test_js__WEBPACK_IMPORTED_MODULE_64__ = __webpack_require__(/*! ./researchRelationship.test.js */ "./tests/researchRelationship.test.js");
+/* harmony import */ var _resolveStream_test_js__WEBPACK_IMPORTED_MODULE_65__ = __webpack_require__(/*! ./resolveStream.test.js */ "./tests/resolveStream.test.js");
+/* harmony import */ var _systemItems_test_js__WEBPACK_IMPORTED_MODULE_66__ = __webpack_require__(/*! ./systemItems.test.js */ "./tests/systemItems.test.js");
+/* harmony import */ var _temperatureShift_test_js__WEBPACK_IMPORTED_MODULE_67__ = __webpack_require__(/*! ./temperatureShift.test.js */ "./tests/temperatureShift.test.js");
+/* harmony import */ var _toolkitStreamAutoCreate_test_js__WEBPACK_IMPORTED_MODULE_68__ = __webpack_require__(/*! ./toolkitStreamAutoCreate.test.js */ "./tests/toolkitStreamAutoCreate.test.js");
+/* harmony import */ var _toolkitStreamsTools_test_js__WEBPACK_IMPORTED_MODULE_69__ = __webpack_require__(/*! ./toolkitStreamsTools.test.js */ "./tests/toolkitStreamsTools.test.js");
+/* harmony import */ var _twinSatisfies_test_js__WEBPACK_IMPORTED_MODULE_70__ = __webpack_require__(/*! ./twinSatisfies.test.js */ "./tests/twinSatisfies.test.js");
 /**
  * Hook for webpack to build browser test-suite
  * Every `*.test.js` file is listed here, except the node-only ones:
  * - validatorDrift.test.js (reads the file system and runs the validator build)
  * - browserSuiteCoverage.test.js (reads this file; fails when a test file is neither listed nor excluded)
  */
+
 
 
 
