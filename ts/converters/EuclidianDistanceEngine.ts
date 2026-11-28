@@ -88,9 +88,7 @@ function buildLookupConverter (def: MethodDef, dims: readonly string[], w: Dimen
     toVector (observation: any): ObservationVector {
       let entry: VocabEntry | undefined;
       if (single) {
-        // Bridges store a single-component observation as `{ <field>: value }` (e.g. `{ mucus: '10KL' }`).
-        const field = comps[0].field;
-        const value = observation !== null && typeof observation === 'object' && field in observation ? observation[field] : observation;
+        const value = singleComponentValue(observation, comps[0].field);
         entry = vocabulary.find(e => valuesEqual(e.observation, value, ci));
       } else {
         const obs = observation as Record<string, ObsValue>;
@@ -111,6 +109,18 @@ function buildLookupConverter (def: MethodDef, dims: readonly string[], w: Dimen
   };
 }
 
+/**
+ * The value of a single-component observation. Bridges store it as `{ <field>: value }` (e.g. `{ mucus: '10KL' }`);
+ * an object with one key under another name is unwrapped too: older Cyclefeminin imports wrote sympto-thermal days as
+ * `{ mucus: 'creamy' }` though the method's field is `observation` (B-2026-11-23-2).
+ */
+export function singleComponentValue (observation: any, field: string): any {
+  if (observation === null || typeof observation !== 'object') return observation;
+  if (field in observation) return observation[field];
+  const keys = Object.keys(observation);
+  return keys.length === 1 ? observation[keys[0]] : observation;
+}
+
 function buildAssemblyConverter (def: MethodDef, dims: readonly string[], w: DimensionWeights): MethodConverter {
   const comps = def.components;
   const single = comps.length === 1;
@@ -126,7 +136,7 @@ function buildAssemblyConverter (def: MethodDef, dims: readonly string[], w: Dim
   function toVector (observation: any): ObservationVector {
     const result = zeroVector(dims);
     for (const comp of comps) {
-      const obsValue: ObsValue = single ? observation : (observation as Record<string, ObsValue>)[comp.field];
+      const obsValue: ObsValue = single ? singleComponentValue(observation, comp.field) : (observation as Record<string, ObsValue>)[comp.field];
       const value = obsValue !== undefined ? obsValue : (comp.options[0].value ?? null);
       const opt = findOption(comp, value);
       if (!opt && value !== null && value !== undefined) {
