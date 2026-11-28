@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.86.3] - 2026-11-28
+
+### Fixed
+
+- `eventToShortText` leaves an option marked `unspecified: true` out of the nearest-option match (a select between
+  hooks, a composite field between stops). data-model 4.58.0 adds `body-vulva-bleeding` option `0.5` "Bleeding (amount
+  not stated)": a device value of 0.45 to 0.52 read as that option, now as the nearest grade (Moderate or Light). A
+  stored 0.5 still reads "Bleeding (amount not stated)" (plan 133 step 7).
+- Tests follow the data-model 4.58.0 stream labels: `body-vulva-mucus` "Cervical fluid", `body-vulva-mucus-inspect`
+  "Cervical fluid observations". `[CPHP12]` pins bleeding 0.5 as a period day in `cyclePhaseAt`.
+
 ## [2.86.2] - 2026-11-28
 
 ### Fixed

@@ -148,6 +148,15 @@ describe('[CPHX] cyclePhaseAt', () => {
       assert.equal(options.filter(o => o.value > 0.08 && o.value < 0.2).length, 0);
     });
 
+    it('[CPHP12] bleeding of unstated amount (the option marked unspecified, 0.5) is a period day', async () => {
+      const model = getHDSModel();
+      await model.load('https://model.datasafe.dev/pack.json');
+      const marked = model.itemsDefs.forKey('body-vulva-bleeding').data.options.filter(o => o.unspecified === true);
+      assert.deepEqual(marked.map(o => o.value), [0.5]);
+      const events = [start(1), bleeding(1, 0.5), bleeding(2, 0.5), window(10, 6)];
+      assert.deepEqual(phases(1, 3, events), ['menstrual', 'menstrual', 'follicular']);
+    });
+
     it('[CPHP10] spotting after the last real bleeding day does not extend the period', () => {
       const events = [start(1), bleeding(1, 0.75), bleeding(2, 0.35), bleeding(3, 0.08), bleeding(4, 0.08), window(10, 6)];
       assert.deepEqual(phases(1, 5, events), ['menstrual', 'menstrual', 'follicular', 'follicular', 'follicular']);
