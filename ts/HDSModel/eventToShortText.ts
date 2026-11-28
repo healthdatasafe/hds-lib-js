@@ -10,6 +10,7 @@ import { ENCOUNTER_VISIT, PROVIDER_PRACTITIONER, PROVIDER_ORGANIZATION, encounte
 import { GENETIC_VARIANT_CODED, geneticVariantText } from './genetics.ts';
 import { CHART_STAMP, chartStampText } from './chartStamp.ts';
 import { medicationStatusText } from './medication.ts';
+import { singleComponentValue } from '../converters/EuclidianDistanceEngine.ts';
 
 /** A calendar day: year, month (1-12), day of month. */
 interface DayParts { y: number; m: number; d: number }
@@ -1039,6 +1040,8 @@ function getMethodName (engine: any, methodId: string | undefined): string {
 function resolveObservationLabel (engine: any, methodId: string, data: any): string {
   const def = engine?.getMethodDef(methodId);
   if (!def?.components) return typeof data === 'string' ? data : JSON.stringify(data);
+  // a single-component reading stored as `{ <field>: value }`, or under another key (B-2026-11-23-2)
+  if (def.components.length === 1) data = singleComponentValue(data, def.components[0].field);
   // A case-insensitive method (Creighton) converts '6ck' as '6CK': label it the same way.
   const matches = (o: any, val: any): boolean => o.value === val ||
     (!!def.caseInsensitive && typeof o.value === 'string' && typeof val === 'string' && o.value.toUpperCase() === val.toUpperCase());

@@ -748,6 +748,17 @@ describe('[ESTX] eventToShortText', () => {
       assert.equal(eventToShortText(event), expected);
     });
 
+    it('[EST21g] older Cyclefeminin sympto-thermal { mucus } reads as its label, converts (B-2026-11-23-2)', async () => {
+      const event = await model.converters.convertMethodToEvent('cervical-fluid', 'sympto-thermal', 'creamy');
+      event.time = Date.now() / 1000;
+      const expected = eventToShortText(event);
+      event.content.source.sourceData = { mucus: 'creamy' };
+      assert.equal(eventToShortText(event), expected);
+      assert.ok(!expected.includes('{'), `no raw JSON: ${expected}`);
+      const engine = model.converters.getEngine('cervical-fluid');
+      assert.deepEqual(engine.toVector('sympto-thermal', { mucus: 'creamy' }), engine.toVector('sympto-thermal', 'creamy'));
+    });
+
     it('[EST21f] the Creighton frequency recorded with the code is shown after it (B-2026-11-21-3)', async () => {
       const event = await model.converters.convertMethodToEvent('cervical-fluid', 'creighton', '6C');
       event.time = Date.now() / 1000;

@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.86.1] - 2026-11-28
+
+### Fixed
+
+- A single-component observation stored as a one-key object under another field name is read as its value, in the
+  converter (`toVector`, lookup and assembly methods) and in its `eventToShortText` label. Older Cyclefeminin imports
+  wrote sympto-thermal days as `{ mucus: 'creamy' }` though the method's field is `observation`: the label was empty and
+  a conversion threw "Unknown sympto-thermal observation" (B-2026-11-23-2). New export of the converter module:
+  `singleComponentValue`.
+
 ## [2.86.0] - 2026-11-28
 
 ### Fixed
