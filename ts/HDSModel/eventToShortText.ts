@@ -736,12 +736,16 @@ function formatSelect (event: any, content: any, itemDef: any, model?: any): str
   return prefix + String(valueForSelect);
 }
 
-/** The option whose numeric value is closest to `value` (first one on a tie), or null when none is numeric. */
+/**
+ * The option whose numeric value is closest to `value` (first one on a tie), or null when none is numeric.
+ * An option marked `unspecified: true` (data-model 4.58.0, bleeding 0.5 "amount not stated") is not a grade on the
+ * scale: it is left out, so a value between hooks reads as the nearest grade. An exact match still finds it.
+ */
 function nearestNumericOption (options: any[], value: number): any {
   let nearest: any = null;
   let bestDist = Infinity;
   for (const o of options) {
-    if (typeof o.value !== 'number') continue;
+    if (typeof o.value !== 'number' || o.unspecified === true) continue;
     const d = Math.abs(o.value - value);
     if (d < bestDist) { bestDist = d; nearest = o; }
   }

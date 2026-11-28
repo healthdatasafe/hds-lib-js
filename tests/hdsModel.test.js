@@ -364,12 +364,12 @@ describe('[MODX] Model', () => {
       assert.deepEqual(streamsToBeCreated, [
         {
           id: 'body-vulva-mucus',
-          name: 'Vulva Mucus',
+          name: 'Cervical fluid',
           parentId: 'body-vulva'
         },
         {
           id: 'body-vulva-mucus-inspect',
-          name: 'Vulva Mucus Inspect',
+          name: 'Cervical fluid observations',
           parentId: 'body-vulva-mucus'
         },
         { id: 'profile-name', name: 'Name', parentId: 'profile' },
@@ -424,7 +424,7 @@ describe('[MODX] Model', () => {
       const expected = [
         {
           streamId: 'body-vulva-mucus-inspect',
-          defaultName: 'Vulva Mucus Inspect',
+          defaultName: 'Cervical fluid observations',
           level: 'read'
         },
         { streamId: 'profile-name', defaultName: 'Name', level: 'read' },
@@ -517,7 +517,7 @@ describe('[MODX] Model', () => {
         { streamId: 'app-test', defaultName: 'App test', level: 'write' },
         {
           streamId: 'body-vulva-mucus-inspect',
-          defaultName: 'Vulva Mucus Inspect',
+          defaultName: 'Cervical fluid observations',
           level: 'read'
         },
         {

@@ -462,10 +462,20 @@ describe('[ESTX] eventToShortText', () => {
     };
 
     it('[EST25a] a bare select value between hooks reads as the nearest hook label (bleeding)', () => {
-      assert.equal(eventToShortText(bleeding(0.5)), 'Moderate');
+      assert.equal(eventToShortText(bleeding(0.48)), 'Moderate');
       assert.equal(eventToShortText(bleeding(0.62)), 'Moderate');
       assert.equal(eventToShortText(bleeding(0.7)), 'Heavy');
       assert.equal(eventToShortText(bleeding(0.1)), 'Spotting');
+    });
+
+    it('[EST25e] an option marked unspecified matches exactly, never as the nearest hook (bleeding 0.5)', () => {
+      const marked = model.itemsDefs.forKey('body-vulva-bleeding').data.options.find(o => o.unspecified === true);
+      assert.equal(marked?.value, 0.5);
+      assert.equal(eventToShortText(bleeding(0.5)), 'Bleeding (amount not stated)');
+      // 0.45 to 0.52 would snap to the marked 0.5: they read as the nearest grade instead
+      assert.equal(eventToShortText(bleeding(0.46)), 'Moderate');
+      assert.equal(eventToShortText(bleeding(0.51)), 'Moderate');
+      assert.equal(eventToShortText(bleeding(0.44)), 'Light');
     });
 
     it('[EST25b] an exact hook is unchanged, and test-result/scale keeps its percentage', () => {
