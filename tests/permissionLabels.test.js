@@ -98,6 +98,18 @@ describe('[PLBL] permission labels', function () {
     assert.strictEqual(dataName('symptom-general', { locale: 'en', qualified: true }), 'Symptoms › General');
   });
 
+  it('[PLBL11] a parent with an item is named by its own stream label in a child\'s name; alone, by its item (data-model 4.55.1)', () => {
+    assert.strictEqual(permissionView({ streamId: 'documents-clinical' }, { locale: 'fr' }).name, 'Documents médicaux › Documents cliniques');
+    assert.strictEqual(permissionView({ streamId: 'documents-clinical' }, { locale: 'en' }).name, 'Medical documents › Clinical documents');
+    assert.strictEqual(permissionView({ streamId: 'documents-admin-insurance' }, { locale: 'en' }).name, 'Administrative documents › Insurance documents');
+    assert.strictEqual(permissionView({ streamId: 'documents' }, { locale: 'en' }).name, model.itemsDefs.forKey('document').data.label.en);
+    // a parent with an item and no label of its own: the item's name, as before
+    const syncStatus = model.streams.getDataById('sync-status');
+    assert.strictEqual(syncStatus.label, undefined);
+    const leaf = syncStatus.children[0];
+    assert.strictEqual(dataName(leaf.id, { locale: 'en', qualified: true }), `${model.itemsDefs.forKey('sync-status').data.label.en} › ${leaf.label.en}`);
+  });
+
   it('[PLBL10] description: the model stream\'s, in the same language as the name; null when it has none', () => {
     const desc = model.streams.getDataById('documents-admin').description;
     assert.strictEqual(permissionView({ streamId: 'documents-admin', level: 'read' }, { locale: 'fr' }).description, desc.fr);

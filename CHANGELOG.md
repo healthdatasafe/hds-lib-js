@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.85.3] - 2026-11-28
+
+### Fixed
+
+- `appTemplates.dataName(…, { qualified: true })` (so `permissionView`): the parent of a "Parent › Child" name is named
+  by its own stream label first, then as before. The item filed on a parent names one entry, not the stream: a documents
+  class read "Medical document › Clinical documents", now "Medical documents › Clinical documents" (data-model 4.55.1
+  gives the `documents` root its label). The root named alone keeps its item's label (plan 144 Bug C).
+
 ## [2.85.2] - 2026-11-27
 
 ### Changed
